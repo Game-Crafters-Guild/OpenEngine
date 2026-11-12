@@ -171,8 +171,7 @@
     color: #FFFFFF;
 }
 
-.movie-recorder-browse-button,
-button.movie-recorder-browse-button {
+.movie-recorder-browse-button {
     height: var(--inspector-row-height, 27px);
     min-height: var(--inspector-row-height, 27px);
     max-height: var(--inspector-row-height, 27px);
@@ -182,11 +181,8 @@ button.movie-recorder-browse-button {
 }
 
 .movie-recorder-record-button,
-button.movie-recorder-record-button,
 .movie-recorder-record-button.icon-button,
-button.movie-recorder-record-button.icon-button,
-.movie-recorder-record-button.record-icon,
-button.movie-recorder-record-button.record-icon {
+.movie-recorder-record-button.record-icon {
     width: 132px;
     min-width: 132px;
     max-width: 132px;
@@ -209,30 +205,21 @@ button.movie-recorder-record-button.record-icon {
     opacity: 1.0;
 }
 
-.movie-recorder-record-button .button-text,
-button.movie-recorder-record-button .button-text {
+.movie-recorder-record-button .button-text {
     line-height: normal;
 }
 
 .movie-recorder-record-button:hover,
-button.movie-recorder-record-button:hover,
 .movie-recorder-record-button.icon-button:hover,
-button.movie-recorder-record-button.icon-button:hover,
 .movie-recorder-record-button.record-icon:hover,
-button.movie-recorder-record-button.record-icon:hover,
 .movie-recorder-record-button.active,
-button.movie-recorder-record-button.active,
-.movie-recorder-record-button.record-icon.active,
-button.movie-recorder-record-button.record-icon.active {
+.movie-recorder-record-button.record-icon.active {
     opacity: 1.0;
 }
 
 .movie-recorder-record-button:hover,
-button.movie-recorder-record-button:hover,
 .movie-recorder-record-button.icon-button:hover,
-button.movie-recorder-record-button.icon-button:hover,
-.movie-recorder-record-button.record-icon:hover,
-button.movie-recorder-record-button.record-icon:hover {
+.movie-recorder-record-button.record-icon:hover {
     background-color: #363636 !important;
     border-color: #6A6A6A !important;
     border-width: 1px !important;
@@ -240,17 +227,11 @@ button.movie-recorder-record-button.record-icon:hover {
 }
 
 .movie-recorder-record-button.active,
-button.movie-recorder-record-button.active,
 .movie-recorder-record-button.record-icon.active,
-button.movie-recorder-record-button.record-icon.active,
 .movie-recorder-panel .movie-recorder-record-button.icon-button.secondary.active,
-.movie-recorder-panel button.movie-recorder-record-button.icon-button.secondary.active,
 .movie-recorder-panel .movie-recorder-record-button.record-icon.secondary.active,
-.movie-recorder-panel button.movie-recorder-record-button.record-icon.secondary.active,
 .movie-recorder-panel .movie-recorder-record-button.record-icon:active,
-.movie-recorder-panel button.movie-recorder-record-button.record-icon:active,
-.movie-recorder-panel .movie-recorder-record-button.record-icon.pressed,
-.movie-recorder-panel button.movie-recorder-record-button.record-icon.pressed {
+.movie-recorder-panel .movie-recorder-record-button.record-icon.pressed {
     background-color: #3A2224 !important;
     border-color: #B4434C !important;
     border-width: 1px !important;
@@ -259,9 +240,7 @@ button.movie-recorder-record-button.record-icon.active,
 }
 
 .movie-recorder-panel .movie-recorder-record-button.record-icon.active:hover,
-.movie-recorder-panel button.movie-recorder-record-button.record-icon.active:hover,
-.movie-recorder-panel .movie-recorder-record-button.record-icon.secondary.active:hover,
-.movie-recorder-panel button.movie-recorder-record-button.record-icon.secondary.active:hover {
+.movie-recorder-panel .movie-recorder-record-button.record-icon.secondary.active:hover {
     background-color: #47282B !important;
     border-color: #CC5962 !important;
     border-width: 1px !important;
@@ -399,8 +378,7 @@ button.movie-recorder-record-button.record-icon.active,
     max-width: 78px;
 }
 
-.movie-recorder-row-button,
-button.movie-recorder-row-button {
+.movie-recorder-row-button {
     flex-shrink: 0;
     width: 20px;
     min-width: 20px;
@@ -418,19 +396,14 @@ button.movie-recorder-row-button {
 }
 
 .movie-recorder-row-button:hover,
-button.movie-recorder-row-button:hover,
 .movie-recorder-row-button:active,
-button.movie-recorder-row-button:active,
-.movie-recorder-row-button.pressed,
-button.movie-recorder-row-button.pressed {
+.movie-recorder-row-button.pressed {
     opacity: 1.0;
     background-color: transparent;
 }
 
 .movie-recorder-delete-button,
-button.movie-recorder-delete-button,
-.movie-recorder-delete-button.icon-button,
-button.movie-recorder-delete-button.icon-button {
+.movie-recorder-delete-button.icon-button {
     background-image: url("editor:Icons/trash.svg");
     background-size: 16px 16px;
     background-repeat: no-repeat;
@@ -443,17 +416,11 @@ button.movie-recorder-delete-button.icon-button {
 }
 
 .movie-recorder-delete-button:hover,
-button.movie-recorder-delete-button:hover,
 .movie-recorder-delete-button:active,
-button.movie-recorder-delete-button:active,
 .movie-recorder-delete-button.pressed,
-button.movie-recorder-delete-button.pressed,
 .movie-recorder-delete-button.icon-button:hover,
-button.movie-recorder-delete-button.icon-button:hover,
 .movie-recorder-delete-button.icon-button:active,
-button.movie-recorder-delete-button.icon-button:active,
-.movie-recorder-delete-button.icon-button.pressed,
-button.movie-recorder-delete-button.icon-button.pressed {
+.movie-recorder-delete-button.icon-button.pressed {
     opacity: 1.0;
     background-color: transparent;
     border-color: transparent;

@@ -132,10 +132,10 @@ kShaderAssetDir = "Assets/Shaders"
 kWorkspaceDir = ".workspace"
 kVariantCacheDir = f"{kWorkspaceDir}/.Cache/Shaders"
 
-# The template is the wasm Player exactly as built. WebPlayer.html already has
-# Tools/Web/shell.html expanded into it by the link step, so the shell is a
-# build input and never a dist file.
-kTemplateFiles = ("WebPlayer.html", "WebPlayer.js", "WebPlayer.wasm")
+# The template is the wasm Player as built: the link expands Tools/Web/shell.html into
+# WebPlayer.html, so the shell is never a dist file. The WebPlayer build writes the
+# notices beside it (build_web_package.py --game-notices), and every game ships them.
+kTemplateFiles = ("WebPlayer.html", "WebPlayer.js", "WebPlayer.wasm", "THIRD_PARTY_NOTICES.md")
 
 
 class ExportError(Exception):
@@ -259,6 +259,7 @@ def WritePack(staging: Path, outDir: Path, name: str, role: str,
 
 
 def CopyTemplate(template: Path, outDir: Path) -> None:
+    # Check every file before the first copy, so a refused template writes nothing.
     for name in kTemplateFiles:
         source = template / name
         if not source.is_file():
@@ -266,7 +267,8 @@ def CopyTemplate(template: Path, outDir: Path) -> None:
                 f"player template incomplete: {source} missing. Build the WebPlayer target "
                 f"(cmake --build build/wasm-debug --target WebPlayer) and point --template at "
                 f"its bin directory.")
-        shutil.copy2(source, outDir / name)
+    for name in kTemplateFiles:
+        shutil.copy2(template / name, outDir / name)
     shutil.copy2(kRepoRoot / "Tools" / "Web" / "serve.py", outDir / "serve.py")
 
 
@@ -332,7 +334,8 @@ def main() -> int:
                              "(StageWebExportContent)")
     parser.add_argument("--out", type=Path, required=True, help="dist directory to create")
     parser.add_argument("--template", type=Path, required=True,
-                        help="directory holding the built WebPlayer.{html,js,wasm}")
+                        help="directory holding the built WebPlayer.{html,js,wasm} and "
+                             "THIRD_PARTY_NOTICES.md (the WebPlayer target's bin directory)")
     parser.add_argument("--shaderpkg-dir", type=Path, required=True,
                         help="desktop build's Shaders/ dir (SPIR-V .shaderpkg + reflection)")
     parser.add_argument("--material-cook", type=Path, required=True,

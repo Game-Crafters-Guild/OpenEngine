@@ -260,8 +260,8 @@ void MetalQueryPool::BeginFrame(uint32_t frameIndex)
         frameIndex %= m_Config.FramesInFlight;
     }
 
-    // The caller waited this slot's frame pacing semaphore, so the slot's GPU
-    // work is complete and the samples can be resolved without stalling.
+    // The previous frame's end waited for this slot's command buffers, so the
+    // slot's GPU work is complete and the samples can be resolved without stalling.
     ResolveSlice(frameIndex);
 
     m_CurrentFrame = frameIndex;
@@ -444,10 +444,9 @@ MTL::Buffer* MetalQueryPool::GetCurrentVisibilityBuffer() const
     return m_Valid ? m_Frames[m_CurrentFrame].visibilityBuffer : nullptr;
 }
 
-bool MetalQueryPool::GetPipelineStatsResult(uint32_t, QueryResult& outResult)
+bool MetalQueryPool::GetPipelineStatsResult(uint32_t, PipelineStatistics& outStatistics) const
 {
-    outResult = QueryResult{};
-    outResult.Type = QueryType::PipelineStats;
+    outStatistics = PipelineStatistics{};
     return false;
 }
 
@@ -492,7 +491,7 @@ std::vector<QueryResult> MetalQueryPool::GetAllTimestampResults() const
 void MetalQueryPool::ResetQueries(CommandList*)
 {
     // Counter sample buffers need no GPU-side reset; slices recycle in
-    // BeginFrame after the frame pacing wait.
+    // BeginFrame, after the previous frame's end recycled the slot.
 }
 
 bool MetalQueryPool::IsValid() const

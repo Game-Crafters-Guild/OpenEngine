@@ -2,6 +2,7 @@
 
 #include "Engine/Rendering/CameraUtils.h"
 #include "Engine/Rendering/PostProcessSettings.h"
+#include "Engine/Rendering/RenderOrigin.h"
 #include "Engine/Rendering/RenderServices.h"
 
 #include "Core/Time.h"
@@ -94,14 +95,19 @@ void ViewParamsUploadNode::DeclareForView(ViewDeclare& d)
     ViewParamsUBO ubo{};
     std::memcpy(ubo.ge_invProj, invProjM.Data(), sizeof(ubo.ge_invProj));
     std::memcpy(ubo.ge_view, cam->view.Data(), sizeof(ubo.ge_view));
-    float zn = 0.1f, zf = 1000.0f;
-    ExtractNearFarLH_ZO(cam->proj, zn, zf);
-    ubo.ge_nearFar[0] = zn;
-    ubo.ge_nearFar[1] = zf;
-    const float logRatio = std::log(zf / std::max(zn, 1e-4f));
-    ubo.ge_nearFar[2] = (logRatio > 1e-6f) ? (1.0f / logRatio) : 0.0f;
-    const float shaderAnimationTime = d.Services.GetShaderAnimationTimeSeconds();
-    ubo.ge_nearFar[3] = shaderAnimationTime;
+    const ProjectionDepthTerms depthTerms = ProjectionDepthTerms::Of(cam->proj);
+    ubo.ge_depthTerms[0] = depthTerms.M22;
+    ubo.ge_depthTerms[1] = depthTerms.M32;
+    ubo.ge_depthTerms[2] = depthTerms.M23;
+    ubo.ge_depthTerms[3] = depthTerms.M33;
+    // Near is the linearized depth at raw 1; the range is the carried culling range.
+    const float zn = LinearizeReverseZDepthLH_ZO(1.0f, depthTerms);
+    const float range = d.Services.Views().ResolveCameraRanges(d.View.id).CullingRange;
+    const float logRatio = std::log(range / std::max(zn, 1e-4f));
+    ubo.ge_viewRanges[0] = zn;
+    ubo.ge_viewRanges[1] = range;
+    ubo.ge_viewRanges[2] = (logRatio > 1e-6f) ? (1.0f / logRatio) : 0.0f;
+    ubo.ge_viewRanges[3] = d.Services.GetShaderAnimationTimeSeconds();
 
     GameEngine::Rendering::Matrix4x4 viewM = cam->view;
     GameEngine::Rendering::Matrix4x4 invViewM = GameEngine::Mathematics::Inverse(viewM);
@@ -113,6 +119,18 @@ void ViewParamsUploadNode::DeclareForView(ViewDeclare& d)
     // view->world, so consumers reconstruct a world position from a view-space
     // point without a per-pixel matrix inverse (SSR reprojection).
     std::memcpy(ubo.ge_invView, invViewM.Data(), sizeof(ubo.ge_invView));
+
+    // The relative frame takes the same arithmetic on the origin-relative view, so in sector
+    // (0,0,0), where viewRel is a copy of view, each field holds its absolute partner's bits.
+    const GameEngine::Rendering::Matrix4x4 invViewRelM = GameEngine::Mathematics::Inverse(cam->viewRel);
+    std::memcpy(ubo.ge_viewRel, cam->viewRel.Data(), sizeof(ubo.ge_viewRel));
+    std::memcpy(ubo.ge_invViewRel, invViewRelM.Data(), sizeof(ubo.ge_invViewRel));
+    ubo.ge_cameraPosRel[0] = invViewRelM[3][0];
+    ubo.ge_cameraPosRel[1] = invViewRelM[3][1];
+    ubo.ge_cameraPosRel[2] = invViewRelM[3][2];
+    ubo.ge_cameraPosRel[3] = 0.0f;
+    for (int32 axis = 0; axis < 4; ++axis)
+        ubo.ge_renderOrigin[axis] = static_cast<float>(cam->renderOriginSector[axis]);
 
     // THE view extent — the same numbers buffer-size expressions and
     // dispatch sizing use.
@@ -145,9 +163,16 @@ void ViewParamsUploadNode::DeclareForView(ViewDeclare& d)
     const ViewTemporalSample* previous = d.Services.TemporalHistory().Advance(
         d.View.id, d.Frame.FrameIndex(), currentSample, d.Frame.SubmittedFrameCount(),
         &previousValid);
-    const GameEngine::Rendering::Matrix4x4& prevViewProj =
-        (previousValid && previous) ? previous->Camera.viewProj : stored->viewProj;
-    std::memcpy(ubo.ge_prevViewProj, prevViewProj.Data(), sizeof(ubo.ge_prevViewProj));
+    const Rendering::CameraData& prevCamera = (previousValid && previous) ? previous->Camera : *stored;
+    std::memcpy(ubo.ge_prevViewProj, prevCamera.viewProj.Data(), sizeof(ubo.ge_prevViewProj));
+    // The previous relative view-projection takes positions relative to the previous frame's
+    // origin: move it into this frame's sector.
+    std::memcpy(ubo.ge_prevViewProjRel, prevCamera.viewProjRel.Data(), sizeof(ubo.ge_prevViewProjRel));
+    if (!std::equal(prevCamera.renderOriginSector, prevCamera.renderOriginSector + 3, stored->renderOriginSector))
+    {
+        RebaseTranslationColumnBySectorDelta(prevCamera.viewProjRel.Data(), prevCamera.renderOriginSector,
+                                             stored->renderOriginSector, ubo.ge_prevViewProjRel);
+    }
 
     // Sub-pixel NDC jitter, current (xy) and previous (zw) frame. A consumer
     // reprojecting through the UNJITTERED ge_prevViewProj adds zw to land on the

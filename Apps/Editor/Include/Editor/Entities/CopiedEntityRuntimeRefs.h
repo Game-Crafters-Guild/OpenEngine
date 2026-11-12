@@ -21,7 +21,7 @@
 #include "PhysicsECS/Components/PhysicsBody.h"
 #include "SplineECS/SplineService.h"
 #include "TerrainECS/Components/TerrainPageCollider.h"
-#include "TerrainECS/Components/TerrainPlanetFaceCollider.h"
+#include "TerrainECS/Components/TerrainPlanetPageCollider.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -247,7 +247,10 @@ class CopiedEntityRuntimeRefs
         if (const auto* copied = world.GetComponent<Components::WorldTransform>(copy))
             wt = *copied;
         else if (const auto* local = world.GetComponent<Components::Transform>(copy))
-            std::memcpy(wt.matrix, local->matrix, sizeof(wt.matrix));
+        {
+            wt.Position = local->Position;
+            wt.Basis = local->Basis;
+        }
         ++wt.Version;
         world.AddComponentImmediate(copy, wt);
     }
@@ -487,15 +490,13 @@ class CopiedEntityRuntimeRefs
     }
 
     // The collider tags name a heightfield physics handle the terrain service
-    // allocated for the source page/face, so the copy is stripped of its claim:
+    // allocated for the source page, so the copy is stripped of its claim:
     // zero has the service's handle bit clear, and every release path returns on
     // that bit before touching a slot (TerrainService::ReleasePagePhysicsHandle).
     //
     // Nothing re-links the zeroed tag — a handle is only ever assigned when
-    // TerrainPhysicsSystem creates a collider entity. The copy is redundant.
-    // A page copy names no slot, so the system's next sweep tears it down. A
-    // face copy keeps the source's face keys, so the sweep destroys it together
-    // with the source's face collider.
+    // TerrainPhysicsSystem creates a collider entity. The copy is redundant: it
+    // names no slot, so the system's next sweep tears it down.
     static void RepairTerrainColliders(ECS::World& world, ECS::EntityHandle copy)
     {
         if (const auto* page = world.GetComponent<Components::TerrainPageCollider>(copy))
@@ -506,9 +507,9 @@ class CopiedEntityRuntimeRefs
             world.AddComponentImmediate(copy, updated);
         }
 
-        if (const auto* face = world.GetComponent<Components::TerrainPlanetFaceCollider>(copy))
+        if (const auto* planetPage = world.GetComponent<Components::TerrainPlanetPageCollider>(copy))
         {
-            Components::TerrainPlanetFaceCollider updated = *face;
+            Components::TerrainPlanetPageCollider updated = *planetPage;
             updated.PhysicsHandleIndex = 0;
             updated.PhysicsHandleGeneration = 0;
             world.AddComponentImmediate(copy, updated);

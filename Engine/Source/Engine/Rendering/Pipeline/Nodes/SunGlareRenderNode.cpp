@@ -264,10 +264,10 @@ void SunGlareRenderNode::DeclareForView(ViewDeclare& d)
     // observer's normalised altitude, with the shell's radii in Horizon. All are one value per
     // frame, so the shader takes them as scalars and does the single tap in its vertex stage.
     Rendering::AtmosphereParametersGPU atmo{};
-    Rendering::SkyRenderer::FillDefaultAtmosphere(atmo);
-    const float planetCenterY = -atmo.planetRadius;
-    const Mathematics::Vector3 fromCenter(camera->cameraPos.x, camera->cameraPos.y - planetCenterY,
-                                          camera->cameraPos.z);
+    Rendering::SkyRenderer::FillDefaultAtmosphere(atmo, sky.planet);
+    const Mathematics::Vector3 fromCenter(camera->cameraPos.x - atmo.planetCenter.x,
+                                          camera->cameraPos.y - atmo.planetCenter.y,
+                                          camera->cameraPos.z - atmo.planetCenter.z);
     const float r = std::max(std::sqrt(fromCenter.LengthSquared()), 1e-5f);
     const Mathematics::Vector3 up = fromCenter / r;
     pc.Params[1] = std::clamp(Mathematics::Vector3::Dot(sunDir, up), -1.0f, 1.0f);
@@ -301,38 +301,10 @@ void SunGlareRenderNode::DeclareForView(ViewDeclare& d)
         depth.IsValid() ? std::max(d.Frame.Graph().ResourceDesc(depth.Id).SampleCount, 1u) : 1u;
     pc.Params[3] = onScreen ? static_cast<float>(depthSamples) : 0.0f;
 
-    // The terrain skyline along the sun's own azimuth, on the CPU, from the heightfield.
-    //
-    // This is the term that does not care where the camera points. The screen probe is gated on
-    // the sun projecting inside the viewport, so a sun one degree outside the frame edge cannot
-    // be occluded by anything at all -- the halo's edge glow and far veil stayed at full
-    // strength behind a hill and then switched off the frame after the sun's centre crossed in.
-    // A skyline is a property of the terrain and the eye, so it holds on- and off-frame, and
-    // past whatever distance the shadow cascades reach.
-    //
-    // Compared as TANGENTS, and faded over the sun's own angular radius rather than a chosen
-    // width: the disc is hidden when the skyline is one radius above its centre and clear when
-    // it is one radius below, which is exactly the geometry of a disc setting behind a ridge.
-    float horizonVisibility = 1.0f;
-    {
-        // Marched on the terrain side (TerrainExtractionSystem), which is the only layer that
-        // can see both the heightfield and the renderer. Absent means "no terrain to report
-        // on", which must read as fully visible rather than as flat ground.
-        const float horizonTangent = feature.GetSkylineTangent(d.View.id);
-        if (horizonTangent > SunGlareRenderFeature::kNoSkyline)
-        {
-            // Both sides as tangents of the elevation above the horizontal. sunDir is a unit
-            // vector, so its Y IS the sine of the sun's elevation and the horizontal component
-            // is the cosine.
-            const float sunHoriz =
-                std::sqrt(std::max(sunDir.x * sunDir.x + sunDir.z * sunDir.z, 1e-12f));
-            const float sunTangent = sunDir.y / sunHoriz;
-            const float radiusTangent = kSunAngularRadiusRad; // tan(r) == r at this size
-            const float t = Math::Clamp01((sunTangent - (horizonTangent - radiusTangent)) / (2.0f * radiusTangent));
-            horizonVisibility = t * t * (3.0f - 2.0f * t); // smoothstep over the disc's diameter
-        }
-    }
-    pc.Horizon[0] = horizonVisibility;
+    // The terrain skyline along the sun's azimuth, marched on the CPU by TerrainExtractionSystem. It
+    // does not read the sun's screen position, so it also hides a sun outside the frame. Do not
+    // gate it on onScreen.
+    pc.Horizon[0] = feature.GetSkylineVisibility(d.View.id, sunDir);
     pc.Horizon[1] = atmo.planetRadius;
     pc.Horizon[2] = atmo.atmosphereRadius;
 
@@ -343,11 +315,8 @@ void SunGlareRenderNode::DeclareForView(ViewDeclare& d)
     RenderGraph::RGBuffer casters{};
     if (cascadesReady && feature.GetCastersPipelineId().IsValid())
     {
-        SunGlareCastersPushConstants castersPc{};
-        castersPc.Eye = Mathematics::Vector4(camera->cameraPos.x, camera->cameraPos.y,
-                                             camera->cameraPos.z, 0.0f);
-        castersPc.SunDirRadius = Mathematics::Vector4(sunDir.x, sunDir.y, sunDir.z,
-                                                      visibilityDiscRadius);
+        const SunGlareCastersPushConstants castersPc =
+            SunGlareRenderFeature::MakeCastersPushConstants(*camera, sunDir, visibilityDiscRadius);
         casters = DeclareCastersPass(d, feature, shadowArray, shadowData, castersPc);
     }
     pc.Horizon[3] = casters.IsValid() ? 1.0f : 0.0f;

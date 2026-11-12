@@ -17,11 +17,11 @@
 #include "Components/Rendering/MeshRenderer.h"
 #include "AssetCore/GUID.h"
 #include "Components/Rendering/Particles.h"
-#include "Components/Rendering/WorldSectorCoord.h"
 #include "Core/ApplicationPaths.h"
 #include "Scene/SceneSchemaRegistry.h"
 #include "Scene/SceneIOContext.h"
 #include "Scene/RenderLayerMaskText.h"
+#include "SceneLoadTracker/SceneLoadTracker.h"
 #include "Components/Spline/SplineComponent.h"
 #include "Components/Terrain/Terrain.h"
 #include "Components/Terrain/TerrainGrass.h"
@@ -33,27 +33,31 @@
 #include "Core/CpuProfiler.h"
 #include "Core/DebugMetrics.h"
 #include "Core/Engine.h"
+#include "DebugServer/AI/AiDebugHandlers.h"
 #include "DebugServer/AssistantSessionHandlers.h"
 #include "DebugServer/BenchSceneHandlers.h"
 #include "DebugServer/BuildStatusReport.h"
 #include "DebugServer/Capture/FrameSequence/FrameSequenceRecorder.h"
 #include "DebugServer/Capture/ScreenshotUtils.h"
 #include "DebugServer/CameraProjectionReport.h"
+#include "Editor/Application/EditorVersion.h"
 #include "Editor/CaptureOutputDirectory.h"
 #include "DebugServer/Components/ComponentValueReader.h"
+#include "DebugServer/Components/FieldValueReaders.h"
 #include "Mathematics/Interpolation.h"
-#include "DebugServer/Components/RenderLayerMaskValue.h"
 #include "DebugServer/DebugServerReply.h"
 #include "DebugServer/EditorDebugServer.h"
 #include "DebugServer/ElementPointerTarget.h"
 #include "DebugServer/GpuToolingHandlers.h"
 #include "DebugServer/GroundQueryDebugHandlers.h"
 #include "DebugServer/JobSystem/JobSystemDebugHandlers.h"
+#include "DebugServer/KeyTapSequence.h"
 #include "DebugServer/LogQueryReport.h"
 #include "DebugServer/NavigationDebugHandlers.h"
 #include "DebugServer/MarkupDebugHandlers.h"
 #include "DebugServer/MemoryDebugHandlers.h"
 #include "DebugServer/PerformDropRequest.h"
+#include "DebugServer/ScrollSequence.h"
 #include "DebugServer/SkyDebugHandlers.h"
 #include "DebugServer/ThumbnailDebugHandlers.h"
 #include "DebugServer/InjectedInput.h"
@@ -68,6 +72,7 @@
 #include "DebugServer/Components/SchemaComponentApply.h"
 #include "DebugServer/Capture/RenderDocCapture.h"
 #include "DebugServer/FramePhase/FramePhaseDebugHandlers.h"
+#include "DebugServer/GpuProfiler/GpuProfilerReport.h"
 #include "DebugServer/RenderGraphResourceFilter.h"
 #include "DebugServer/ScreenshotCaptureWait.h"
 #include "DebugServer/Terrain/TerrainDebugHandlers.h"
@@ -94,7 +99,7 @@
 #include "EditorApplication/EditorApplication.h"
 #include "Search/UniversalSearchController.h"
 #include "EditorChangeNotifications.h"
-#include "GameViewController.h"
+#include "GameView/GameViewController.h"
 #include "MovieRecorderController.h"
 #include "Video/VideoWriter.h"
 #include "EditorContextMenu/InterceptableContextMenu.h"
@@ -164,7 +169,6 @@
 #include "Spline/SplineEvaluator.h"
 #include "SplineECS/SplineService.h"
 #include "Terrain/TerrainEntityProvisioning.h"
-#include "TerrainECS/TerrainFactory.h"
 #include "TerrainECS/TerrainService.h"
 #include "TerrainECS/TerrainRenderFeature.h"
 #include "TerrainGrass/TerrainGrassClamps.h"
@@ -199,7 +203,6 @@
 #include <algorithm>
 #include <atomic>
 #include <bit>
-#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -225,6 +228,16 @@ using json = nlohmann::json;
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+// True for a masked text field or its editor (a key or a password): the debug port never
+// returns the value of one.
+static bool IsMaskedText(UIElement* element)
+{
+    if (auto* field = dynamic_cast<TextField*>(element))
+        return field->IsMasked();
+    const TextInput* input = element ? element->GetAsTextInput() : nullptr;
+    return input && input->IsMasked();
+}
 
 // The number a JSON array holds at `index`, or `stored` when the array is short there or the
 // entry is not a number, so a partial array keeps the components it does not name.
@@ -269,49 +282,23 @@ static void WriteColorFromJson(const ECS::FieldInfo& field, std::span<std::byte>
     ECS::WriteFieldElement(field, component, 0, composite);
 }
 
-// Write one JSON value into a component's raw bytes for a single reflected field,
-// dispatching on its FieldTypeId. Type-guarded so a mismatched JSON value is
-// ignored rather than throwing. Float/Vec/Color accept a JSON array for the
-// element-wise components (e.g. Light.Color = [r,g,b]).
-// Returns false whenever the field was not written and the caller must say so: an
-// AssetGuid/enum string that did not resolve (unknown asset path / unknown enumerator),
-// an entity id naming no live entity, or a field type this writer has no representation
-// for (Mat4/Bytes/Unknown). Reporting success for a write that changed nothing is what
-// this contract exists to prevent. `world` supplies entity-handle liveness. A refusal with
-// a reason the caller can act on (the forms a render layer field takes) puts it in `outReason`.
+// Writes one JSON value into `bytes` for a reflected field. Returns false when the field is not written:
+// an unresolved asset path, an enum or render layer value the field does not take, a dead entity id or
+// a type with no JSON form (Mat4, Bytes, Unknown). A reason the caller can act on goes in `outReason`.
 static bool WriteFieldFromJson(ECS::World& world, std::vector<uint8_t>& bytes,
                                const ECS::FieldInfo& field, const json& value, std::string& outReason)
 {
     using ECS::FieldTypeId;
     const std::span<std::byte> component = std::as_writable_bytes(std::span(bytes));
     const std::size_t offset = field.Offset;
-    // Enum-by-name: a reflected enum field collapses to its underlying integer Type but
-    // carries an EnumNames table. Accept the enumerator NAME the scene format + inspector
-    // use (e.g. RenderMode="Fullscreen"), resolving it to the integer value. A numeric
-    // value falls through to the normal integer path below.
-    //
-    // Matched case-INSENSITIVELY, like the field name this value arrived under and like the
-    // scene loader, which lowercases before comparing — "blend" loading from a .scene and
-    // failing over IPC is the get/set disagreement this surface exists to remove.
-    // ReflectedEnumNameDrift pins the precondition: no reflected enum has two enumerators
-    // differing only by case.
-    if (!field.EnumNames.empty() && value.is_string())
+    // A reflected enum field has the integer Type of its underlying type and an EnumNames table.
+    // It takes only a value that the table declares.
+    if (!field.EnumNames.empty())
     {
-        const std::string name = value.get<std::string>();
-        for (const auto& enumerator : field.EnumNames)
-        {
-            if (EqualsIgnoreCase(enumerator.Name, name))
-                return ECS::WriteFieldInteger(field, component, 0, enumerator.Value);
-        }
-        // Accept a numeric STRING (e.g. "1") as the underlying integer too, matching the lenient
-        // JSON-number path — callers/scripts sometimes quote enum values.
-        long long number = 0;
-        if (auto [end, error] = std::from_chars(name.data(), name.data() + name.size(), number);
-            error == std::errc{} && end == name.data() + name.size())
-        {
-            return ECS::WriteFieldInteger(field, component, 0, number);
-        }
-        return false; // not a known enumerator name or integer → report rather than silently no-op
+        std::int64_t enumerator = 0;
+        if (!Editor::ReadEnumFieldValue(value, field, enumerator, outReason))
+            return false;
+        return ECS::WriteFieldInteger(field, component, 0, enumerator);
     }
     switch (field.Type)
     {
@@ -483,9 +470,9 @@ static bool SetReflectedComponentFields(ECS::World* world, ECS::EntityHandle ent
                     }
                     else if (std::string reason; !WriteFieldFromJson(*world, bytes, f, it.value(), reason) && outUnapplied)
                     {
-                        // Bad asset path / enum name, an entity id naming no live entity,
-                        // a field type with no JSON form (Mat4/Bytes), or a value of the wrong
-                        // form, which names the forms the field takes.
+                        // Bad asset path, an entity id naming no live entity, a field type
+                        // with no JSON form (Mat4/Bytes), or a value of the wrong form or an
+                        // undeclared enum value, which names the values the field takes.
                         outUnapplied->push_back(reason.empty() ? it.key() : it.key() + " (" + reason + ")");
                     }
                     break;
@@ -621,7 +608,7 @@ static ComponentApplyResult ApplyComponentFields(ECS::World* world, ECS::EntityH
         // Merge onto the existing transform: a partial write ({position} only)
         // must not reset rotation/scale to defaults — a scale reset silently
         // collapses scale-derived volumes (reflection-probe influence boxes).
-        Mathematics::Vector3 pos{};
+        Mathematics::WorldPosition pos{};
         Mathematics::Quaternion rot{};
         Mathematics::Vector3 scl{1.0f, 1.0f, 1.0f};
         if (const auto* existing = world->GetComponent<Components::Transform>(entity))
@@ -633,7 +620,7 @@ static ComponentApplyResult ApplyComponentFields(ECS::World* world, ECS::EntityH
         if (fields.Has("position"))
         {
             auto& p = fields["position"];
-            pos = Mathematics::Vector3(p.value("x", 0.0f), p.value("y", 0.0f), p.value("z", 0.0f));
+            pos = Mathematics::WorldPosition{p.value("x", 0.0), p.value("y", 0.0), p.value("z", 0.0)};
         }
         if (fields.Has("rotation"))
         {
@@ -650,24 +637,6 @@ static ComponentApplyResult ApplyComponentFields(ECS::World* world, ECS::EntityH
             world->AddComponentImmediate(entity, xf);
         else
             *world->GetComponentForWrite<Components::Transform>(entity) = xf;
-    }
-    else if (componentName == "WorldSectorCoord")
-    {
-        // Debug/IPC tagging surface for camera-relative rendering (Earth-scale).
-        // WorldSectorCoord is also user-addable in the Inspector; this IPC path
-        // is the test/automation equivalent (place a mesh far out at a precise
-        // sector + small local so it renders AND picks at the same world spot).
-        // Merges onto any existing sector.
-        Components::WorldSectorCoord sc{};
-        if (const auto* existing = world->GetComponent<Components::WorldSectorCoord>(entity))
-            sc = *existing;
-        sc.x = fields.Value("x", sc.x);
-        sc.y = fields.Value("y", sc.y);
-        sc.z = fields.Value("z", sc.z);
-        if (!world->GetComponent<Components::WorldSectorCoord>(entity))
-            world->AddComponentImmediate(entity, sc);
-        else
-            *world->GetComponentForWrite<Components::WorldSectorCoord>(entity) = sc;
     }
     else if (componentName == "Parent")
     {
@@ -1007,13 +976,13 @@ static json BuildRequestedEntity(ECS::World* world, const json& params, ECS::Ent
     }
 
     // Always add a Transform. Top-level position/rotation/scale default to identity.
-    Mathematics::Vector3 pos{};
+    Mathematics::WorldPosition pos{};
     Mathematics::Quaternion rot{};
     Mathematics::Vector3 scl{1.0f, 1.0f, 1.0f};
     if (params.contains("position") && params["position"].is_object())
     {
         auto& p = params["position"];
-        pos = Mathematics::Vector3(p.value("x", 0.0f), p.value("y", 0.0f), p.value("z", 0.0f));
+        pos = Mathematics::WorldPosition{p.value("x", 0.0), p.value("y", 0.0), p.value("z", 0.0)};
     }
     if (params.contains("rotation") && params["rotation"].is_object())
     {
@@ -1629,7 +1598,7 @@ static json SerializeEntityComponents(ECS::World* world, ECS::EntityHandle entit
         auto scl = c->GetScale();
         const auto& rq = rot.GetGLM();
         components["Transform"] = {
-            {"position", {{"x", pos.x}, {"y", pos.y}, {"z", pos.z}}},
+            {"position", {{"x", pos.X}, {"y", pos.Y}, {"z", pos.Z}}},
             {"rotation", {{"x", rq.x}, {"y", rq.y}, {"z", rq.z}, {"w", rq.w}}},
             {"scale", {{"x", scl.x}, {"y", scl.y}, {"z", scl.z}}}};
         serialized.insert(ECS::GetComponentTypeId<Components::Transform>());
@@ -1737,9 +1706,10 @@ static json SerializeEntityComponents(ECS::World* world, ECS::EntityHandle entit
             {"StreamingRadius", c->StreamingRadius},
             {"Domain", static_cast<uint32>(c->Domain)},
             {"PlanetRadius", c->PlanetRadius},
-            {"SphereSculpt",
-             c->SphereSculptGuid.IsNull() ? std::string{} : c->SphereSculptGuid.ToGuid().ToString()},
+            {"HeightLayer",
+             c->HeightLayerGuid.IsNull() ? std::string{} : c->HeightLayerGuid.ToGuid().ToString()},
             {"TargetPixelError", c->TargetPixelError},
+            {"BehindCameraDetail", static_cast<uint32>(c->BehindCameraDetail)},
             {"SeaLevel", c->SeaLevel},
             {"MaterialTiling", c->MaterialTiling},
             {"MaterialLibrary", c->MaterialLibraryGuid.IsNull()
@@ -1903,17 +1873,6 @@ const char* RgResourceLifetimeName(const RG::RGFrame& frame, RG::RGResourceId r)
     if (frame.Graph().IsExternal(r))
         return "Imported";
     return "Transient";
-}
-
-const char* RgQueueName(RG::RGQueue q)
-{
-    switch (q)
-    {
-    case RG::RGQueue::Graphics: return "Graphics";
-    case RG::RGQueue::Compute:  return "Compute";
-    case RG::RGQueue::Transfer: return "Copy";
-    }
-    return "?";
 }
 
 const char* RgLayoutName(RG::RGImageLayout l)
@@ -2678,6 +2637,39 @@ EditorDebugServer::DeferredPollFn BeginScreenshotCapture(EditorApplication& app,
     };
 }
 
+// The open window with id `windowId` and a UI, or null when that window or its UI is closed.
+static EditorApplication::EditorWindowContext* FindWindowWithUi(EditorApplication& app, uint64_t windowId)
+{
+    for (const auto& window : app.m_Windows)
+    {
+        if (window && window->windowId == windowId)
+            return window->ui ? window.get() : nullptr;
+    }
+    return nullptr;
+}
+
+// Injects one key action into the open window with id `windowId`. Gives false when that window
+// or its UI is closed.
+static bool InjectKeyIntoWindow(EditorApplication& app, uint64_t windowId, int key, int action, int mods)
+{
+    EditorApplication::EditorWindowContext* window = FindWindowWithUi(app, windowId);
+    if (!window)
+        return false;
+    Editor::InjectKey(window->inputConfig, window->ui.get(), key, action, mods);
+    return true;
+}
+
+// Sends one wheel delta into the open window with id `windowId`. Gives false when that window
+// or its UI is closed.
+static bool InjectScrollIntoWindow(EditorApplication& app, uint64_t windowId, float dx, float dy, int mods)
+{
+    EditorApplication::EditorWindowContext* window = FindWindowWithUi(app, windowId);
+    if (!window)
+        return false;
+    Editor::InjectScroll(window->inputConfig, window->ui.get(), dx, dy, mods);
+    return true;
+}
+
 // The pointer as the UI manager sees it this frame, for a response that states what a capture shows.
 static json ReadPointerState(const UIManager& ui)
 {
@@ -2692,6 +2684,32 @@ static json ReadPointerState(const UIManager& ui)
                 {"dragDropActive", dragDrop && dragDrop->IsDragging()}};
 }
 
+// The tracker's snapshot at the last frame, one row per category id. Only Frame tickets have
+// an age, so oldestPending names the oldest open Frame ticket; null when none is open.
+static json ReadSceneLoadStatus(const SceneLoadTracker& tracker)
+{
+    const SceneLoadTracker::LoadStatus& status = tracker.GetStatus();
+    json categories = json::array();
+    for (const SceneLoadTracker::CategoryStatus& row : status.Categories)
+    {
+        const bool hasOldest = row.OldestPending != 0;
+        categories.push_back(json{{"id", row.Id},
+                                  {"queued", row.Queued},
+                                  {"running", row.Running},
+                                  {"background", row.Background},
+                                  {"done", row.Done},
+                                  {"failed", row.Failed},
+                                  {"waitingGates", row.WaitingGates},
+                                  {"gatePending", row.GatePending},
+                                  {"reason", row.WaitingGates != 0 ? json(std::string(row.Reason)) : json()},
+                                  {"oldestPending", hasOldest ? json(tracker.NameOf(row.OldestPending)) : json()},
+                                  {"oldestPendingSeconds", hasOldest ? json(row.OldestPendingSeconds) : json()}});
+    }
+    return json{{"readyToShow", status.ReadyToShow},
+                {"stalled", status.Stalled},
+                {"categories", std::move(categories)}};
+}
+
 void RegisterDebugHandlers(EditorDebugServer& server,
                            EditorApplication& app,
                            Logger::RingBufferSink* ringBufferSink)
@@ -2700,6 +2718,10 @@ void RegisterDebugHandlers(EditorDebugServer& server,
     server.RegisterHandler("get_editor_state", [&app](const EditorDebugServer::RequestContext& ctx) -> json
                            {
         json result;
+
+        // The short commit id at HEAD at build time, "-dirty" when tracked files had changes; null when unread.
+        const std::string_view buildCommit = Editor::EditorBuildCommit();
+        result["buildCommit"] = buildCommit.empty() ? json(nullptr) : json(std::string(buildCommit));
 
         // Play mode
         auto* playMode = app.m_PlayMode.get();
@@ -2788,6 +2810,9 @@ void RegisterDebugHandlers(EditorDebugServer& server,
             (!app.m_Windows.empty() && app.m_Windows[0]) ? app.m_Windows[0]->ui.get() : nullptr;
         result["pendingUiBackgroundImages"] =
             chromeUi ? chromeUi->BackgroundImages().PendingCount() : 0u;
+        // The engine's readiness signal. readyToShow is true when no Frame ticket is open and
+        // no gate waits. Background work is counted per category and never holds it.
+        result["sceneLoad"] = ReadSceneLoadStatus(EngineCore::GetInstance().GetSceneLoadTracker());
 
         // Selected entity — read from the InspectorPanel which displays the
         // currently selected entity across all selection sources.
@@ -3238,6 +3263,9 @@ void RegisterDebugHandlers(EditorDebugServer& server,
     // 4k. the Memory module's stats registry: arenas, tracked bytes, each thread's scratch
     RegisterMemoryDebugHandlers(server, app);
 
+    // 4l. AI: one agent's last decisions from its AiTrace
+    RegisterAiDebugHandlers(server);
+
     // 5. query_ecs
     server.RegisterHandler("query_ecs", [](const EditorDebugServer::RequestContext& ctx) -> json
                            {
@@ -3595,6 +3623,88 @@ void RegisterDebugHandlers(EditorDebugServer& server,
                              {"hovered", ui->GetHoveredElementDebugName()}};
             return true;
         });
+        return EditorDebugServer::DeferredMarker(); });
+
+    // A wheel through the router entry point a real wheel takes, one delta on each of `count`
+    // frames. The UI scrolls the element its last Update resolved as hovered, so a pointer that
+    // moves to a target gets one frame before the first delta. The reply follows the last delta.
+    server.RegisterHandler("send_scroll", [&app, &server](const EditorDebugServer::RequestContext& ctx) -> json
+                           {
+        const int windowIndex = ctx.params.value("windowIndex", 0);
+        if (windowIndex < 0 || windowIndex >= static_cast<int>(app.m_Windows.size()))
+            return Editor::RefuseRequest("windowIndex out of range");
+
+        auto* wndCtx = app.m_Windows[static_cast<size_t>(windowIndex)].get();
+        if (!wndCtx || !wndCtx->ui)
+            return Editor::RefuseRequest("No UI manager available");
+
+        auto* ui = wndCtx->ui.get();
+        const Mathematics::Vector2 pointer = ui->GetMousePosition();
+        float x = pointer.x;
+        float y = pointer.y;
+        const bool movesPointer = ctx.params.contains("elementId") || ctx.params.contains("x") || ctx.params.contains("y");
+        if (ctx.params.contains("elementId"))
+        {
+            const std::string elementId = ctx.params["elementId"].get<std::string>();
+            json targetError;
+            if (!Editor::ResolveElementPointerTarget(ui->GetRootElement(), elementId, x, y, targetError))
+                return targetError;
+        }
+        else if (ctx.params.contains("x") && ctx.params.contains("y"))
+        {
+            json coordError;
+            if (!Editor::ReadPointerCoords(ctx.params, "x", "y", x, y, coordError))
+                return coordError;
+        }
+        else if (movesPointer)
+        {
+            return Editor::RefuseRequest("Provide elementId, both x and y, or no target to turn the wheel at the pointer");
+        }
+
+        const double dxValue = ctx.params.value("dx", 0.0);
+        const double dyValue = ctx.params.value("dy", 0.0);
+        constexpr double kFloatMax = std::numeric_limits<float>::max();
+        if (!std::isfinite(dxValue) || !std::isfinite(dyValue) || std::abs(dxValue) > kFloatMax || std::abs(dyValue) > kFloatMax)
+            return Editor::RefuseRequest("Pass dx and dy as finite wheel steps in float range (got dx=" + json(dxValue).dump() +
+                                         ", dy=" + json(dyValue).dump() + ")");
+        const float dx = static_cast<float>(dxValue);
+        const float dy = static_cast<float>(dyValue);
+        if (dx == 0.0f && dy == 0.0f)
+            return Editor::RefuseRequest("Provide a non-zero dx or dy in wheel steps (one notch of the wheel is 1; positive dy is a wheel up)");
+
+        const int deltaCount = ctx.params.value("count", 1);
+        if (deltaCount < 1 || deltaCount > Editor::ScrollSequence::kMaxDeltaCount)
+            return Editor::RefuseRequest("count must be 1 to " + std::to_string(Editor::ScrollSequence::kMaxDeltaCount) + " frames");
+
+        const int mods = Editor::ReadKeyModifiers(ctx.params);
+        if (movesPointer)
+            Editor::InjectMouseMove(wndCtx->inputConfig, wndCtx->window.get(), ui, x, y);
+
+        // The poll finds the window by its id each frame: the window can close before the wheel ends.
+        auto wheel = std::make_shared<Editor::ScrollSequence>(deltaCount, movesPointer);
+        const uint64_t windowId = wndCtx->windowId;
+        server.EnqueueDeferredResponse(ctx.id, [&app, windowId, x, y, dx, dy, mods, wheel](json& outResult) -> bool
+        {
+            const Editor::ScrollSequence::Step step = wheel->Poll([&]
+                { return InjectScrollIntoWindow(app, windowId, dx, dy, mods); });
+            if (step == Editor::ScrollSequence::Step::Pending)
+                return false;
+            const EditorApplication::EditorWindowContext* window = FindWindowWithUi(app, windowId);
+            if (step == Editor::ScrollSequence::Step::WindowClosed || !window)
+            {
+                outResult = Editor::RefuseRequest("The window closed before the wheel ended");
+                return true;
+            }
+            outResult = json{{"scrolled", true},
+                             {"x", x},
+                             {"y", y},
+                             {"dx", dx},
+                             {"dy", dy},
+                             {"count", wheel->DeltaCount()},
+                             {"mods", mods},
+                             {"hovered", window->ui->GetHoveredElementDebugName()}};
+            return true;
+        }, wheel->FrameCount());
         return EditorDebugServer::DeferredMarker(); });
 
     // ---- Context-menu automation -------------------------------------------
@@ -4073,6 +4183,11 @@ void RegisterDebugHandlers(EditorDebugServer& server,
         if (!field)
             return Editor::RefuseRequest("Element is not a TextField: " + elementId);
 
+        if (field->IsMasked())
+        {
+            field->SetValue(text);
+            return json{{"ok", true}, {"elementId", elementId}, {"masked", true}};
+        }
         const std::string previous = field->GetValue();
         field->SetValue(text);
         return json{{"ok", true}, {"elementId", elementId}, {"previous", previous}}; });
@@ -4192,7 +4307,9 @@ void RegisterDebugHandlers(EditorDebugServer& server,
             // verify what the control now holds without a second round-trip.
             UIElement* root = ui->GetRootElement();
             UIElement* el = root ? root->FindById(HashStringId(focusId)) : nullptr;
-            if (auto* sf = dynamic_cast<Field<std::string>*>(el))
+            if (IsMaskedText(el))
+                outResult["masked"] = true;
+            else if (auto* sf = dynamic_cast<Field<std::string>*>(el))
                 outResult["value"] = sf->GetValue();
             else if (auto* ff = dynamic_cast<Field<float>*>(el))
                 outResult["value"] = ff->GetValue();
@@ -4266,70 +4383,44 @@ void RegisterDebugHandlers(EditorDebugServer& server,
             return Editor::RefuseRequest("key must be a string name or integer keycode");
         }
 
-        int mods = 0;
-        auto applyMod = [&mods, &toLower](const std::string& m) {
-            const std::string s = toLower(m);
-            if (s == "shift") mods |= 0x0001;
-            else if (s == "control" || s == "ctrl") mods |= 0x0002;
-            else if (s == "alt") mods |= 0x0004;
-            else if (s == "super" || s == "cmd" || s == "meta") mods |= 0x0008;
-        };
-        if (ctx.params.contains("mods"))
-        {
-            const auto& mp = ctx.params["mods"];
-            if (mp.is_string())
-                applyMod(mp.get<std::string>());
-            else if (mp.is_array())
-                for (const auto& e : mp) { if (e.is_string()) applyMod(e.get<std::string>()); }
-            else if (mp.is_number_integer())
-                mods = mp.get<int>();
-        }
+        const int mods = Editor::ReadKeyModifiers(ctx.params);
 
         const std::string action = ctx.params.value("action", std::string("tap"));
-        constexpr int kRelease = 0, kPress = 1, kRepeat = 2;
 
         if (action == "press")
         {
-            Editor::InjectKey(wndCtx->inputConfig, ui, keyCode, kPress, mods);
+            Editor::InjectKey(wndCtx->inputConfig, ui, keyCode, Input::kKeyActionPress, mods);
             return json{{"ok", true}, {"key", keyCode}, {"action", "press"}, {"mods", mods}};
         }
         if (action == "release")
         {
-            Editor::InjectKey(wndCtx->inputConfig, ui, keyCode, kRelease, mods);
+            Editor::InjectKey(wndCtx->inputConfig, ui, keyCode, Input::kKeyActionRelease, mods);
             return json{{"ok", true}, {"key", keyCode}, {"action", "release"}, {"mods", mods}};
         }
         if (action == "repeat")
         {
-            Editor::InjectKey(wndCtx->inputConfig, ui, keyCode, kRepeat, mods);
+            Editor::InjectKey(wndCtx->inputConfig, ui, keyCode, Input::kKeyActionRepeat, mods);
             return json{{"ok", true}, {"key", keyCode}, {"action", "repeat"}, {"mods", mods}};
         }
         if (action != "tap")
             return Editor::RefuseRequest("action must be tap, press, release, or repeat");
 
-        int count = ctx.params.value("count", 1);
-        if (count < 1) count = 1;
-        if (count > 64) count = 64;
-
-        // Press (count times) this frame; defer the release to the next frame so
-        // ui->Update() processes the press edge(s) first (mirrors click_element).
-        for (int i = 0; i < count; ++i)
-            Editor::InjectKey(wndCtx->inputConfig, ui, keyCode, kPress, mods);
-
-        auto framesToSkip = std::make_shared<int>(1);
-        const int relKey = keyCode;
-        const int relMods = mods;
-        const int relCount = count;
-        server.EnqueueDeferredResponse(ctx.id, [wndCtx, ui, relKey, relMods, relCount, framesToSkip](json& outResult) -> bool
+        // One key event a frame, so the game and the UI read each tap as its own press.
+        // The poll finds the window by its id each frame: the window can close before the taps end.
+        auto taps = std::make_shared<Editor::KeyTapSequence>(ctx.params.value("count", 1));
+        const uint64_t windowId = wndCtx->windowId;
+        server.EnqueueDeferredResponse(ctx.id, [&app, windowId, keyCode, mods, taps](json& outResult) -> bool
         {
-            if (*framesToSkip > 0)
-            {
-                --(*framesToSkip);
+            const Editor::KeyTapSequence::Step step = taps->Poll([&](int keyAction)
+                { return InjectKeyIntoWindow(app, windowId, keyCode, keyAction, mods); });
+            if (step == Editor::KeyTapSequence::Step::Pending)
                 return false;
-            }
-            Editor::InjectKey(wndCtx->inputConfig, ui, relKey, 0 /*release*/, relMods);
-            outResult = json{{"ok", true}, {"key", relKey}, {"action", "tap"}, {"count", relCount}, {"mods", relMods}};
+            if (step == Editor::KeyTapSequence::Step::WindowClosed)
+                outResult = Editor::RefuseRequest("The window closed before the taps ended");
+            else
+                outResult = json{{"ok", true}, {"key", keyCode}, {"action", "tap"}, {"count", taps->TapCount()}, {"mods", mods}};
             return true;
-        });
+        }, taps->FrameCount());
         return EditorDebugServer::DeferredMarker(); });
 
     // send_text — inject UTF-8 text into the currently focused UI control.
@@ -4916,9 +5007,7 @@ void RegisterDebugHandlers(EditorDebugServer& server,
                     if (auto* xf = world2->GetComponent<Components::Transform>(created.rootEntity))
                     {
                         Components::Transform updated = *xf;
-                        updated.matrix[12] = state->px;
-                        updated.matrix[13] = state->py;
-                        updated.matrix[14] = state->pz;
+                        updated.Position = Mathematics::WorldPosition{state->px, state->py, state->pz};
                         world2->AddComponentImmediate(created.rootEntity, updated);
                     }
                 }
@@ -5050,9 +5139,7 @@ void RegisterDebugHandlers(EditorDebugServer& server,
             if (auto* xf = world->GetComponent<Components::Transform>(created.rootEntity))
             {
                 Components::Transform updated = *xf;
-                updated.matrix[12] = px;
-                updated.matrix[13] = py;
-                updated.matrix[14] = pz;
+                updated.Position = Mathematics::WorldPosition{px, py, pz};
                 world->AddComponentImmediate(created.rootEntity, updated);
             }
         }
@@ -5557,6 +5644,11 @@ void RegisterDebugHandlers(EditorDebugServer& server,
             renderServices["meshEntryCount"] = rs->GetMeshGPURegistry().GetEntryCount();
             renderServices["drawStreamSlots"] =
                 rs->GetDrawStreamBuilder() ? static_cast<uint64_t>(rs->GetDrawStreamBuilder()->GetRangeCount()) : 0ull;
+            // Range inserts of this frame that moved the ranges after them. A scatter call publishes in key order.
+            renderServices["drawStreamInsertsBeforeEnd"] =
+                rs->GetDrawStreamBuilder()
+                    ? static_cast<uint64_t>(rs->GetDrawStreamBuilder()->GetRangeInsertsBeforeEnd())
+                    : 0ull;
             // Non-skipped MaterialParams repacks; flat while idle = the
             // PackMaterialSSBO skip gate is engaging.
             renderServices["materialSSBOPackCount"] = rs->Materials().GetMaterialSSBOPackCount();
@@ -6176,8 +6268,6 @@ void RegisterDebugHandlers(EditorDebugServer& server,
             {"terminalPassesMs", perf.terminalPassesMs},
             {"rgCompileMs", perf.rgCompileMs},
             {"rgExecuteMs", perf.rgExecuteMs},
-            {"variantCompileMs", perf.variantCompileMs},
-            {"prewarmMs", perf.prewarmMs},
             {"presentMs", perf.presentMs}
         };
 
@@ -7027,10 +7117,16 @@ void RegisterDebugHandlers(EditorDebugServer& server,
 
     // 14. shutdown
     // Gracefully exits the editor. Useful to release PDB locks before rebuilds.
-    server.RegisterHandler("shutdown", [&app](const EditorDebugServer::RequestContext& /*ctx*/) -> json
-                           {
-        app.RequestExit();
-        return json{{"ok", true}}; });
+    // Runs on the network thread: a quit during a long frame stops the loop at the end
+    // of that frame.
+    server.RegisterHandler(
+        "shutdown",
+        [&app](const EditorDebugServer::RequestContext& /*ctx*/) -> json
+        {
+            app.RequestExit();
+            return json{{"ok", true}};
+        },
+        EditorDebugServer::HandlerThread::Network);
 
     // Undocks a panel into a floating OS window — exercises the multi-window
     // render-target path from the test harness.
@@ -7614,7 +7710,7 @@ void RegisterDebugHandlers(EditorDebugServer& server,
     auto rgTimingMap = [](RG::RGFrame* frame) {
         std::unordered_map<std::string, std::pair<double, double>> m;
         if (frame)
-            for (const auto& t : frame->LastFrameTimings())
+            for (const auto& t : frame->LastFrameProfiling().Passes)
                 m[t.Name] = {t.CpuMs, t.GpuSpanMs};
         return m;
     };
@@ -7681,7 +7777,9 @@ void RegisterDebugHandlers(EditorDebugServer& server,
             jp["id"] = p;
             jp["scheduledIndex"] = idx++;
             jp["name"] = name ? name : "(unnamed)";
-            jp["queue"] = RgQueueName(g.PassQueue(p));
+            jp["queue"] = RG::RGQueueName(g.PassQueue(p));
+            jp["executionQueue"] = RG::RGQueueName(g.PassExecutionQueue(p));
+            jp["submissionIndex"] = g.PassSubmission(p);
             jp["phase"] = g.PassPhase(p);
             jp["level"] = g.Level(p);
             jp["barrierCount"] = RgBarrierCountForPass(g, p);
@@ -7709,9 +7807,31 @@ void RegisterDebugHandlers(EditorDebugServer& server,
             }
             passes.push_back(std::move(jp));
         }
+        // Each wait names the submission of this frame that signals it; null when an earlier frame signals it.
+        json submissions = json::array();
+        for (uint32_t submissionIndex = 0; submissionIndex < g.Submissions().size(); ++submissionIndex)
+        {
+            const RG::RGSubmission& submission = g.Submissions()[submissionIndex];
+            json waits = json::array();
+            for (uint32_t waitIndex = 0; waitIndex < submission.WaitCount; ++waitIndex)
+            {
+                const RG::RGSemaphoreWait& wait = submission.Waits[waitIndex];
+                const uint32_t waited = g.WaitedSubmission(wait);
+                waits.push_back({{"physicalQueue", wait.Queue},
+                                 {"value", wait.Value},
+                                 {"submission", waited == RG::kInvalidId ? json(nullptr) : json(waited)}});
+            }
+            submissions.push_back({{"index", submissionIndex},
+                                   {"queue", RG::RGQueueName(submission.Queue)},
+                                   {"physicalQueue", submission.PhysicalQueue},
+                                   {"firstScheduledIndex", submission.ScheduledFirst},
+                                   {"passCount", submission.ScheduledCount},
+                                   {"waits", std::move(waits)}});
+        }
         return json{{"passCount", passes.size()},
                     {"profilingEnabled", frame->ProfilingEnabled()},
-                    {"passes", std::move(passes)}}; });
+                    {"passes", std::move(passes)},
+                    {"submissions", std::move(submissions)}}; });
 
     // 18. get_render_graph_resources
     server.RegisterHandler("get_render_graph_resources", [&app](const EditorDebugServer::RequestContext& ctx) -> json
@@ -7824,7 +7944,7 @@ void RegisterDebugHandlers(EditorDebugServer& server,
 
         json detail;
         detail["name"] = wanted;
-        detail["queue"] = RgQueueName(g.PassQueue(target));
+        detail["queue"] = RG::RGQueueName(g.PassQueue(target));
         detail["phase"] = g.PassPhase(target);
         detail["level"] = g.Level(target);
         detail["barrierCount"] = RgBarrierCountForPass(g, target);
@@ -7939,11 +8059,11 @@ void RegisterDebugHandlers(EditorDebugServer& server,
         // Null while no frame has been recorded, never a stand-in value: a
         // fabricated 60 degrees is the guess this field exists to retire.
         json projection = json(nullptr);
-        Mathematics::Matrix4x4 proj;
+        Rendering::CameraData camera;
         uint32_t viewW = 0;
         uint32_t viewH = 0;
-        if (scene->GetLastFrameProjection(proj, viewW, viewH))
-            projection = Editor::DescribeCameraProjection(proj, viewW, viewH);
+        if (scene->GetLastFrameCamera(camera, viewW, viewH))
+            projection = Editor::DescribeCameraProjection(camera.proj, viewW, viewH);
 
         // is2D separates the two ways a projection turns orthographic: 2D mode,
         // which also makes the view ignore the 3D pose reported here, and a 3D
@@ -8075,8 +8195,7 @@ void RegisterDebugHandlers(EditorDebugServer& server,
             }
             else if (auto* xf = world->GetComponent<Components::Transform>(entity))
             {
-                auto pos = xf->GetPosition();
-                target = Mathematics::Vector3(pos.x, pos.y, pos.z);
+                target = xf->GetPosition() - Mathematics::WorldPosition{};
             }
         }
         else if (ctx.params.contains("target"))
@@ -9592,15 +9711,10 @@ void RegisterDebugHandlers(EditorDebugServer& server,
         return result; });
 
     // GPU profiler: per-pass CPU/GPU timings from the main window's render graph
-    // for the last resolved frame. Pass {"enabled": true|false} to arm/disarm
-    // per-pass GPU timestamp profiling (results resolve ~FramesInFlight frames
-    // later; the first call after arming returns empty until they land).
-    // timingSemantics says what gpuSpanMs measures; under "encoder-span" (Metal)
-    // the values are overlapping encoder spans and there is deliberately no
-    // frame GPU total in the payload — summing them is wrong. spanCounted marks
-    // the one pass per measurement that resolveStats.distinctSpanGpuMs counts
-    // (RGPassTiming::SpanCounted), so a total over any set of passes adds only
-    // those.
+    // for the last resolved frame. {"enabled": true|false} arms or disarms the
+    // timestamps; {"stats": true|false} turns per-pass pipeline statistics on or
+    // off, and on also arms the timestamps. Results resolve FramesInFlight frames
+    // later, so the first call after arming returns empty rows.
     server.RegisterHandler("get_gpu_profiler", [&app](const EditorDebugServer::RequestContext& ctx) -> json
                            {
         RG::RGFrame* frame = MainRgFrame(app);
@@ -9609,69 +9723,25 @@ void RegisterDebugHandlers(EditorDebugServer& server,
 
         if (ctx.params.contains("enabled"))
             frame->SetProfilingEnabled(ctx.params.value("enabled", false));
-
-        const auto timings = frame->LastFrameTimings();
-        const RG::RGFrame::RGProfilingResolveStats rs = frame->LastResolveStats();
-        const bool encoderSpan = frame->TimingSemantics() == Rendering::TimestampSemantics::EncoderSpan;
-
-        json passes = json::array();
-        double totalCpu = 0.0;
-        for (const auto& t : timings)
+        if (ctx.params.contains("stats"))
         {
-            totalCpu += t.CpuMs;
-            passes.push_back({{"name", t.Name},
-                              {"queue", RgQueueName(t.Queue)},
-                              {"phase", t.Phase},
-                              {"cpuMs", t.CpuMs},
-                              {"gpuSpanMs", t.GpuSpanMs},
-                              {"spanShared", t.SpanShared},
-                              {"spanCounted", t.SpanCounted}});
+            const bool statistics = ctx.params.value("stats", false);
+            frame->SetPipelineStatisticsEnabled(statistics);
+            if (statistics)
+                frame->SetProfilingEnabled(true);
         }
 
-        json warnings = json::array();
-        if (encoderSpan)
-        {
-            warnings.push_back(
-                "gpuSpanMs values are summed command-encoder spans, not additive pass costs: "
-                "one encoder can carry several passes and is then reported to each of them "
-                "(spanShared), and encoders overlap one another because the GPU runs them "
-                "concurrently. Treat each as an upper bound and do NOT sum them — use "
-                "resolveStats.distinctSpanGpuMs (itself an upper bound) or the device's GPU frame "
-                "period for a frame total. To total a group of passes, add only the ones with "
-                "spanCounted true: each measurement is counted on exactly one pass.");
-        }
-        if (rs.NonMonotonic > 0)
-        {
-            warnings.push_back("resolveStats.nonMonotonicTimestamps = " +
-                               std::to_string(rs.NonMonotonic) +
-                               ": that many passes' raw timestamp pairs closed before they opened "
-                               "and were discarded, so their gpuSpanMs reads 0.");
-        }
-        if (rs.ReadFailures > 0 || rs.InvalidQueryIndices > 0)
-        {
-            warnings.push_back("resolveStats readFailures/invalidQueryIndices are non-zero: those "
-                               "passes have no measurement this frame and read 0.");
-        }
-
-        json result;
-        result["enabled"] = frame->ProfilingEnabled();
-        if (!frame->ProfilingEnabled())
-            result["hint"] = "Profiling disarmed — call with {\"enabled\": true}, then poll again.";
-        result["timingSemantics"] = encoderSpan ? "encoder-span" : "pipeline-point";
-        result["warnings"] = std::move(warnings);
-        result["resolveStats"] = {
-            {"invalidQueryIndices", rs.InvalidQueryIndices},
-            {"readFailures", rs.ReadFailures},
-            {"nonMonotonicTimestamps", rs.NonMonotonic},
-            {"resolvedPasses", rs.ResolvedPasses},
-            {"sharedSpanPasses", rs.SharedSpanPasses},
-            {"distinctSpanGpuMs", rs.DistinctSpanGpuMs}
-        };
-        result["lastFrame"] = {
-            {"passes", std::move(passes)},
-            {"totalCpuMs", totalCpu}
-        };
-        return result; });
+        const RG::RGFrame::RGProfilingSnapshot profiling = frame->LastFrameProfiling();
+        Editor::GpuProfilerReportInput input;
+        input.Timings = profiling.Passes;
+        input.Skipped = profiling.Skipped;
+        input.Scopes = profiling.Scopes;
+        input.ResolveStats = profiling.ResolveStats;
+        input.ProfilingEnabled = frame->ProfilingEnabled();
+        input.TimingSemantics = frame->TimingSemantics();
+        input.StatisticsEnabled = frame->PipelineStatisticsEnabled();
+        input.StatisticsSupported = frame->PipelineStatisticsSupported();
+        return Editor::DescribeGpuProfiler(input); });
 
     // Named monitor history (frame-time ring buffer, memory, draw counts, ...).
     // Returns the list of registered monitors with their latest/peak/average,

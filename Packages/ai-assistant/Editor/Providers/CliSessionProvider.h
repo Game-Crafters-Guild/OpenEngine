@@ -4,12 +4,16 @@
 #include "IAgentProvider.h"
 #include "ReplyTextBlocks.h"
 
+#include "Types/FlatMap.h"
+
+#include <atomic>
 #include <cstdint>
 #include <filesystem>
-#include <map>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <vector>
 
 namespace GameEngine
@@ -28,16 +32,6 @@ public:
     static constexpr std::string_view kStrippedVariables[] = {
         "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CODEX_API_KEY", "OPENAI_API_KEY"};
 
-    /// What the login check reports, for the settings page's Login status row.
-    struct LoginStatus
-    {
-        /// The CLI reported a usable login.
-        bool LoggedIn = false;
-        /// One line for the user: the login method, or what is wrong and the fix.
-        /// Never holds an email address, an organization or a key.
-        std::string Text;
-    };
-
     /// `executable` is a program name searched for by the platform or a full path;
     /// `workingDirectory` is the session's directory (the project root), empty to
     /// inherit the editor's.
@@ -45,18 +39,31 @@ public:
 
     ProviderCapabilities Capabilities() const override;
 
-    /// Checks the CLI once per provider (CheckReadiness) until it passes, then spawns
-    /// the turn. A turn that attaches the editor's tools runs without them when
-    /// ToolsRefusal() refuses, and its TurnResult::Note says why. Ends Stopped when `cancel` fires, checks included; Failed when the
+    /// The Editor tools step's name (ToolsStep).
+    static constexpr std::string_view kEditorToolsStep = "Editor tools";
+
+    /// Runs CheckSetup() until it passes once, then spawns the turn; a failed setup ends
+    /// the turn Failed and NotReady with the first failed step's finding and the panel's fix. A turn that
+    /// attaches the editor's tools runs without them when ToolsRefusal() refuses, and its
+    /// TurnResult::Note says why. Ends Stopped when `cancel` fires, checks included; Failed when the
     /// CLI cannot start, a check does not answer within its time limit, a stdout line
     /// exceeds 1 MiB, the CLI reports an error or exits before its completion record;
     /// Text keeps what arrived in every case.
     void RunTurn(const AgentTurnRequest& request, AgentTurnEvents& events, const CancelToken& cancel) final;
 
-    /// Runs the CLI's own login check under the stripped environment. Blocks for as
-    /// long as the CLI takes (seconds, at most the check's time limit) or until
-    /// `cancel` fires: call it off the UI thread.
-    virtual LoginStatus CheckLogin(const CancelToken& cancel) const = 0;
+    /// The program step (CheckProgram), then the login step (CheckLogin), both under the
+    /// stripped environment. A completed check that passes lets the next turn skip it;
+    /// one that fails makes the next turn check again.
+    SetupStatus CheckSetup(const CancelToken& cancel, SetupSurface surface, const SetupStepSink& onStep) const final;
+    /// The program step and the login step, as CheckSetup() runs them.
+    std::vector<SetupStep> SetupPlan() const final;
+    /// A CheckSetup() passed since the executable was set: a turn starts without a check.
+    bool SetupChecked() const { return m_Ready.load(std::memory_order_acquire); }
+    /// The Editor tools step for `node`: Passed when `refusal` is empty, else a Warning with
+    /// `refusal` as its fix, since a turn then runs as a conversation only.
+    static SetupStep ToolsStep(const std::string& node, std::string refusal);
+    /// The Editor tools step before it runs, as SetupPlan() lists a step.
+    static SetupStep PlannedToolsStep();
 
     /// The sessions the CLI keeps on disk for WorkingDirectory(), read from its own
     /// files (CliSessionFiles); empty without a working directory. Reads files for as
@@ -66,9 +73,10 @@ public:
     /// Empty when a turn can attach the editor's tools through the Node.js executable
     /// `node` to the debug port `port`; otherwise why not, with the fix. Checks that
     /// `node` is Node 20 or later, then the CLI's own condition (ToolsBlocker), and
-    /// remembers the answer per node and port. Blocks for as long as the checks take
-    /// (seconds) or until `cancel` fires: call it off the UI thread.
-    std::string ToolsRefusal(const std::string& node, uint16_t port, const CancelToken& cancel);
+    /// remembers the answer per node, port and surface (the fix names where Node
+    /// executable is from `surface`). Blocks for as long as the checks take (seconds) or
+    /// until `cancel` fires: call it off the UI thread.
+    std::string ToolsRefusal(const std::string& node, uint16_t port, SetupSurface surface, const CancelToken& cancel);
 
     /// The executable this provider runs.
     const std::string& Executable() const { return m_Executable; }
@@ -95,12 +103,17 @@ protected:
         /// executable is a .cmd or .bat script, could not start, was stopped or did
         /// not answer in time), with the fix.
         std::string Failure;
+        /// The command did not answer within the check's time limit (Failure says so).
+        bool TimedOut = false;
         /// The exit code; -1 when the executable could not be started.
         int ExitCode = -1;
         /// Every stdout line, each followed by '\n'.
         std::string Stdout;
         /// The end of stderr.
         std::string Stderr;
+        /// The first non-empty line of Stdout, else of Stderr, cut at
+        /// SetupStep::kMaxFirstOutputBytes.
+        std::string FirstOutput;
     };
 
     /// The CLI's name in messages ("Claude Code").
@@ -109,9 +122,19 @@ protected:
     virtual std::vector<std::string> TurnArguments(const AgentTurnRequest& request) const = 0;
     /// Reads one stdout line of the turn and reports through `turn.Events`.
     virtual void ReadLine(std::string_view line, TurnState& turn) const = 0;
-    /// Empty when the CLI can run a turn; otherwise the refusal with its fix. Returns
-    /// early once `cancel` fires.
-    virtual std::string CheckReadiness(const CancelToken& cancel) const = 0;
+    /// The program step: `<executable> --version` ran and printed the CLI's version.
+    virtual SetupStep CheckProgram(const CancelToken& cancel, SetupSurface surface) const = 0;
+    /// The login step: the CLI's own login check.
+    virtual SetupStep CheckLogin(const CancelToken& cancel, SetupSurface surface) const = 0;
+    /// The program to pick in the executable field, by its file name on this platform
+    /// ("Claude Code's claude.exe" on Windows).
+    virtual std::string ProgramToPick() const = 0;
+    /// Where the program comes from ("install it from claude.com/claude-code").
+    virtual std::string InstallSource() const = 0;
+    /// A sentence that tells the CLI from a desktop app of the same name, or empty: for a
+    /// program that printed nothing (`printedNothing`) or one that sits under a known
+    /// desktop-app folder. A hint, never the finding.
+    virtual std::string DesktopAppHint(bool printedNothing) const = 0;
     /// The end of stderr of a turn that exited before its completion record says the
     /// session the turn continued does not exist (TurnResult::SessionNotFound). A CLI
     /// that reports it in its stdout records sets it in ReadLine() instead.
@@ -134,6 +157,19 @@ protected:
     static std::string QuotedLastLine(std::string_view text);
     /// The refusal for an executable that could not be started.
     std::string NotStartedMessage() const;
+    /// The sentence that fixes a wrong or missing executable on `surface`: on the settings
+    /// page, Browse; in the panel, where the executable field is, first.
+    std::string ProgramFix(SetupSurface surface) const;
+    /// The fix of a failed login: run `command` in a terminal, then check again the way
+    /// `surface` offers (Check again on the page, the next prompt in the panel).
+    static std::string LoginFix(std::string_view command, SetupSurface surface);
+    /// The program step for `output` of `<executable> <command>` when it did not run to
+    /// its end (Failure set) or printed nothing; nullopt when it printed something.
+    std::optional<SetupStep> FailedProgramStep(const CommandOutput& output, std::string_view command,
+                                               SetupSurface surface) const;
+    /// The program step for a program that printed `output.FirstOutput`, which is not
+    /// the CLI's answer to its version command.
+    SetupStep NotTheCliStep(const CommandOutput& output, SetupSurface surface) const;
     /// Where the CLI keeps its files: the directory the environment variable
     /// `variable` names (the CLI reads the same environment), else `folder` in the
     /// user's home directory.
@@ -143,9 +179,12 @@ private:
     std::string m_Executable;
     std::filesystem::path m_WorkingDirectory;
     std::mutex m_ReadinessMutex;
-    bool m_Ready = false;
-    /// ToolsRefusal() answers by node and port.
+    /// Written by CheckSetup() on any thread, read by the UI thread (SetupChecked()).
+    mutable std::atomic<bool> m_Ready = false;
+    /// ToolsRefusal() answers by node, port and surface. They are valid while
+    /// AiAssistantSettings::SetupGeneration() equals m_ToolsGeneration.
     std::mutex m_ToolsMutex;
-    std::map<std::pair<std::string, uint16_t>, std::string> m_ToolsRefusals;
+    FlatMap<std::tuple<std::string, uint16_t, SetupSurface>, std::string> m_ToolsRefusals;
+    uint64_t m_ToolsGeneration = 0;
 };
 } // namespace GameEngine

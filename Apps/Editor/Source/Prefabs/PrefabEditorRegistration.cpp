@@ -447,7 +447,7 @@ ComponentOverrides QueryPrefabComponentOverrides(ECS::World& world, ECS::EntityH
         else if (entry.Kind == Scene::PrefabOverrideKind::Field)
         {
             answer.Overridden = true;
-            const std::string_view field = ReflectedFieldForSceneKey(typeId, entry.Field);
+            const std::string_view field = InspectorFieldForSceneKey(typeId, entry.Field);
             if (!field.empty() && !answer.IsFieldOverridden(field))
                 answer.Fields.emplace_back(field);
         }
@@ -469,7 +469,10 @@ void AddRemovedComponentHeaders(const InspectorContext& context)
             removed.push_back(entry.Component);
     if (removed.empty())
         return;
-    const OverrideMenuTarget entity{context.World, context.Entity, 0, {}, context.Undo, context.ChangeNotifications};
+    const OverrideMenuTarget entity{.World = context.World,
+                                    .Entity = context.Entity,
+                                    .Undo = context.Undo,
+                                    .Notifications = context.ChangeNotifications};
     context.Parent->AddChild(std::make_unique<PrefabRemovedComponents>(removed, entity, context.RequestInspectorRefresh));
 }
 
@@ -562,12 +565,13 @@ void RefreshViewsOf(EditorChangeNotifications& notifications, ECS::World& world)
 
 } // namespace
 
-void RegisterPrefabEditor(EditorChangeNotifications& notifications, IThumbnailProvider* thumbnails,
-                          std::function<bool()> isInPlayMode, std::function<SceneDocumentManager*()> document)
+void RegisterPrefabEditor(EditorChangeNotifications& notifications, UndoRedoService* undo,
+                          IThumbnailProvider* thumbnails, std::function<bool()> isInPlayMode,
+                          std::function<SceneDocumentManager*()> document)
 {
     OverridesListReopen() = {};
     OverridesListContext() = {std::move(document), isInPlayMode, &OverridesListReopen()};
-    PrefabInstanceDescriptions::Get().Track(notifications);
+    PrefabInstanceDescriptions::Get().Track(notifications, undo, isInPlayMode);
     InstancesChangedSubscription() = Scene::SubscribePrefabInstancesChanged(
         [&notifications](ECS::World& world) { RefreshViewsOf(notifications, world); });
     EditorComponentTraits traits;

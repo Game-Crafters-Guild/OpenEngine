@@ -51,7 +51,7 @@ bool GraphAsset::Load()
     return ok;
 }
 
-bool GraphAsset::LoadFromData(const Vector<uint8>& data)
+bool GraphAsset::LoadFromData(std::span<const uint8> data)
 {
     std::string text(reinterpret_cast<const char*>(data.data()), data.size());
     if (ShaderGraph::IsShaderGraphSource(text))

@@ -23,10 +23,13 @@
 #include "TerrainECS/TerrainRuleNoise.h" // SurfaceRuleNoiseSample
 #include "TerrainECS/TerrainSplatComposite.h" // CompositeSplatTexel
 #include "TerrainECS/TerrainSurface/TerrainSurfaceRuleEval.h" // EvaluateTerrainSurfaceRuleWeight
+#include "TerrainECS/PageLevelRule.h" // kPinWholePyramidCacheFraction
+#include "TerrainECS/TerrainPages.h" // PlatformHeightPageProfile
 #include "Components/Terrain/TerrainSurfaceRules.h" // kMaxTerrainSurfaceRules (binding-size sweep)
 #include "GrassSurfaceParams.h" // TerrainGrass/Source
 #include "Terrain/Heightfield.h"
 #include "Mathematics/MatrixOps.h" // MakeLookAtLH (tile-priority +Z look pin)
+#include "PageStreaming/PageStore/PageStoreFormat.h" // the level bound of the sizing plan
 
 #include <gtest/gtest.h>
 
@@ -34,6 +37,7 @@
 #include <cmath>
 #include <cstring>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 using namespace GameEngine;
@@ -252,15 +256,57 @@ BuiltAtlas Build2x2FullAtlas(uint32 tileRes)
             const std::vector<float32> heights = MakeFullTile(tileRes, tx, tz);
             PackTileHeightIntoSlot(b.Atlas.data(), b.Geo, slot, heights.data(),
                                    /*tileIsFull*/ true, AtlasTileNeighbors{}, AtlasNeighborEdges{});
-            TileAtlasSlot& row = b.Table.Row(tx, tz);
+            TileAtlasSlot& row = *b.Table.Claim(tx, tz);
             row.Slot = slot;
             row.Generation = 1;
-            row.LodBias = kAtlasLodBiasFull;
             ++slot;
         }
     return b;
 }
 } // namespace
+
+TEST(AtlasIndirection, TheRowsAreAWindowThatWrapsOverALargeTileGrid)
+{
+    // 245 tiles a side: tile (244, 244) and tile (116, 116) share window row (116, 116).
+    const uint32 tileRes = 9;
+    const AtlasGeometry geo = MakeAtlasGeometry(tileRes, /*slots*/ 1, /*tilesX*/ 245, /*tilesZ*/ 245);
+    std::vector<float32> atlas(static_cast<size_t>(geo.AtlasDim) * geo.AtlasDim, 0.0f);
+    AtlasIndirectionTable table;
+    table.Resize(geo);
+    ASSERT_EQ(table.Rows.size(), 128u * 128u) << "the table size does not grow with the terrain";
+    EXPECT_EQ(geo.RowIndex(244, 244), geo.RowIndex(116, 116));
+
+    const std::vector<float32> heights(static_cast<size_t>(tileRes) * tileRes, 0.75f);
+    PackTileHeightIntoSlot(atlas.data(), geo, /*slot*/ 0, heights.data(), /*tileIsFull*/ true,
+                           AtlasTileNeighbors{}, AtlasNeighborEdges{});
+    TileAtlasSlot* far = table.Claim(244, 244);
+    ASSERT_NE(far, nullptr);
+    far->Slot = 0;
+    EXPECT_EQ(table.Claim(116, 116), nullptr) << "a resident tile keeps its row";
+    EXPECT_EQ(table.Row(244, 244).Slot, 0u);
+    EXPECT_EQ(table.Row(116, 116).Slot, kAtlasNoSlot) << "a row another tile owns reads not resident";
+
+    const AtlasHeightSampler sampler{geo, table.Rows.data(), atlas.data(), nullptr};
+    const float32 farUV = 244.5f / 245.0f;
+    const float32 nearUV = 116.5f / 245.0f;
+    EXPECT_TRUE(sampler.IsResidentAt(farUV, farUV));
+    EXPECT_FLOAT_EQ(sampler.SampleHeightNormalized(farUV, farUV), 0.75f);
+    EXPECT_FALSE(sampler.IsResidentAt(nearUV, nearUV));
+    EXPECT_FLOAT_EQ(sampler.SampleHeightNormalized(nearUV, nearUV), 0.0f) << "the coarse fallback, not tile (244, 244)";
+}
+
+TEST(AtlasIndirection, AGridOfAtMost128TilesASideKeepsOneRowPerTile)
+{
+    for (const auto [tilesX, tilesZ] : {std::pair{5u, 3u}, std::pair{128u, 128u}, std::pair{1u, 128u}})
+    {
+        const AtlasGeometry geo = MakeAtlasGeometry(/*tileRes*/ 9, /*slots*/ 1, tilesX, tilesZ);
+        EXPECT_EQ(geo.RowCount(), tilesX * tilesZ);
+        for (uint32 tz = 0; tz < tilesZ; ++tz)
+            for (uint32 tx = 0; tx < tilesX; ++tx)
+                ASSERT_EQ(geo.RowIndex(static_cast<int32>(tx), static_cast<int32>(tz)), tz * tilesX + tx)
+                    << tilesX << "x" << tilesZ << " at (" << tx << ", " << tz << ")";
+    }
+}
 
 TEST(AtlasSampler, ParityWithDirectTileSampleAtGridPoints)
 {
@@ -431,8 +477,8 @@ TEST(AtlasEdgeOwnership, Risk1_ApronRefreshDiscriminates)
     std::vector<float32> atlas(static_cast<size_t>(geo.AtlasDim) * geo.AtlasDim, 0.0f);
     AtlasIndirectionTable table;
     table.Resize(geo);
-    table.Row(0, 0).Slot = 0; // T = coarse tile (0,0)
-    table.Row(1, 0).Slot = 1; // N = tile (1,0), coarse then upgraded
+    table.Claim(0, 0)->Slot = 0; // T = coarse tile (0,0)
+    table.Claim(1, 0)->Slot = 1; // N = tile (1,0), coarse then upgraded
 
     // T coarse; N starts coarse. Neither Full -> T keeps its own +X edge.
     const std::vector<float32> coarse = MakeCoarseTile(tileRes);
@@ -483,8 +529,9 @@ TEST(AtlasEdgeOwnership, Risk1_ApronRefreshSetIncludesDiagonals)
     for (int32 tz = 0; tz < 2; ++tz)
         for (int32 tx = 0; tx < 2; ++tx)
         {
-            table.Row(tx, tz).Slot = static_cast<uint32>(tz * 2 + tx);
-            table.Row(tx, tz).Generation = 1;
+            TileAtlasSlot& row = *table.Claim(tx, tz);
+            row.Slot = static_cast<uint32>(tz * 2 + tx);
+            row.Generation = 1;
         }
     // Tile (1,0): resident axis neighbours (0,0),(1,1) + resident DIAGONAL (0,1).
     const std::vector<TileCoord> refresh = NeighborsNeedingApronRefresh(table, /*tx*/ 1, /*tz*/ 0);
@@ -492,7 +539,7 @@ TEST(AtlasEdgeOwnership, Risk1_ApronRefreshSetIncludesDiagonals)
     EXPECT_TRUE(std::find(refresh.begin(), refresh.end(), TileCoord{0, 1}) != refresh.end())
         << "diagonal neighbour omitted -> the 4-tile corner never refreshes";
     // A non-resident diagonal drops out of the set.
-    table.Row(0, 1).Slot = kAtlasNoSlot;
+    table.Claim(0, 1)->Slot = kAtlasNoSlot;
     EXPECT_EQ(NeighborsNeedingApronRefresh(table, 1, 0).size(), 2u);
 }
 
@@ -645,10 +692,9 @@ TEST(AtlasSampler, Risk3_HorizonSeamContinuity)
             const std::vector<float32> h = coarseTileFromField(tx, tz);
             PackTileHeightIntoSlot(atlas.data(), geo, slot, h.data(),
                                    /*tileIsFull*/ false, AtlasTileNeighbors{}, AtlasNeighborEdges{});
-            TileAtlasSlot& row = table.Row(tx, tz);
+            TileAtlasSlot& row = *table.Claim(tx, tz);
             row.Slot = slot;
             row.Generation = 1;
-            row.LodBias = kAtlasLodBiasCoarse;
             ++slot;
         }
 
@@ -715,10 +761,9 @@ TEST(AtlasSampler, Risk3_CoarseFieldFrontierContinuous_FlatFallbackCracks)
                 PackTileHeightIntoSlot(atlas.data(), geo, slot,
                                        tileHeights[static_cast<size_t>(tz) * tilesPerAxis + tx].data(),
                                        /*tileIsFull*/ true, AtlasTileNeighbors{}, AtlasNeighborEdges{});
-                TileAtlasSlot& row = table.Row(tx, tz);
+                TileAtlasSlot& row = *table.Claim(tx, tz);
                 row.Slot = slot;
                 row.Generation = 1;
-                row.LodBias = kAtlasLodBiasFull;
                 ++slot;
             }
         }
@@ -989,28 +1034,59 @@ TEST(TerrainRenderPublication, ATerrainCreatedAfterADeleteDoesNotTakeTheDraw)
 // pin BOTH halves of it — where the atlas engages, and that no authored size renders nothing.
 // ---------------------------------------------------------------------------
 
-TEST(TerrainHeightSourceRule, BelowThePerTileCapStaysASingleUntiledTerrain)
+// A 1025-sample terrain is one tile whose height pyramid (9 x 9 + 5 x 5 + 3 x 3 + 2 x 2 + 1 pages)
+// is pinned whole when it fits a quarter of the platform's cache: 128 pages on desktop, 64 on
+// Steam Deck, where only the coarse levels within the quarter are pinned.
+TEST(TerrainHeightSourceRule, BelowThePerTileCapIsOneTileWithItsPyramidPinnedWithinTheCacheQuarter)
 {
     const TerrainSizingPlan plan = DeriveTerrainSizingPlan(1024.0f, 1024.0f, 1.0f);
+    const uint64 pinCap = PlatformHeightPageProfile().Slots / kPinWholePyramidCacheFraction;
 
-    EXPECT_EQ(plan.Source, TerrainHeightSource::Single);
-    EXPECT_EQ(plan.SampleResolution, 1025u);
+    EXPECT_EQ(plan.Source, TerrainHeightSource::Unified);
+    EXPECT_EQ(plan.UnifiedWidth, 1025u);
+    EXPECT_EQ(plan.UnifiedHeight, 1025u);
     EXPECT_EQ(plan.TotalTiles, 1u);
+    EXPECT_EQ(plan.HeightPages, 120u);
+    if (plan.HeightPages <= pinCap)
+        EXPECT_EQ(plan.PinnedHeightPages, plan.HeightPages);
+    else
+        EXPECT_LE(plan.PinnedHeightPages, pinCap);
 }
 
-// TerrainService::CreateTiledTerrain consumes this plan's tile geometry, and it is reachable
-// with a SUB-CAP config (the tiled-terrain tests call it directly). Tiles are square and sized
-// from the SHORTER axis, so the geometry must be derived for a non-tiling terrain too — deriving
-// it only on the tiling branch silently resized those tiles to the longer axis.
-TEST(TerrainHeightSourceRule, TileGeometryIsDerivedEvenWhenTheTerrainDoesNotTile)
+// The plan's levels live in kPageStoreMaxLevels slots on the stack. The largest grid the plan
+// counts must keep its whole pyramid inside them, down to the one-page level.
+TEST(TerrainHeightSourceRule, TheLargestDerivedGridKeepsItsWholePyramidWithinTheLevelBound)
+{
+    const TerrainSizingPlan plan = DeriveTerrainSizingPlan(1.0e9f, 1.0e9f, 1.0f);
+    ASSERT_EQ(plan.TilesPerAxisX, kMaxDerivedTilesPerAxis);
+
+    const std::vector<PageStreaming::PageStoreLevel> levels =
+        PageStreaming::BuildPageStoreLevels(plan.UnifiedWidth, plan.UnifiedHeight);
+    ASSERT_LT(levels.size(), PageStreaming::kPageStoreMaxLevels);
+    EXPECT_EQ(levels.back().PagesX, 1u);
+    EXPECT_EQ(plan.HeightPages, PageStreaming::DensePageCount(levels));
+}
+
+// Tiles are square and sized from the SHORTER axis, as TerrainService::CreateTiledTerrain builds them.
+TEST(TerrainHeightSourceRule, ANonSquareSmallTerrainTilesAlongItsShorterAxis)
 {
     const TerrainSizingPlan plan = DeriveTerrainSizingPlan(512.0f, 128.0f, 1.0f);
 
-    ASSERT_EQ(plan.Source, TerrainHeightSource::Single);
+    ASSERT_EQ(plan.Source, TerrainHeightSource::Unified);
     EXPECT_FLOAT_EQ(plan.TileWorldSize, 128.0f)
         << "square tiles take the shorter axis, exactly as CreateTiledTerrain computes them";
-    // The single heightmap still resolves from the LONGER axis, which is a different question.
-    EXPECT_EQ(plan.SampleResolution, 513u);
+    EXPECT_EQ(plan.TotalTiles, 4u);
+    EXPECT_EQ(plan.UnifiedWidth, 513u);
+    EXPECT_EQ(plan.UnifiedHeight, 129u);
+
+    // 576 x 300 m is two 300 m tiles of 513 samples: the grid overhangs the long side by 24 m and
+    // the lattice is 300 / 512 m, finer than the authored 1 sample per meter.
+    const TerrainSizingPlan oblong = DeriveTerrainSizingPlan(576.0f, 300.0f, 1.0f);
+    EXPECT_FLOAT_EQ(oblong.TileWorldSize, 300.0f);
+    EXPECT_EQ(oblong.TilesPerAxisX, 2u);
+    EXPECT_EQ(oblong.TilesPerAxisZ, 1u);
+    EXPECT_EQ(oblong.TileResolution, 513u);
+    EXPECT_FLOAT_EQ(oblong.MetresPerTexelNear, 300.0f / 512.0f);
 }
 
 TEST(TerrainHeightSourceRule, ATiledTerrainUnderTheUnifiedCeilingUsesTheUnifiedSource)
@@ -1057,7 +1133,8 @@ TEST(TerrainHeightSourceRule, NoAuthoredSizeResolvesToNothing)
             const TerrainSizingPlan plan = DeriveTerrainSizingPlan(sx, sz, spm);
             const std::string at = "sx=" + std::to_string(sx) + " sz=" + std::to_string(sz) +
                                    " spm=" + std::to_string(spm);
-            EXPECT_GT(plan.SampleResolution, 0u) << at;
+            EXPECT_GT(plan.UnifiedWidth, 0u) << at;
+            EXPECT_GT(plan.UnifiedHeight, 0u) << at;
             EXPECT_GT(plan.TotalTiles, 0u) << at;
             EXPECT_GT(plan.ResidentSlots, 0u) << at << " resolves to no live source";
             EXPECT_GT(plan.PredictedVramBytes, 0u) << at;
@@ -1267,6 +1344,23 @@ TEST(AtlasResidencyController, OverBudgetFarthestTilesRenderFallback)
     // The nearest tile (0,0) must be resident; a far corner must be fallback.
     EXPECT_NE(table.Row(0, 0).Slot, kAtlasNoSlot);
     EXPECT_EQ(table.Row(2, 2).Slot, kAtlasNoSlot);
+}
+
+// 245 tiles a side: tiles (116, 116) and (244, 244) share one window row. Both are resident and the
+// camera is near (244, 244), so that tile owns the row and (116, 116) reads the coarse field.
+TEST(AtlasResidencyController, TheNearerTileKeepsASharedWindowRow)
+{
+    AtlasResidencyController ctrl;
+    ctrl.Configure(/*tileRes*/ 9, /*slots*/ 4, /*framesInFlight*/ 2, /*tilesX*/ 245, /*tilesZ*/ 245, false, kNoFade);
+    const std::vector<AtlasResidentTile> desired{{{116, 116}, 2.0f * 128.0f * 128.0f, true},
+                                                 {{244, 244}, 0.0f, true}};
+    for (uint64 f = 1; f <= 8; ++f)
+        ctrl.Update(f, kNoFadeDt, desired);
+
+    ASSERT_EQ(ctrl.ResidentCount(), 2u) << "both tiles hold a slot";
+    const AtlasIndirectionTable& table = ctrl.Table();
+    EXPECT_NE(table.Row(244, 244).Slot, kAtlasNoSlot) << "the nearer tile owns the shared row";
+    EXPECT_EQ(table.Row(116, 116).Slot, kAtlasNoSlot) << "the farther tile reads the coarse field";
 }
 
 // Assign budget: a large resident window that could fill in one frame instead commits at most
@@ -1615,7 +1709,7 @@ TEST(TileStreamingPriorityOrder, InFrustumBeatsOutOfFrustumAtEqualDistance)
     nearBehind.InFrustum = false;
     EXPECT_TRUE(farInFront < nearBehind) << "in-frustum priority dominates distance — the visible frontier leads";
 
-    // Within the same frustum class, nearer still wins (distance is the tiebreak after frustum + upgrade).
+    // Within the same frustum class, nearer still wins (distance is the tiebreak after frustum).
     TileStreamingPriority near{};
     near.DistanceSq = 25.0f;
     near.InFrustum = true;
@@ -1713,7 +1807,7 @@ TEST(AtlasComponentSampler, ParityWithDirectTileSampleAtGridPoints)
                 const std::vector<float32> t = MakeFullTileN(tileRes, tx, tz, components);
                 PackTileComponentsIntoSlot(atlas.data(), geo, slot, t.data(), components,
                                            /*tileIsFull*/ true, AtlasTileNeighbors{}, AtlasNeighborEdgesN{});
-                TileAtlasSlot& row = table.Row(tx, tz);
+                TileAtlasSlot& row = *table.Claim(tx, tz);
                 row.Slot = slot;
                 row.Generation = 1;
                 ++slot;
@@ -1921,7 +2015,7 @@ TEST(AtlasComponentField, FrontierContinuousWithResident)
                 PackTileComponentsIntoSlot(atlas.data(), geo, slot,
                                            tiles[static_cast<size_t>(tz) * tilesPerAxis + tx].data(),
                                            components, true, AtlasTileNeighbors{}, AtlasNeighborEdgesN{});
-                TileAtlasSlot& row = table.Row(tx, tz);
+                TileAtlasSlot& row = *table.Claim(tx, tz);
                 row.Slot = slot;
                 row.Generation = 1;
                 ++slot;
@@ -2182,15 +2276,14 @@ TEST(GrassSplatBake, GrassIsPluralityWhereSurfaceReadsGrassy)
                 minH = std::min(minH, v);
                 maxH = std::max(maxH, v);
             }
-        const float32 range = std::max(maxH - minH, 0.001f);
-        const auto rules = MakeDefaultTerrainSurfaceRules();
+        const auto rules = MakeDefaultTerrainSurfaceRules(minH * heightScale, maxH * heightScale);
         for (uint32 z = 0; z < dim; ++z)
             for (uint32 x = 0; x < dim; ++x)
             {
                 const auto n = hf.ComputeNormal(static_cast<int32>(x), static_cast<int32>(z),
                                                 spacing, spacing);
                 const TerrainRuleSample sample = MakeTerrainRuleSample(
-                    n.x, n.y, n.z, hf.GetSample(x, z), heightScale, minH, range,
+                    n.x, n.y, n.z, hf.GetSample(x, z), heightScale,
                     static_cast<float32>(x) * spacing, static_cast<float32>(z) * spacing);
                 uint8* pixel = &splat[(static_cast<size_t>(z) * dim + x) * 4];
                 for (uint32 r = 0; r < rules.RuleCount; ++r)
@@ -2314,7 +2407,8 @@ Terrain::HeightfieldData MakeNoiseTile(uint32 tileRes, float32 tileWorld, float3
                                        float32 originZ, uint32 seed)
 {
     Terrain::HeightfieldData hf(tileRes, tileRes);
-    hf.FillWithNoiseWorldSpace(0.01f, 1.0f, originX, originZ, tileWorld, tileWorld, 5, seed);
+    hf.FillWithNoiseWorldSpace(Terrain::TerrainNoiseStack{0.01f, 5u, 0.5f, seed}, originX, originZ, tileWorld,
+                               tileWorld);
     return hf;
 }
 } // namespace
@@ -2706,7 +2800,7 @@ TEST(TerrainReprovisionGpuBake, ReleaseDrainsPendingBakesAndReadbacksForRetiredS
     const TerrainHandle other{9u, 1u}; // a different slot's work must survive
 
     std::vector<GpuHeightBakeDispatch> dispatches(1); // non-empty so QueueGpuHeightBake retains it
-    feature.QueueGpuHeightBake(retiring, {}, dispatches, /*settle=*/true, 0.0f, 1.0f, false, {}, {});
+    feature.QueueGpuHeightBake(retiring, {}, dispatches, /*settle=*/true, false, {}, {});
     feature.SeedPendingReadbackForTests(retiring);
     feature.SeedPendingReadbackForTests(other);
     ASSERT_TRUE(feature.HasPendingBakes());
@@ -2732,11 +2826,11 @@ TEST(TerrainGrassContentEpoch, AQueuedAtlasBakeBumpsTheEpoch)
     const uint64 atRest = feature.GetGrassPlacementContentEpoch();
 
     // A bake with nothing to dispatch queues no write, so it must not claim a content change.
-    feature.QueueGpuHeightBake(terrain, {}, {}, /*settle=*/false, 0.0f, 1.0f, false, {}, {});
+    feature.QueueGpuHeightBake(terrain, {}, {}, /*settle=*/false, false, {}, {});
     EXPECT_EQ(feature.GetGrassPlacementContentEpoch(), atRest);
 
     std::vector<GpuHeightBakeDispatch> dispatches(1);
-    feature.QueueGpuHeightBake(terrain, {}, dispatches, /*settle=*/false, 0.0f, 1.0f, false, {}, {});
+    feature.QueueGpuHeightBake(terrain, {}, dispatches, /*settle=*/false, false, {}, {});
     const uint64 afterBake = feature.GetGrassPlacementContentEpoch();
     EXPECT_GT(afterBake, atRest);
 

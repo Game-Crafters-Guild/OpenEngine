@@ -6,23 +6,26 @@
 #include "UI/UIManager.h"
 
 #include <algorithm>
+#include <cmath>
+#include <optional>
 
 namespace GameEngine::UI::Layout
 {
 namespace
 {
 constexpr float kPopupEdgeClearance = 2.0f;
+// A laid-out width within this of the cap is the cap.
+constexpr float kCapTolerance = 0.5f;
 
-// The window-space area the popup may draw in: the root's window rect cut down to every ancestor that is a
-// ScrollView clip viewport or a dock panel box. Those impose a real limit whatever their content; a plain
-// overflow:hidden wrapper sizes to its content and clips nothing, so it does not count.
+// The window-space area the popup may open into on the vertical axis: the root's window rect cut down to
+// every ancestor that is a ScrollView clip viewport or a dock panel box. Those impose a real limit whatever
+// their content; a plain overflow:hidden wrapper sizes to its content and clips nothing, so it does not count.
+// The horizontal limit is the window (PlaceHorizontally).
 Mathematics::Rect VisibleArea(const UIElement& header, const UIElement& root)
 {
     const Mathematics::Rect window = root.GetWindowRect();
     float top = window.Y;
     float bottom = window.Bottom();
-    float left = window.X;
-    float right = window.Right();
     for (UIElement* ancestor = header.GetParent(); ancestor; ancestor = ancestor->GetParent())
     {
         if (!ancestor->HasClass("scroll-viewport") && !ancestor->HasClass("panel"))
@@ -30,10 +33,8 @@ Mathematics::Rect VisibleArea(const UIElement& header, const UIElement& root)
         const Mathematics::Rect bounds = ancestor->GetWindowRect();
         top = std::max(top, bounds.Y);
         bottom = std::min(bottom, bounds.Bottom());
-        left = std::max(left, bounds.X);
-        right = std::min(right, bounds.Right());
     }
-    return Mathematics::Rect::FromEdges(left, top, right, bottom);
+    return Mathematics::Rect::FromEdges(window.X, top, window.Right(), bottom);
 }
 
 void SetUpward(UIElement& header, bool upward)
@@ -42,6 +43,53 @@ void SetUpward(UIElement& header, bool upward)
         header.AddClass("open-upward");
     else
         header.RemoveClass("open-upward");
+}
+
+// The list hangs from the header's left edge, or from its right edge when that leaves the window; a list wider
+// than the room on both sides takes the larger room and its rows end in an ellipsis. The window is the limit, not
+// the panel. Lengths are window pixels; `windowPerLayoutX` converts them back for the popup's style.
+void PlaceHorizontally(const Mathematics::Rect& header, const Mathematics::Rect& window, UIElement& popup,
+                       float windowPerLayoutX)
+{
+    const float roomFromLeftEdge = std::max(header.Width, window.Right() - kPopupEdgeClearance - header.X);
+    const float roomFromRightEdge = std::max(header.Width, header.Right() - (window.X + kPopupEdgeClearance));
+
+    // Before its first layout the popup has no width of its own; it is at least as wide as its header.
+    const float laidOutWidth = std::max(popup.GetLayoutWidth() * windowPerLayoutX, header.Width);
+    const std::optional<StyleLength> cap = popup.Style().Get(Style::MaxWidth);
+    const float capWidth = cap ? cap->Value * windowPerLayoutX : 0.0f;
+    // A capped list shows the cap, not its entries' width: it keeps the cap until the room changes.
+    const bool capped = cap && laidOutWidth >= capWidth - kCapTolerance;
+    const float largerRoom = std::max(roomFromLeftEdge, roomFromRightEdge);
+
+    float width = laidOutWidth;
+    bool fromRightEdge = false;
+    if (capped && std::abs(largerRoom - capWidth) <= kCapTolerance)
+    {
+        width = capWidth;
+        fromRightEdge = roomFromRightEdge > roomFromLeftEdge;
+    }
+    else if (capped || laidOutWidth <= roomFromLeftEdge)
+    {
+        // A capped list whose room changed is measured again at its entries' width on the next pass.
+        popup.Style().Reset(Style::MaxWidth);
+    }
+    else if (laidOutWidth <= roomFromRightEdge)
+    {
+        popup.Style().Reset(Style::MaxWidth);
+        fromRightEdge = true;
+    }
+    else
+    {
+        width = largerRoom;
+        fromRightEdge = roomFromRightEdge > roomFromLeftEdge;
+        popup.Style().Set(Style::MaxWidth, StyleLength::Px(largerRoom / windowPerLayoutX));
+    }
+
+    if (fromRightEdge)
+        popup.Style().Set(Style::PositionLeft, StyleLength::Px((header.Width - width) / windowPerLayoutX));
+    else
+        popup.Style().Reset(Style::PositionLeft);
 }
 } // namespace
 
@@ -71,26 +119,7 @@ DropdownPopupRoom PlaceDropdownPopup(UIElement& header, UIElement& popup, float 
     const bool upward = roomBelow < requiredHeight && roomAbove > roomBelow;
     SetUpward(header, upward);
 
-    const float available = visible.Right() - visible.X - 2.0f * kPopupEdgeClearance;
-    // Before its first layout the popup has no width of its own; it is at least as wide as its header.
-    const float popupWidth = std::max(popup.GetLayoutWidth() * windowPerLayoutX, rect.Width);
-    const float overflowRight = (rect.X + popupWidth) - (visible.Right() - kPopupEdgeClearance);
-    float offset = overflowRight > 0.0f ? -overflowRight : 0.0f;
-    const float leftLimit = (visible.X + kPopupEdgeClearance) - rect.X;
-    offset = std::max(offset, std::min(0.0f, leftLimit));
-    if (offset < 0.0f)
-    {
-        popup.Style().Set(Style::PositionLeft, StyleLength::Px(offset / windowPerLayoutX));
-        // A popup that has to be pulled back does not fit where it was anchored, and it was sized against
-        // the header, not the panel: give it the panel's width so its rows use the space that is there.
-        if (available > 0.0f)
-            popup.Style().Set(Style::MinWidth, StyleLength::Px(available / windowPerLayoutX));
-    }
-    else
-    {
-        popup.Style().Reset(Style::PositionLeft);
-        popup.Style().Reset(Style::MinWidth);
-    }
+    PlaceHorizontally(rect, root->GetWindowRect(), popup, windowPerLayoutX);
 
     return {std::max(0.0f, (upward ? roomAbove : roomBelow) - kPopupEdgeClearance), windowPerLayoutY};
 }

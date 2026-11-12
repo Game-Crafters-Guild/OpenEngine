@@ -118,10 +118,10 @@ class ModelSkeletonPersistence : public testing::Test
     }
     void Load(ECS::World& world, bool clearWorldFirst = true)
     {
-        Scene::SceneDegradation degradation;
-        Scene::SceneReadOptions options{.clearWorldFirst = clearWorldFirst};
-        options.outDegradation = &degradation;
-        ASSERT_TRUE(Scene::ReadSceneInto(world, Path, options));
+        Scene::SceneInstantiateOptions options{.ClearWorldFirst = clearWorldFirst};
+        const Scene::SceneInstantiateResult readResult = Scene::ReadSceneInto(world, Path, {}, options);
+        ASSERT_TRUE(readResult);
+        const Scene::SceneDegradation& degradation = readResult.Degradation;
         EXPECT_TRUE(degradation.skips.empty());
     }
     AssetManager Assets;

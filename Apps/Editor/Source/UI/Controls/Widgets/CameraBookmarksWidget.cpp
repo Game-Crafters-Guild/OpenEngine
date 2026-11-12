@@ -61,7 +61,7 @@ bool IsPointInside(const UIElement& el, float x, float y)
 // decoded, or is not `width` x `height`.
 std::vector<uint8_t> ReadPreviewPng(const std::filesystem::path& path, uint32_t width, uint32_t height)
 {
-    Vector<uint8> fileBytes;
+    ByteBuffer fileBytes;
     if (!ReadFileBytesShared(path, fileBytes))
         return {};
     Image::Image8 decoded = Image::Decode8(fileBytes, path.string(), Image::DecodeChannels::Rgba);

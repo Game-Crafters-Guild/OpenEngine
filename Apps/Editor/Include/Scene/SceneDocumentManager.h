@@ -41,6 +41,20 @@ inline constexpr const char* kSaveBlockedDuringPlayMessage =
     "Scene save is disabled until play mode returns to Edit - stop play if it is running, "
     "then apply or discard the play-time edits the change review offers.";
 
+// The [hierarchy_ui] section of the last scene load, until the hierarchy panel takes it. Ui is empty
+// when the file has no such section.
+struct SceneHierarchyUiFromFile
+{
+    std::optional<Scene::SceneHierarchyUi> Ui;
+};
+
+// The [editor_camera] section of the last scene load, until the scene view takes it. Camera is empty
+// when the file has no such section.
+struct SceneEditorCameraFromFile
+{
+    std::optional<Scene::SceneEditorCamera> Camera;
+};
+
 // Editor-side state for the currently edited world as a .scene document.
 // This tracks:
 // - which .scene file (if any) backs the current world
@@ -153,7 +167,7 @@ class SceneDocumentManager
     // loaded DEGRADED unless the caller passes SaveAnyway: writing back a
     // scene this build could not fully read replaces the user's unreadable data with whatever the
     // fields defaulted to, and the source file is the one copy of it that exists. The refusal
-    // happens before any sidecar (.tzone/.tsculpt/material-library) is touched, so a refused save
+    // happens before any sidecar (.tzone/height layer .gepage/material-library) is touched, so a refused save
     // writes nothing at all.
     bool Save(DegradedSavePolicy degradedPolicy = DegradedSavePolicy::Refuse);
     // Save to a new path and set it as the document path. Saving a degraded document to a DIFFERENT
@@ -175,13 +189,13 @@ class SceneDocumentManager
     void SetHierarchyUiCaptureForSave(std::function<Scene::SceneHierarchyUi()> capture);
 
     // Consumes embedded [hierarchy_ui] state from the last OpenSceneReplace / NewSceneUntitled (once).
-    std::optional<Scene::SceneHierarchyUiFromFile> ConsumeHierarchyUiFromLastDocumentLoad();
+    std::optional<SceneHierarchyUiFromFile> ConsumeHierarchyUiFromLastDocumentLoad();
 
     // Editor scene-view camera pose snapshot for the next save (embedded as [editor_camera]).
     void SetEditorCameraCaptureForSave(std::function<Scene::SceneEditorCamera()> capture);
 
     // Consumes embedded [editor_camera] state from the last OpenSceneReplace (once).
-    std::optional<Scene::SceneEditorCameraFromFile> ConsumeEditorCameraFromLastDocumentLoad();
+    std::optional<SceneEditorCameraFromFile> ConsumeEditorCameraFromLastDocumentLoad();
 
     // The call that releases the generated entities the outgoing world holds (the editor services).
     // Runs inside ReleaseSceneScopedState, before World::Clear restarts entity versions, so no
@@ -272,13 +286,11 @@ class SceneDocumentManager
     EditorChangeNotifications::SubscriptionToken m_SubComponent{};
     EditorChangeNotifications::SubscriptionToken m_SubStructure{};
 
-    // Announce and record the failure Scene::GetLastSceneIOError() currently
-    // describes, and — when it says the world was already cleared — drop the
-    // document identity, so nothing downstream reports a scene that is not in
-    // the world. `contentPath` is the file the load actually read (a recovery
-    // open reads a backup), used only when the error names no file itself.
+    // Announce and record `error`; `contentPath` names the file when the error names none. When the
+    // world was already cleared, drop the document identity: nothing may report a scene not in the world.
     void RecordLoadFailure(const std::filesystem::path& documentPath,
-                           const std::filesystem::path& contentPath);
+                           const std::filesystem::path& contentPath,
+                           const Scene::SceneIOError& error);
 
     // Announce and record `census` against `documentPath` when it holds anything, or clear a
     // standing record when it does not. Called after every successful document load.
@@ -303,10 +315,10 @@ class SceneDocumentManager
     bool m_Dirty = false;
     std::vector<uint8_t> m_BaselineSnapshot;
 
-    std::optional<Scene::SceneHierarchyUiFromFile> m_PendingHierarchyUiFromLoad;
+    std::optional<SceneHierarchyUiFromFile> m_PendingHierarchyUiFromLoad;
     std::function<Scene::SceneHierarchyUi()> m_HierarchyUiCaptureForSave;
 
-    std::optional<Scene::SceneEditorCameraFromFile> m_PendingEditorCameraFromLoad;
+    std::optional<SceneEditorCameraFromFile> m_PendingEditorCameraFromLoad;
     std::function<Scene::SceneEditorCamera()> m_EditorCameraCaptureForSave;
 
     std::function<void()> m_SceneScopedGeneratorRelease;

@@ -12,11 +12,14 @@
 #include "Scene/AssetManagerSceneResolver.h"
 #include "Scene/PrefabAuthoring.h"
 #include "Scene/PrefabLibrary.h"
+#include "Scene/PrefabOverrideRecords.h"
 #include "Scene/SceneSchemaRegistry.h"
 #include "Types/StringUtils.h"
 #include "Types/FlatMap.h"
 
 #include <algorithm>
+#include <span>
+#include <string>
 
 namespace GameEngine::Scene
 {
@@ -100,16 +103,13 @@ static bool AddsAComponent(const std::vector<ComponentText>& instance, const std
     });
 }
 
-// The override lines of the instance entity at `address` ("" for the root): every line that differs
-// from the template entity's, "+address/Component" and its lines for a component the template does
-// not have, "-address/Component" for one the instance does not have. `instance` and `templateText`
-// hold every field (SceneWriteContext::WriteEveryField), so a field the instance clears differs from
-// the template's line; `added` is the instance's plain text, which an added component writes, and is
-// empty when the instance adds none. Sibling order is the prefab's, so a member's HierarchyOrder is
-// never written.
+// The override lines of the entity at `address` ("" for the root): each line that differs from the template's
+// or whose key `recorded` holds, "+address/Component" with `added`'s lines, and "-address/Component". Both texts
+// hold every field (WriteEveryField), so a cleared field differs; a member's HierarchyOrder is never written.
 static void WriteEntityOverrides(std::string_view address, const std::vector<ComponentText>& instance,
                                  const std::vector<ComponentText>& added,
-                                 const std::vector<ComponentText>& templateText, std::string& out)
+                                 const std::vector<ComponentText>& templateText,
+                                 std::span<const std::string> recorded, std::string& out)
 {
     const bool isRoot = address.empty();
 
@@ -128,12 +128,17 @@ static void WriteEntityOverrides(std::string_view address, const std::vector<Com
         {
             out.append("+").append(Addressed(address, text.token)).append(1, '\n');
             for (const auto& line : FindComponentText(added, text.key)->lines)
-                out.append(Addressed(address, line)).append(1, '\n');
+            {
+                // A component with no fields writes its bare name; on an override the "+" line says it.
+                if (line != text.token)
+                    out.append(Addressed(address, line)).append(1, '\n');
+            }
             continue;
         }
         for (const auto& line : text.lines)
         {
-            if (std::find(templateIt->lines.begin(), templateIt->lines.end(), line) == templateIt->lines.end())
+            if (std::find(templateIt->lines.begin(), templateIt->lines.end(), line) == templateIt->lines.end() ||
+                PrefabOverrideRecords::HoldsLine(recorded, line))
                 out.append(Addressed(address, line)).append(1, '\n');
         }
         // A component the prefab switches off and the instance switches on writes its switch.
@@ -214,7 +219,7 @@ bool CollectPrefabInstances(ECS::World& world, const std::vector<ECS::EntityHand
                             const std::filesystem::path& sceneFilePath,
                             std::unordered_map<ECS::EntityId, std::string>& tagByEntity,
                             std::unordered_set<ECS::EntityId>& excluded, PrefabTemplates& templates,
-                            std::vector<SavedPrefabInstance>& instances)
+                            std::vector<SavedPrefabInstance>& instances, SceneIOError& error)
 {
     std::unordered_set<std::string> usedTags;
     usedTags.reserve(tagByEntity.size());
@@ -246,9 +251,10 @@ bool CollectPrefabInstances(ECS::World& world, const std::vector<ECS::EntityHand
                 {
                     if (const std::string* claimed = pathByHashedTag.Find(tag); claimed && *claimed != path)
                     {
-                        SetError(sceneFilePath, 0,
-                                 "Cannot save: two entities get the scene identity \"" + tag + "\": \"" + *claimed +
-                                     "\" and \"" + path + "\". Shorten an id in one of the chains.");
+                        error = SceneIOError{sceneFilePath, 0,
+                                             "Cannot save: two entities get the scene identity \"" + tag + "\": \"" +
+                                                 *claimed + "\" and \"" + path +
+                                                 "\". Shorten an id in one of the chains."};
                         return false;
                     }
                     pathByHashedTag.InsertOrAssign(tag, path);
@@ -275,24 +281,25 @@ bool CollectPrefabInstances(ECS::World& world, const std::vector<ECS::EntityHand
         instance.id = tagByEntity.count(h.id) ? tagByEntity[h.id] : ("e_" + std::to_string(h.id));
         if (!ResolvePrefabSourceForSave(saveCtx, marker->Source, instance.sourcePath))
         {
-            SetError(sceneFilePath, 0,
-                     "Cannot save prefab instance '" + instance.id +
-                         "': the asset database does not know its source prefab. Save the scene "
-                         "from the project that holds the prefab, reimport the prefab, or delete the instance.");
+            error = SceneIOError{sceneFilePath, 0,
+                                 "Cannot save prefab instance '" + instance.id +
+                                     "': the asset database does not know its source prefab. Save the scene "
+                                     "from the project that holds the prefab, reimport the prefab, or delete the "
+                                     "instance."};
             return false;
         }
         instance.sourceGuid = marker->Source.ToString();
         std::filesystem::path prefabPath;
         AssetType type = AssetType::Unknown;
         saveCtx.Resolver->TryGetPathAndType(saveCtx.Resolver->ResolveGuid(marker->Source), prefabPath, type);
-        std::string error;
+        std::string templateError;
         std::filesystem::path errorFile;
         int errorLine = 0;
-        instance.templ = GetPrefabTemplate(templates, sceneFilePath, prefabPath, error, errorFile, errorLine);
+        instance.templ = GetPrefabTemplate(templates, sceneFilePath, prefabPath, templateError, errorFile, errorLine);
         if (!instance.templ)
         {
-            SetError(errorFile.empty() ? sceneFilePath : errorFile, errorLine,
-                     "Cannot save prefab instance '" + instance.id + "': " + error);
+            error = SceneIOError{errorFile.empty() ? sceneFilePath : errorFile, errorLine,
+                                 "Cannot save prefab instance '" + instance.id + "': " + templateError};
             return false;
         }
         if (parent && parent->Entity.IsValid())
@@ -341,7 +348,8 @@ void WritePrefabInstanceBody(ECS::World& world, const SavedPrefabInstance& insta
         addedText.clear();
         if (AddsAComponent(instanceText, templateText))
             CollectComponentText(world, h, saveCtx, schemas, addedText);
-        WriteEntityOverrides(address, instanceText, addedText, templateText, out);
+        WriteEntityOverrides(address, instanceText, addedText, templateText,
+                             PrefabOverrideRecords::Get().Find(world, h), out);
     }
 
     for (const auto& [address, h] : instance.templ->placed.members)
@@ -364,7 +372,8 @@ static void RemovePlacementText(std::vector<ComponentText>& texts)
 // The overrides of the instance entity at `address` against the template entity, read from the
 // lines the saver writes. Placement components are no override on the root.
 static void CollectEntityOverrides(const std::string& address, std::vector<ComponentText>& instanceText,
-                                   std::vector<ComponentText>& templateText, std::vector<PrefabOverride>& out)
+                                   std::vector<ComponentText>& templateText, std::span<const std::string> recorded,
+                                   std::vector<PrefabOverride>& out)
 {
     if (address.empty())
     {
@@ -372,7 +381,7 @@ static void CollectEntityOverrides(const std::string& address, std::vector<Compo
         RemovePlacementText(templateText);
     }
     std::string text;
-    WriteEntityOverrides(address, instanceText, instanceText, templateText, text);
+    WriteEntityOverrides(address, instanceText, instanceText, templateText, recorded, text);
     const std::string prefix = Addressed(address, {});
     std::string_view addedComponent;
     for (std::string_view line : Split(text, '\n'))
@@ -517,7 +526,8 @@ void DescribePrefabInstanceAgainst(ECS::World& world, ECS::EntityHandle root, Pr
         CollectComponentText(world, out[index].Entity, instanceCtx, schemas, instanceText);
         CollectComponentText(library.GetWorld(), prefab->Entities[*templateIndexByAddress.Find(address)], templateCtx,
                              schemas, templateText);
-        CollectEntityOverrides(address, instanceText, templateText, out[index].Overrides);
+        CollectEntityOverrides(address, instanceText, templateText,
+                               PrefabOverrideRecords::Get().Find(world, out[index].Entity), out[index].Overrides);
     }
 
     // A removed child is an override of its parent.

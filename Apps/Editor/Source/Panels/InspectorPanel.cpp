@@ -596,8 +596,8 @@ static std::unique_ptr<UIElement> MakeInspectorPaddedContentColumn()
     return column;
 }
 
-template <typename T, typename = std::enable_if_t<std::is_base_of_v<UIElement, T>>>
-static void AddInspectorPaddedContent(UIElement* contentRoot, std::unique_ptr<T> inner)
+// Adds the padded column of an asset view's content to `contentRoot`, and returns the column.
+static UIElement* AddInspectorAssetContent(UIElement* contentRoot)
 {
     auto wrap = std::make_unique<UIElement>();
     wrap->AddClass("inspector-asset-content");
@@ -606,8 +606,15 @@ static void AddInspectorPaddedContent(UIElement* contentRoot, std::unique_ptr<T>
         .Set(Style::FlexDir, FlexDirection::Column)
         .Set(Style::PaddingLeft, StyleLength::Px(kInspectorAssetContentHorizontalInsetPx))
         .Set(Style::PaddingRight, StyleLength::Px(kInspectorAssetContentHorizontalInsetPx));
-    wrap->AddChild(std::unique_ptr<UIElement>(inner.release()));
+    UIElement* column = wrap.get();
     contentRoot->AddChild(std::move(wrap));
+    return column;
+}
+
+template <typename T, typename = std::enable_if_t<std::is_base_of_v<UIElement, T>>>
+static void AddInspectorPaddedContent(UIElement* contentRoot, std::unique_ptr<T> inner)
+{
+    AddInspectorAssetContent(contentRoot)->AddChild(std::unique_ptr<UIElement>(inner.release()));
 }
 
 // Get default value string based on C# type name
@@ -2552,6 +2559,23 @@ void InspectorPanel::RefreshCurrentAssetInspector()
     m_SuppressInspectorHistory = prevSuppressHistory;
 }
 
+void InspectorPanel::AddAssetSelectionRows(const std::vector<std::filesystem::path>& paths)
+{
+    UIElement* rows = AddInspectorAssetContent(m_ContentRoot);
+    InspectorContext ctx{};
+    ctx.Parent = rows;
+    ctx.AssetPaths = paths;
+    ctx.Undo = m_Undo;
+    ctx.ChangeNotifications = m_ChangeNotifications;
+    ctx.PingAsset = m_PingAsset;
+    ctx.RequestInspectorRefresh = [this]()
+    { RefreshCurrentAssetInspector(); };
+    for (const InspectorFn& row : InspectorRegistry::Get().GetAssetSelectionRows())
+        row(ctx);
+    if (rows->GetChildren().empty())
+        m_ContentRoot->RemoveChild(rows);
+}
+
 void InspectorPanel::RequestEntityRefresh()
 {
     if (m_EntityRefreshPosted)
@@ -2583,7 +2607,8 @@ void InspectorPanel::AddOverrideMenuEntries(ContextMenuBuilder& builder, ECS::Co
     m_ContextOverrideMenuEntries.clear();
     if (!m_World || m_Entities.size() > 1)
         return;
-    const OverrideMenuTarget target{m_World, m_Entity, typeId, {}, m_Undo, m_ChangeNotifications};
+    const OverrideMenuTarget target{
+        .World = m_World, .Entity = m_Entity, .Component = typeId, .Undo = m_Undo, .Notifications = m_ChangeNotifications};
     m_ContextOverrideMenuEntries = InspectorRegistry::Get().QueryOverrideMenu(target);
     if (m_ContextOverrideMenuEntries.size() > kCmdInspectorOverrideMenuMax)
         m_ContextOverrideMenuEntries.resize(kCmdInspectorOverrideMenuMax);
@@ -3426,6 +3451,8 @@ void InspectorPanel::ShowSelectedAssets(const std::vector<std::filesystem::path>
         return;
     }
 
+    AddAssetSelectionRows(paths);
+
     // Multi-select: show a summary for now.
     if (paths.size() != 1)
     {
@@ -3681,6 +3708,7 @@ void InspectorPanel::BuildComponentSectionBody(InspectorSection* section, ECS::C
     ctx.PingAsset = m_PingAsset;
     ctx.PingAssetPreserveInspector = m_PingAssetPreserveInspector;
     ctx.SelectEntity = m_SelectEntity;
+    ctx.OpenAsset = m_OpenAsset;
     ctx.RequestInspectorRefresh = [this]()
     { RequestEntityRefresh(); };
     ctx.GetWorld = [this]() -> ECS::World*

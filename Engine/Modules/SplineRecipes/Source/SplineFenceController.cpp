@@ -249,7 +249,7 @@ SplineFenceController::Candidate SplineFenceController::MakeCandidate(ECS::Entit
     candidate.Recipe = SplineLayout::SanitizeFenceRecipe(fence);
     candidate.SplineDataIndex = spline.SplineDataIndex;
     candidate.SplineDataGeneration = spline.SplineDataGeneration;
-    candidate.WorldMatrix = Mathematics::Matrix4x4::FromColumnMajor(transform.matrix);
+    candidate.WorldMatrix = transform.ToMatrix4x4(transform.GetPosition() - Mathematics::WorldPosition{});
     return candidate;
 }
 
@@ -262,15 +262,9 @@ void SplineFenceController::Update(ECS::World& world,
     if (!splineService)
         return;
 
-    // A world reset destroys every generated piece with no per-entity Removed
-    // event and restarts entity versions, so the cached handles now alias
-    // unrelated entities — the retire sweep below would destroy those. The
-    // scene-swap sites release this controller beforehand, but World::Clear is
-    // also reached through World::DeserializeWorld (play-mode exit, undo
-    // snapshot restore), which no swap-site hook can cover. Forgetting the
-    // state is the release for the pieces, which instance already-registered
-    // model meshes. The cut span variants are this controller's own
-    // registrations and not handle-based, so those are released here.
+    // A world reset removes every generated piece and sends no Removed event: no snapshot or scene file
+    // holds a GeneratedEntity, so each cached handle names an entity that does not exist. Drop the
+    // state here and build again; release the cut span variants, which this controller registered.
     const uint64 resetGeneration = world.GetLifecycleResetGeneration();
     if (resetGeneration != m_LastWorldResetGeneration)
     {
@@ -309,7 +303,8 @@ void SplineFenceController::Update(ECS::World& world,
     const bool anyConforms = std::any_of(
         candidates.begin(), candidates.end(), [](const Candidate& c)
         { return c.Recipe.ConformMode != Components::SplinePlacementConform::None; });
-    const uint64 surfaceRevision = anyConforms ? ConformSurfaceRevision(world, /*conforms by raycast*/ nullptr) : 0u;
+    const uint64 surfaceRevision =
+        anyConforms ? ConformSurfaceRevision(world, /*conforms by raycast*/ nullptr, UnboundedConformRun()) : 0u;
     // One request of the scene TLAS per frame, shared by every candidate that conforms to the scene.
     const bool anyConformsToScene = std::any_of(
         candidates.begin(), candidates.end(), [](const Candidate& c)

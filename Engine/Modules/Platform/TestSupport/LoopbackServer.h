@@ -99,6 +99,13 @@ public:
 
     int RequestCount() const { return m_RequestCount.load(); }
 
+    // The head and body of the last request the server read.
+    std::string LastRequest() const
+    {
+        std::lock_guard lock(m_RequestMutex);
+        return m_LastRequest;
+    }
+
     static void Send(SocketHandle client, std::string_view bytes)
     {
         while (!bytes.empty())
@@ -137,15 +144,19 @@ private:
             const SocketHandle client = accept(m_Listener, nullptr, nullptr);
             if (client == kInvalidSocket)
                 return;
-            ReadRequest(client);
+            std::string request = ReadRequest(client);
+            {
+                std::lock_guard lock(m_RequestMutex);
+                m_LastRequest = std::move(request);
+            }
             ++m_RequestCount;
             m_Responder(*this, client);
             CloseSocket(client);
         }
     }
 
-    // Consumes the request head and its Content-Length body.
-    static void ReadRequest(SocketHandle client)
+    // Consumes the request head and its Content-Length body, and returns them.
+    static std::string ReadRequest(SocketHandle client)
     {
         std::string request;
         char buffer[4096];
@@ -154,10 +165,10 @@ private:
         for (;;)
         {
             if (headEnd != std::string::npos && request.size() >= headEnd + 4 + contentLength)
-                return;
+                return request;
             const int received = recv(client, buffer, sizeof(buffer), 0);
             if (received <= 0)
-                return;
+                return request;
             request.append(buffer, static_cast<size_t>(received));
             if (headEnd == std::string::npos && (headEnd = request.find("\r\n\r\n")) != std::string::npos)
             {
@@ -172,6 +183,8 @@ private:
     SocketHandle m_Listener = kInvalidSocket;
     int m_Port = 0;
     std::atomic<int> m_RequestCount{0};
+    mutable std::mutex m_RequestMutex;
+    std::string m_LastRequest;
     std::mutex m_Mutex;
     std::condition_variable m_Signalled;
     int m_Signals = 0;

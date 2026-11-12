@@ -174,7 +174,7 @@ inline void ReparentKeepingWorldPose(ECS::World& world, ECS::EntityHandle entity
     if (!newParent.IsValid()) {
         if (const auto* entityWorld = world.GetComponent<WorldTransform>(entity)) {
             Transform local{};
-            std::memcpy(local.matrix, entityWorld->matrix, sizeof(local.matrix));
+            std::memcpy(&local, entityWorld, kTransformPoseBytes);
             world.AddComponentImmediate(entity, local);
         }
         world.RemoveComponentImmediate<Parent>(entity);
@@ -185,11 +185,12 @@ inline void ReparentKeepingWorldPose(ECS::World& world, ECS::EntityHandle entity
     const auto* parentWorld = world.GetComponent<WorldTransform>(newParent);
     const auto* entityWorld = world.GetComponent<WorldTransform>(entity);
     if (!parentWorld || !entityWorld) return;
-    const Mathematics::Matrix4x4 local = Mathematics::Inverse(Mathematics::Matrix4x4::FromColumnMajor(parentWorld->matrix)) *
-                                         Mathematics::Matrix4x4::FromColumnMajor(entityWorld->matrix);
-    Transform transform{};
-    std::memcpy(transform.matrix, local.Data(), sizeof(transform.matrix));
-    world.AddComponentImmediate(entity, transform);
+    // The offset from the parent subtracts in double and then rounds to float, so a far parent
+    // gives the local the float precision of the offset, not of the world position.
+    const Vector3 offset = entityWorld->GetPosition() - parentWorld->GetPosition();
+    const Mathematics::Matrix4x4 local = Mathematics::Inverse(parentWorld->ToMatrix4x4(Vector3{})) *
+                                         entityWorld->ToMatrix4x4(offset);
+    world.AddComponentImmediate(entity, Transform::FromMatrix4x4(local));
 }
 
 // Practical cap on hierarchy depth. Any real scene deeper than this is a

@@ -69,10 +69,14 @@ void RestoreSceneBackupModal::Show(const std::string& title, const std::string& 
     if (auto* m = dynamic_cast<Label*>(m_Message))
         m->SetText(message);
     AddClass("visible");
-    if (auto* manager = GetOwnerManager())
+    if (GetOwnerManager())
     {
         UIElement* backdrop = m_Backdrop;
-        manager->PostToUI([manager, backdrop]() { manager->FocusElement(backdrop); });
+        backdrop->PostSafeAction([backdrop]()
+        {
+            if (UIManager* manager = backdrop->GetOwnerManager())
+                manager->FocusElement(backdrop);
+        });
     }
 }
 

@@ -6,12 +6,10 @@
 #include "UI/ControlLayoutLoader.h"
 #include "UI/Controls/Button.h"
 #include "UI/Controls/Label.h"
-#include "UI/Layout/ElementOverrideHelpers.h"
-#include "UI/StyleProperties.h"
+#include "UI/Controls/ProgressBar.h"
 #include "UI/UIEvents.h"
 #include "UI/UIManager.h"
 
-#include <algorithm>
 #include <array>
 #include <chrono>
 #include <memory>
@@ -26,17 +24,16 @@ namespace
 constexpr const char* kLayoutAssetPath = "UI/controls/PlayModeEntryModal/PlayModeEntryModal.uxml";
 constexpr const char* kStyleAssetPath = "UI/controls/PlayModeEntryModal/PlayModeEntryModal.css";
 // The ids the constructor looks up. A layout that lacks one does not load.
-constexpr std::array<std::string_view, 6> kRequiredIds = {
+constexpr std::array<std::string_view, 5> kRequiredIds = {
     "play-entry-title",
     "play-entry-message",
     "play-entry-activity",
-    "play-entry-progress-track",
-    "play-entry-progress-fill",
+    "play-entry-progress",
     "play-entry-button",
 };
 constexpr const char* kFailedClass = "play-entry-failed";
 constexpr const char* kPulseDimClass = "play-entry-progress-dim";
-// Half a period of the indeterminate pulse: the fill's opacity transition in the stylesheet runs
+// Half a period of the indeterminate pulse: the bar's opacity transition in the stylesheet runs
 // over the same time.
 constexpr std::chrono::milliseconds kPulseHalfPeriod{700};
 constexpr const char* kHiddenClass = "hidden";
@@ -70,8 +67,7 @@ PlayModeEntryModal::PlayModeEntryModal(Editor::PlayModeEntryGate& gate)
     m_Title = dynamic_cast<Label*>(m_Backdrop->FindById("play-entry-title"_sid));
     m_Message = dynamic_cast<Label*>(m_Backdrop->FindById("play-entry-message"_sid));
     m_Activity = dynamic_cast<Label*>(m_Backdrop->FindById("play-entry-activity"_sid));
-    m_ProgressTrack = m_Backdrop->FindById("play-entry-progress-track"_sid);
-    m_ProgressFill = m_Backdrop->FindById("play-entry-progress-fill"_sid);
+    m_Progress = dynamic_cast<ProgressBar*>(m_Backdrop->FindById("play-entry-progress"_sid));
     m_Button = dynamic_cast<Button*>(m_Backdrop->FindById("play-entry-button"_sid));
     if (m_Button)
         m_Button->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { OnButtonClicked(); });
@@ -97,7 +93,7 @@ void PlayModeEntryModal::Poll()
 
 void PlayModeEntryModal::Present()
 {
-    if (!m_Title || !m_Message || !m_Activity || !m_Button || !m_ProgressTrack || !m_ProgressFill)
+    if (!m_Title || !m_Message || !m_Activity || !m_Button || !m_Progress)
         return;
     const Editor::ScriptBuildSnapshot& snapshot = m_Gate.GetSnapshot();
     if (m_Gate.GetPhase() == Editor::PlayModeEntryGate::Phase::Failed)
@@ -110,7 +106,7 @@ void PlayModeEntryModal::Present()
             failure += ": " + snapshot.FirstError;
         m_Activity->SetText(failure);
         m_Activity->AddClass(kFailedClass);
-        m_ProgressTrack->AddClass(kHiddenClass);
+        m_Progress->AddClass(kHiddenClass);
         m_Button->SetText("Close");
         m_Button->SetTooltip("");
         return;
@@ -119,18 +115,18 @@ void PlayModeEntryModal::Present()
     m_Message->SetText("Scripts are building. Play mode starts when the build finishes.");
     m_Activity->SetText(snapshot.Activity);
     m_Activity->RemoveClass(kFailedClass);
-    m_ProgressTrack->RemoveClass(kHiddenClass);
-    // Without a measure the full-width fill pulses, so a long compile does not read as stalled.
-    const bool indeterminate = snapshot.Fraction <= 0.0f;
-    const float fraction = indeterminate ? 1.0f : std::min(snapshot.Fraction, 1.0f);
-    m_ProgressFill->Style().Set(Style::Width, StyleLength::Percent(fraction * 100.0f));
+    m_Progress->RemoveClass(kHiddenClass);
+    // The bar is indeterminate, and pulses, only while the build gives no measure. From the first
+    // measure, 0 included, it shows the value that the activity line prints as a percent.
+    const bool indeterminate = snapshot.Fraction < 0.0f;
+    m_Progress->SetIndeterminate(indeterminate);
+    m_Progress->SetValueWithoutNotify(snapshot.Fraction);
     const auto sinceEpoch = std::chrono::steady_clock::now().time_since_epoch();
     const bool dim = indeterminate && (sinceEpoch / kPulseHalfPeriod) % 2 == 1;
     if (dim)
-        m_ProgressFill->AddClass(kPulseDimClass);
+        m_Progress->AddClass(kPulseDimClass);
     else
-        m_ProgressFill->RemoveClass(kPulseDimClass);
-    m_ProgressFill->MarkDirty(UIElement::LayoutDirty | UIElement::VisualDirty);
+        m_Progress->RemoveClass(kPulseDimClass);
     m_Button->SetText("Cancel");
     m_Button->SetTooltip("Stop waiting and stay in edit mode. The script build keeps running.");
 }
@@ -146,10 +142,14 @@ void PlayModeEntryModal::SetVisible(bool visible)
         return;
     }
     AddClass("visible");
-    if (auto* manager = GetOwnerManager(); manager && m_Backdrop)
+    if (GetOwnerManager() && m_Backdrop)
     {
         UIElement* backdrop = m_Backdrop;
-        manager->PostToUI([manager, backdrop]() { manager->FocusElement(backdrop); });
+        backdrop->PostSafeAction([backdrop]()
+        {
+            if (UIManager* manager = backdrop->GetOwnerManager())
+                manager->FocusElement(backdrop);
+        });
     }
 }
 

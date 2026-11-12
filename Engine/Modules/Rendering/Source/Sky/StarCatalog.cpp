@@ -1,5 +1,6 @@
 #include "StarCatalog.h"
 
+#include "Mathematics/Interpolation.h"
 #include "Types/Color.h"
 
 #include <algorithm>
@@ -103,6 +104,43 @@ std::array<SpectralSample, kSpectralSampleCount> BuildSpectralSamples()
     return samples;
 }
 
+// BuildStarField reads star colours from a table of BlackbodyLinearRec709 over the spectral mix's
+// temperature range, at even steps of reciprocal temperature (1/K), where the colour is close to linear.
+// With 256 entries the error is about 6e-6 per channel; StarCatalogTests holds every star within 1e-4.
+constexpr double kBlackbodyTableHottestKelvin = kSpectralMix.front().HotKelvin;
+constexpr double kBlackbodyTableCoolestKelvin = kSpectralMix.back().CoolKelvin;
+constexpr size_t kBlackbodyTableEntryCount = 256;
+constexpr double kBlackbodyTableFirstReciprocalKelvin = 1.0 / kBlackbodyTableHottestKelvin;
+constexpr double kBlackbodyTableReciprocalKelvinStep =
+    (1.0 / kBlackbodyTableCoolestKelvin - kBlackbodyTableFirstReciprocalKelvin) / static_cast<double>(kBlackbodyTableEntryCount - 1);
+
+using BlackbodyTable = std::array<ColorLinear, kBlackbodyTableEntryCount>;
+
+BlackbodyTable BuildBlackbodyTable()
+{
+    BlackbodyTable table{};
+    for (size_t index = 0; index < table.size(); ++index)
+    {
+        const double reciprocalKelvin =
+            kBlackbodyTableFirstReciprocalKelvin + static_cast<double>(index) * kBlackbodyTableReciprocalKelvinStep;
+        table[index] = BlackbodyLinearRec709(static_cast<float>(1.0 / reciprocalKelvin));
+    }
+    return table;
+}
+
+// Temperatures outside the table's range read its nearest edge.
+ColorLinear BlackbodyFromTable(const BlackbodyTable& table, float kelvin)
+{
+    const double position = (1.0 / static_cast<double>(kelvin) - kBlackbodyTableFirstReciprocalKelvin) /
+                            kBlackbodyTableReciprocalKelvinStep;
+    const double clamped = std::clamp(position, 0.0, static_cast<double>(kBlackbodyTableEntryCount - 1));
+    const size_t index = std::min(static_cast<size_t>(clamped), kBlackbodyTableEntryCount - 2);
+    const float t = static_cast<float>(clamped - static_cast<double>(index));
+    const ColorLinear& below = table[index];
+    const ColorLinear& above = table[index + 1];
+    return ColorLinear(Math::Lerp(below.r, above.r, t), Math::Lerp(below.g, above.g, t), Math::Lerp(below.b, above.b, t));
+}
+
 } // namespace
 
 ColorLinear BlackbodyLinearRec709(float kelvin)
@@ -144,6 +182,7 @@ std::vector<StarInstanceGPU> BuildStarField()
     std::vector<StarInstanceGPU> stars;
     stars.reserve(starCount);
 
+    const BlackbodyTable blackbodyTable = BuildBlackbodyTable();
     std::mt19937 rng(42u);
     constexpr double kTwoPi = 2.0 * std::numbers::pi;
     for (uint32_t rank = 0; rank < starCount; ++rank)
@@ -160,7 +199,7 @@ std::vector<StarInstanceGPU> BuildStarField()
         star.dirAndMagnitude[1] = static_cast<float>(z);
         star.dirAndMagnitude[2] = static_cast<float>(ring * std::sin(azimuth));
         star.dirAndMagnitude[3] = MagnitudeOfRank(rank);
-        const ColorLinear color = BlackbodyLinearRec709(TemperatureOfStar(classPick, withinClass));
+        const ColorLinear color = BlackbodyFromTable(blackbodyTable, TemperatureOfStar(classPick, withinClass));
         star.colorAndSeed[0] = color.r;
         star.colorAndSeed[1] = color.g;
         star.colorAndSeed[2] = color.b;

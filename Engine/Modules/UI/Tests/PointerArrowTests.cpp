@@ -1,12 +1,15 @@
 // The pointer arrow of the hover tooltip and of PopoverArrow: it points at the center of its
 // source on each side, stays on the straight part of the bubble's edge when the bubble is
-// clamped, and takes its fill and border from the bubble's style.
+// clamped, and takes its fill and border from the bubble's style. The arrow of a tooltip
+// anchored to a panel sits on the panel's edge, lined up with the hovered tile.
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <span>
+#include <string>
 #include <vector>
 
 #include "IsolatedUIFixture.h"
@@ -94,6 +97,90 @@ Box LayoutBox(const UIElement& element, float scale)
 {
     return {element.GetLayoutX() * scale, element.GetLayoutY() * scale, element.GetLayoutWidth() * scale,
             element.GetLayoutHeight() * scale};
+}
+
+// A 200 x 120 panel holding 20 x 30 tiles in three rows. The top row has a tile at each end of
+// the panel and two between them; the column at x 90 has a tile in each row.
+constexpr char kGridXml[] = R"(<uielement id="root"><uielement id="panel">
+<uielement id="row0-col0"/><uielement id="row0-col1"/><uielement id="row0-col2"/><uielement id="row0-col3"/>
+<uielement id="row1-col1"/><uielement id="row2-col1"/></uielement></uielement>)";
+constexpr char kGridCss[] = R"(
+#root { width: 400px; height: 300px; }
+#panel { position: absolute; left: 100px; top: 150px; width: 200px; height: 120px; }
+#row0-col0 { position: absolute; left: 0px; top: 0px; width: 20px; height: 30px; }
+#row0-col1 { position: absolute; left: 90px; top: 0px; width: 20px; height: 30px; }
+#row0-col2 { position: absolute; left: 140px; top: 0px; width: 20px; height: 30px; }
+#row0-col3 { position: absolute; left: 180px; top: 0px; width: 20px; height: 30px; }
+#row1-col1 { position: absolute; left: 90px; top: 45px; width: 20px; height: 30px; }
+#row2-col1 { position: absolute; left: 90px; top: 90px; width: 20px; height: 30px; }
+.tooltip { background-color: #203040; border-width: 2px; border-color: #c08020; border-radius: 6px; padding: 4px 8px; }
+)";
+constexpr const char* kGridTiles[] = {"row0-col0", "row0-col1", "row0-col2", "row0-col3", "row1-col1", "row2-col1"};
+
+// A 60 x 240 panel holding 20 x 30 tiles in two columns: one in each column at y 100, and one
+// in the right column at y 160.
+constexpr char kColumnXml[] = R"(<uielement id="root"><uielement id="panel">
+<uielement id="left-row1"/><uielement id="right-row1"/><uielement id="right-row2"/></uielement></uielement>)";
+constexpr char kColumnCss[] = R"(
+#root { width: 400px; height: 300px; }
+#panel { position: absolute; left: 170px; top: 30px; width: 60px; height: 240px; }
+#left-row1 { position: absolute; left: 0px; top: 100px; width: 20px; height: 30px; }
+#right-row1 { position: absolute; left: 40px; top: 100px; width: 20px; height: 30px; }
+#right-row2 { position: absolute; left: 40px; top: 160px; width: 20px; height: 30px; }
+.tooltip { background-color: #203040; border-width: 2px; border-color: #c08020; border-radius: 6px; padding: 4px 8px; }
+)";
+constexpr const char* kColumnTiles[] = {"left-row1", "right-row1", "right-row2"};
+
+// Gives each tile the same tooltip, on `placement`, anchored to the panel.
+void AnchorTilesToThePanel(UITesting::IsolatedUIFixture& fixture, std::span<const char* const> tiles,
+                           UIElement::TooltipPlacement placement)
+{
+    UIElement* panel = fixture.Element("panel");
+    for (const char* id : tiles)
+    {
+        UIElement* tile = fixture.Element(id);
+        tile->SetTooltip(kText);
+        tile->SetTooltipPlacement(placement);
+        tile->SetTooltipAnchor(panel);
+    }
+}
+
+struct HoveredArrow
+{
+    Box Bubble;
+    Box Tile;
+    Vector2 Tip;
+    std::vector<UI::UIPrimitive> Triangles;
+};
+
+// Moves the pointer onto the tile and pumps past the hover delay. The tip is the vertex of the
+// outer triangle that lies furthest along `pointing`. False when no arrow is drawn.
+bool HoverTile(UITesting::IsolatedUIFixture& fixture, const char* tileId, Vector2 pointing, HoveredArrow& out)
+{
+    const UIElement* tile = fixture.Element(tileId);
+    fixture.Manager().OnMouseMove(tile->GetLayoutX() + 5.0f, tile->GetLayoutY() + 5.0f);
+    for (int frame = 0; frame < 4; ++frame)
+        fixture.PumpSeconds(0.3f);
+    out.Triangles = ArrowPrimitives(fixture.Manager());
+    if (out.Triangles.empty())
+        return false;
+    const auto vertices = Vertices(out.Triangles.front());
+    out.Tip = *std::max_element(vertices.begin(), vertices.end(), [pointing](Vector2 a, Vector2 b) {
+        return Vector2::Dot(a, pointing) < Vector2::Dot(b, pointing);
+    });
+    out.Bubble = LayoutBox(*fixture.Element("ui-tooltip"), 1.0f);
+    out.Tile = LayoutBox(*tile, 1.0f);
+    return true;
+}
+
+float CenterX(const Box& box)
+{
+    return box.X + box.W * 0.5f;
+}
+
+float CenterY(const Box& box)
+{
+    return box.Y + box.H * 0.5f;
 }
 
 } // namespace
@@ -252,4 +339,146 @@ TEST(PointerArrowTests, APopoverArrowPointsBySideInItsBubblesPaint)
     EXPECT_NEAR(tip.x, box.X + box.W * 0.5f, 0.5f) << "the tip is at the middle of the arrow's box";
     EXPECT_NEAR(tip.y, box.Y + box.H, 0.5f) << "the tip points down, at the far edge of the arrow's box";
     EXPECT_GT(tip.y, panel.Y + panel.H) << "the tip is below the panel";
+}
+
+// The bubble sits above the panel. The arrow sits on the panel's top edge at the hovered tile's
+// center x, the same for the tile in the top row and for the tile in the bottom row.
+TEST(PointerArrowTests, AnAnchoredTooltipsArrowLinesUpWithTheTileInEveryRow)
+{
+    UITesting::IsolatedUIFixture fixture;
+    const bool built = fixture.Build(1.0f, kGridXml, kGridCss);
+    if (!fixture.DeviceAvailable())
+        GTEST_SKIP() << "No Vulkan device available";
+    ASSERT_TRUE(built);
+    AnchorTilesToThePanel(fixture, kGridTiles, UIElement::TooltipPlacement::Above);
+    const Box panel = LayoutBox(*fixture.Element("panel"), 1.0f);
+    const Vector2 down(0.0f, 1.0f);
+
+    HoveredArrow top;
+    ASSERT_TRUE(HoverTile(fixture, "row0-col1", down, top)) << "no arrow for the top row's tile";
+    HoveredArrow bottom;
+    ASSERT_TRUE(HoverTile(fixture, "row2-col1", down, bottom)) << "no arrow for the bottom row's tile";
+
+    for (const HoveredArrow* hovered : {&top, &bottom})
+    {
+        EXPECT_LE(hovered->Bubble.Y + hovered->Bubble.H, panel.Y) << "the bubble covers the panel";
+        EXPECT_NEAR(hovered->Tip.x, CenterX(hovered->Tile), 0.5f) << "the arrow is not at the tile's center x";
+        EXPECT_GT(hovered->Tip.y, hovered->Bubble.Y + hovered->Bubble.H) << "the arrow does not point down";
+        EXPECT_LE(hovered->Tip.y, panel.Y) << "the arrow reaches into the panel";
+    }
+    EXPECT_FLOAT_EQ(bottom.Tip.x, top.Tip.x) << "the rows of one column have different arrows";
+}
+
+// The bubble is as wide as the panel, so it stays in one place for every tile. The arrow moves
+// to the center x of each tile the pointer goes to.
+TEST(PointerArrowTests, AnAnchoredTooltipsArrowMovesBetweenColumnsWhileTheBubbleStays)
+{
+    std::string css = kGridCss;
+    css += ".tooltip { width: 200px; }";
+    UITesting::IsolatedUIFixture fixture;
+    const bool built = fixture.Build(1.0f, kGridXml, css);
+    if (!fixture.DeviceAvailable())
+        GTEST_SKIP() << "No Vulkan device available";
+    ASSERT_TRUE(built);
+    AnchorTilesToThePanel(fixture, kGridTiles, UIElement::TooltipPlacement::Above);
+    const Box panel = LayoutBox(*fixture.Element("panel"), 1.0f);
+    const Vector2 down(0.0f, 1.0f);
+
+    HoveredArrow first;
+    ASSERT_TRUE(HoverTile(fixture, "row0-col1", down, first));
+    HoveredArrow second;
+    ASSERT_TRUE(HoverTile(fixture, "row0-col2", down, second));
+
+    ASSERT_FLOAT_EQ(first.Bubble.W, panel.W) << "the bubble must be as wide as the panel";
+    EXPECT_FLOAT_EQ(second.Bubble.X, first.Bubble.X) << "the bubble moved";
+    EXPECT_FLOAT_EQ(second.Bubble.Y, first.Bubble.Y) << "the bubble moved";
+    EXPECT_NEAR(first.Tip.x, CenterX(first.Tile), 0.5f);
+    EXPECT_NEAR(second.Tip.x, CenterX(second.Tile), 0.5f) << "the arrow did not move to the new column";
+}
+
+// The tiles at the two ends of the panel have their centers past the straight part of the
+// bubble's edge. The arrow stops where the bubble's rounded corner starts, the same distance
+// from each end, and still points down.
+TEST(PointerArrowTests, AnAnchoredTooltipsArrowStopsAtTheBubblesStraightEdgeAtBothEnds)
+{
+    UITesting::IsolatedUIFixture fixture;
+    const bool built = fixture.Build(1.0f, kGridXml, kGridCss);
+    if (!fixture.DeviceAvailable())
+        GTEST_SKIP() << "No Vulkan device available";
+    ASSERT_TRUE(built);
+    AnchorTilesToThePanel(fixture, kGridTiles, UIElement::TooltipPlacement::Above);
+    const Box panel = LayoutBox(*fixture.Element("panel"), 1.0f);
+    const Vector2 down(0.0f, 1.0f);
+
+    HoveredArrow leftEnd;
+    ASSERT_TRUE(HoverTile(fixture, "row0-col0", down, leftEnd));
+    HoveredArrow rightEnd;
+    ASSERT_TRUE(HoverTile(fixture, "row0-col3", down, rightEnd));
+
+    // The bubble is as wide as its text, a fraction of a pixel short of a whole pixel.
+    ASSERT_NEAR(leftEnd.Bubble.X, panel.X, 1.0f) << "the bubble must be held at the panel's left end";
+    ASSERT_NEAR(rightEnd.Bubble.X + rightEnd.Bubble.W, panel.X + panel.W, 1.0f)
+        << "the bubble must be held at the panel's right end";
+    EXPECT_GT(leftEnd.Tip.x, CenterX(leftEnd.Tile)) << "the arrow is on the rounded corner";
+    EXPECT_LT(rightEnd.Tip.x, CenterX(rightEnd.Tile)) << "the arrow is on the rounded corner";
+    EXPECT_NEAR(leftEnd.Tip.x - leftEnd.Bubble.X, rightEnd.Bubble.X + rightEnd.Bubble.W - rightEnd.Tip.x, 0.5f)
+        << "the arrow stops at a different distance from each end";
+    for (const HoveredArrow* hovered : {&leftEnd, &rightEnd})
+    {
+        EXPECT_GT(hovered->Tip.y, hovered->Bubble.Y + hovered->Bubble.H) << "the arrow does not point down";
+        for (const UI::UIPrimitive& triangle : hovered->Triangles)
+        {
+            for (const Vector2 vertex : Vertices(triangle))
+            {
+                EXPECT_GE(vertex.x, hovered->Bubble.X + kBubbleRadius - 0.01f) << "a vertex is on the rounded corner";
+                EXPECT_LE(vertex.x, hovered->Bubble.X + hovered->Bubble.W - kBubbleRadius + 0.01f)
+                    << "a vertex is on the rounded corner";
+            }
+        }
+    }
+}
+
+// The bubble sits right of the panel, then left of it. The arrow sits on the panel's facing edge
+// at the hovered tile's center y: the same for both tiles of a row, and it moves to the next row.
+TEST(PointerArrowTests, AnAnchoredTooltipsArrowOnTheRightOrLeftLinesUpWithTheTileInEveryColumn)
+{
+    using Placement = UIElement::TooltipPlacement;
+    for (const Placement placement : {Placement::Right, Placement::Left})
+    {
+        SCOPED_TRACE(placement == Placement::Right ? "Right" : "Left");
+        UITesting::IsolatedUIFixture fixture;
+        const bool built = fixture.Build(1.0f, kColumnXml, kColumnCss);
+        if (!fixture.DeviceAvailable())
+            GTEST_SKIP() << "No Vulkan device available";
+        ASSERT_TRUE(built);
+        AnchorTilesToThePanel(fixture, kColumnTiles, placement);
+        const Box panel = LayoutBox(*fixture.Element("panel"), 1.0f);
+        const Vector2 pointing(placement == Placement::Right ? -1.0f : 1.0f, 0.0f);
+
+        HoveredArrow leftColumn;
+        ASSERT_TRUE(HoverTile(fixture, "left-row1", pointing, leftColumn));
+        HoveredArrow rightColumn;
+        ASSERT_TRUE(HoverTile(fixture, "right-row1", pointing, rightColumn));
+        HoveredArrow nextRow;
+        ASSERT_TRUE(HoverTile(fixture, "right-row2", pointing, nextRow));
+
+        for (const HoveredArrow* hovered : {&leftColumn, &rightColumn, &nextRow})
+        {
+            EXPECT_NEAR(hovered->Tip.y, CenterY(hovered->Tile), 0.5f) << "the arrow is not at the tile's center y";
+            if (placement == Placement::Right)
+            {
+                EXPECT_GE(hovered->Bubble.X, panel.X + panel.W) << "the bubble covers the panel";
+                EXPECT_GE(hovered->Tip.x, panel.X + panel.W) << "the arrow reaches into the panel";
+                EXPECT_LT(hovered->Tip.x, hovered->Bubble.X) << "the arrow does not point left";
+            }
+            else
+            {
+                EXPECT_LE(hovered->Bubble.X + hovered->Bubble.W, panel.X) << "the bubble covers the panel";
+                EXPECT_LE(hovered->Tip.x, panel.X) << "the arrow reaches into the panel";
+                EXPECT_GT(hovered->Tip.x, hovered->Bubble.X + hovered->Bubble.W) << "the arrow does not point right";
+            }
+        }
+        EXPECT_FLOAT_EQ(rightColumn.Tip.y, leftColumn.Tip.y) << "the columns of one row have different arrows";
+        EXPECT_GT(nextRow.Tip.y, rightColumn.Tip.y) << "the arrow did not move to the next row";
+    }
 }

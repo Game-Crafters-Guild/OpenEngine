@@ -180,7 +180,7 @@ std::optional<Vector3> ResolveMarkupRegionGround(const Mathematics::Ray3D& ray, 
     options.IncludePrimitives = false;
     const Scene::PickResult terrain = Picking::PickScene(ray, world, options);
     if (terrain.Hit)
-        return terrain.Best.WorldPosition;
+        return terrain.Best.Point;
     float t = 0.0f;
     Vector3 onPlane;
     if (Mathematics::IntersectRayPlane(ray, Vector3(0.0f, 0.0f, 0.0f), Vector3(0.0f, 1.0f, 0.0f), t, onPlane) && t >= 0.0f)

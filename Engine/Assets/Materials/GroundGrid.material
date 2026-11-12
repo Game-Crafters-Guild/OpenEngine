@@ -4,6 +4,7 @@
   "lightingModel": "StandardPBR",
   "alphaMode": "Opaque",
   "doubleSided": false,
+  "patternSymmetry": "Square",
   "surfaceShader": "Surfaces/standard_pbr.glsl",
   "properties": {
     "baseColor": [1.0, 1.0, 1.0, 1.0],

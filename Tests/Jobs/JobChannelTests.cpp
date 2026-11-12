@@ -68,7 +68,9 @@ bool IsCancelled(const TaskHandle& handle) {
     return handle.IsDone() && handle.HasFailed() && handle.GetErrorMessage().empty();
 }
 
-// A latch the test opens; jobs park on it.
+// A latch the test opens; jobs park on it. Declare it before the pool: a job
+// can still be inside Wait() after the gate opens, and only the pool's
+// destructor joins that job's thread.
 class Gate {
 public:
     void Open() {
@@ -137,13 +139,14 @@ void Spin(std::chrono::microseconds duration) {
 // two compute workers, and a fork on the main thread still completes: the
 // compute workers never ran a channel job.
 TEST(JobChannelTest, BlockingJobsNeverOccupyCpuWorkers) {
+    Gate gate;
+    // Declared before the pool: a job can still use it when an ASSERT returns early.
+    std::atomic<int> running{0};
     WorkStealingThreadPool pool(2);
     JobChannel channel(pool, {.Name = "Test blocking", .MaxRunning = 4});
-    Gate gate;
     GateOpener opener{gate};
 
     const uint64 popsBefore = TotalComputePops(pool);
-    std::atomic<int> running{0};
     std::vector<TaskHandle> handles;
     for (int i = 0; i < 4; ++i) {
         handles.push_back(channel.Submit([&] {
@@ -222,12 +225,8 @@ TEST(JobChannelTest, CapIsNeverExceeded) {
 // cap-1 channel's job runs to completion: the queued jobs took no thread, so
 // every job of both channels ran on at most two blocking threads.
 TEST(JobChannelTest, QueuedJobsHoldNoThread) {
-    WorkStealingThreadPool pool(1);
-    JobChannel parked(pool, {.Name = "Test parked", .MaxRunning = 1});
-    JobChannel other(pool, {.Name = "Test other", .MaxRunning = 1});
     Gate gate;
-    GateOpener opener{gate};
-
+    // Declared before the pool: a job can still use them when an ASSERT returns early.
     std::mutex threadsMutex;
     std::set<std::thread::id> threads;
     auto recordThread = [&] {
@@ -235,6 +234,11 @@ TEST(JobChannelTest, QueuedJobsHoldNoThread) {
         threads.insert(std::this_thread::get_id());
     };
     std::atomic<bool> headRunning{false};
+    WorkStealingThreadPool pool(1);
+    JobChannel parked(pool, {.Name = "Test parked", .MaxRunning = 1});
+    JobChannel other(pool, {.Name = "Test other", .MaxRunning = 1});
+    GateOpener opener{gate};
+
     std::vector<TaskHandle> handles;
     handles.push_back(parked.Submit([&] {
         recordThread();
@@ -260,12 +264,16 @@ TEST(JobChannelTest, QueuedJobsHoldNoThread) {
 }
 
 TEST(JobChannelTest, CancelledQueuedSubmitReleasesNothingItNeverTook) {
+    Gate gate;
+    Gate second;
+    // Declared before the pool: a job can still use them when an ASSERT returns early.
+    std::atomic<bool> headRunning{false};
+    std::atomic<int> running{0};
+    std::atomic<int> highWater{0};
     WorkStealingThreadPool pool(1);
     JobChannel channel(pool, {.Name = "Test cancel queued", .MaxRunning = 1});
-    Gate gate;
     GateOpener opener{gate};
 
-    std::atomic<bool> headRunning{false};
     std::atomic<bool> cancelledRan{false};
     std::atomic<bool> nextRan{false};
     TaskHandle head = channel.Submit([&] {
@@ -287,10 +295,7 @@ TEST(JobChannelTest, CancelledQueuedSubmitReleasesNothingItNeverTook) {
     EXPECT_FALSE(cancelledRan.load());
 
     // One slot, exactly: the second of two parked jobs waits for the first.
-    Gate second;
     GateOpener secondOpener{second};
-    std::atomic<int> running{0};
-    std::atomic<int> highWater{0};
     auto parkedJob = [&] {
         const int now = running.fetch_add(1) + 1;
         highWater.store(std::max(highWater.load(), now));
@@ -312,15 +317,17 @@ TEST(JobChannelTest, CancelledQueuedSubmitReleasesNothingItNeverTook) {
 // there; when a thread reaches it the dropped envelope frees its slot, so the
 // channel still runs two jobs at once afterwards.
 TEST(JobChannelTest, CancelledDispatchedSubmitReleasesItsSlot) {
+    Gate holderGate;
+    Gate headGate;
+    Gate pairGate;
+    // Declared before the pool: a job can still use it when an ASSERT returns early.
+    std::atomic<int> running{0};
     WorkStealingThreadPool pool(1, /*blockingThreadBudget=*/2);
     JobChannel holder(pool, {.Name = "Test holder", .MaxRunning = 1});
     JobChannel channel(pool, {.Name = "Test dispatched", .MaxRunning = 2});
-    Gate holderGate;
-    Gate headGate;
     GateOpener holderOpener{holderGate};
     GateOpener headOpener{headGate};
 
-    std::atomic<int> running{0};
     TaskHandle hold = holder.Submit([&] {
         running.fetch_add(1);
         holderGate.Wait();
@@ -346,7 +353,6 @@ TEST(JobChannelTest, CancelledDispatchedSubmitReleasesItsSlot) {
     head.Wait();
     hold.Wait();
 
-    Gate pairGate;
     GateOpener pairOpener{pairGate};
     std::atomic<int> pairRunning{0};
     auto pairJob = [&] {
@@ -363,12 +369,13 @@ TEST(JobChannelTest, CancelledDispatchedSubmitReleasesItsSlot) {
 }
 
 TEST(JobChannelTest, DestroyedChannelCancelsQueuedSubmit) {
+    Gate gate;
+    // Declared before the pool: a job can still use it when an ASSERT returns early.
+    std::atomic<bool> headRunning{false};
     WorkStealingThreadPool pool(1);
     auto channel = std::make_unique<JobChannel>(pool, JobChannelDesc{.Name = "Test destroyed", .MaxRunning = 1});
-    Gate gate;
     GateOpener opener{gate};
 
-    std::atomic<bool> headRunning{false};
     std::atomic<bool> queuedRan{false};
     TaskHandle head = channel->Submit([&] {
         headRunning.store(true);
@@ -387,10 +394,12 @@ TEST(JobChannelTest, DestroyedChannelCancelsQueuedSubmit) {
 }
 
 TEST(JobChannelTest, SubmitHandleIsAGraphDependency) {
+    Gate gate;
+    Gate failureGate;
     WorkStealingThreadPool pool(2);
     JobChannel channel(pool, {.Name = "Test dependency", .MaxRunning = 1});
-    Gate gate;
     GateOpener opener{gate};
+    GateOpener failureOpener{failureGate};
 
     TaskHandle produced = channel.Submit([&] {
         gate.Wait();
@@ -413,10 +422,16 @@ TEST(JobChannelTest, SubmitHandleIsAGraphDependency) {
     EXPECT_TRUE(dependent.IsCompleted());
     EXPECT_EQ(seen.load(), 7);
 
-    TaskHandle failing = channel.Submit([]() -> int { throw std::runtime_error("channel job failed"); });
+    // The failing job parks on its gate, so the dependent is submitted while
+    // its dependency is live. The pool adds no edge to a dependency that ended.
+    TaskHandle failing = channel.Submit([&]() -> int {
+        failureGate.Wait();
+        throw std::runtime_error("channel job failed");
+    });
     std::atomic<bool> dependentRan{false};
     TaskHandle afterFailure =
         pool.Submit([&] { dependentRan.store(true); }, std::span<const TaskHandle>(&failing, 1));
+    failureGate.Open();
     afterFailure.Wait();
     EXPECT_TRUE(failing.HasFailed());
     EXPECT_FALSE(afterFailure.IsCompleted());
@@ -484,14 +499,20 @@ TEST(JobChannelTest, IdleBlockingThreadFlushesItsCleanupShare) {
 // the registered caps above the thread count, so a hand-on that created a
 // thread would run them beside the running job.
 TEST(JobChannelEnqueueTest, DestroyedChannelHandsEnqueueOnToItsTarget) {
+    Gate gate;
+    // Declared before the pool: a job can still use them when an ASSERT returns early.
+    std::atomic<bool> headRunning{false};
+    std::thread::id headThread;
+    std::mutex orderMutex;
+    std::vector<int> order;
+    std::vector<std::thread::id> ranOn;
+    std::atomic<int> done{0};
+    std::atomic<bool> submitRan{false};
     WorkStealingThreadPool pool(1);
     JobChannel idle(pool, {.Name = "Test idle demand", .MaxRunning = 2});
     auto channel = std::make_unique<JobChannel>(pool, JobChannelDesc{.Name = "Test hand on", .MaxRunning = 1});
-    Gate gate;
     GateOpener opener{gate};
 
-    std::atomic<bool> headRunning{false};
-    std::thread::id headThread;
     TaskHandle head = channel->Submit([&] {
         headThread = std::this_thread::get_id();
         headRunning.store(true);
@@ -499,11 +520,6 @@ TEST(JobChannelEnqueueTest, DestroyedChannelHandsEnqueueOnToItsTarget) {
     });
     ASSERT_TRUE(WaitUntil([&] { return headRunning.load(); }));
 
-    std::mutex orderMutex;
-    std::vector<int> order;
-    std::vector<std::thread::id> ranOn;
-    std::atomic<int> done{0};
-    std::atomic<bool> submitRan{false};
     for (int i = 0; i < 3; ++i) {
         channel->Enqueue([&, i] {
             {
@@ -539,15 +555,16 @@ TEST(JobChannelEnqueueTest, DestroyedChannelHandsEnqueueOnToItsTarget) {
 // blocking threads, never on a compute worker.
 TEST(JobChannelEnqueueTest, EnqueueJobsRunOnBlockingThreadsUnderTheCap) {
     constexpr uint32 kCap = 2;
-    WorkStealingThreadPool pool(1);
-    JobChannel channel(pool, {.Name = "Test enqueue cap", .MaxRunning = kCap});
-    const uint64 popsBefore = TotalComputePops(pool);
-
+    // Declared before the pool: a job can still use them when an ASSERT returns early.
     std::atomic<int> running{0};
     std::atomic<int> highWater{0};
     std::atomic<int> done{0};
     std::atomic<bool> ranOnCaller{false};
     const std::thread::id caller = std::this_thread::get_id();
+    WorkStealingThreadPool pool(1);
+    JobChannel channel(pool, {.Name = "Test enqueue cap", .MaxRunning = kCap});
+    const uint64 popsBefore = TotalComputePops(pool);
+
     constexpr int kJobs = 64;
     for (int i = 0; i < kJobs; ++i) {
         channel.Enqueue([&] {
@@ -597,10 +614,10 @@ TEST(JobChannelEnqueueTest, InlinePoolRunsChannelJobsAtEnqueue) {
 }
 
 TEST(JobChannelShutdownTest, ShutdownCancelsQueuedHandles) {
+    Gate gate;
     auto pool = std::make_unique<WorkStealingThreadPool>(1);
     std::vector<std::unique_ptr<JobChannel>> channels;
     channels.push_back(std::make_unique<JobChannel>(*pool, JobChannelDesc{.Name = "Test queued", .MaxRunning = 1}));
-    Gate gate;
     GateOpener opener{gate};
 
     std::atomic<bool> headRunning{false};
@@ -635,13 +652,14 @@ TEST(JobChannelShutdownTest, ShutdownCancelsQueuedHandles) {
 // the parked worker) and waits on its handle. Only the shutdown drain can
 // release that wait, so the blocking threads are joined after it.
 TEST(JobChannelShutdownTest, ShutdownReleasesABlockingJobWaitingOnAQueuedComputeHandle) {
+    Gate workerGate;
+    // Declared before the pool: a job can still use it when an ASSERT returns early.
+    std::atomic<bool> workerParked{false};
     auto pool = std::make_unique<WorkStealingThreadPool>(1);
     std::vector<std::unique_ptr<JobChannel>> channels;
     channels.push_back(std::make_unique<JobChannel>(*pool, JobChannelDesc{.Name = "Test waiter", .MaxRunning = 1}));
-    Gate workerGate;
     GateOpener opener{workerGate};
 
-    std::atomic<bool> workerParked{false};
     TaskHandle parkedWorker = pool->Submit([&] {
         workerParked.store(true);
         workerGate.Wait();
@@ -669,23 +687,24 @@ TEST(JobChannelShutdownTest, ShutdownReleasesABlockingJobWaitingOnAQueuedCompute
 // The channel arm: a job of the first channel waits on a handle queued in the
 // second channel, whose only slot a parked job holds.
 TEST(JobChannelShutdownTest, ShutdownReleasesABlockingJobWaitingOnAQueuedChannelHandle) {
+    Gate gate;
+    // Declared before the pool: a job can still use them when an ASSERT returns early.
+    std::atomic<bool> secondParked{false};
+    std::atomic<bool> waiting{false};
     auto pool = std::make_unique<WorkStealingThreadPool>(1);
     std::vector<std::unique_ptr<JobChannel>> channels;
     channels.push_back(std::make_unique<JobChannel>(*pool, JobChannelDesc{.Name = "Test first", .MaxRunning = 1}));
     channels.push_back(std::make_unique<JobChannel>(*pool, JobChannelDesc{.Name = "Test second", .MaxRunning = 1}));
     JobChannel& first = *channels[0];
     JobChannel& second = *channels[1];
-    Gate gate;
     GateOpener opener{gate};
 
-    std::atomic<bool> secondParked{false};
     TaskHandle parked = second.Submit([&] {
         secondParked.store(true);
         gate.Wait();
     });
     ASSERT_TRUE(WaitUntil([&] { return secondParked.load(); }));
 
-    std::atomic<bool> waiting{false};
     auto queuedHandle = std::make_shared<TaskHandle>();
     auto token = std::make_shared<int>(0);
     std::weak_ptr<int> queuedClosure = token;
@@ -713,6 +732,8 @@ TEST(JobChannelShutdownTest, ShutdownReleasesABlockingJobWaitingOnAQueuedChannel
 // the gate under its mutex and hands the job back: the handle reads
 // Cancelled, never Pending, and the job never runs.
 TEST(JobChannelShutdownTest, ChannelPublishRacingShutdownIsDrainedOnTheCaller) {
+    // Declared before the pool: a dispatched job can still use it when an ASSERT returns early.
+    std::atomic<bool> ran{false};
     auto pool = std::make_unique<WorkStealingThreadPool>(1);
     JobChannel channel(*pool, {.Name = "Test racing", .MaxRunning = 1});
 
@@ -723,7 +744,6 @@ TEST(JobChannelShutdownTest, ChannelPublishRacingShutdownIsDrainedOnTheCaller) {
         shutdown.join();
         shutdownReturned.store(true);
     });
-    std::atomic<bool> ran{false};
     TaskHandle handle = channel.Submit([&] { ran.store(true); });
     channel.SetBeforeDispatchHookForTests({});
 
@@ -738,6 +758,9 @@ TEST(JobChannelShutdownTest, ChannelPublishRacingShutdownIsDrainedOnTheCaller) {
 // The Enqueue arm: the job is handed back to its caller and runs there,
 // exactly once.
 TEST(JobChannelShutdownTest, ChannelEnqueueRacingShutdownIsDrainedOnTheCaller) {
+    // Declared before the pool: a dispatched job can still use them when an ASSERT returns early.
+    std::atomic<int> runs{0};
+    std::thread::id ranOn;
     auto pool = std::make_unique<WorkStealingThreadPool>(1);
     JobChannel channel(*pool, {.Name = "Test racing enqueue", .MaxRunning = 1});
 
@@ -748,8 +771,6 @@ TEST(JobChannelShutdownTest, ChannelEnqueueRacingShutdownIsDrainedOnTheCaller) {
         shutdown.join();
         shutdownReturned.store(true);
     });
-    std::atomic<int> runs{0};
-    std::thread::id ranOn;
     channel.Enqueue([&] {
         ranOn = std::this_thread::get_id();
         runs.fetch_add(1);
@@ -769,23 +790,24 @@ TEST(JobChannelShutdownTest, ChannelEnqueueRacingShutdownIsDrainedOnTheCaller) {
 // queued Enqueue jobs run on the thread that called Shutdown() and the queued
 // Submit jobs read Cancelled.
 TEST(JobChannelShutdownTest, ShutdownExecutesQueuedBareJobsAndCancelsHandles) {
+    Gate workerGate;
+    Gate headGate;
+    // Declared before the pool: a job can still use them when an ASSERT returns early.
+    std::atomic<bool> workerParked{false};
+    std::atomic<bool> headRunning{false};
     auto pool = std::make_unique<WorkStealingThreadPool>(1);
     std::vector<std::unique_ptr<JobChannel>> channels;
     channels.push_back(std::make_unique<JobChannel>(*pool, JobChannelDesc{.Name = "Test drained", .MaxRunning = 1}));
     JobChannel& channel = *channels[0];
-    Gate workerGate;
-    Gate headGate;
     GateOpener workerOpener{workerGate};
     GateOpener headOpener{headGate};
 
-    std::atomic<bool> workerParked{false};
     TaskHandle parkedWorker = pool->Submit([&] {
         workerParked.store(true);
         workerGate.Wait();
     });
     ASSERT_TRUE(WaitUntil([&] { return workerParked.load(); }));
 
-    std::atomic<bool> headRunning{false};
     TaskHandle head = channel.Submit([&] {
         headRunning.store(true);
         headGate.Wait();
@@ -843,18 +865,19 @@ TEST(JobChannelShutdownTest, ShutdownExecutesQueuedBareJobsAndCancelsHandles) {
 // handle, across every channel's FIFO, before it runs any queued Enqueue job,
 // so the wait returns on the shutting-down thread.
 TEST(JobChannelShutdownTest, ShutdownCancelsEveryQueuedHandleBeforeRunningAQueuedEnqueue) {
+    Gate firstGate;
+    Gate secondGate;
+    // Declared before the pool: a job can still use it when an ASSERT returns early.
+    std::atomic<int> parkedCount{0};
     auto pool = std::make_unique<WorkStealingThreadPool>(1);
     std::vector<std::unique_ptr<JobChannel>> channels;
     channels.push_back(std::make_unique<JobChannel>(*pool, JobChannelDesc{.Name = "Test first", .MaxRunning = 1}));
     channels.push_back(std::make_unique<JobChannel>(*pool, JobChannelDesc{.Name = "Test second", .MaxRunning = 1}));
     JobChannel& first = *channels[0];
     JobChannel& second = *channels[1];
-    Gate firstGate;
-    Gate secondGate;
     GateOpener firstOpener{firstGate};
     GateOpener secondOpener{secondGate};
 
-    std::atomic<int> parkedCount{0};
     TaskHandle firstParked = first.Submit([&] {
         parkedCount.fetch_add(1);
         firstGate.Wait();

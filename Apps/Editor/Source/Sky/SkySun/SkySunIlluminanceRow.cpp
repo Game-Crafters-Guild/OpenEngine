@@ -14,7 +14,7 @@
 #include "UI/Controls/Button.h"
 #include "UI/Controls/FloatField.h"
 #include "UI/Controls/Label.h"
-#include "UI/StyleProperties.h"
+#include "UI/StyleUtil.h"
 
 #include <algorithm>
 #include <cmath>
@@ -93,18 +93,12 @@ std::string DimmedSunText(const SunReadout& readout)
     return text;
 }
 
-// Show or hide an element that only applies in some states.
-void SetShown(UIElement* element, bool shown)
-{
-    element->Style().Set(Style::Display, shown ? DisplayMode::Flex : DisplayMode::None);
-}
-
 // A state line under the row: shown with `text`, hidden when there is nothing to say.
 void ShowStateLine(Label* line, const std::string& text)
 {
     if (line->GetText() != text)
         line->SetText(text);
-    SetShown(line, !text.empty());
+    UIUtil::SetShown(*line, !text.empty());
 }
 
 // The unlinked row's value: the sun the sky reads and where it comes from, or that there is none.
@@ -128,7 +122,7 @@ void RefreshReadOnlySunRow(const ReadOnlySunRow& row, ECS::World& world, const S
     const std::string text = ReadOnlySunText(world, readout);
     if (row.Value->GetText() != text)
         row.Value->SetText(text);
-    SetShown(row.Link, readout.Resolved.IsValid());
+    UIUtil::SetShown(*row.Link, readout.Resolved.IsValid());
 }
 
 // No light is linked: the sun the sky reads, read-only, with the action that links it.

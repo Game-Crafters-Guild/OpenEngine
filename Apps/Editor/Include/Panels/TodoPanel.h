@@ -122,7 +122,6 @@ private:
     // Flag to request rebuild on next safe opportunity (OnPostLayout)
     bool m_NeedsRebuild = false;
     bool m_NeedsSave = false;
-    bool m_AddFieldShowingPlaceholder = false;
     
     // Generation counter - increments on each rebuild to invalidate stale pointers
     uint32_t m_RebuildGeneration = 0;

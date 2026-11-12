@@ -6,6 +6,7 @@
 #include "Panels/SaveSceneChangesModal.h"
 #include "EditorContext.h"
 #include "Graph/GraphModel.h"
+#include "Graph/GraphPanelFactory.h"
 #include "Graph/GraphTypeRegistry.h"
 #include "Graph/GraphNode/GraphNodeRegistry.h"
 #include "Graph/GraphKindChrome.h"
@@ -1591,7 +1592,9 @@ void GraphPanel::RebuildPalette()
             if (!MatchSearch(meta.DisplayName, meta.TypeId, search))
                 continue;
             auto item = std::make_unique<UIElement>();
+            // A Button's look without a Button's input handling: the item requests the Button sheet.
             item->AddClass("button");
+            item->RequestSubtreeStyleAssetPath("UI/controls/Button.css", "editor");
             item->AddClass("node-graph-palette-node-button");
             if (m_ColorPaletteNodes)
             {
@@ -4325,12 +4328,23 @@ void GraphPanel::RefreshGraphViewAfterModelChange()
     this->UIElement::MarkDirty(UIElement::LayoutDirty | UIElement::VisualDirty);
 }
 
+// The dock id is unique per docked panel. A default layout dock has no id; it is the only
+// dock of its kind, so the kind's layout dock id is unique there.
+std::string GraphPanel::SaveChangesPromptPrefix() const
+{
+    if (!GetId().empty())
+        return GetId();
+    if (const char* layoutDockId = GraphDockPanelIdForKind(m_PanelKindId))
+        return layoutDockId;
+    return m_PanelKindId;
+}
+
 void GraphPanel::EnsureUnsavedChangesModal()
 {
     if (m_UnsavedChangesModal)
         return;
 
-    auto modal = std::make_unique<SaveSceneChangesModal>();
+    auto modal = std::make_unique<SaveSceneChangesModal>(SaveChangesPromptPrefix());
     m_UnsavedChangesModal = modal.get();
     UIManager* ui = GetOwnerManager();
     UIElement* uiRoot = ui ? ui->GetRootElement() : nullptr;

@@ -17,10 +17,10 @@ namespace GameEngine {
 namespace {
 
 
-/// Files a directory must hold to be a usable wasm Player template. The shell
-/// is expanded into WebPlayer.html at link time, so a template is exactly the
-/// three artifacts the emscripten link produces.
-constexpr const char* kPlayerTemplateFiles[] = {"WebPlayer.html", "WebPlayer.js", "WebPlayer.wasm"};
+/// A usable wasm Player template holds the three files the emscripten link produces
+/// (it expands the shell into WebPlayer.html) and the notices the WebPlayer build writes.
+constexpr const char* kPlayerLinkFiles[] = {"WebPlayer.html", "WebPlayer.js", "WebPlayer.wasm"};
+constexpr const char* kPlayerNoticesFile = "THIRD_PARTY_NOTICES.md";
 
 /// wasm build trees the engine's own presets produce, newest-first by
 /// preference: a Release template ships smaller, a Debug one is what a
@@ -92,17 +92,35 @@ std::filesystem::path FindPythonExecutable()
     return {};
 }
 
-bool IsPlayerTemplateDir(const std::filesystem::path& directory)
+bool HoldsPlayerLinkFiles(const std::filesystem::path& directory)
 {
     if (directory.empty())
         return false;
     std::error_code ec;
-    for (const char* file : kPlayerTemplateFiles)
+    for (const char* file : kPlayerLinkFiles)
     {
         if (!std::filesystem::is_regular_file(directory / file, ec))
             return false;
     }
     return true;
+}
+
+bool IsPlayerTemplateDir(const std::filesystem::path& directory)
+{
+    std::error_code ec;
+    return HoldsPlayerLinkFiles(directory) && std::filesystem::is_regular_file(directory / kPlayerNoticesFile, ec);
+}
+
+/// The first tried directory that holds the link files but not the notices: a template
+/// that the WebPlayer build wrote before it wrote the notices. Empty when there is none.
+std::filesystem::path FindTemplateWithoutNotices(const std::vector<std::filesystem::path>& tried)
+{
+    for (const auto& directory : tried)
+    {
+        if (HoldsPlayerLinkFiles(directory))
+            return directory;
+    }
+    return {};
 }
 
 /// Resolve the wasm Player template, recording every location tried so a
@@ -178,23 +196,32 @@ bool RunWebExport(const BuildSettings& settings,
     // <engine root>/Tools/Web/export_web_player.py
     const auto engineRoot = exportScript.parent_path().parent_path().parent_path();
 
+    std::vector<std::filesystem::path> templatesTried;
+    const auto playerTemplate = FindPlayerTemplate(settings.projectRoot, engineRoot, inputs.playerTemplate, templatesTried);
+    if (playerTemplate.empty())
+    {
+        const auto withoutNotices = FindTemplateWithoutNotices(templatesTried);
+        if (!withoutNotices.empty())
+        {
+            outError = withoutNotices.generic_string() + " has no " + kPlayerNoticesFile +
+                       ". Build the WebPlayer target again in the wasm build tree that holds it, for "
+                       "example: cmake --build --preset wasm-debug --target WebPlayer.";
+            return false;
+        }
+        outError = "No wasm Player template found (looked in: " + DescribePaths(templatesTried) +
+                   "). Build one with: Tools/emsdk/setup.sh && cmake --preset wasm-debug && "
+                   "cmake --build --preset wasm-debug --target WebPlayer — then point "
+                   "Settings > Build > Web > Player template at the directory holding "
+                   "WebPlayer.html, WebPlayer.js, WebPlayer.wasm and THIRD_PARTY_NOTICES.md (the "
+                   "WebPlayer build writes all four).";
+        return false;
+    }
+
     const auto python = FindPythonExecutable();
     if (python.empty())
     {
         outError = "Web export needs Python 3, which was not found on PATH. Install Python 3 "
                    "(brew install python on macOS, python.org on Windows) and restart the Editor.";
-        return false;
-    }
-
-    std::vector<std::filesystem::path> templatesTried;
-    const auto playerTemplate = FindPlayerTemplate(settings.projectRoot, engineRoot, inputs.playerTemplate, templatesTried);
-    if (playerTemplate.empty())
-    {
-        outError = "No wasm Player template found (looked in: " + DescribePaths(templatesTried) +
-                   "). Build one with: Tools/emsdk/setup.sh && cmake --preset wasm-debug && "
-                   "cmake --build --preset wasm-debug --target WebPlayer — then point "
-                   "Settings > Build > Web > Player template at the directory holding "
-                   "WebPlayer.html, WebPlayer.js and WebPlayer.wasm.";
         return false;
     }
 

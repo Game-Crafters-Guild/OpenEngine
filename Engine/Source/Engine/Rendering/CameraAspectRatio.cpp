@@ -1,6 +1,7 @@
 #include "Engine/Rendering/CameraAspectRatio.h"
 
 #include "Engine/Rendering/Camera.h"
+#include "Engine/Rendering/RenderOrigin.h"
 #include "Engine/Rendering/RenderServices.h"
 #include "Rendering/Camera/CameraPixelGrid.h"
 
@@ -258,6 +259,7 @@ void ApplyActiveCameraAspect(RenderServices& rs,
                              uint32_t viewportWidth,
                              uint32_t viewportHeight)
 {
+    const Rendering::CameraRanges ranges = activeCamera.ToCameraRanges();
     const bool pixelPerfect = activeCamera.params.PixelPerfect && !activeCamera.params.Perspective;
     if (pixelPerfect)
     {
@@ -276,8 +278,10 @@ void ApplyActiveCameraAspect(RenderServices& rs,
                 pp.state.PaddedWidth, pp.state.PaddedHeight, 1.0f, uvTransform, 0);
             pp.state.FracX = uvTransform[2] * pp.state.PaddedWidth;
             pp.state.FracY = -uvTransform[3] * pp.state.PaddedHeight;
+            // The snap moved proj and viewProj: rebuild the rebased matrices from them.
+            Engine::Renderer::SetCameraEye(cameraData, activeCamera.Eye());
         }
-        rs.Views().SetCameraData(cameraId, cameraData);
+        rs.Views().SetCameraData(cameraId, cameraData, ranges);
         // The upscale pass centers + letterboxes the output itself, so the view
         // itself carries no letterbox rect.
         rs.Views().SetViewLetterbox(viewId, ViewLetterbox{});
@@ -287,7 +291,7 @@ void ApplyActiveCameraAspect(RenderServices& rs,
 
     const CameraAspectResolution resolved =
         ResolveCameraAspect(activeCamera.params, viewportWidth, viewportHeight);
-    rs.Views().SetCameraData(cameraId, activeCamera.ToCameraData(resolved.projectionAspect));
+    rs.Views().SetCameraData(cameraId, activeCamera.ToCameraData(resolved.projectionAspect), ranges);
     rs.Views().SetViewLetterbox(viewId, resolved.letterbox);
     rs.Views().SetViewPixelPerfect(viewId, PixelPerfectViewState{});
 }

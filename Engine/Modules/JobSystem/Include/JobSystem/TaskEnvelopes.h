@@ -33,16 +33,16 @@ namespace Detail
 class HandleTask : public TaskBase
 {
   public:
-    const SharedPtr<TaskHandle::TaskData>& GetTaskData() const { return m_Data; }
+    const TaskHandle::TaskDataRef& GetTaskData() const { return m_Data; }
 
   protected:
-    HandleTask(TaskId taskId, SharedPtr<TaskHandle::TaskData> data)
+    HandleTask(TaskId taskId, TaskHandle::TaskDataRef data)
         : TaskBase(taskId, kFlagNeedsTaskData | kFlagInlineTaskData), m_Data(std::move(data))
     {
     }
 
   private:
-    SharedPtr<TaskHandle::TaskData> m_Data;
+    TaskHandle::TaskDataRef m_Data;
 };
 
 /**
@@ -57,7 +57,7 @@ class SubmitTask : public HandleTask
 {
   public:
     template <typename Fn>
-    SubmitTask(TaskId taskId, SharedPtr<TaskHandle::TaskData> data, Fn&& fn)
+    SubmitTask(TaskId taskId, TaskHandle::TaskDataRef data, Fn&& fn)
         : HandleTask(taskId, std::move(data)), m_Fn(std::forward<Fn>(fn))
     {
     }
@@ -121,7 +121,7 @@ class ChannelSubmitTask : public SubmitTask<F>
 {
   public:
     template <typename Fn>
-    ChannelSubmitTask(TaskId taskId, SharedPtr<TaskHandle::TaskData> data, Fn&& fn,
+    ChannelSubmitTask(TaskId taskId, TaskHandle::TaskDataRef data, Fn&& fn,
                       SharedPtr<JobChannelState> channel)
         : SubmitTask<F>(taskId, std::move(data), std::forward<Fn>(fn)), Slot(std::move(channel))
     {

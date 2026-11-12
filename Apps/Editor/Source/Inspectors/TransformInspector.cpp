@@ -1,9 +1,13 @@
+#include "Inspectors/TransformInspector.h"
+
 #include "InspectorRegistry.h"
 #include "Platform/SystemMetrics.h"
 #include "Inspectors/InspectorUIHelpers.h"
 #include "Inspectors/InspectorDragHelpers.h"
+#include "Inspectors/InspectorOverrideRows.h"
 
 #include "EditorChangeNotifications.h"
+#include "Editor/Entities/EditorECSHelpers.h"
 #include "UndoRedo/MultiEntityComponentSnapshot.h"
 #include "UndoRedo/UndoRedoService.h"
 
@@ -11,6 +15,7 @@
 #include "UI/Controls/Label.h"
 #include "UI/Controls/Vector3Field.h"
 #include "UI/InspectorSection.h"
+#include "UI/Interaction/ContextMenuManipulator.h"
 #include "UI/StyleProperties.h"
 
 #include "ECS/ECSTemplates.h"
@@ -18,19 +23,20 @@
 #include "ECS/World.h"
 
 #include "Components/Hierarchy.h"
-#include "PhysicsECS/Components/PhysicsBody.h"
-#include "PhysicsECS/PhysicsWorldService.h"
 #include "Components/Transform.h"
-#include "Components/Rendering/WorldSectorCoord.h"
 #include "Mathematics/Quaternion.h"
 #include "Mathematics/Vector3.h"
+#include "Mathematics/WorldPosition.h"
 #include "Types/FormatNumber.h"
+#include "Types/ParseNumber.h"
+#include "Types/StringUtils.h"
 
 #include "EditorContextMenu/UIContextMenu.h"
 #include "Platform/Capabilities.h"
 #include "Platform/ContextMenu.h"
 #include "Platform/Clipboard.h"
 
+#include <array>
 #include <cctype>
 #include <cerrno>
 #include <chrono>
@@ -38,6 +44,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -69,7 +76,7 @@ inline TRS GetLocalTRS(ECS::Entity& e)
     TRS t = IdentityTRS();
     if (const Transform* xf = e.Get<Transform>())
     {
-        t.position = xf->GetPosition();
+        t.position = xf->GetPosition() - Mathematics::WorldPosition{};
         t.rotation = xf->GetRotation();
         t.scale = xf->GetScale();
     }
@@ -170,57 +177,7 @@ Vector3 ComputeLocalPositionFromWorld(const Vector3& worldPos,
         (parentScale.z != 0.0f) ? (unrotated.z / parentScale.z) : unrotated.z);
 }
 
-static bool TrySetPhysicsBodyWorldPose(ECS::World* world,
-                                       ECS::EntityHandle entity,
-                                       const Vector3& worldPos,
-                                       const Quaternion& worldRot)
-{
-    if (!world || !entity.IsValid() || !world->IsValid(entity))
-    {
-        return false;
-    }
-
-    auto* pw = PhysicsECS::PhysicsWorldService::TryGet();
-    if (!pw)
-    {
-        return false;
-    }
-
-    auto* body = world->GetComponentForWrite<PhysicsBody>(entity);
-    if (!body || !body->initialized || !pw->IsBodyValid(body->body))
-    {
-        return false;
-    }
-
-    Physics::Transform pt{};
-    pt.position = Physics::Vector3(worldPos.x, worldPos.y, worldPos.z);
-    const auto& wq = worldRot.GetGLM();
-    pt.rotation = Physics::Quaternion(wq.w, wq.x, wq.y, wq.z);
-    pw->SetBodyTransform(body->body, pt, Physics::ActivationMode::Activate);
-
-    // Prevent interpolation smear after manual edits.
-    body->prevPhysicsTransform = pt;
-    body->hasPrevPhysicsTransform = true;
-    return true;
-}
-
 using InspectorUI::ContainsFocusedElement;
-
-static bool TryParseVec3FromClipboard(const std::string& text, Rendering::Vector3& out)
-{
-    std::string s = text;
-    for (char& c : s)
-    {
-        if (c == ',' || c == ';') c = ' ';
-    }
-    float x, y, z;
-    if (std::sscanf(s.c_str(), "%f %f %f", &x, &y, &z) == 3)
-    {
-        out = Rendering::Vector3(x, y, z);
-        return true;
-    }
-    return false;
-}
 
 static bool TryParseAllTRSFromClipboard(const std::string& text,
                                         Rendering::Vector3& outPos,
@@ -287,7 +244,7 @@ public:
         AddClass("inspector-section");
         AddClass("inspector-section-transform");
 
-        BuildUI();
+        BuildUI(ctx);
         RefreshFromWorld();
         Subscribe();
 
@@ -342,7 +299,12 @@ public:
     }
 
 private:
-    void AddTrsVector3Row(const std::string& labelText,
+    // A row with a label and a Vector3 field. `overrideField` is the Inspector field of the row, as
+    // InspectorFieldForSceneKey names it: the reflected field ("Position") or the scene key ("rotation");
+    // empty for a derived row, which has the row menu and no override marks.
+    void AddTrsVector3Row(const InspectorContext& context,
+                          std::string overrideField,
+                          const std::string& labelText,
                           const std::string& tooltip,
                           Vector3Field*& outField,
                           const std::function<void(Vector3Field*)>& configureField,
@@ -363,41 +325,24 @@ private:
         field->AddClass("inspector-vector3");
         configureField(field.get());
 
+        UIElement* rowPtr = row.get();
         row->AddChild(std::move(label));
         row->AddChild(std::move(field));
         AddChild(std::move(row));
 
         SetupLabelDrag(labelPtr, outField, onChanging, onChanged);
+        std::vector<ContextMenuManipulator::Item> rowItems = RowMenuItems(outField, onChanged);
+        if (overrideField.empty())
+            rowPtr->AddManipulator(ContextMenuManipulator::Create(std::move(rowItems)));
+        else
+            BindFieldRow(context, ECS::GetComponentTypeId<Transform>(), rowPtr, std::move(overrideField),
+                         std::move(rowItems));
     }
 
-    // Read-only "label : value" row (no field, no drag). Used for the earth-scale
-    // sector readout and the composed true-world position — pure display; the
-    // authoring surface stays the editable Local rows + the WorldSectorCoord section.
-    void AddReadOnlyInfoRow(const std::string& labelText,
-                            const std::string& tooltip,
-                            Label*& outValueLabel)
-    {
-        auto row = std::make_unique<UIElement>();
-        row->AddClass("inspector-transform-info-row");
-
-        auto label = std::make_unique<Label>();
-        label->AddClass("inspector-transform-info-label");
-        label->SetText(labelText);
-        label->SetTooltip(tooltip);
-
-        auto value = std::make_unique<Label>();
-        outValueLabel = value.get();
-        value->AddClass("inspector-transform-readonly-value");
-        value->SetTooltip(tooltip);
-
-        row->AddChild(std::move(label));
-        row->AddChild(std::move(value));
-        AddChild(std::move(row));
-    }
-
-    void BuildUI()
+    void BuildUI(const InspectorContext& ctx)
     {
         AddTrsVector3Row(
+            ctx, "Position",
             "Local Position",
             "Position relative to parent (or world origin if no parent)",
             m_LocalPos,
@@ -411,6 +356,7 @@ private:
             [this](const Rendering::Vector3& v) { OnLocalPositionChanged(v); });
 
         AddTrsVector3Row(
+            ctx, "rotation",
             "Local Rotation",
             "Rotation relative to parent in Euler angles (degrees, XYZ order)",
             m_LocalRot,
@@ -424,6 +370,7 @@ private:
             [this](const Rendering::Vector3& v) { OnLocalRotationChanged(v); });
 
         AddTrsVector3Row(
+            ctx, "scale",
             "Local Scale",
             "Scale relative to parent (1, 1, 1 = no scaling)",
             m_LocalScale,
@@ -437,6 +384,7 @@ private:
             [this](const Rendering::Vector3& v) { OnLocalScaleChanged(v); });
 
         AddTrsVector3Row(
+            ctx, {},
             "World Position",
             "World-space position (derived from hierarchy); editing converts back to local space",
             m_WorldPos,
@@ -448,25 +396,6 @@ private:
             },
             [this](const Rendering::Vector3& v) { OnWorldPositionChanging(v); },
             [this](const Rendering::Vector3& v) { OnWorldPositionChanged(v); });
-
-        // Earth-scale authoring: for entities tagged with a WorldSectorCoord, show
-        // the coarse integer sector and the composed TRUE world position (sector *
-        // sectorSize + local) as read-only rows. This resolves the confusion where
-        // the sector-local translation reads as "World Position" while the mesh
-        // renders far out. Untagged entities get zero extra rows.
-        if (m_World && m_Entity.IsValid() && m_World->IsValid(m_Entity) &&
-            m_World->GetComponent<Components::WorldSectorCoord>(m_Entity))
-        {
-            m_HasSectorRows = true;
-            AddReadOnlyInfoRow(
-                "Sector",
-                "Coarse integer world sector (edit in the World Sector Coord section below)",
-                m_SectorValue);
-            AddReadOnlyInfoRow(
-                "World (sector-composed)",
-                "True world position = sector * 1024 + local. Read-only; edit Local Position or Sector to move it.",
-                m_ComposedWorldValue);
-        }
     }
 
     void Subscribe()
@@ -477,7 +406,6 @@ private:
         }
 
         const ECS::ComponentTypeId transformType = ECS::GetComponentTypeId<Transform>();
-        const ECS::ComponentTypeId sectorType = ECS::GetComponentTypeId<Components::WorldSectorCoord>();
         m_Sub = m_Changes->SubscribeComponentChanged(
             [this](const Editor::EditorChangeNotifications::ComponentChangedEvent& e)
             {
@@ -489,9 +417,7 @@ private:
                 {
                     return;
                 }
-                // Sector edits (from the WorldSectorCoord section) move the composed
-                // world readout, so refresh on those too — not just Transform.
-                if (e.componentType != transformType && e.componentType != sectorType)
+                if (e.componentType != transformType)
                 {
                     return;
                 }
@@ -538,7 +464,7 @@ private:
             return;
         }
 
-        Vector3 localPos = t->GetPosition();
+        Vector3 localPos = t->GetPosition() - Mathematics::WorldPosition{};
         Quaternion localRot = t->GetRotation();
         Vector3 localScale = t->GetScale();
 
@@ -592,49 +518,6 @@ private:
             m_WorldPos->SetValue(worldPosV);
             m_LastWorldPos = worldPosV;
             m_HasLastWorldPos = true;
-        }
-
-        RefreshSectorRows(worldPos);
-    }
-
-    // Update the read-only Sector + composed-world rows from the current sector
-    // tag. Composition goes through ComposeEffectiveWorldTransform — the single
-    // source of truth shared with the render/pick/gizmo paths — so the displayed
-    // value is exactly where the mesh renders. `hierarchyWorldPos` is the
-    // parent-composed (sector-local) world translation.
-    void RefreshSectorRows(const Vector3& hierarchyWorldPos)
-    {
-        if (!m_HasSectorRows)
-            return;
-
-        const auto* sector = m_World->GetComponent<Components::WorldSectorCoord>(m_Entity);
-        if (!sector)
-            return;
-
-        if (m_SectorValue)
-        {
-            std::string sectorText = std::to_string(sector->x) + ", " +
-                                     std::to_string(sector->y) + ", " +
-                                     std::to_string(sector->z);
-            m_SectorValue->SetText(sectorText);
-        }
-
-        if (m_ComposedWorldValue)
-        {
-            Components::WorldTransform hierWt{};
-            hierWt.matrix[12] = hierarchyWorldPos.x;
-            hierWt.matrix[13] = hierarchyWorldPos.y;
-            hierWt.matrix[14] = hierarchyWorldPos.z;
-            const Components::WorldTransform composed =
-                Components::ComposeEffectiveWorldTransform(hierWt, sector, Components::kWorldSectorSize);
-
-            std::string worldText;
-            AppendFloat(worldText, composed.matrix[12]);
-            worldText += ", ";
-            AppendFloat(worldText, composed.matrix[13]);
-            worldText += ", ";
-            AppendFloat(worldText, composed.matrix[14]);
-            m_ComposedWorldValue->SetText(worldText);
         }
     }
 
@@ -774,7 +657,7 @@ private:
             Vector3 newPos(v.x, v.y, v.z);
             Quaternion r = t->GetRotation();
             Vector3 s = t->GetScale();
-            Transform updated = Transform::FromTRS(newPos, r, s);
+            Transform updated = Transform::FromTRS(Mathematics::WorldPosition::FromVector3(newPos), r, s);
             m_World->AddComponentImmediate(entity, updated);
 
             Vector3 parentPos;
@@ -782,7 +665,7 @@ private:
             Vector3 parentScale{1.0f, 1.0f, 1.0f};
             GetParentWorldTRS(m_World, entity, parentPos, parentRot, parentScale);
             TRS worldTrs = CombineTRS(TRS{parentPos, parentRot, parentScale}, TRS{newPos, r, s});
-            (void)TrySetPhysicsBodyWorldPose(m_World, entity, worldTrs.position, worldTrs.rotation);
+            (void)Editor::TeleportPhysicsBody(m_World, entity, worldTrs.position, worldTrs.rotation);
         }
     }
 
@@ -810,7 +693,7 @@ private:
 
         if (const Transform* t = e.Get<Transform>())
         {
-            Vector3 p = t->GetPosition();
+            Mathematics::WorldPosition p = t->GetPosition();
             Vector3 s = t->GetScale();
             Quaternion newRot = QuaternionFromEulerXYZDegrees(v.x, v.y, v.z);
             Transform updated = Transform::FromTRS(p, newRot, s);
@@ -820,8 +703,9 @@ private:
             Quaternion parentRot;
             Vector3 parentScale{1.0f, 1.0f, 1.0f};
             GetParentWorldTRS(m_World, entity, parentPos, parentRot, parentScale);
-            TRS worldTrs = CombineTRS(TRS{parentPos, parentRot, parentScale}, TRS{p, newRot, s});
-            (void)TrySetPhysicsBodyWorldPose(m_World, entity, worldTrs.position, worldTrs.rotation);
+            TRS worldTrs = CombineTRS(TRS{parentPos, parentRot, parentScale},
+                                      TRS{p - Mathematics::WorldPosition{}, newRot, s});
+            (void)Editor::TeleportPhysicsBody(m_World, entity, worldTrs.position, worldTrs.rotation);
         }
     }
 
@@ -851,7 +735,7 @@ private:
 
         if (const Transform* t = e.Get<Transform>())
         {
-            Vector3 p = t->GetPosition();
+            Mathematics::WorldPosition p = t->GetPosition();
             Quaternion r = t->GetRotation();
             Vector3 newScale(v.x, v.y, v.z);
             Transform updated = Transform::FromTRS(p, r, newScale);
@@ -900,12 +784,12 @@ private:
 
             Quaternion r = t->GetRotation();
             Vector3 s = t->GetScale();
-            Transform updated = Transform::FromTRS(newLocalPos, r, s);
+            Transform updated = Transform::FromTRS(Mathematics::WorldPosition::FromVector3(newLocalPos), r, s);
             m_World->AddComponentImmediate(entity, updated);
 
             TRS worldTrs = ComputeWorldTRSForEntity(m_World, entity);
             Quaternion worldRot = worldTrs.rotation;
-            (void)TrySetPhysicsBodyWorldPose(m_World, entity, newWorldPos, worldRot);
+            (void)Editor::TeleportPhysicsBody(m_World, entity, newWorldPos, worldRot);
         }
     }
 
@@ -1101,13 +985,6 @@ private:
 
         label->RegisterEventHandler(kEventMouseCancel, [this, field, onChanged, dragDidMove](UIEvent& e)
                                     { CancelLabelDrag(e, field, *dragDidMove, onChanged); });
-
-        label->RegisterEventHandler(kEventMouseUp, [this, field, onChanging, onChanged](UIEvent& e) {
-            if (e.Button == 1) {
-                ShowFieldContextMenu(field, onChanging, onChanged, e.X, e.Y);
-                e.Stop();
-            }
-        });
     }
 
     // Escape or another button during a row label drag: a drag that moved the row puts back its start
@@ -1143,7 +1020,7 @@ private:
 
     // Drops the "value unchanged since last refresh" guards so the next refresh
     // repaints every row, including ones an edit changed indirectly (local ->
-    // world position, sector readouts).
+    // world position).
     void InvalidateFieldValueCache()
     {
         m_HasLastLocalPos = false;
@@ -1220,69 +1097,67 @@ private:
         RefreshFromWorld();
     }
 
-    void ShowFieldContextMenu(Vector3Field* field,
-                              const std::function<void(const Rendering::Vector3&)>& onChanging,
-                              const std::function<void(const Rendering::Vector3&)>& onChanged,
-                              float x, float y)
+    // The row's own menu entries: Copy, Paste and Reset of the whole row (X, Y, Z), and on Local Scale the
+    // linked-scale toggle. Avoid '/' in labels: the menu splits paths on '/' into submenus.
+    std::vector<ContextMenuManipulator::Item> RowMenuItems(
+        Vector3Field* field, const std::function<void(const Rendering::Vector3&)>& onChanged)
     {
-        if (!m_Window || !field)
+        const std::string rowName = TransformVectorRowLabelForMenu(field);
+        std::vector<ContextMenuManipulator::Item> items = {
+            {.Path = "Copy " + rowName + " (X, Y, Z)",
+             .IconPath = EditorIcons::kCopy,
+             .OnActivate = [field]() { CopyRow(*field); }},
+            {.Path = "Paste " + rowName + " (X, Y, Z)",
+             .IconPath = EditorIcons::kPaste,
+             .OnActivate = [this, field, onChanged]() { PasteRow(*field, onChanged); },
+             .State = &RowPasteState},
+            {.Separator = true},
+            {.Path = "Reset " + rowName + " (X, Y, Z)",
+             .IconPath = EditorIcons::kReset,
+             .OnActivate = [this, field]() { ResetRowToDefault(field); }},
+        };
+        if (field != m_LocalScale)
+            return items;
+        items.push_back({.Separator = true});
+        items.push_back({.Path = "Linked Scale Values",
+                         .IconPath = EditorIcons::kLink,
+                         .OnActivate = [this]() { ToggleLinkedScale(); },
+                         .State = [this]() { return ContextMenuManipulator::ItemState{.Checked = m_LocalScaleLinked}; }});
+        return items;
+    }
+
+    // Paste is enabled while the clipboard holds three numbers. A read that can prompt the user (web) is not
+    // made to peek: Paste stays enabled, and its own read does nothing on text that does not parse.
+    static ContextMenuManipulator::ItemState RowPasteState()
+    {
+        if (Platform::ClipboardReadCanPromptUser())
+            return {};
+        Rendering::Vector3 parsed;
+        return {.Enabled = TryParseTransformRowClipboardText(Platform::GetClipboardText(), parsed)};
+    }
+
+    static void CopyRow(const Vector3Field& field)
+    {
+        Platform::SetClipboardText(TransformRowClipboardText(field.GetValue()).c_str());
+    }
+
+    void PasteRow(Vector3Field& field, const std::function<void(const Rendering::Vector3&)>& onChanged)
+    {
+        Rendering::Vector3 parsed;
+        if (!TryParseTransformRowClipboardText(Platform::GetClipboardText(), parsed))
             return;
+        FinalizeActiveInteractiveEditIfAny();
+        field.SetValue(parsed);
+        if (onChanged)
+            onChanged(parsed);
+    }
 
-        m_ContextMenuTargetField = field;
-        m_ContextMenuOnChanging = onChanging;
-        m_ContextMenuOnChanged = onChanged;
-
-        if (!m_FieldContextMenu)
-        {
-            m_FieldContextMenu = CreateContextMenu();
-            if (!m_FieldContextMenu)
-                return;
-            m_FieldContextMenu->SetCommandHandler([this](uint32_t cmd) { OnContextMenuCommand(cmd); });
-        }
-
-        // A peek-only read (this menu's Paste enabled-state, not a real paste)
-        // risks a permission prompt on web for every right-click; skip it there
-        // and leave Paste enabled — kCmdPaste's own read still validates, and
-        // silently does nothing on a clipboard that fails to parse.
-        bool canPaste = true;
-        if (!Platform::ClipboardReadCanPromptUser())
-        {
-            std::string clip = Platform::GetClipboardText();
-            Rendering::Vector3 dummy;
-            canPaste = TryParseVec3FromClipboard(clip, dummy);
-        }
-
-        m_FieldContextMenu->Clear();
-        ContextMenuBuilder builder;
-        const char* rowName = TransformVectorRowLabelForMenu(field);
-        // Opens from X / Y / Z labels but copies the whole row (comma-separated triple), not a single axis.
-        builder.AddItem(std::string("Copy ") + rowName + " (X, Y, Z)",
-                        kCmdCopy,
-                        MenuItemFlag_None,
-                        0,
-                        EditorIcons::kCopy);
-        builder.AddItem(std::string("Paste ") + rowName + " (X, Y, Z)",
-                        kCmdPaste,
-                        canPaste ? MenuItemFlag_None : MenuItemFlag_Disabled,
-                        10,
-                        EditorIcons::kPaste);
-        builder.AddItem("---reset", 0, MenuItemFlag_None, 14);
-        builder.AddItem(std::string("Reset ") + rowName + " (X, Y, Z)",
-                        kCmdResetRow,
-                        MenuItemFlag_None,
-                        15,
-                        EditorIcons::kReset);
-        if (field == m_LocalScale)
-        {
-            builder.AddItem("---linkedScale", 0, MenuItemFlag_None, 20);
-            builder.AddItem("Linked Scale Values",
-                            kCmdToggleLinkedScale,
-                            m_LocalScaleLinked ? MenuItemFlag_Checked : MenuItemFlag_None,
-                            30,
-                            EditorIcons::kLink);
-        }
-        builder.Build(m_FieldContextMenu.get());
-        m_FieldContextMenu->Show(m_Window, static_cast<int>(x), static_cast<int>(y));
+    void ToggleLinkedScale()
+    {
+        m_LocalScaleLinked = !m_LocalScaleLinked;
+        m_HasLocalScaleLinkedLastValue = m_LocalScaleLinked;
+        if (m_LocalScaleLinked)
+            m_LocalScaleLinkedLastValue = GetCurrentLocalScaleValue();
     }
 
     void ApplyAllTRSToEntity(ECS::EntityHandle entity,
@@ -1300,7 +1175,7 @@ private:
             Vector3 newPos(pos.x, pos.y, pos.z);
             Quaternion newRot = QuaternionFromEulerXYZDegrees(rotEulerDeg.x, rotEulerDeg.y, rotEulerDeg.z);
             Vector3 newScale(scale.x, scale.y, scale.z);
-            Transform updated = Transform::FromTRS(newPos, newRot, newScale);
+            Transform updated = Transform::FromTRS(Mathematics::WorldPosition::FromVector3(newPos), newRot, newScale);
             m_World->AddComponentImmediate(entity, updated);
 
             Vector3 parentPos;
@@ -1308,7 +1183,7 @@ private:
             Vector3 parentScale{1.0f, 1.0f, 1.0f};
             GetParentWorldTRS(m_World, entity, parentPos, parentRot, parentScale);
             TRS worldTrs = CombineTRS(TRS{parentPos, parentRot, parentScale}, TRS{newPos, newRot, newScale});
-            (void)TrySetPhysicsBodyWorldPose(m_World, entity, worldTrs.position, worldTrs.rotation);
+            (void)Editor::TeleportPhysicsBody(m_World, entity, worldTrs.position, worldTrs.rotation);
         }
     }
 
@@ -1400,7 +1275,7 @@ private:
 
         if (const Transform* t = m_World->GetComponent<Transform>(entity))
         {
-            out.localPos = t->GetPosition();
+            out.localPos = t->GetPosition() - Mathematics::WorldPosition{};
             out.localRot = t->GetRotation();
             out.localScale = t->GetScale();
         }
@@ -1427,17 +1302,15 @@ private:
         if (!m_World || !m_Entity.IsValid() || !m_World->IsValid(m_Entity))
             return;
 
-        m_ContextMenuTargetField = nullptr;
-
-        if (!m_FieldContextMenu)
+        if (!m_SectionContextMenu)
         {
-            m_FieldContextMenu = CreateContextMenu();
-            if (!m_FieldContextMenu)
+            m_SectionContextMenu = CreateContextMenu();
+            if (!m_SectionContextMenu)
                 return;
-            m_FieldContextMenu->SetCommandHandler([this](uint32_t cmd) { OnContextMenuCommand(cmd); });
+            m_SectionContextMenu->SetCommandHandler([this](uint32_t cmd) { OnContextMenuCommand(cmd); });
         }
 
-        // Same reasoning as the single-field menu above: a peek-only read risks
+        // As in RowPasteState: a peek-only read risks
         // a permission prompt on web for every right-click, so skip it there.
         bool canPaste = true;
         if (!Platform::ClipboardReadCanPromptUser())
@@ -1447,7 +1320,7 @@ private:
             canPaste = TryParseAllTRSFromClipboard(clip, dPos, dRot, dScale);
         }
 
-        m_FieldContextMenu->Clear();
+        m_SectionContextMenu->Clear();
         ContextMenuBuilder builder;
         // Avoid '/' in labels — ContextMenuBuilder splits on '/' and would create accidental nested submenus.
         builder.AddItem("Copy All Transform Values",
@@ -1466,36 +1339,13 @@ private:
                         MenuItemFlag_None,
                         15,
                         EditorIcons::kReset);
-        builder.Build(m_FieldContextMenu.get());
-        m_FieldContextMenu->Show(m_Window, static_cast<int>(x), static_cast<int>(y));
+        builder.Build(m_SectionContextMenu.get());
+        m_SectionContextMenu->Show(m_Window, static_cast<int>(x), static_cast<int>(y));
     }
 
     void OnContextMenuCommand(uint32_t cmd)
     {
-        if (cmd == kCmdCopy && m_ContextMenuTargetField)
-        {
-            Rendering::Vector3 v = m_ContextMenuTargetField->GetValue();
-            char buf[128];
-            std::snprintf(buf, sizeof(buf), "%g, %g, %g", v.x, v.y, v.z);
-            Platform::SetClipboardText(buf);
-        }
-        else if (cmd == kCmdPaste && m_ContextMenuTargetField)
-        {
-            std::string clip = Platform::GetClipboardText();
-            Rendering::Vector3 parsed;
-            if (TryParseVec3FromClipboard(clip, parsed))
-            {
-                FinalizeActiveInteractiveEditIfAny();
-                m_ContextMenuTargetField->SetValue(parsed);
-                if (m_ContextMenuOnChanged)
-                    m_ContextMenuOnChanged(parsed);
-            }
-        }
-        else if (cmd == kCmdResetRow && m_ContextMenuTargetField)
-        {
-            ResetRowToDefault(m_ContextMenuTargetField);
-        }
-        else if (cmd == kCmdResetAll)
+        if (cmd == kCmdResetAll)
         {
             ResetAllTransformValues();
         }
@@ -1506,7 +1356,7 @@ private:
             auto* t = m_World->GetComponent<Transform>(m_Entity);
             if (!t)
                 return;
-            Vector3 p = t->GetPosition();
+            const Mathematics::WorldPosition p = t->GetPosition();
             Vector3 s = t->GetScale();
             float xDeg = 0.0f, yDeg = 0.0f, zDeg = 0.0f;
             EulerXYZDegreesFromQuaternion(t->GetRotation(), xDeg, yDeg, zDeg);
@@ -1518,7 +1368,7 @@ private:
                           "Rotation: %g, %g, %g\n"
                           "Scale: %g, %g, %g\n"
                           "World Position: %g, %g, %g",
-                          p.x, p.y, p.z,
+                          p.X, p.Y, p.Z,
                           xDeg, yDeg, zDeg,
                           s.x, s.y, s.z,
                           wp.x, wp.y, wp.z);
@@ -1544,27 +1394,10 @@ private:
                 RefreshFromWorld();
             }
         }
-        else if (cmd == kCmdToggleLinkedScale)
-        {
-            m_LocalScaleLinked = !m_LocalScaleLinked;
-            if (m_LocalScaleLinked)
-            {
-                m_LocalScaleLinkedLastValue = GetCurrentLocalScaleValue();
-                m_HasLocalScaleLinkedLastValue = true;
-            }
-            else
-            {
-                m_HasLocalScaleLinkedLastValue = false;
-            }
-        }
     }
 
-    static constexpr uint32_t kCmdCopy     = 1;
-    static constexpr uint32_t kCmdPaste    = 2;
     static constexpr uint32_t kCmdCopyAll  = 3;
     static constexpr uint32_t kCmdPasteAll = 4;
-    static constexpr uint32_t kCmdToggleLinkedScale = 5;
-    static constexpr uint32_t kCmdResetRow = 6;
     static constexpr uint32_t kCmdResetAll = 7;
 
 private:
@@ -1580,11 +1413,6 @@ private:
     Vector3Field* m_LocalRot = nullptr;
     Vector3Field* m_LocalScale = nullptr;
     Vector3Field* m_WorldPos = nullptr;
-
-    // Earth-scale read-only rows (present only when the entity carries a WorldSectorCoord).
-    bool m_HasSectorRows = false;
-    Label* m_SectorValue = nullptr;
-    Label* m_ComposedWorldValue = nullptr;
 
     Editor::UndoRedoService::InteractiveEdit m_ActiveEdit{};
 
@@ -1608,11 +1436,8 @@ private:
     float m_DragStartX = 0.0f;
     Rendering::Vector3 m_DragStartVec3{};
 
-    // Context menu (copy/paste) for row labels
-    std::unique_ptr<INativeContextMenu> m_FieldContextMenu;
-    Vector3Field* m_ContextMenuTargetField = nullptr;
-    std::function<void(const Rendering::Vector3&)> m_ContextMenuOnChanging;
-    std::function<void(const Rendering::Vector3&)> m_ContextMenuOnChanged;
+    // The header menu: copy, paste and reset of all values.
+    std::unique_ptr<INativeContextMenu> m_SectionContextMenu;
 
     bool m_LocalScaleLinked = false;
     bool m_HasLocalScaleLinkedLastValue = false;
@@ -1630,6 +1455,40 @@ private:
 };
 
 } // anonymous namespace
+
+std::string TransformRowClipboardText(const Vector3& value)
+{
+    // Six significant digits: short text that Paste reads back.
+    constexpr int kClipboardSignificantDigits = 6;
+    const std::array<std::string, 3> components = {FormatFloat(value.x, kClipboardSignificantDigits),
+                                                   FormatFloat(value.y, kClipboardSignificantDigits),
+                                                   FormatFloat(value.z, kClipboardSignificantDigits)};
+    return Join(components, ", ");
+}
+
+bool TryParseTransformRowClipboardText(const std::string& text, Vector3& out)
+{
+    std::string spaced = text;
+    for (char& c : spaced)
+    {
+        if (c == ',' || c == ';')
+            c = ' ';
+    }
+    std::string_view rest = spaced;
+    Vector3 parsed;
+    constexpr size_t kAxisCount = 3;
+    for (size_t axis = 0; axis < kAxisCount; ++axis)
+    {
+        size_t consumed = 0;
+        const std::optional<float> value = ParseLeadingFloat(rest, &consumed);
+        if (!value)
+            return false;
+        parsed[axis] = *value;
+        rest.remove_prefix(consumed);
+    }
+    out = parsed;
+    return true;
+}
 
 void RegisterTransformInspector()
 {

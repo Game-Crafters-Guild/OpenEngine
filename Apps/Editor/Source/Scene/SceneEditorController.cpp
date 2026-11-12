@@ -123,7 +123,7 @@ void SceneEditorController::AttachToRoot(UIElement& root,
 
     // UI modals
     {
-        auto saveChanges = std::make_unique<SaveSceneChangesModal>();
+        auto saveChanges = std::make_unique<SaveSceneChangesModal>("scene");
         m_SaveChangesModal = saveChanges.get();
         root.AddChild(std::move(saveChanges));
 
@@ -457,12 +457,12 @@ bool SceneEditorController::IsSceneDirty() const
         return false;
     if (m_Doc->IsDirty())
         return true;
-    // Brush strokes mutate zone payloads / the sphere sculpt store, never ECS
+    // Brush strokes mutate zone payloads and planet height layers, never ECS
     // components, so the document flag alone misses stroke-only sessions. The
     // quit/switch prompts must fire for them: autosave never touches the live
-    // .tzone/.tsculpt files, so closing without saving genuinely discards them.
+    // .tzone and .gepage files, so closing without saving discards them.
     if (auto* terrain = TerrainECS::TerrainService::TryGet())
-        return terrain->AnyZonePayloadNeedsSave() || terrain->SphereSculptNeedsSave();
+        return terrain->AnyZonePayloadNeedsSave() || terrain->AnyPlanetHeightLayerNeedsSave();
     return false;
 }
 
@@ -562,7 +562,7 @@ void SceneEditorController::SetHierarchyUiCaptureForSave(std::function<Scene::Sc
     m_Doc->SetHierarchyUiCaptureForSave(std::move(capture));
 }
 
-std::optional<Scene::SceneHierarchyUiFromFile> SceneEditorController::ConsumeHierarchyUiFromLastDocumentLoad()
+std::optional<SceneHierarchyUiFromFile> SceneEditorController::ConsumeHierarchyUiFromLastDocumentLoad()
 {
     if (!m_Doc)
         return std::nullopt;
@@ -576,7 +576,7 @@ void SceneEditorController::SetEditorCameraCaptureForSave(std::function<Scene::S
     m_Doc->SetEditorCameraCaptureForSave(std::move(capture));
 }
 
-std::optional<Scene::SceneEditorCameraFromFile> SceneEditorController::ConsumeEditorCameraFromLastDocumentLoad()
+std::optional<SceneEditorCameraFromFile> SceneEditorController::ConsumeEditorCameraFromLastDocumentLoad()
 {
     if (!m_Doc)
         return std::nullopt;

@@ -216,12 +216,12 @@ bool WriteLodCache(const std::filesystem::path& file,
 LodCacheStatus ReadLodCacheInto(const std::filesystem::path& file,
                                 const LodCacheKey* expectKey,
                                 Vector<Mesh>& meshes) {
-    Vector<uint8> buffer;
+    ByteBuffer buffer;
     if (!ReadFileBytesShared(file, buffer))
         return LodCacheStatus::Missing;
 
-    const char* data = reinterpret_cast<const char*>(buffer.data());
-    const std::size_t size = buffer.size();
+    const char* data = reinterpret_cast<const char*>(buffer.Data());
+    const std::size_t size = buffer.Size();
     std::size_t cursor = 0;
 
     uint32 magic = 0;

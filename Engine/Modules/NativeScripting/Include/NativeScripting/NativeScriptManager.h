@@ -186,13 +186,9 @@ public:
         std::function<std::string(std::string_view moduleId, std::uint64_t currentGeneration)>;
     void SetModuleQuiesceCheck(ModuleQuiesceCheck check) { m_QuiesceCheck = std::move(check); }
 
-    // C12 reload reconcile fan-out for registries whose entries are replaced
-    // in place by a replay but whose UNDECLARED leftovers the manager cannot
-    // retire itself (today: render pipeline node factories + the live pipeline
-    // instances built from them). LoadModule invokes it after a successful
-    // load's replay completed (registrations re-owned) and BEFORE the unload
-    // quiesce decision, so retired entries and torn-down instances never block
-    // — or dangle past — the superseded image's unmap. EngineCore installs it.
+    // Reload reconcile: retires the leftovers the manager cannot retire (AI registry entries, terrain height
+    // functions, render pipeline node factories and their live pipelines). LoadModule calls it after a replay and
+    // before the unload decision, so no retired entry blocks or outlives the old image. EngineCore installs it.
     using ModuleReloadReconcileHandler =
         std::function<void(std::string_view moduleId, std::uint64_t generation)>;
     void SetModuleReloadReconcileHandler(ModuleReloadReconcileHandler handler)

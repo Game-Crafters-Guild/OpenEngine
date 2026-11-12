@@ -148,6 +148,7 @@ namespace GameEngine.Scripting
                 // until something needs checkbox-specific API.
                 ("checkbox", static id => new Toggle(id)),
                 ("slider", static id => new Slider(id)),
+                ("progressbar", static id => new ProgressBar(id)),
                 ("textfield", static id => new TextField(id)),
                 ("dropdown", static id => new Dropdown(id)),
                 ("scrollview", static id => new ScrollView(id)),

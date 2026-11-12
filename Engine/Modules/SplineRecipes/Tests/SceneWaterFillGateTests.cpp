@@ -26,6 +26,7 @@
 #include "ECS/ECSTemplates.h"
 #include "ECS/World.h"
 #include "ECSModules/Rendering/Systems/TransformHierarchySystem.h"
+#include "Mathematics/Angle.h"
 #include "Mathematics/Matrix4x4.h"
 #include "Scene/SceneIO.h"
 #include "Scene/SceneTlas.h"
@@ -46,6 +47,7 @@ using GameEngine::uint32;
 using GameEngine::ECS::EntityHandle;
 using GameEngine::ECS::World;
 using GameEngine::Mathematics::Matrix4x4;
+using GameEngine::Mathematics::ToDegrees;
 using GameEngine::Mathematics::Vector3;
 using GameEngine::TerrainECS::TerrainService;
 
@@ -550,11 +552,12 @@ class SceneWaterFillGate : public ::testing::Test
         const std::filesystem::path path(scenePath);
         ASSERT_TRUE(std::filesystem::exists(path)) << "no such scene: " << scenePath;
 
-        GameEngine::Scene::SceneReadOptions options;
-        options.clearWorldFirst = true;
-        ASSERT_TRUE(GameEngine::Scene::ReadSceneInto(m_World, path, options))
+        GameEngine::Scene::SceneInstantiateOptions options;
+        options.ClearWorldFirst = true;
+        const auto readResult = GameEngine::Scene::ReadSceneInto(m_World, path, {}, options);
+        ASSERT_TRUE(readResult)
             << "scene failed to load: " << scenePath << " -- "
-            << GameEngine::Scene::GetLastSceneIOError().message;
+            << readResult.Error->message;
         m_World.ProcessCommands();
 
         // The Spline schema leaves its data Dirty (no arc-length LUT, no segment
@@ -658,7 +661,7 @@ class SceneWaterFillGate : public ::testing::Test
             run.World.Data()[0] = run.World.Data()[5] = run.World.Data()[10] =
                 run.World.Data()[15] = 1.0f;
             if (const auto* wt = m_World.GetComponent<Components::WorldTransform>(e))
-                run.World = Matrix4x4::FromColumnMajor(wt->matrix);
+                run.World = wt->ToMatrix4x4(wt->GetPosition() - GameEngine::Mathematics::WorldPosition{});
             run.Stations = BuildWorldStations(*data, *recipe, run.World);
             runs.push_back(std::move(run));
         }
@@ -751,7 +754,7 @@ TEST_F(SceneWaterFillGate, GroundUnderEveryControlPoint)
         std::memset(worldM.Data(), 0, sizeof(float32) * 16);
         worldM.Data()[0] = worldM.Data()[5] = worldM.Data()[10] = worldM.Data()[15] = 1.0f;
         if (const auto* wt = m_World.GetComponent<Components::WorldTransform>(e))
-            worldM = Matrix4x4::FromColumnMajor(wt->matrix);
+            worldM = wt->ToMatrix4x4(wt->GetPosition() - GameEngine::Mathematics::WorldPosition{});
 
         std::printf("\n[ground] %s (%zu points)\n", EntityLabel(m_World, e).c_str(),
                     data->Points.size());
@@ -872,7 +875,6 @@ TEST_F(SceneWaterFillGate, TheLandAboveTheSeaRollsRatherThanBristles)
         return terrain.OriginY() + field.GetSample(xi, zi) * terrain.HeightScale();
     };
 
-    const float32 toDegrees = 57.2957795130823f;
     std::vector<float32> planeSlope;
     std::vector<float32> edgeSlope;
     planeSlope.reserve(static_cast<size_t>(width - 1u) * (height - 1u));
@@ -904,7 +906,7 @@ TEST_F(SceneWaterFillGate, TheLandAboveTheSeaRollsRatherThanBristles)
 
             const float32 dhdx = ((h10 - h00) + (h11 - h01)) / (2.0f * spacingX);
             const float32 dhdz = ((h01 - h00) + (h11 - h10)) / (2.0f * spacingZ);
-            planeSlope.push_back(std::atan(std::sqrt(dhdx * dhdx + dhdz * dhdz)) * toDegrees);
+            planeSlope.push_back(ToDegrees(std::atan(std::sqrt(dhdx * dhdx + dhdz * dhdz))));
 
             const float32 worst = std::max({std::abs(h10 - h00) / spacingX,
                                             std::abs(h11 - h01) / spacingX,
@@ -912,7 +914,7 @@ TEST_F(SceneWaterFillGate, TheLandAboveTheSeaRollsRatherThanBristles)
                                             std::abs(h11 - h10) / spacingZ,
                                             std::abs(h11 - h00) / diagonal,
                                             std::abs(h10 - h01) / diagonal});
-            edgeSlope.push_back(std::atan(worst) * toDegrees);
+            edgeSlope.push_back(ToDegrees(std::atan(worst)));
 
             if (splatAligned)
             {

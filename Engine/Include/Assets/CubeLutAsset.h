@@ -33,7 +33,7 @@ class CubeLutAsset final : public Asset
     }
 
     bool Load() override;
-    bool LoadFromData(const Vector<uint8>& data) override;
+    bool LoadFromData(std::span<const uint8> data) override;
     void Unload() override;
 
     const CubeLutFileHeader& GetHeader() const { return m_Header; }

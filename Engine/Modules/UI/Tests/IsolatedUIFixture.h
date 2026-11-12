@@ -69,6 +69,16 @@ class IsolatedUIFixture
     // from the authoring error; Diagnostic() names whichever happened.
     bool Build(float contentScale, const std::string& xml, const std::string& css)
     {
+        if (!Load(contentScale, xml, css))
+            return false;
+        Settle();
+        return true;
+    }
+
+    // Build without the settle: no frame has run yet. A test that needs state
+    // from the first frame on (focus before the first style pass) sets it here.
+    bool Load(float contentScale, const std::string& xml, const std::string& css)
+    {
         m_ContentScale = contentScale;
 
         m_Device = SharedHeadlessDevice();
@@ -111,11 +121,6 @@ class IsolatedUIFixture
         m_Ui->AddStylesheet(std::make_shared<const Stylesheet>(std::move(sheet)));
 
         m_Rg = std::make_unique<UiRgHarness>(m_Device);
-        for (int i = 0; i < kSettleFrames; ++i)
-        {
-            m_Ui->Update(kFrameSeconds, /*interactive=*/true);
-            DriveUiRender(*m_Ui, *m_Rg);
-        }
         return true;
     }
 

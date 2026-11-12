@@ -3,6 +3,7 @@
 #include "Engine/Build/AppIconGenerator.h"
 #include "Engine/Build/BuildHost.h"
 #include "Engine/Build/DirectoryCopy.h"
+#include "Engine/Build/ExportRequirements.h"
 #include "Engine/Build/LinuxRuntimeTemplate.h"
 #include "Engine/Build/MacBundleAssembler.h"
 #include "Engine/Build/MaterialVariantCookTool.h"
@@ -16,11 +17,15 @@
 #include "Engine/Build/TexturePackageCook.h"
 #include "Engine/Build/PlayerSourcePreparation.h"
 #include "Engine/Build/RuntimeDependencyStaging.h"
+#include "Engine/Build/ShellUtil.h"
+#include "Engine/Build/ShipRules.h"
 #include "Engine/Build/StagedAssetCook.h"
 #include "Scripting/ScriptTargetFramework.h"
 #include "Engine/Build/CancellableShellProcess.h"
 #include "Engine/GameUI/UIScaleProjectSettings.h"
-#include "Engine/Rendering/PackageShaderDirs.h"
+#include "Rendering/ShaderCache/MetalLibraryArchive.h"
+#include "Rendering/ShaderCache/MetalLibraryBake.h"
+#include "Rendering/ShaderCache/ShaderStageRecord.h"
 #include "Assets/Packages/PackagesIndex.h"
 #include "Scripting/NativeAotScriptsLibrary.h"
 #include "Scripting/PathResolver.h"
@@ -36,7 +41,6 @@
 #include "Assets/RuntimeAssetMetadata.h"
 #include "Assets/MeshLODCache.h"
 #include "Assets/ShaderProgramAsset.h"
-#include "TerrainECS/TerrainBakeCache.h"
 #include "Assets/MeshLODGenerator.h"
 #include "Assets/ModelAsset.h"
 #include "Core/ApplicationPaths.h"
@@ -63,6 +67,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <chrono>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -70,6 +75,7 @@
 #include <unordered_map>
 #include <map>
 #include <sstream>
+#include <thread>
 #include <unordered_set>
 
 namespace fs = std::filesystem;
@@ -807,6 +813,7 @@ bool BuildPipeline::ExecuteImpl(const BuildSettings& settings)
     // 6. Collect assets
     ReportProgress(BuildProgress::Stage::CollectingAssets, 0.45f, "Collecting assets...");
     if (checkCancel()) return false;
+    ShipRules shipRules;
     {
         AssetCollector collector(EngineCore::GetInstance().GetAssetManager());
         std::string collectError;
@@ -814,9 +821,12 @@ bool BuildPipeline::ExecuteImpl(const BuildSettings& settings)
                                           EngineCore::GetInstance().GetResolvedAssetRoot(), manifest,
                                           m_Progress.warnings, collectError))
         {
+            for (std::string_view line : Split(collectError, '\n'))
+                m_Progress.errors.emplace_back(line);
             ReportProgress(BuildProgress::Stage::Failed, 0.0f, collectError);
             return false;
         }
+        shipRules = collector.GetShipRules();
     }
     // ctx.manifest binds the local `manifest`, updated in place above — so the
     // PreAssetCopy/PostAssetCopy/PrePackage hooks below see the collected manifest.
@@ -826,6 +836,18 @@ bool BuildPipeline::ExecuteImpl(const BuildSettings& settings)
     {
         ReportProgress(BuildProgress::Stage::Failed, 0.0f, "PreAssetCopy hook failed");
         return false;
+    }
+
+    // 7a. Step 6 adds no Never asset, so a Never entry here comes from a PreAssetCopy step.
+    {
+        const size_t errorsBefore = m_Progress.errors.size();
+        shipRules.ReportNeverEntries(manifest, EngineCore::GetInstance().GetResolvedAssetRoot(),
+                                     "a build step added it. Change the step or the rule.", m_Progress.errors);
+        if (m_Progress.errors.size() > errorsBefore)
+        {
+            ReportProgress(BuildProgress::Stage::Failed, 0.0f, m_Progress.errors[errorsBefore]);
+            return false;
+        }
     }
 
     // 8. Copy assets. Always the FULL manifest: the staging dir is recreated
@@ -865,6 +887,8 @@ bool BuildPipeline::ExecuteImpl(const BuildSettings& settings)
             ReportProgress(BuildProgress::Stage::Failed, 0.0f, "Failed to cook material shaders");
         return false;
     }
+    if (!CompileMetalLibraries(contentRoot, settings))
+        return false;
 
     // 9b. Stage third-party notices/licenses for bundled engine modules and assets.
     if (!CopyThirdPartyNotices(contentRoot, settings))
@@ -1002,12 +1026,7 @@ bool BuildPipeline::ExecuteImpl(const BuildSettings& settings)
     // cook failure is non-fatal: the Player falls back to runtime generation.
     CookMeshLODs(contentRoot, manifest);
 
-    // 13e. Stage the project's baked terrains beside the manifest, where the
-    // packaged Player looks them up by content key; a terrain with no bake there
-    // is baked at load as before.
-    StageTerrainBakes(contentRoot, settings, manifest);
-
-    // 13f. Pack each shipped terrain heightmap's cooked pages into its terrain container
+    // 13e. Pack each shipped terrain heightmap's cooked pages into its terrain container
     // (Assets/Cooked/Terrain/<guid>.geterrain), cooking it in the project cache first when it changed.
     {
         AssetManager& pageAssets = EngineCore::GetInstance().GetAssetManager();
@@ -1959,25 +1978,27 @@ void LogCookSummary(const std::string& output)
     }
 }
 
-// The warning of a cook that exited non-zero: the materials whose variants failed, grouped and
-// capped, which compile when the game first draws them; the output's tail when the cook named none
-// (it stopped before cooking).
-std::string DescribeFailedCook(int exitCode, const std::string& output)
-{
-    constexpr std::size_t kListedMaterials = 20;
-    std::string message = "MaterialVariantCook failed (exit " + std::to_string(exitCode) + ")";
-    const std::vector<std::string> failed = FailedCookMaterials(output);
-    if (failed.empty())
-        return message + "; the game compiles every material on first use:\n" + OutputTail(output, 25);
-    message += "; these materials compile when the game first draws them:";
-    for (std::size_t i = 0; i < failed.size() && i < kListedMaterials; ++i)
-        message += "\n  " + failed[i];
-    if (failed.size() > kListedMaterials)
-        message += "\n  and " + std::to_string(failed.size() - kListedMaterials) + " more";
-    return message;
-}
-
 } // namespace
+
+DesktopMaterialCookInputs BuildPipeline::MakeMaterialCookInputs(const fs::path& contentRoot,
+                                                                const BuildSettings& s) const
+{
+    std::vector<MaterialCookScanRoot> packageRoots;
+    for (const ResolvedPackage& package : m_PackageResolution.MountOrder)
+    {
+        // A package without an assets folder (code only) has no materials to cook.
+        if (!package.AssetsDir.empty() && fs::is_directory(package.AssetsDir))
+            packageRoots.push_back({package.AssetsDir, package.Alias});
+    }
+    // The cook composes the project assets and the engine shader tree this export staged, so its keys
+    // are the ones the packaged runtime computes.
+    DesktopMaterialCookInputs inputs = ExportMaterialCookInputs(contentRoot, s.projectRoot, packageRoots);
+    // A program the editor already compiled is the same program under the same key, so the cook copies it.
+    const fs::path editorCache = ShaderProgramAsset::GetShaderCacheRoots().Writable;
+    if (!editorCache.empty() && fs::is_directory(editorCache) && editorCache != inputs.Cache)
+        inputs.ReuseCache = editorCache;
+    return inputs;
+}
 
 bool BuildPipeline::CookMaterialVariants(const fs::path& contentRoot, const BuildSettings& s)
 {
@@ -1989,48 +2010,37 @@ bool BuildPipeline::CookMaterialVariants(const fs::path& contentRoot, const Buil
             "build stages it there. Build the Editor target again, then export.");
         return false;
     }
-    // The cook composes against the engine shader tree this export ships, so its keys are the ones the
-    // packaged runtime computes.
-    const fs::path engineShaders = contentRoot / "Assets" / "Shaders";
-    if (!fs::is_directory(engineShaders))
+    const DesktopMaterialCookInputs inputs = MakeMaterialCookInputs(contentRoot, s);
+    if (!fs::is_directory(inputs.EngineShaders))
     {
         m_Progress.warnings.push_back("Material variant cook skipped: the export staged no engine shaders.");
         return true;
     }
 
-    DesktopMaterialCookInputs inputs;
-    inputs.ProjectAssets = s.projectRoot / "Assets";
-    inputs.EngineShaders = engineShaders;
-    for (const ResolvedPackage& package : m_PackageResolution.MountOrder)
-    {
-        // A package without an assets folder (code only) has no materials to cook.
-        if (package.AssetsDir.empty() || !fs::is_directory(package.AssetsDir))
-            continue;
-        if (fs::is_directory(package.AssetsDir / "Shaders"))
-            inputs.PackageShaderDirs.push_back(package.AssetsDir / "Shaders");
-        inputs.ScanRoots.push_back({package.AssetsDir, package.Alias});
-    }
-    AppendStagedModuleShaderDirs(engineShaders, inputs.PackageShaderDirs);
-    inputs.Cache = s.projectRoot / ".Build" / "MaterialVariantCook";
-    // A program the editor already compiled is the same program under the same key, so the cook copies it.
-    const fs::path editorCache = ShaderProgramAsset::GetShaderCacheRoots().Writable;
-    if (!editorCache.empty() && fs::is_directory(editorCache) && editorCache != inputs.Cache)
-        inputs.ReuseCache = editorCache;
-
     std::string command = "\"" + tool.generic_string() + "\"";
     for (const std::string& argument : DesktopMaterialCookArguments(inputs))
         command += " \"" + argument + "\"";
     Logger::Log::Info("Build: material variant cook: {}", command);
+    RemoveMaterialCookOutputs(inputs.Cache);
     const ShellProcessResult result = RunShellCommandImpl(command + " 2>&1", nullptr);
     if (result.cancelled)
         return FailIfCancelled(), false;
     // A material that does not cook is reported, not fatal: the game compiles it on first use and
     // shows the same compile error the editor does. Everything that cooked still ships.
-    if (result.exitCode != 0)
-        m_Progress.warnings.push_back(DescribeFailedCook(result.exitCode, result.output));
+    const MaterialCookOutcome cook =
+        ReadMaterialCookOutcome(inputs.Cache, result.exitCode, OutputTail(result.output, 25));
+    if (!cook.Error.empty())
+    {
+        m_Progress.errors.push_back(cook.Error);
+        return false;
+    }
+    if (!cook.Warning.empty())
+        m_Progress.warnings.push_back(cook.Warning);
     LogCookSummary(result.output);
+    if (!cook.Record)
+        return true;
 
-    const std::vector<fs::path> packages = CookedShaderPackages(result.output);
+    const std::vector<fs::path>& packages = cook.Record->Packages;
     std::string error;
     if (!StageCookedShaderPackages(packages, inputs.Cache, contentRoot / ".Cache" / "Shaders", error))
     {
@@ -2041,6 +2051,111 @@ bool BuildPipeline::CookMaterialVariants(const fs::path& contentRoot, const Buil
                       (contentRoot / ".Cache" / "Shaders").string());
     return true;
 }
+
+// ---------------------------------------------------------------------------
+// CompileMetalLibraries
+// ---------------------------------------------------------------------------
+
+#if defined(__APPLE__)
+namespace
+{
+// One command that compiles every job, as many at a time as the machine has cores. The job list holds
+// the source and library paths NUL-separated, so a path with spaces stays one argument.
+std::string MetalCompileCommand(const fs::path& jobList, std::span<const std::string> flags)
+{
+    std::string flagList;
+    for (const std::string& flag : flags)
+        flagList += flag + " ";
+    return "xargs -0 -n 2 -P " + std::to_string(std::max(1u, std::thread::hardware_concurrency())) +
+           " sh -c 'xcrun -sdk macosx metal -c " + flagList + "\"$0\" -o \"$1.air\" && xcrun -sdk macosx metallib " +
+           "\"$1.air\" -o \"$1\"' < " + ShellQuote(jobList) + " 2>&1";
+}
+} // namespace
+#endif
+
+bool BuildPipeline::CompileMetalLibraries([[maybe_unused]] const fs::path& contentRoot,
+                                          [[maybe_unused]] const BuildSettings& s)
+{
+#if defined(__APPLE__)
+    // A Mac game loads the stages that development runs recorded from libraries compiled here, instead
+    // of compiling their MSL at run time. Without a record or the toolchain it compiles them at run time.
+    if (!IsMacBundleTarget(s))
+        return true;
+    const fs::path record = Rendering::ShaderStageRecordFile(s.projectRoot);
+    if (!fs::is_regular_file(record))
+    {
+        Logger::Log::Info("Build: no Metal libraries: a development run of the game records its shader stages to '{}'",
+                          record.string());
+        return true;
+    }
+    bool checkCancelled = false;
+    const bool toolchainInstalled =
+        IsExportRequirementInstalled(MetalToolchainRequirement(), [&](const std::string& command) {
+            const ShellProcessResult result = RunShellCommandImpl(command + " 2>&1", nullptr);
+            checkCancelled |= result.cancelled;
+            return result.exitCode;
+        });
+    if (checkCancelled)
+        return FailIfCancelled(), false;
+    if (!toolchainInstalled)
+    {
+        const std::string message = "Metal libraries skipped: " + DescribeMissingExportRequirement(MetalToolchainRequirement());
+        Logger::Log::Warning("Build: {}", message);
+        m_Progress.warnings.push_back(message);
+        return true;
+    }
+
+    const auto start = std::chrono::steady_clock::now();
+    const fs::path bundleCache = contentRoot / ".Cache" / "Shaders";
+    // A recorded stage's SPIR-V is in a package or a .spv file under the shader folders the cook reads or
+    // writes, or in the project's own cache.
+    std::vector<fs::path> packageRoots = DesktopShaderPackageRoots(MakeMaterialCookInputs(contentRoot, s));
+    if (const fs::path projectCache = s.projectRoot / ".Cache" / "Shaders";
+        std::ranges::find(packageRoots, projectCache) == packageRoots.end())
+        packageRoots.push_back(projectCache);
+    const fs::path workDir = s.projectRoot / ".Build" / "MetalLibraries";
+    bool cancelled = false;
+    const Rendering::MetalLibraryBake bake = Rendering::BakeMetalLibraries(
+        record, packageRoots, workDir,
+        [&](std::span<const Rendering::MetalLibraryCompileJob> jobs, std::span<const std::string> flags) {
+            cancelled = !RunMetalCompileJobs(jobs, flags, workDir / "jobs.txt");
+        });
+    if (cancelled)
+        return FailIfCancelled(), false;
+    if (!bake.Archive.empty())
+    {
+        std::ofstream out(bundleCache / Rendering::kMetalLibraryArchiveFileName, std::ios::binary | std::ios::trunc);
+        out.write(reinterpret_cast<const char*>(bake.Archive.data()), static_cast<std::streamsize>(bake.Archive.size()));
+        if (!out)
+            m_Progress.warnings.push_back("Metal libraries were compiled but could not be written to '" +
+                                          bundleCache.string() + "'");
+    }
+    Logger::Log::Info("Build: Metal libraries: {} recorded stages, {} found in shader files, {} compiled, {} bytes, "
+                      "{:.1f} s",
+                      bake.RecordedStages, bake.ResolvedStages, bake.CompiledStages, bake.Archive.size(),
+                      std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
+#endif
+    return true;
+}
+
+#if defined(__APPLE__)
+bool BuildPipeline::RunMetalCompileJobs(std::span<const Rendering::MetalLibraryCompileJob> jobs,
+                                        std::span<const std::string> flags, const fs::path& jobList)
+{
+    {
+        std::ofstream out(jobList, std::ios::binary | std::ios::trunc);
+        for (const Rendering::MetalLibraryCompileJob& job : jobs)
+            out << job.Source.string() << '\0' << job.Library.string() << '\0';
+    }
+    const ShellProcessResult result = RunShellCommandImpl(MetalCompileCommand(jobList, flags), nullptr);
+    if (result.cancelled)
+        return false;
+    if (result.exitCode != 0)
+        m_Progress.warnings.push_back("Some Metal libraries did not compile; those stages compile at run time:\n" +
+                                      OutputTail(result.output, 25));
+    return true;
+}
+#endif
 
 // ---------------------------------------------------------------------------
 // CopyThirdPartyNotices
@@ -2506,38 +2621,6 @@ bool BuildPipeline::CookMeshLODs(const fs::path& contentRoot, const AssetManifes
     Logger::Log::Info("Build: Cooked LOD cache for {} models ({} skipped, no LODs), {} bytes -> '{}'",
                       cooked, skippedNoLods, totalBytes, lodDir.generic_string());
     return true;
-}
-
-// ---------------------------------------------------------------------------
-// StageTerrainBakes
-// ---------------------------------------------------------------------------
-
-void BuildPipeline::StageTerrainBakes(const fs::path& contentRoot, const BuildSettings& s,
-                                      const AssetManifest& manifest)
-{
-    // The editor keeps one artifact per terrain, under the scene the terrain was
-    // loaded from (TerrainBakeCache.h). Stage the folders of exactly the scenes this
-    // package ships; every other scene's artifacts stay in the project cache.
-    std::vector<GUID> scenes;
-    std::unordered_map<GUID, std::string> scenePaths;
-    for (const auto& entry : manifest.entries)
-    {
-        if (entry.type != AssetType::Scene)
-            continue;
-        scenes.push_back(entry.guid);
-        scenePaths[entry.guid] = entry.sourcePath.generic_string();
-    }
-    std::vector<fs::path> failures;
-    const auto staged = TerrainECS::StageTerrainBakeArtifacts(s.projectRoot / ".Cache" / "TerrainBake", scenes,
-                                                              contentRoot / "Assets" / ".terrainbake", failures);
-    for (const fs::path& failure : failures)
-        m_Progress.warnings.push_back("Terrain bake staging: failed to copy " + failure.string());
-    // The editor stores each terrain's current bake when its scene is saved, so a saved
-    // scene's folder holds exactly its terrains.
-    for (const TerrainECS::TerrainBakeStagedScene& scene : staged)
-        if (scene.Artifacts > 0)
-            Logger::Log::Info("Build: Scene '{}' ships {} baked terrain(s) ({} bytes)", scenePaths[scene.Scene],
-                              scene.Artifacts, scene.Bytes);
 }
 
 // ---------------------------------------------------------------------------

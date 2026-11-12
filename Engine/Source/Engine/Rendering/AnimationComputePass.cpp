@@ -37,8 +37,9 @@ void AnimationComputePass::RecordDispatch(IDevice* dev, CommandList* cl,
 
     m_DataStore->FlushInstances();
 
-    // Descriptor set layout: 7 storage buffers (added binding 6 for the
-    // Phase 6-iii runtime-visibility flag buffer).
+    // Descriptor set layout: 7 storage buffers; binding 6 is the runtime-visibility flags.
+    // The shader declares all but binding 5 (the bone palette atlas) `readonly`, so the layout marks them read-only too.
+    constexpr uint32_t kBonePaletteBinding = 5;
     DescriptorSetLayoutDesc set0{};
     set0.debugName = "AnimCompute_Set0";
     for (uint32_t i = 0; i < 7; ++i) {
@@ -47,6 +48,7 @@ void AnimationComputePass::RecordDispatch(IDevice* dev, CommandList* cl,
         b.type = DescriptorType::StorageBuffer;
         b.count = 1;
         b.shaderStages = kShaderStageCompute;
+        b.flags = i == kBonePaletteBinding ? 0u : kDescriptorBindingReadOnlyStorage;
         set0.bindings.push_back(b);
     }
 

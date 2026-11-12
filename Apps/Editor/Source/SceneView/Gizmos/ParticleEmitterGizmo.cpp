@@ -13,7 +13,6 @@
 #include "SceneView/ComponentGizmoRegistry.h"
 #include "Types/Color.h"
 
-#include <glm/gtc/type_ptr.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -222,7 +221,7 @@ const StackDocument* SimulatedStack(const Components::ParticleEmitter3D& emitter
 void DrawParticleStackGizmo(GizmoRenderContext& context, const Components::ParticleEmitter3D& emitter,
                             const Components::WorldTransform& worldTransform, const StackDocument& document)
 {
-    const EmitterSpace space{Matrix4x4{glm::make_mat4(worldTransform.matrix)},
+    const EmitterSpace space{worldTransform.ToMatrix4x4(worldTransform.GetPosition() - Mathematics::WorldPosition{}),
                              emitter.Dimension == Components::ParticleEmitterDimension::World2D};
     bool placed = false;
     for (const auto& phase : document.Phases)

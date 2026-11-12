@@ -22,10 +22,13 @@ bool MergeShaderGraphTagsIntoDocument(const std::filesystem::path& graphGlslPath
 /** Generated node-graph live preview materials under Generated/GraphPreview/. */
 bool IsGraphLivePreviewMaterialPath(const std::filesystem::path& materialAssetPath);
 
-/** Vertex layout + shader defines for graph materials; preview always uses tangents. */
+/** Vertex layout + shader defines for graph materials; preview always uses tangents. Only a graph
+    surface beside the material counts: `resolvedSurfacePath` is where the shader-root chain found the
+    surface, and the file is read from the shader source cache. */
 GameEngine::Rendering::VertexAttributeFlags InferVertexAttributeFlagsFromDocument(
     const MaterialDocument& doc,
-    const std::filesystem::path& materialAssetPath);
+    const std::filesystem::path& materialAssetPath,
+    const std::filesystem::path& resolvedSurfacePath);
 
 /** The material-buildable .glsl text (node includes + compiled EvaluateSurface
     body + the semantic @sg-* tags) without touching disk. `outputGlslPath` is

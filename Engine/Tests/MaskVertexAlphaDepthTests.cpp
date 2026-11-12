@@ -39,6 +39,7 @@
 #include "Rendering/Materials/MaterialDocument.h"
 
 #include "StagedTestPaths.h"
+#include "TestCameraEye.h"
 #include "TestDeviceHelper.h"
 
 #include <algorithm>
@@ -251,7 +252,7 @@ void DrawTheCardOverTheFloor(IDevice* device, const MaterialDocument& cardDocume
     camera.view = Mathematics::Matrix4x4::Identity();
     camera.proj = Mathematics::Matrix4x4::Identity();
     camera.viewProj = Mathematics::Matrix4x4::Identity();
-    rs.Views().SetCameraData(cameraId, camera);
+    rs.Views().SetCameraData(cameraId, ::GameEngine::Tests::TestCameraWithEye(camera), {0.1f, 1000.0f});
     const ViewId viewId = rs.Views().AllocateView("MaskVertexAlpha.View", cameraId);
     rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
     rs.Views().SetViewWorldId(viewId, kWorldId);

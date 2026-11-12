@@ -7,6 +7,7 @@ namespace GameEngine
 
 class Button;
 class Label;
+class ProgressBar;
 
 namespace Editor
 {
@@ -34,8 +35,7 @@ class PlayModeEntryModal final : public UIElement
     Label* m_Title = nullptr;
     Label* m_Message = nullptr;
     Label* m_Activity = nullptr;
-    UIElement* m_ProgressTrack = nullptr;
-    UIElement* m_ProgressFill = nullptr;
+    ProgressBar* m_Progress = nullptr;
     Button* m_Button = nullptr;
     bool m_Visible = false;
 };

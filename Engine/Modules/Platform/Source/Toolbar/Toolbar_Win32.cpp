@@ -83,6 +83,7 @@ class Win32Toolbar : public INativeToolbar
         m_SubMenuTitles.Clear();
         m_ItemTexts.Clear();
         m_CustomCaption = false;
+        m_MenuHeadingPressed = false;
         m_Frame = {};
         m_NextMenuId = 1;
         m_Callback = nullptr;
@@ -297,6 +298,50 @@ class Win32Toolbar : public INativeToolbar
         m_Popup.reset();
     }
 
+    bool HandleMenuPointerMessage(UINT message, LPARAM lParam)
+    {
+        if (message == WM_LBUTTONUP && m_MenuHeadingPressed)
+        {
+            m_MenuHeadingPressed = false;
+            return true;
+        }
+        // The window does not get the release of a press that ends outside it.
+        // Thus each press clears the flag, and a consumed press sets it again.
+        if (message == WM_LBUTTONDOWN)
+            m_MenuHeadingPressed = false;
+        if (!m_OpenMenu)
+            return false;
+        // Caption presses bypass the UI manager's outside-press dismissal.
+        if (message == WM_NCLBUTTONDOWN || message == WM_NCRBUTTONDOWN || message == WM_NCMBUTTONDOWN ||
+            message == WM_NCLBUTTONDBLCLK)
+        {
+            ClosePopup();
+            return false;
+        }
+        if (message != WM_MOUSEMOVE && message != WM_LBUTTONDOWN)
+            return false;
+        const auto heading = std::find_if(m_Regions.begin(), m_Regions.end(), [lParam](const auto& region) {
+            return region.Bounds.Contains(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+        });
+        if (heading == m_Regions.end())
+            return false;
+        // Open popups gate UI input to their panels. The caption owns switching
+        // between headings, including the overflow, before that gate runs.
+        const uint32_t menuId = heading->Id;
+        if (message == WM_LBUTTONDOWN)
+        {
+            m_MenuHeadingPressed = true;
+            if (m_OpenMenu == menuId)
+                ClosePopup();
+            else
+                ShowTitleBarMenu(menuId);
+            return true;
+        }
+        if (m_OpenMenu != menuId)
+            ShowTitleBarMenu(menuId);
+        return false;
+    }
+
     HMENU GetMenuById(uint32_t id) const
     {
         const HMENU* menu = m_Menus.Find(id);
@@ -320,6 +365,8 @@ class Win32Toolbar : public INativeToolbar
             m_PrevProc = nullptr;
             return CallWindowProcW(previous, hWnd, msg, wParam, lParam);
         }
+        if (HandleMenuPointerMessage(msg, lParam))
+            return 0;
         if (m_CustomCaption && msg == WM_SYSCOMMAND && (wParam & 0xFFF0) == SC_KEYMENU)
         {
             // GLFW suppresses SC_KEYMENU by default. Alt+Space belongs to the
@@ -383,6 +430,7 @@ class Win32Toolbar : public INativeToolbar
     std::vector<TitleBarMenuRegion> m_Regions;
     uint64_t m_MenuRevision = 0;
     bool m_CustomCaption = false;
+    bool m_MenuHeadingPressed = false;
     std::optional<uint32_t> m_OpenMenu;
 
     static inline FlatMap<HWND, Win32Toolbar*> s_Instances;

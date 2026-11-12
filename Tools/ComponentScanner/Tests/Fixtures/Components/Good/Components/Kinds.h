@@ -9,11 +9,13 @@
 #include "FixtureShapes/Shape.h"
 #include "Mathematics/Curve.h"
 #include "Mathematics/Geometry.h"
+#include "Mathematics/Matrix3x3.h"
 #include "Mathematics/Matrix4x4.h"
 #include "Mathematics/Quaternion.h"
 #include "Mathematics/Vector2.h"
 #include "Mathematics/Vector3.h"
 #include "Mathematics/Vector4.h"
+#include "Mathematics/WorldPosition.h"
 #include "Rendering/RenderLayerMask.h"
 #include "Types/Color.h"
 #include "Types/StringId.h"
@@ -64,6 +66,8 @@ struct FixtureKinds
     GUID Source;
     Math::Curve Falloff;
     Mathematics::BoundingBox Bounds;
+    Mathematics::WorldPosition Anchor;
+    Mathematics::Matrix3x3 Frame;
     FixtureGlow Glow = FixtureGlow::Soft;
     FixturePulse Pulse = FixturePulse::Even;
     FixtureShapes::Shape Outline = FixtureShapes::Shape::Sphere;

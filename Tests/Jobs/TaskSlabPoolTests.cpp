@@ -11,6 +11,7 @@
 // point of process teardown.
 
 #include "HeldSlabFreelist.h"
+#include "ScopedLogLevel.h"
 
 #include "JobSystem/TaskSlabPool.h"
 #include "JobSystem/WorkStealingThreadPool.h"
@@ -71,12 +72,13 @@ TEST(TaskSlabPoolTest, PoolReuseChurn)
     constexpr size_t kTotalTasks = kSubmitters * kTasksPerSubmitter;
     constexpr size_t kInFlightWindow = 8192;
 
-    Logger::Log::SetLogLevel(Logger::LogLevel::Error);
+    const GameEngine::Tests::ScopedLogLevel quietLog(Logger::LogLevel::Error);
 
+    // Declared before the pool: a queued job can still use it when an ASSERT returns early.
+    std::atomic<size_t> executed{0};
     JobSystem::WorkStealingThreadPool pool(4);
 
     std::atomic<size_t> submitted{0};
-    std::atomic<size_t> executed{0};
 
     const auto before = JobSystem::Detail::GetTaskSlabStatsForTests();
 
@@ -119,7 +121,6 @@ TEST(TaskSlabPoolTest, PoolReuseChurn)
     pool.Shutdown();
 
     const auto after = JobSystem::Detail::GetTaskSlabStatsForTests();
-    Logger::Log::SetLogLevel(Logger::LogLevel::Debug);
 
     const auto heapAllocs = after.HeapAllocs - before.HeapAllocs;
     const auto reuses = after.PoolReuses - before.PoolReuses;
@@ -162,8 +163,10 @@ TEST(TaskSlabPoolTest, PoolReuseChurn)
 // therefore exercised by this suite (every other test's closures are pooled).
 TEST(TaskSlabPoolTest, OversizedClosureFallbackStillRuns)
 {
-    Logger::Log::SetLogLevel(Logger::LogLevel::Error);
+    const GameEngine::Tests::ScopedLogLevel quietLog(Logger::LogLevel::Error);
 
+    // Declared before the pool: a queued job can still use it when an ASSERT returns early.
+    std::atomic<size_t> result{0};
     JobSystem::WorkStealingThreadPool pool(2);
 
     struct BigPayload
@@ -174,7 +177,6 @@ TEST(TaskSlabPoolTest, OversizedClosureFallbackStillRuns)
     payload.Bytes[0] = 42;
     payload.Bytes[191] = 7;
 
-    std::atomic<size_t> result{0};
     auto oversized = [payload, &result] {
         result.fetch_add(static_cast<size_t>(payload.Bytes[0]) +
                              static_cast<size_t>(payload.Bytes[191]),
@@ -192,7 +194,6 @@ TEST(TaskSlabPoolTest, OversizedClosureFallbackStillRuns)
     EXPECT_EQ(after.HeapAllocs - before.HeapAllocs, 0u);
     EXPECT_EQ(after.PoolReuses - before.PoolReuses, 0u);
 
-    Logger::Log::SetLogLevel(Logger::LogLevel::Debug);
     pool.Shutdown();
 }
 
@@ -200,8 +201,10 @@ TEST(TaskSlabPoolTest, OversizedClosureFallbackStillRuns)
 // EnqueueWorkBatch's staging loop.
 TEST(TaskSlabPoolTest, OversizedBatchFallbackStillRuns)
 {
-    Logger::Log::SetLogLevel(Logger::LogLevel::Error);
+    const GameEngine::Tests::ScopedLogLevel quietLog(Logger::LogLevel::Error);
 
+    // Declared before the pool: a queued job can still use it when an ASSERT returns early.
+    std::atomic<size_t> ran{0};
     JobSystem::WorkStealingThreadPool pool(2);
 
     struct BigPayload
@@ -217,7 +220,6 @@ TEST(TaskSlabPoolTest, OversizedBatchFallbackStillRuns)
     };
     static_assert(sizeof(BigChunk) > JobSystem::kTaskSlabSize);
 
-    std::atomic<size_t> ran{0};
     constexpr size_t kBatch = 32;
     std::vector<BigChunk> chunks(kBatch);
     for (auto& c : chunks)
@@ -228,7 +230,6 @@ TEST(TaskSlabPoolTest, OversizedBatchFallbackStillRuns)
     pool.EnqueueWorkBatch(chunks.data(), chunks.size());
     ASSERT_TRUE(WaitForCount(ran, kBatch, 30));
 
-    Logger::Log::SetLogLevel(Logger::LogLevel::Debug);
     pool.Shutdown();
 }
 
@@ -258,10 +259,11 @@ TEST(JobSystemBench, BENCHMARK_SubmitPathCost)
     constexpr size_t kWarmup = 20'000;
     constexpr size_t kTasks = 50'000;
 
-    Logger::Log::SetLogLevel(Logger::LogLevel::Error);
+    const GameEngine::Tests::ScopedLogLevel quietLog(Logger::LogLevel::Error);
 
-    JobSystem::WorkStealingThreadPool pool(8);
+    // Declared before the pool: a queued job can still use it when an ASSERT returns early.
     std::atomic<size_t> executed{0};
+    JobSystem::WorkStealingThreadPool pool(8);
 
     for (size_t i = 0; i < kWarmup; ++i)
     {
@@ -286,7 +288,6 @@ TEST(JobSystemBench, BENCHMARK_SubmitPathCost)
 
     const auto newAfterDrain = allocations.Count();
     const auto slabAfter = JobSystem::Detail::GetTaskSlabStatsForTests();
-    Logger::Log::SetLogLevel(Logger::LogLevel::Debug);
 
     const double submitNs = std::chrono::duration<double, std::nano>(submitEnd - submitStart)
                                 .count() /
@@ -328,10 +329,11 @@ TEST(JobSystemBench, BENCHMARK_EnqueueWorkAllocFloor)
     constexpr size_t kWarmup = 10'000;
     constexpr size_t kTasks = 100'000;
 
-    Logger::Log::SetLogLevel(Logger::LogLevel::Error);
+    const GameEngine::Tests::ScopedLogLevel quietLog(Logger::LogLevel::Error);
 
-    JobSystem::WorkStealingThreadPool pool(4);
+    // Declared before the pool: a queued job can still use it when an ASSERT returns early.
     std::atomic<size_t> executed{0};
+    JobSystem::WorkStealingThreadPool pool(4);
 
     for (size_t i = 0; i < kWarmup; ++i)
     {
@@ -349,8 +351,6 @@ TEST(JobSystemBench, BENCHMARK_EnqueueWorkAllocFloor)
     ASSERT_TRUE(WaitForCount(executed, kTasks, 60));
     const auto doneEnd = SteadyClock::now();
     const auto newAfter = allocations.Count();
-
-    Logger::Log::SetLogLevel(Logger::LogLevel::Debug);
 
     const double allocsPerTask =
         static_cast<double>(newAfter) / static_cast<double>(kTasks);

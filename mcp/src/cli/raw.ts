@@ -91,17 +91,16 @@ export function runBatch(opts: RenderOptions): Promise<number> {
     let watchdog: NodeJS.Timeout | null = null;
     let rl: readline.Interface | null = null;
 
-    // Let buffered stdout drain rather than truncating large piped output.
-    // Closing the readline and unrefing stdin matters as much as destroying
-    // the socket: an open stdin keeps the event loop alive, so without it a
-    // fired watchdog prints its message and the process still never exits —
-    // the driver holding stdin open then hangs right alongside it.
+    // Close readline, unref a socket or TTY stdin and destroy the socket, so a fired
+    // watchdog ends the process. A file or the null device makes stdin an fs.ReadStream,
+    // which has no unref and ends when it is fully read.
     const finish = (code: number) => {
       if (settled) return;
       settled = true;
       if (watchdog) { clearTimeout(watchdog); watchdog = null; }
       rl?.close();
-      process.stdin.unref();
+      const stdin = process.stdin as NodeJS.ReadStream & { unref?: () => void };
+      if (typeof stdin.unref === "function") stdin.unref();
       socket.destroy();
       resolve(code);
     };

@@ -12,9 +12,9 @@
 // Magnification: Catmull-Rom (bicubic, B=0, C=0.5) over a 4x4 footprint,
 // gathered in 9 bilinear fetches instead of 16 point fetches: sharper than the
 // hardware bilinear this replaces, for 9 samples. The kernel has negative
-// lobes, so it can undershoot below zero on high contrast; the result is
-// clamped non-negative because the HDR chain downstream (bloom threshold,
-// tonemap) treats negatives as fireflies.
+// lobes. The result is clamped to the min and max of the fetches it read, so
+// it never leaves the range of its source pixels: a bright highlight cannot
+// ring to black beside dark pixels.
 //
 // Minification: a separable tent with a one-output-pixel radius suppresses
 // frequencies above the display sampling limit more strongly than a box.
@@ -27,6 +27,14 @@ layout(location = 0) out vec4 oColor;
 layout(push_constant) uniform SpatialResampleParams { vec4 uOutputExtent; } Resample;
 
 layout(set = 0, binding = 0) uniform sampler2D uSource; // internal-extent, linear clamp
+
+void AccumulateTap(vec2 uv, float weight, inout vec4 result, inout vec4 lowest, inout vec4 highest)
+{
+    vec4 tap = textureLod(uSource, uv, 0.0);
+    result += tap * weight;
+    lowest = min(lowest, tap);
+    highest = max(highest, tap);
+}
 
 vec4 SampleCatmullRom(vec2 uv, vec2 sourceSize)
 {
@@ -51,19 +59,24 @@ vec4 SampleCatmullRom(vec2 uv, vec2 sourceSize)
     vec2 texPos3 = (texPos1 + 2.0) / sourceSize;
     vec2 texPos12 = (texPos1 + offset12) / sourceSize;
 
+    // Start values above and below any finite HDR color, so the first tap sets the range.
+    const float kRangeStartLowest = 3.0e38;
+    const float kRangeStartHighest = -3.0e38;
     vec4 result = vec4(0.0);
-    result += textureLod(uSource, vec2(texPos0.x, texPos0.y), 0.0) * w0.x * w0.y;
-    result += textureLod(uSource, vec2(texPos12.x, texPos0.y), 0.0) * w12.x * w0.y;
-    result += textureLod(uSource, vec2(texPos3.x, texPos0.y), 0.0) * w3.x * w0.y;
+    vec4 lowest = vec4(kRangeStartLowest);
+    vec4 highest = vec4(kRangeStartHighest);
+    AccumulateTap(vec2(texPos0.x, texPos0.y), w0.x * w0.y, result, lowest, highest);
+    AccumulateTap(vec2(texPos12.x, texPos0.y), w12.x * w0.y, result, lowest, highest);
+    AccumulateTap(vec2(texPos3.x, texPos0.y), w3.x * w0.y, result, lowest, highest);
 
-    result += textureLod(uSource, vec2(texPos0.x, texPos12.y), 0.0) * w0.x * w12.y;
-    result += textureLod(uSource, vec2(texPos12.x, texPos12.y), 0.0) * w12.x * w12.y;
-    result += textureLod(uSource, vec2(texPos3.x, texPos12.y), 0.0) * w3.x * w12.y;
+    AccumulateTap(vec2(texPos0.x, texPos12.y), w0.x * w12.y, result, lowest, highest);
+    AccumulateTap(vec2(texPos12.x, texPos12.y), w12.x * w12.y, result, lowest, highest);
+    AccumulateTap(vec2(texPos3.x, texPos12.y), w3.x * w12.y, result, lowest, highest);
 
-    result += textureLod(uSource, vec2(texPos0.x, texPos3.y), 0.0) * w0.x * w3.y;
-    result += textureLod(uSource, vec2(texPos12.x, texPos3.y), 0.0) * w12.x * w3.y;
-    result += textureLod(uSource, vec2(texPos3.x, texPos3.y), 0.0) * w3.x * w3.y;
-    return result;
+    AccumulateTap(vec2(texPos0.x, texPos3.y), w0.x * w3.y, result, lowest, highest);
+    AccumulateTap(vec2(texPos12.x, texPos3.y), w12.x * w3.y, result, lowest, highest);
+    AccumulateTap(vec2(texPos3.x, texPos3.y), w3.x * w3.y, result, lowest, highest);
+    return clamp(result, lowest, highest);
 }
 
 // Pair the four source sample weights into two hardware-linear fetches.

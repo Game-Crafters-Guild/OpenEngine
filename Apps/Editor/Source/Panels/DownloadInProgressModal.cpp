@@ -75,10 +75,14 @@ void DownloadInProgressModal::Show(const std::string& /*actionName*/,
     UpdateMessage();
 
     AddClass("visible");
-    if (auto* manager = GetOwnerManager())
+    if (GetOwnerManager())
     {
         UIElement* backdrop = m_Backdrop;
-        manager->PostToUI([manager, backdrop]() { manager->FocusElement(backdrop); });
+        backdrop->PostSafeAction([backdrop]()
+        {
+            if (UIManager* manager = backdrop->GetOwnerManager())
+                manager->FocusElement(backdrop);
+        });
     }
 }
 

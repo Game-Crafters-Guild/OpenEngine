@@ -2801,6 +2801,25 @@ TEST(FbxLodGroupAssembly, ExpandedLowerBoundsKeepSourceSwitchDistance) {
     EXPECT_FLOAT_EQ(minimum[0], -9.0f);
 }
 
+// The load's mesh hashes match its final meshes. A LOD regeneration changes the meshes, so no hash the
+// model then holds may name the old content: a GPU registration would keep the stale geometry.
+TEST(MeshLODGenerator, ModelMeshHashesMatchTheMeshesAfterTheLoadAndAfterARegeneration) {
+    ModelAsset model(GUID::Generate(), "grid.fbx");
+    model.SetMeshesForTest({MakeGridPlane(32)});
+    model.PostLoad();
+    ASSERT_EQ(model.GetMeshContentHashes().size(), 1u);
+    const uint64 loaded = ComputeMeshContentHash(model.GetMesh(0));
+    EXPECT_EQ(model.GetMeshContentHashes()[0], loaded);
+
+    MeshLODConfig twoLevels{};
+    twoLevels.LodCount = 2;
+    model.GenerateLODs(twoLevels, /*generateSkinned=*/false);
+    const uint64 regenerated = ComputeMeshContentHash(model.GetMesh(0));
+    ASSERT_NE(regenerated, loaded) << "the regeneration did not change the mesh";
+    const std::span<const uint64> hashes = model.GetMeshContentHashes();
+    EXPECT_TRUE(hashes.empty() || hashes[0] == regenerated) << "the model holds the hash of its old mesh";
+}
+
 TEST(FbxLodGroupAssembly, DegenerateDistanceFallsBackToDefaultTable) {
     Vector<Mesh> meshes;
     meshes.push_back(MakeMsftSubmesh("A", 0, 0, 4u));

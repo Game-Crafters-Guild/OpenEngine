@@ -19,7 +19,8 @@
 //   registered): that first pass runs at enqueue, outside the frame slice, so
 //   a burst of ordinary spawns (projectiles, debris, a wave of units) binds in
 //   its spawn frame. Every other entity is held: its model's load starts at
-//   once, and the entity binds on a later Step once the model has landed. The
+//   once, and the entity binds on a later Step once the model has landed and a
+//   job has parsed the surfaces its materials compose with. The
 //   slice bounds only models that had to land, and scene batches (EnqueueWorld).
 // - Held work never outlives its world or its entity. A held entity that is
 //   destroyed or loses its MeshRenderer is dropped by a bounded sweep that runs
@@ -188,8 +189,13 @@ class SceneResolveService
     void ObserveWorld(const ECS::World& world);
     void DropHeldWork();
     void SweepGoneEntities(const ECS::World& world);
-    void Hold(ECS::EntityHandle entity, const GUID& modelGuid, SceneResolveBatch batch);
-    void AddModelRecord(ECS::EntityHandle entity, const GUID& modelGuid);
+    void Hold(RenderServices& renderServices, ECS::EntityHandle entity, const GUID& modelGuid,
+              SceneResolveBatch batch);
+    void AddModelRecord(RenderServices& renderServices, ECS::EntityHandle entity, const GUID& modelGuid);
+    // Starts the surface job of a landed model (or material) and queues it as preparing, or as ready when
+    // no job runs.
+    void PrepareLandedModel(RenderServices& renderServices, const GUID& modelGuid, ModelWork& work);
+    void PrepareLandedMaterial(RenderServices& renderServices, const GUID& materialGuid, MaterialWork& work);
     bool BindAtEnqueue(ECS::World& world, RenderServices& renderServices, ECS::EntityHandle entity,
                        const GUID& modelGuid);
     KeptBinding FindKept(RenderServices& renderServices, const GUID& modelGuid);
@@ -197,8 +203,9 @@ class SceneResolveService
     void BindEntity(ECS::World& world, RenderServices& renderServices, ECS::EntityHandle entity,
                     const ModelRenderResources& resources, SceneResolveBatch batch);
     void RequestMaterial(RenderServices& renderServices, const GUID& materialGuid, SceneResolveBatch batch);
-    void PollModelLoads();
-    void PollMaterialLoads();
+    void PollModelLoads(RenderServices& renderServices);
+    void PollMaterialLoads(RenderServices& renderServices);
+    void PollPreparedWork();
     std::size_t Run(ECS::World& world, RenderServices& renderServices,
                     std::chrono::steady_clock::time_point deadline);
     bool ResolveNextEntity(ECS::World& world, RenderServices& renderServices);
@@ -214,6 +221,8 @@ class SceneResolveService
 
     std::unordered_map<GUID, std::unique_ptr<ModelWork>> m_Models;
     std::vector<GUID> m_LoadingModels;
+    // Landed models whose surfaces a job parses (ModelWork::SurfaceParse).
+    std::vector<GUID> m_PreparingModels;
     std::deque<GUID> m_ReadyModels;
     // Each held entity, the model it waits for and its batch.
     std::unordered_map<ECS::EntityHandle, HeldEntity, ECS::EntityHandleHash> m_Held;
@@ -222,6 +231,8 @@ class SceneResolveService
 
     std::unordered_map<GUID, std::unique_ptr<MaterialWork>> m_Materials;
     std::vector<GUID> m_LoadingMaterials;
+    // Landed materials whose surfaces a job parses (MaterialWork::SurfaceParse).
+    std::vector<GUID> m_PreparingMaterials;
     std::deque<GUID> m_ReadyMaterials;
 
     std::unordered_map<uint32, BatchState> m_Batches;

@@ -13,6 +13,7 @@
 #include "Logger/Logger.h"
 #include "Scripting/ScriptManager.h"
 #include "TestTempDir.h"
+#include "Types/StringUtils.h"
 
 #include <algorithm>
 #include <atomic>
@@ -117,7 +118,7 @@ class TestReloadableAsset final : public Asset
         return true;
     }
 
-    bool LoadFromData(const Vector<uint8>& /*data*/) override
+    bool LoadFromData(std::span<const uint8> /*data*/) override
     {
         m_LoadCount.fetch_add(1, std::memory_order_relaxed);
         SetState(AssetState::Loaded);
@@ -335,6 +336,71 @@ TEST(AssetRootSeparation, AssetRegistry_DerivedSourceStorePathsRemainCanonicalRe
     }
 
     fs::remove_all(root, ec);
+}
+
+// The engine registers the resolved project root, and a caller can spell an asset through
+// a directory link to that root. Both spellings name one project asset, and its metadata
+// persists in the project store.
+TEST(AssetRootSeparation, AssetRegistry_PathThroughLinkToProjectRootIsAProjectAsset)
+{
+    namespace fs = std::filesystem;
+
+    const TestUtils::ScopedTempDir project(TestUtils::MakeUniqueTempDirectory("ge_linked_project"));
+    const TestUtils::ScopedTempDir elsewhere(TestUtils::MakeUniqueTempDirectory("ge_linked_project_via"));
+    const fs::path link = elsewhere.Path() / "link";
+    std::error_code ec;
+    fs::create_directory_symlink(project.Path(), link, ec);
+    if (ec)
+        GTEST_SKIP() << "directory symlink not supported: " << ec.message();
+
+    const fs::path assetRoot = project.Path() / "Assets";
+    const fs::path projectDb = project.Path() / "AssetDatabase.assetdb";
+    const fs::path projectCache = project.Path() / ".Cache" / "AssetDatabase";
+    const fs::path resolvedAsset = assetRoot / "Textures" / "rock.png";
+    const fs::path linkedAsset = link / "Assets" / "Textures" / "rock.png";
+    {
+        AssetRegistry reg;
+        ASSERT_TRUE(reg.Initialize(assetRoot, nullptr, projectDb, projectCache));
+        // Written after the startup scan, so the registry first meets the file through the link.
+        WriteTextFile(resolvedAsset, "png");
+
+        ASSERT_TRUE(reg.RegisterAsset(linkedAsset));
+        const GUID guid = reg.GetAssetGUID(linkedAsset);
+        ASSERT_FALSE(guid.IsNull());
+        EXPECT_EQ(reg.GetAssetGUID(resolvedAsset), guid);
+        EXPECT_TRUE(reg.IsAssetRegistered(linkedAsset));
+        ASSERT_TRUE(reg.RegisterAsset(linkedAsset, "project"));
+        EXPECT_EQ(reg.GetAssetSourceOwnerAlias(resolvedAsset), "project");
+
+        AssetMetadata md{};
+        ASSERT_TRUE(reg.TryGetAssetMetadata(linkedAsset, md));
+        EXPECT_EQ(ToLowerAscii(md.Path.generic_string()), ToLowerAscii(resolvedAsset.generic_string()))
+            << "the registry keys the asset by its resolved spelling";
+
+        const AssetImportSettingsOrigin origin = reg.GetImportSettingsOrigin(linkedAsset);
+        EXPECT_EQ(origin.SourceAlias, "project");
+        EXPECT_TRUE(origin.Writable);
+
+        ASSERT_TRUE(reg.SetMetaValue(linkedAsset, "tags", "stone"));
+        std::string value;
+        EXPECT_TRUE(reg.TryGetMetaValue(linkedAsset, "tags", value));
+        EXPECT_EQ(value, "stone");
+
+        // A GUID minted through the link before registration is the GUID the file registers with.
+        const fs::path resolvedNew = assetRoot / "Textures" / "moss.png";
+        WriteTextFile(resolvedNew, "png");
+        const GUID minted = reg.GetOrCreateAssetGUID(link / "Assets" / "Textures" / "moss.png");
+        ASSERT_TRUE(reg.RegisterAsset(resolvedNew));
+        EXPECT_EQ(reg.GetAssetGUID(resolvedNew), minted);
+        reg.Shutdown();
+    }
+
+    AssetRegistry reopened;
+    ASSERT_TRUE(reopened.Initialize(assetRoot, nullptr, projectDb, projectCache));
+    std::string value;
+    EXPECT_TRUE(reopened.TryGetMetaValue(resolvedAsset, "tags", value));
+    EXPECT_EQ(value, "stone");
+    reopened.Shutdown();
 }
 
 TEST(AssetRootSeparation, AssetManager_AllowsEditorAliasWhenEditorAndProjectRootsMatch)
@@ -2204,6 +2270,60 @@ TEST(AssetRootSeparation, RegisterAsset_MissingFileErrorIsEpisodic)
         EXPECT_EQ(countLines("Asset file appeared"), 1)
             << "recovery must close the missing-file episode";
 
+        reg.Shutdown();
+    }
+
+    Logger::Log::ClearSinks();
+    fs::remove_all(root, ec);
+}
+
+// A content folder named like tool output registers below the asset root. A folder
+// that the rules skip says so once per session, at Warning, never only at Trace.
+TEST(AssetRootSeparation, RegisterAsset_ToolOutputNamesSkipOnlyTheRootFolderAndWarnOnce)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = TestUtils::MakeUniqueTempDirectory("ge_tool_output_folders");
+    std::error_code ec;
+    const fs::path assetsRoot = root / "Assets";
+    WriteTextFile(assetsRoot / "World" / "Generated" / "Preview.png", "not-really-a-png");
+    WriteTextFile(assetsRoot / "build" / "a.png", "not-really-a-png");
+    WriteTextFile(assetsRoot / "build" / "b.png", "not-really-a-png");
+
+    std::vector<std::string> logLines;
+    Logger::Log::RedirectToSharedState(GameEngine::GetEngineLoggerState());
+    Logger::Log::Initialize({});
+    Logger::Log::AddSink(std::make_unique<CapturingLogSink>(&logLines));
+
+    {
+        AssetRegistry reg;
+        ASSERT_TRUE(reg.Initialize(assetsRoot, nullptr, root / "AssetDatabase.assetdb",
+                                   root / ".Cache" / "AssetDatabase"));
+        EXPECT_TRUE(reg.RegisterAsset(assetsRoot / "World" / "Generated" / "Preview.png"));
+        EXPECT_FALSE(reg.RegisterAsset(assetsRoot / "build" / "a.png"));
+        EXPECT_FALSE(reg.RegisterAsset(assetsRoot / "build" / "b.png"));
+        const auto countWarnings = [&]
+        {
+            Logger::Log::Flush();
+            return std::count_if(logLines.begin(), logLines.end(), [](const std::string& line)
+                                 { return line.find("are not registered as assets") != std::string::npos; });
+        };
+        EXPECT_EQ(countWarnings(), 1) << "one Warning per skipped folder per project";
+
+        // A project that opens again in the same registry warns again.
+        const auto projectDesc = [](const fs::path& projectRoot)
+        {
+            AssetSourceDesc desc{};
+            desc.Alias = "project";
+            desc.Root = projectRoot / "Assets";
+            desc.AuthoritativeDbFile = projectRoot / "AssetDatabase.assetdb";
+            desc.CacheRoot = projectRoot / ".Cache" / "AssetDatabase";
+            desc.Priority = 100;
+            return desc;
+        };
+        ASSERT_TRUE(reg.RebindSource("project", projectDesc(root / "Other")));
+        ASSERT_TRUE(reg.RebindSource("project", projectDesc(root)));
+        EXPECT_FALSE(reg.RegisterAsset(assetsRoot / "build" / "a.png"));
+        EXPECT_EQ(countWarnings(), 2);
         reg.Shutdown();
     }
 

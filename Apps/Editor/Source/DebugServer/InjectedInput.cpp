@@ -77,6 +77,24 @@ void InjectMouseButton(const WindowInputRouterConfig& config, UIManager* ui, int
     WindowInputRouter::RouteMouseButton(ConfigTargeting(config, ui), button, pressed, ui->GetModifierKeys());
 }
 
+void InjectScroll(const WindowInputRouterConfig& config, UIManager* ui, float dx, float dy, int mods)
+{
+    if (!ui)
+        return;
+
+    if (!std::isfinite(dx) || !std::isfinite(dy))
+        return;
+
+    if (!config.getUi)
+    {
+        ui->ReconcileModifierKeys(mods);
+        ui->OnScroll(dx, dy);
+        return;
+    }
+
+    WindowInputRouter::RouteScroll(ConfigTargeting(config, ui), dx, dy, mods);
+}
+
 void InjectKey(const WindowInputRouterConfig& config, UIManager* ui, int key, int action, int mods)
 {
     if (!ui)

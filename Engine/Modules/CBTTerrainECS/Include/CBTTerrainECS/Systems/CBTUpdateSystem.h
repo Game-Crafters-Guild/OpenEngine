@@ -65,11 +65,10 @@ class CBTUpdateSystem : public ECS::ISystem
                             CBTTerrain::CBTClassifyDesc& classify);
 
     // The sphere's analogue of ConsumeDirtyRegion: each changed face's face-local rect joins its face's pending
-    // union (`regions` is the clear-on-read drain of TerrainService::ConsumeSphereSculptDirtyRegions), and every
+    // union (`regions` is the clear-on-read drain of TerrainService::ConsumePlanetLayerDirtyRegions), and every
     // pending face goes to Classify in the same update until an update records its rect unchanged. Public for tests.
-    void ConsumeSphereSculpt(uint64 sphereVersion, uint64 updateRecordCount,
-                             const CBTTerrain::SphereEditRegions& regions,
-                             CBTTerrain::CBTClassifyDesc& classify);
+    void ConsumePlanetLayerEdits(uint64 updateRecordCount, const CBTTerrain::SphereEditRegions& regions,
+                                 CBTTerrain::CBTClassifyDesc& classify);
 
     // Tiled-streaming analogue of ConsumeDirtyRegion: applies TerrainRenderFeature's
     // unified-height dirty rect (streamed / re-baked tile uploads) to `classify` with the
@@ -153,23 +152,21 @@ class CBTUpdateSystem : public ECS::ISystem
 
     // Force a full-pool VertexEval refresh while a planet's editable sculpt is actively changing.
     // The region-scoped MODIFIED re-eval (the dirty rect above) only re-evaluates the bisectors the
-    // rect covers THIS frame. A modifier dragged across the surface bumps the sculpt version at a new
+    // rect covers THIS frame. A modifier dragged across the surface bumps the layer version at a new
     // footprint every frame while the per-frame dirty rect trails behind the motion, so the bisectors
     // the modifier already passed were never re-evaluated and kept their stale (flattened) height —
     // the round-8 flatten-move cracks (a persistent sliver-crack trail behind the disc). While the
-    // sculpt version advances, and for a short settle after it stops, force the whole live pool to
+    // layer version advances, and for a short settle after it stops, force the whole live pool to
     // re-evaluate against the current sculpt so every bisector matches the edited height and no stale
     // trail survives. Fires ONLY while a planet is being edited: a quiescent planet keeps the gated
     // region-scoped re-eval, so the idle CBT.Update cost is byte-identical (the quiescence gate).
-    uint64 m_LastSphereSculptVersion = 0;
+    uint64 m_LastPlanetLayerVersion = 0;
     uint32 m_SphereForceEvalFrames = 0;
 
-    // Identity of the active spherical planet last seen. When it changes to a DIFFERENT planet or to
-    // none (the planet was deleted, or its domain switched away from Spherical), the service-global
-    // sculpt layer is RESET so the next planet re-derives fresh geometry (Dv from ITS radius) with an
-    // empty pool — instead of inheriting the deleted planet's frozen dim + stale dab content (the
-    // create->edit->delete->recreate flow that resurrects "brush does nothing at 20k"). Invalid until
-    // a spherical planet is first seen; a same-entity persist keeps the frozen geometry (by-design).
+    // Identity of the active spherical planet last seen. When it changes to a different planet or to
+    // none (the planet was deleted, or its domain left Spherical), TerrainService::ResetPlanetSculpt
+    // drops the planet layers, so the next planet does not take the old planet's sculpt. Invalid until
+    // a spherical planet is first seen.
     ECS::EntityHandle m_ActivePlanetEntity{};
 
     // Tiled-streaming dirty-rect cursor (ConsumeUnifiedDirtyRect). TerrainRenderFeature's

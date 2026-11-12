@@ -1,7 +1,9 @@
 #pragma once
 
 #include "Mathematics/Interpolation.h"
-#include "Noise/GradientNoise2D.h"
+#include "Mathematics/WorldPosition.h"
+#include "Noise/FractalNoise.h"
+#include "Noise/Gradient/GradientNoise2D.h"
 #include "Types/Types.h"
 
 namespace GameEngine::TerrainECS
@@ -25,7 +27,17 @@ namespace GameEngine::TerrainECS
 inline float32 SurfaceRuleNoiseSample(float32 worldX, float32 worldZ, float32 frequency,
                                       uint32 seed)
 {
-    return Math::Clamp01(0.5f + 0.5f * Noise::GradientNoise2D(worldX * frequency, worldZ * frequency, seed));
+    return Math::Clamp01(Math::MulAdd(0.5f, Noise::GradientNoise2D(worldX * frequency, worldZ * frequency, seed), 0.5f));
+}
+
+// The planet's Noise field: the same contract (one octave, unit amplitude, [0, 1]) as 3D
+// gradient noise at the planet-local position in meters, so a direction has one value on
+// every face, chart and level.
+inline float32 PlanetRuleNoiseSample(const Mathematics::WorldPosition& position, float32 frequency,
+                                     uint32 seed)
+{
+    const Noise::NoiseSample3D noise = Noise::FractalNoise3D(position, frequency, 1u, 1.0f, seed);
+    return Math::Clamp01(Math::MulAdd(0.5f, noise.Value, 0.5f));
 }
 
 } // namespace GameEngine::TerrainECS

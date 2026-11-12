@@ -2,7 +2,12 @@
 
 #include "Engine/Rendering/RenderServices.h"
 #include "Engine/Rendering/Camera.h"
+#include "Components/Transform.h"
+#include "Mathematics/MatrixOps.h"
+#include "Rendering/Camera/CameraDerivation.h"
 #include "Rendering/Camera/CameraTypes.h"
+#include "TerrainECS/TerrainRenderedViews.h"
+#include "TestCameraEye.h"
 
 using namespace GameEngine;
 using namespace GameEngine::Rendering;
@@ -38,6 +43,17 @@ TEST(ViewRegistryTests, GetViewsIterationOrderIsAllocationOrder)
 
 // L5(b): ReleaseCamera refuses while a view still references the camera, and
 // succeeds once the view is released.
+// A camera that a view draws before its owner sets the data stays unset (zero matrices) with a valid eye.
+TEST(ViewRegistryTests, ACameraBeforeItsFirstDataHasItsEyeAtTheOrigin)
+{
+    RenderServices rs;
+    const CameraData* data = rs.Views().FindCameraData(rs.Views().AllocateCamera("cam"));
+    ASSERT_NE(data, nullptr);
+    EXPECT_EQ(data->proj[0][0], 0.0f);
+    EXPECT_EQ(data->proj[1][1], 0.0f);
+    EXPECT_EQ(CameraRenderOriginSector(*data), (Mathematics::Vector3Int{0, 0, 0}));
+}
+
 TEST(ViewRegistryTests, ReleaseCameraRefusedWhileViewReferencesIt)
 {
     RenderServices rs;
@@ -275,6 +291,28 @@ TEST(ViewRegistryTests, ACameraLessGameViewSleepsAndACameraGivesItsLayers)
         << "the camera went away: the view sleeps again once its last arm lapses";
 }
 
+// A camera with World Drawing Paused pauses its Game View: the view draws no layer, so no extraction,
+// culling or shadow pass reads it. Clearing the field gives the camera's layers back.
+TEST(ViewRegistryTests, ACameraWithWorldDrawingPausedPausesItsGameView)
+{
+    RenderServices rs;
+    const CameraId cam = rs.Views().AllocateCamera("cam");
+    const ViewId view = rs.Views().AllocateView("Game View", cam, ViewPurpose::Game, ViewParticipation::OnDemand);
+
+    Camera camera{};
+    camera.params.VisibleLayers = RenderLayerMask::FromLayer(2);
+    camera.params.WorldDrawingPaused = true;
+    DeclareGameCameraView(rs.Views(), view, &camera);
+    EXPECT_TRUE(rs.Views().FindViewDesc(view)->worldPaused);
+    EXPECT_EQ(rs.Views().FindViewDesc(view)->ActiveRenderLayerMask(), RenderLayerMask::None())
+        << "a paused view gets no submissions and no culling slice";
+
+    camera.params.WorldDrawingPaused = false;
+    DeclareGameCameraView(rs.Views(), view, &camera);
+    EXPECT_FALSE(rs.Views().FindViewDesc(view)->worldPaused);
+    EXPECT_EQ(rs.Views().FindViewDesc(view)->ActiveRenderLayerMask(), camera.params.VisibleLayers);
+}
+
 namespace
 {
 // A view of `purpose` drawing world `worldId` through its own new camera; returns that camera.
@@ -349,4 +387,134 @@ TEST(ViewRegistryTests, OnlyAViewTakingPartThroughThePipelineIsTheMainCamera)
     rs.Views().RequestViewFrame(sleeping);
     EXPECT_EQ(rs.Views().FindMainCameraData(7), rs.Views().FindCameraData(sleepingCamera))
         << "an armed Game view takes part this frame";
+}
+
+// A parked Game view that was armed once is not rendered two frames later. The Scene View, armed
+// each frame, is rendered. A view off the pipeline is never rendered.
+TEST(ViewRegistryTests, AParkedViewIsNotRenderedTwoFramesAfterItsLastRequest)
+{
+    RenderServices rs;
+    const CameraId gameCamera = rs.Views().AllocateCamera("game");
+    const ViewId game = rs.Views().AllocateView("Game View", gameCamera, ViewPurpose::Game, ViewParticipation::OnDemand);
+    const CameraId sceneCamera = rs.Views().AllocateCamera("scene");
+    const ViewId scene =
+        rs.Views().AllocateView("Scene View", sceneCamera, ViewPurpose::EditorScene, ViewParticipation::OnDemand);
+    const CameraId offCamera = rs.Views().AllocateCamera("off pipeline");
+    const ViewId offPipeline = rs.Views().AllocateView("off pipeline", offCamera, ViewPurpose::Game);
+    rs.Views().SetViewActiveRenderPipeline(offPipeline, false);
+
+    rs.Views().RequestViewFrame(game);
+    for (int frame = 0; frame < 2; ++frame)
+    {
+        rs.Views().RequestViewFrame(scene);
+        rs.Views().BeginFrame();
+    }
+
+    EXPECT_FALSE(rs.Views().FindViewDesc(game)->RenderedByPipeline()) << "the parked Game view lapsed";
+    EXPECT_TRUE(rs.Views().FindViewDesc(scene)->RenderedByPipeline()) << "the Scene View is armed each frame";
+    EXPECT_FALSE(rs.Views().FindViewDesc(offPipeline)->RenderedByPipeline()) << "the pipeline skips this view";
+}
+
+namespace
+{
+// A view whose camera stands at `eye` and looks along +Z.
+ViewId AddViewAt(RenderServices& rs, const char* name, ViewPurpose purpose, ViewParticipation participation,
+                 const Mathematics::Vector3& eye)
+{
+    const CameraId camera = rs.Views().AllocateCamera(name);
+    CameraData data{};
+    data.view = Mathematics::MakeLookAtLH(eye, eye + Mathematics::Vector3{0.0f, 0.0f, 1.0f},
+                                          Mathematics::Vector3{0.0f, 1.0f, 0.0f});
+    data.proj = Mathematics::MakePerspectiveLH_ZO_ReverseZ(1.0f, 1.5f, 0.5f, 100.0f);
+    rs.Views().SetCameraData(camera, ::GameEngine::Tests::TestCameraWithEye(data), {0.5f, 100.0f});
+    return rs.Views().AllocateView(name, camera, purpose, participation);
+}
+} // namespace
+
+// The terrain collects only the views the pipeline renders: of a parked Game view, a view off the
+// pipeline and an armed Scene View, it collects one camera, the Scene View's.
+TEST(ViewRegistryTests, TheTerrainCollectsOnlyTheRenderedSceneView)
+{
+    RenderServices rs;
+    const ViewId game =
+        AddViewAt(rs, "Game View", ViewPurpose::Game, ViewParticipation::OnDemand, {100.0f, 5.0f, 0.0f});
+    const ViewId offPipeline =
+        AddViewAt(rs, "off pipeline", ViewPurpose::Game, ViewParticipation::Always, {200.0f, 5.0f, 0.0f});
+    rs.Views().SetViewActiveRenderPipeline(offPipeline, false);
+    const ViewId scene =
+        AddViewAt(rs, "Scene View", ViewPurpose::EditorScene, ViewParticipation::OnDemand, {0.0f, 1000.0f, 0.0f});
+
+    rs.Views().RequestViewFrame(game);
+    for (int frame = 0; frame < 2; ++frame)
+    {
+        rs.Views().RequestViewFrame(scene);
+        rs.Views().BeginFrame();
+    }
+
+    const TerrainECS::TerrainRenderedViews rendered = TerrainECS::TerrainRenderedViews::Collect(rs.Views());
+    ASSERT_EQ(rendered.CameraPositions.size(), 1u) << "the parked view and the view off the pipeline request no page";
+    EXPECT_NEAR(rendered.CameraPositions[0].y, 1000.0f, 1e-3f);
+    EXPECT_EQ(rendered.PageCameras.size(), 1u);
+}
+
+// A game with two views the pipeline renders (a split screen) requests terrain pages for both.
+TEST(ViewRegistryTests, TwoAlwaysViewsAreBothRendered)
+{
+    RenderServices rs;
+    const ViewId left = rs.Views().AllocateView("left", rs.Views().AllocateCamera("left"), ViewPurpose::Game);
+    const ViewId right = rs.Views().AllocateView("right", rs.Views().AllocateCamera("right"), ViewPurpose::Game);
+    rs.Views().BeginFrame();
+    rs.Views().BeginFrame();
+
+    EXPECT_TRUE(rs.Views().FindViewDesc(left)->RenderedByPipeline());
+    EXPECT_TRUE(rs.Views().FindViewDesc(right)->RenderedByPipeline());
+}
+
+// The derived near and culling range are the ranges the owner set, not values read from the
+// projection matrix: a matrix built for 0.5..100 m with ranges 0.25..300 m derives 0.25 and 300.
+TEST(ViewRegistryTests, TheDerivedCameraTakesTheCarriedRangesNotTheMatrix)
+{
+    RenderServices rs;
+    const CameraId camera = rs.Views().AllocateCamera("camera");
+    const ViewId view = rs.Views().AllocateView("view", camera, ViewPurpose::Game);
+    CameraData data{};
+    data.proj = Mathematics::MakePerspectiveLH_ZO_ReverseZ(1.0f, 1.5f, 0.5f, 100.0f);
+    data.viewProj = data.proj;
+    rs.Views().SetCameraData(camera, ::GameEngine::Tests::TestCameraWithEye(data), {0.25f, 300.0f});
+
+    const CameraRanges ranges = rs.Views().ResolveCameraRanges(view);
+    EXPECT_EQ(ranges.Near, 0.25f);
+    EXPECT_EQ(ranges.CullingRange, 300.0f);
+    const CameraDerivedData derived = DeriveCameraData(*rs.Views().FindCameraData(camera), ranges);
+    EXPECT_EQ(derived.NearPlane, 0.25f);
+    EXPECT_EQ(derived.FarPlane, 300.0f);
+
+    ASSERT_TRUE(rs.Views().ReleaseView(view));
+    ASSERT_TRUE(rs.Views().ReleaseCamera(camera));
+    EXPECT_EQ(rs.Views().FindCameraRanges(camera).CullingRange, 0.0f);
+}
+
+// A camera 125 km from the origin that moves 0.1 m/s (1.67 mm per frame at 60 Hz) moves on every
+// frame: the eye goes from the entity's double position to the rebased view without a float step.
+TEST(ViewRegistryTests, ACameraAt125KmMovingATenthOfAMeterPerSecondMovesOnEveryFrame)
+{
+    RenderServices rs;
+    const CameraId camera = rs.Views().AllocateCamera("camera");
+    const ViewId view = rs.Views().AllocateView("view", camera, ViewPurpose::Game);
+    constexpr double kStartX = 125000.0;
+    constexpr double kStepMeters = 0.1 / 60.0;
+    float32 previousTranslationX = 0.0f;
+    for (int32 frame = 0; frame <= 10; ++frame)
+    {
+        const Mathematics::WorldPosition eye{kStartX + kStepMeters * frame, 2.0, 0.0};
+        const Components::Transform pose =
+            Components::Transform::FromTRS(eye, Mathematics::Quaternion{}, Mathematics::Vector3{1.0f, 1.0f, 1.0f});
+        Camera active{};
+        active.SetPose(pose.ToMatrix4x4(Mathematics::Vector3{}), eye);
+        rs.Views().SetCameraData(camera, active.ToCameraData(1.0f), active.ToCameraRanges());
+        const float32 translationX = rs.Views().ResolveCameraData(view).viewRel[3][0];
+        if (frame > 0)
+            EXPECT_NE(translationX, previousTranslationX) << "frame " << frame;
+        previousTranslationX = translationX;
+    }
 }

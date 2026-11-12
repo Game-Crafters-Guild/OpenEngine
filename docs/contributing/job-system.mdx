@@ -27,9 +27,9 @@ Tests and tools construct their own: `JobSystem::WorkStealingThreadPool pool(4);
 | You have | Use | Per-task cost | You get back |
 |---|---|---|---|
 | Fire-and-forget work; the caller owns all synchronization | `EnqueueWork(fn)` | 0 allocs steady-state (pooled 128-byte slab), one queue push, one bounded wake · millions of tasks per second | Nothing, but the task is **never dropped**, even racing Shutdown |
-| ≥ ~8 *homogeneous* fire-and-forget closures ready at once | `EnqueueWorkBatch(funcs, count)` | Bulk queue op + one bounded batch wake (≤ 4 caller notifies) · about 10 µs for a 200-task burst | Same as EnqueueWork; elements are moved-from |
+| ≥ ~8 *homogeneous* fire-and-forget closures ready at once | `EnqueueWorkBatch(funcs, count)` | Bulk queue op + one caller wake of one idle worker (each dequeue wakes one more while a backlog remains) · about 10 µs for a 200-task burst | Same as EnqueueWork; elements are moved-from |
 | A cohort you must join ("all N finished"), possibly **from a worker thread** | `Run(fn, counter)` + `Wait(counter)` | One slab envelope per task, and one visit per task within the fork-task budget (§3.4); no TaskHandle, no TaskData · fork and join under 10 µs warm | Happens-before on all task writes at Wait-return; worker-legal join; sticky `HasAnyFailed()` |
-| N units claimed one at a time, an index range to split into chunks, or a range to sort | `ParallelFor` (units, or chunks with a `minBatchSize`) / `ParallelSort` | One slab run block + at most one batch of helper envelopes (min(workers, units − 1, 64)); 0 heap allocations per call | Blocks until done; legal on **any thread**, a worker included; the first exception a chunk threw is rethrown on the caller |
+| N units claimed one at a time, an index range to split into chunks, or a range to sort | `ParallelFor` (units, or chunks with a `minBatchSize`) / `ParallelSort` | One slab run block + at most one batch of helper envelopes (min(workers, units − 1, 64)) at the start, and with `HelpersToKeepQueued` at most one more before each claim of the caller; 0 heap allocations per call | Blocks until done; legal on **any thread**, a worker included; the first exception a chunk threw is rethrown on the caller |
 | Per-task result, status, cancellation, or completion callbacks | `Submit(lambda)` → `TaskHandle` | under 1 µs in Release, exactly 1 heap alloc | `TryGetResult<T>`, `Wait`, `Cancel`, `OnComplete`/`OnFailure`, dependency-graph attachable |
 | Work whose thread waits on another process, the OS or a driver for most of its run (a compiler, cmake, a compile server) | `JobChannel::Submit(fn)`, or `JobChannel::Enqueue(fn)` for work that must never be dropped, on the owning service's channel (§12) | Runs on a blocking thread, never a compute worker; at most the channel's cap run at once, the rest wait in its FIFO and hold no thread | A `TaskHandle`, as `Submit(lambda)`: cancellable while queued, a `Submit(fn, deps)` dependency |
 | Execution ordering between tasks (B runs after A) | `Submit(fn, deps)`: a callable and a span of dependency handles. A stateful job is a function object that holds its state as members | Graph node + TaskData; node erased eagerly at terminal | Dependents run only after every dependency is terminal; failure cascades to parked dependents; cancel cascades too |
@@ -97,7 +97,7 @@ MipTask tasks[16];
 pool.EnqueueWorkBatch(tasks, 16);   // tasks[0..15] are moved-from after this
 ```
 
-- **Batch threshold:** batches below `kBulkPublishThreshold` (= 8) internally route down the per-task publish loop: per-task visibility overlaps publication with execution, which measured faster for small warm forks ([9. Performance reference](#9-performance-reference)). So do not contort call sites to batch fewer than ~8 tasks. At and above 8, the bulk path wins. One `EnqueueWorkBatch` call handles up to any count (staged through 64-entry stack runs, `kStackBatch`).
+- **Batch threshold:** batches below `kBulkPublishThreshold` (= 8) internally route down the per-task publish loop: per-task visibility overlaps publication with execution, which measured faster for small warm forks ([9. Performance reference](#9-performance-reference)). So do not contort call sites to batch fewer than ~8 tasks. At and above 8, the bulk path wins. One `EnqueueWorkBatch` call handles any count. A batch of up to `kStackBatch` (64) stages on the stack, and a larger one in the calling thread's scratch arena. Each run of up to `kMaxBulkRun` (1024) tasks is one bulk push, and its tasks become visible to the workers together, when that push ends.
 - **Nothrow-move closures:** the bulk slab path `static_assert`s `std::is_nothrow_move_constructible_v<F>`. Plain member-wise structs (the intended shape) satisfy this automatically.
 - **Closure size:** closures that fit a 128-byte slab (i.e. ~104 bytes of captures) are allocation-free after warmup. Oversized closures fall back to a plain heap allocation, chosen at compile time. Keep captures small on hot paths.
 - **Exceptions:** a throwing bare task is caught and logged by the worker. It cannot take the pool down, but nobody else observes the failure. If you need failure observation, you wanted a JobCounter or a TaskHandle.
@@ -199,11 +199,12 @@ pool.Wait(m_PrewarmCounter);
 struct ParallelForOptions                              // JobSystem/ParallelForOptions.h
 {
     static constexpr size_t kAllWorkers = SIZE_MAX;
-    size_t Helpers = kAllWorkers;                      // one per worker by default; clamped to min(units - 1, 64); 0 = every unit on the caller
-    JobPriority HelperPriority = JobPriority::Normal;  // a Background body's helpers are Background whatever is asked
+    size_t Helpers = kAllWorkers;                      // one per worker by default; clamped to min(units - 1, 64); 0 = every unit on the caller unless HelpersToKeepQueued publishes more
+    JobPriority HelperPriority = JobPriority::Normal;  // Background demotes the helpers; otherwise they take the caller body's class
     const std::function<bool()>* Stop = nullptr;       // polled by the caller only, before each of its claims
     struct UnitAdmission { std::function<bool()> TryAcquire; std::function<void()> Release; };
     const UnitAdmission* Admission = nullptr;          // per helper unit: acquire before, release after
+    const std::function<size_t()>* HelpersToKeepQueued = nullptr; // polled by the caller before each claim: helpers to keep queued
 };
 
 // Units: body(size_t unit) returns void or bool (false stops the run).
@@ -269,12 +270,13 @@ A pool worker, the main thread, a channel job (§12), or a thread of your own ma
 - **Stopping:** a body that returns `false` or throws, `Stop` returning true or throwing, or an admission hook throwing stops the run: no further unit starts on any thread; units in flight finish. `Stop` is read by the caller only, so a body that must stop helpers mid-unit returns `false` itself, and a cancel flag every thread should honor is read at the start of the body: return `false` once it is set.
 - **Exceptions:** the first exception a unit, `Stop`, or an admission hook threw, on any thread, is rethrown on the caller once the units in flight have finished. Nothing is logged and dropped.
 - **Admission:** each unit a helper runs takes `TryAcquire` first and `Release` after. A refused helper ends and leaves the units to the caller and the other helpers. An admitted helper runs one unit, then re-publishes itself at the end of its lane while units are left, so the lane's other jobs run between units. The caller's own units take no admission. `TextureCookWorkers::RunBands` uses it for the texture decode budget.
+- **Helpers during the run:** `HelpersToKeepQueued` is polled by the caller before each unit it claims, after `Stop`, and returns how many helpers the run keeps queued (published and not yet started). While fewer are queued, the caller publishes the difference, at most 64 at a time and never more than the units left after its own next one, within the budget below. Use it when an admission budget can free room while the run continues. `TextureCookWorkers::RunBands` keeps one helper queued for each free texture slot, so a cook that starts while other cooks hold the share gets helpers when they end. A throw stops the run like a throw from `Stop`.
 - **Helpers waiting:** a pool keeps at most `kMaxUnstartedForkTasksPerWorker` (4) fork tasks per worker published and not yet started in each lane, across every caller: these helpers and the visits `Run` publishes. A `Run` past the budget publishes a visit only when its counter's queue has none pending, since one visit runs every job queued there. Background helpers queued behind a streaming flood never take a Normal fork's budget. A fork publishes only the helpers that fit and the caller claims the rest, so a thread forking back to back faster than the workers drain the helpers its closed runs left queued runs its units itself instead of growing the queue.
-- **Class:** helpers publish at the class of the pool body that calls (Background inside a Background body, Normal everywhere else, §11), so a Background job's fork never puts work in the frame's lane. `HelperPriority` asks for Background outside a Background body.
+- **Class:** helpers publish at the class of the pool body that calls (Background inside a Background body, Awaited inside an Awaited body, Normal everywhere else, §11), so a Background job's fork never puts work in the frame's lane and an Awaited job's fork stays ahead of it. `HelperPriority` asks for Background outside a Background body.
 - **Fallbacks:** a null pool, a single unit, or a chunked range at or under its batch size runs on the caller. An inline pool, or one whose `Shutdown()` has been requested, publishes no helper and runs every unit on the caller.
 - **Lifetime:** the body, `Stop`, and `Admission` need to live only for the call: a helper that runs after `ParallelFor` returned touches none of them.
 - **Bodies run on several threads at once:** give each unit its own output (a slot per unit, merged in unit order after the call) rather than a shared container behind a lock.
-- **Cost:** one 128-byte slab for the run and one slab envelope per helper. The pool provisions the slabs its helpers can hold at once in both lanes when it is built (about 18 per worker), so a fork takes no heap allocation once the pool exists. Each further thread forking at the same moment can add one slab, once.
+- **Cost:** one 128-byte slab for the run and one slab envelope per helper. The pool provisions the slabs its helpers can hold at once in every lane when it is built (about 26 per worker), so a fork takes no heap allocation once the pool exists. Each further thread forking at the same moment can add one slab, once.
 
 `Run(fn, counter)` + `Wait(counter)` (§3) remains the fork for work that needs a counter: a wave whose members are not an index range, or a join on tasks published from several places.
 
@@ -431,7 +433,7 @@ auto compress = pool.Submit(CompressJob(decode, cancelRequested),
 
 :::tip[Lambda handles are real dependencies]
 
-Plain `Submit(lambda)` tasks do not register in the graph (that keeps them at 1 alloc / 1 mutex). `Submit(fn, deps)` bridges them: a live lambda dependency gets a payload-less graph node whose completion/failure/cancellation is driven off the task's own terminal flip. Ordering, failure cascade, and cancel cascade all behave exactly as for graph dependencies. The plain-Submit fast path is unchanged (one flag check at completion; the alloc/lock pins still hold).
+Plain `Submit(lambda)` tasks do not register in the graph (that keeps them at 1 alloc / 1 mutex). `Submit(fn, deps)` bridges them: a live lambda dependency gets a payload-less graph node whose completion/failure/cancellation is driven off the task's own terminal flip. Ordering, failure cascade, and cancel cascade all behave exactly as for graph dependencies. A plain `Submit(lambda)` adds one flag check at completion and keeps its 1 alloc / 1 mutex.
 
 :::
 
@@ -524,22 +526,22 @@ Measured 2026-07-10 on a quiet 32-core machine (CPU not recorded), Release unles
 | `EnqueueWork` steady state | 0 allocations at millions of tasks per second | slab-pooled envelopes |
 | Idle pool CPU | under 0.1% delta | no wakeup churn |
 
-Backpressure signals, if you need them: `GetApproximateQueueSize()` (tasks sitting in queues) and `GetPendingTasksApprox()` (queued + currently executing): both **Normal-only**, see §11.3. `GetWorkerCount()` for fan-out sizing; `GetCurrentWorkerId()` returns `SIZE_MAX` off-pool, the "am I on a worker?" probe. For what the pool is doing (per-lane and per-channel backlogs, what each thread runs, cumulative traffic) read `GetStatistics()`, §13.
+Backpressure signals, if you need them: `GetApproximateQueueSize()` (tasks sitting in queues) and `GetPendingTasksApprox()` (queued + currently executing): both leave out the Background backlog, see §11.3. `GetWorkerCount()` for fan-out sizing; `GetCurrentWorkerId()` returns `SIZE_MAX` off-pool, the "am I on a worker?" probe. For what the pool is doing (per-lane and per-channel backlogs, what each thread runs, cumulative traffic) read `GetStatistics()`, §13.
 
 ## 10. Environment variables
 
 | Variable | Default | Read | Effect |
 |---|---|---|---|
-| `GE_JOB_THREADS` | `hardware_concurrency` (non-editor runs clamp to ≤ 8) | once at engine init (`Engine.cpp`) | Worker count of the engine pool, the single sizing knob (D3). |
+| `GE_JOB_THREADS` | the processors the process may run on, from its affinity mask (`JobSystem::AvailableProcessors`; non-editor runs clamp to ≤ 8) | once at engine init (`Engine.cpp`) | Worker count of the engine pool, the single sizing knob (D3). |
 | `GE_JOB_SPIN_US` | `100` | once at pool construction | Per-worker adaptive spin window (µs) before sleeping, the warm-fork latency win. `0` disables spinning entirely (reproduces pre-overhaul wake behavior; the A/B knob). |
 | `GE_JOB_MAX_SPINNERS` | `2` | once at pool construction | Max simultaneously armed spinner tokens. More spinners trade idle CPU for marginal latency; 2 covered every censused workload. |
 | `GE_JOB_TOMBSTONE_STRICT` | unset | Debug builds, first graph violation | `=1` escalates the "dependency not recently terminal" stderr diagnostic (§6) to an abort. For dependency-order bring-up; leave unset day-to-day (bounded tombstone ring can false-positive on long-held handles). |
 
 Tests must not mutate process env. Use `SetSpinConfigForTest(spinWindowUs, maxSpinners)` and `SetSleepBackstopForTest(backstopUs)` on the pool instance instead.
 
-## 11. Priorities: JobPriority::Background
+## 11. Priorities: JobPriority::Awaited and JobPriority::Background
 
-Two classes only: `Normal` (the default and the hot path) and `Background`. Background rides a dedicated global lane that **every consumer polls LAST** (worker lap, spin poll, retiring spinner's recheck), gated by an occupancy counter so an empty lane costs one relaxed load per scan. Background never enters worker-local queues or the steal ring. Design record: the jobsystem-priorities-design record in the workbench.
+Three classes: `Awaited`, `Normal` (the default and the hot path) and `Background`, dequeued in that order. Awaited is for a short job that a thread is blocked waiting for, such as the one pipeline build a frame thread waits on. It rides its own global lane that **every consumer polls FIRST**, before the worker's own local queue, gated by an occupancy counter like the Background lane, so a Normal or Background flood delays it only by the remainder of the bodies already running. Everything below about the Background lane's queue, census, shutdown and cancellation holds for the Awaited lane too. An Awaited flood postpones Normal work, so bulk work never goes there. Background rides a dedicated global lane that **every consumer polls LAST** (worker lap, spin poll, retiring spinner's recheck), gated by an occupancy counter so an empty lane costs one relaxed load per scan. Background never enters worker-local queues or the steal ring. Design record: the jobsystem-priorities-design record in the workbench.
 
 ```cpp title="Background priority"
 pool.Submit(fn, JobSystem::JobPriority::Background);        // handle semantics identical to Normal
@@ -547,9 +549,9 @@ pool.EnqueueWork(fn, JobSystem::JobPriority::Background);
 pool.EnqueueWorkBatch(funcs, count, JobSystem::JobPriority::Background);
 // Run(fn, counter) and the ParallelFor family have NO priority parameter: a fork
 // publishes at the class of the pool body that forks (Background inside a
-// Background body, Normal everywhere else). ParallelForOptions::HelperPriority
-// asks for a class, clamped the same way. Graph tasks (Submit with deps) are
-// always Normal.
+// Background body, Awaited inside an Awaited body, Normal everywhere else).
+// ParallelForOptions::HelperPriority = Background demotes the helpers. Graph
+// tasks (Submit with deps) are always Normal.
 ```
 
 ### 11.1. When Background is right
@@ -568,12 +570,12 @@ Priority changes scheduling, **never lifetime**, but the two Background shapes e
 
 ### 11.3. Backpressure and flood behavior
 
-- **Backpressure getters are Normal-only (audit A7):** `GetApproximateQueueSize()` and `GetPendingTasksApprox()` EXCLUDE the queued Background backlog: the lane is polled last, so a backlog there never delays a Normal submission, and a streaming flood keeps 10k+ background tasks queued as its steady state. Coarsening ECS batches against that would surrender parallelism for zero contention relief. In-flight background *bodies* still count in `GetPendingTasksApprox` (bounded by worker count; they genuinely occupy workers).
+- **Backpressure getters leave out Background (audit A7):** `GetApproximateQueueSize()` and `GetPendingTasksApprox()` EXCLUDE the queued Background backlog (queued Awaited jobs count: they run before a Normal submission): the lane is polled last, so a backlog there never delays a Normal submission, and a streaming flood keeps 10k+ background tasks queued as its steady state. Coarsening ECS batches against that would surrender parallelism for zero contention relief. In-flight background *bodies* still count in `GetPendingTasksApprox` (bounded by worker count; they genuinely occupy workers).
 - **Floods keep workers spun up:** under a sustained Background flood the workers never park, so warm Normal forks actually get FASTER (no wakeup latency), pinned by the flood-regime tripwire test. A background backlog is not a latency smell for Normal work.
 
 :::danger[Anti-pattern: frame-critical work on Background]
 
-There is no aging: under Normal saturation a Background task waits unboundedly. Anything a frame, an interaction, or a join waits on belongs on Normal (the default). If you find yourself wanting "Background but it must land this frame", you wanted Normal with a smaller body.
+There is no aging: under Normal saturation a Background task waits unboundedly. Anything a frame, an interaction, or a join waits on belongs on Normal (the default), or on Awaited when a thread blocks on that one short job. If you find yourself wanting "Background but it must land this frame", you wanted Normal with a smaller body.
 
 :::
 
@@ -630,6 +632,7 @@ The pool reports what it is doing through two reads, for two kinds of reader.
 // channel's mutex in turn.
 JobSystem::JobSystemStatistics stats = pool.GetStatistics();
 stats.Normal.Queued;        // jobs waiting in the Normal lane
+stats.Awaited.Queued;       // jobs waiting in the Awaited lane
 stats.Background.Running;   // compute workers running a Background job
 stats.Channels[0].QueueWaitNs;
 stats.TasksExecuted;        // compute-lane dequeues + channel jobs run
@@ -643,15 +646,15 @@ size_t count = pool.SnapshotOccupancy(threads);   // workers first, then blockin
 | Field | What it is |
 |---|---|
 | `ComputeWorkers`, `BlockingThreads` | Thread counts. Blocking threads are created on a channel's first dispatch (§12) and never retired. |
-| `Normal`, `Background` | Per lane: `Queued` (jobs waiting) and `Running` (compute workers running a job of that class). |
+| `Normal`, `Awaited`, `Background` | Per lane: `Queued` (jobs waiting) and `Running` (compute workers running a job of that class). |
 | `Channels` | One row per registered `JobChannel`, in registration order: `Name`, `Queued` (past the cap), `Running` (holding a slot), `Cap`, `Jobs` (cumulative jobs that took a slot), `QueueWaitNs` (cumulative time jobs waited in the channel for a slot). |
-| `Threads` | The occupancy snapshot: one `Occupancy` per compute worker, then per blocking thread created so far. `Running` is `"Normal"` or `"Background"` on a worker, the channel's name on a blocking thread, null when idle. `SinceNs` (steady_clock nanoseconds) is set for Background and channel jobs only: the pool reads the clock for the kinds that run long, never for a 1 µs Normal job. |
+| `Threads` | The occupancy snapshot: one `Occupancy` per compute worker, then per blocking thread created so far. `Running` is `"Normal"`, `"Awaited"` or `"Background"` on a worker, the channel's name on a blocking thread, null when idle. `SinceNs` (steady_clock nanoseconds) is set for Background and channel jobs only: the pool reads the clock for the kinds that run long, never for a 1 µs Normal job. |
 | `TasksExecuted` | Dequeues from the compute lanes (the census pops below) plus the channel jobs the blocking threads ran. It counts dequeues, so a handle job the shutdown drain cancelled and a fork visit whose job a participating `Wait` already ran are in it. Derived, so the per-task path pays nothing extra for it. |
-| Census | `GlobalPushes`, `LocalPushes`, `BackgroundPushes`, `GlobalPops`, `LocalPops`, `StealPops`, `BackgroundPops`, `StealMisses`, `EmptyLoopsWithBacklog`, `BackstopTimeouts`: cumulative queue traffic. Pushes equal pops per queue once the pool is idle (steals count against the local queues). Tests assert on these, never on a sampled gauge. |
+| Census | `GlobalPushes`, `LocalPushes`, `AwaitedPushes`, `BackgroundPushes`, `GlobalPops`, `LocalPops`, `StealPops`, `AwaitedPops`, `BackgroundPops`, `StealMisses`, `EmptyLoopsWithBacklog`, `BackstopTimeouts`: cumulative queue traffic. Pushes equal pops per queue once the pool is idle (steals count against the local queues). Tests assert on these, never on a sampled gauge. |
 
 - **Gauges are relaxed reads of a running pool.** Two fields can describe slightly different moments, and a job starting or ending during a snapshot can pair one job's name with another's start time. A job that runs long, the case worth reporting, reads consistently. The cumulative counters only grow: read twice and subtract for a rate.
 - **A job body, not its callbacks.** A thread reads as running from the moment a job's body starts to the moment it returns. Completion callbacks (`OnComplete`) and the dependency release after a body run with the thread already reading idle, wherever the completion happened.
-- **The class a body runs as comes from where it was dequeued:** the Normal lane (global queue, local queues, steal ring) or the Background lane on a worker, its channel on a blocking thread, the class given at publish on an inline pool, the lane or channel it was queued in when the shutdown drain runs it. A participating `Wait` runs a tagged job as the waiter's own class, and a `ParallelFor` caller runs its units as its own class (Normal outside a body). `IsExecutingJob()` answers whether the calling thread is inside any of these bodies.
+- **The class a body runs as comes from where it was dequeued:** the Normal lane (global queue, local queues, steal ring), the Awaited lane or the Background lane on a worker, its channel on a blocking thread, the class given at publish on an inline pool, the lane or channel it was queued in when the shutdown drain runs it. A participating `Wait` runs a tagged job as the waiter's own class, and a `ParallelFor` caller runs its units as its own class (Normal outside a body). `IsExecutingJob()` answers whether the calling thread is inside any of these bodies.
 - **Inline pools** (0 workers) have no threads, so they report no occupancy and zero traffic.
 
 Two consumers ship with it. The editor's `get_job_system` debug method (MCP tool and `node mcp/ge.mjs get_job_system`) returns the statistics as JSON, the instrument for any live check of the pool: which thread holds a long job, which lane or channel is backed up, how many blocking threads exist. The editor's main-thread hang watchdog adds every pool thread's occupancy to each stall report beside the main thread's stack, for example `Job Worker #3: Background for 2.4s` or `Job Blocking #0: Script compiles for 12.0s`. Teardown reports leave it out, because teardown destroys the pool.

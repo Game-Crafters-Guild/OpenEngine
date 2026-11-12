@@ -24,6 +24,9 @@ namespace
 // can opt into SlerpAlongArc; the gate lives in the pairing settings.
 constexpr float kSpineWorldArcEscalationDeg = 30.0f;
 
+// Below this source hip height, Stage 3 keeps the source hip translation unscaled.
+constexpr float kMinHipHeight = 1e-6f;
+
 Mathematics::Quaternion ReadRestRotation(const SkeletonData& skel, uint32_t boneIdx)
 {
     if (boneIdx >= skel.BoneCount) return Mathematics::Quaternion::Identity();
@@ -49,6 +52,29 @@ Mathematics::Vector3 ReadRestScale(const SkeletonData& skel, uint32_t boneIdx)
         return Mathematics::Vector3(1.0f, 1.0f, 1.0f);
     const float* sp = &skel.RestScale[boneIdx * 3u];
     return Mathematics::Vector3(sp[0], sp[1], sp[2]);
+}
+
+// Convert a model-space hip height to the space of the hips' parent bone, where
+// the hip translation lives. Model up passes through the inverse rest rotation
+// and scale of each ancestor, root first.
+float HipHeightInParentSpace(const SkeletonData& skel, uint32 hipBone, float modelHipHeight)
+{
+    std::vector<uint32> ancestors;
+    int32 bone = (hipBone < skel.Parent.size()) ? skel.Parent[hipBone] : -1;
+    while (bone >= 0 && static_cast<size_t>(bone) < skel.Parent.size() && ancestors.size() < skel.BoneCount)
+    {
+        ancestors.push_back(static_cast<uint32>(bone));
+        bone = skel.Parent[static_cast<size_t>(bone)];
+    }
+
+    Mathematics::Vector3 up(0.0f, 1.0f, 0.0f);
+    for (auto it = ancestors.rbegin(); it != ancestors.rend(); ++it)
+    {
+        const Mathematics::Vector3 local = Inverse(ReadRestRotation(skel, *it)).Rotate(up);
+        const Mathematics::Vector3 scale = ReadRestScale(skel, *it);
+        up = Mathematics::Vector3(local.x / scale.x, local.y / scale.y, local.z / scale.z);
+    }
+    return modelHipHeight * up.Length();
 }
 
 // Walk a chain in HumanoidRig.Chains by ChainKind and return the
@@ -326,9 +352,18 @@ bool RetargetNode::Build(const SkeletonData& sourceSkeleton,
         }
     }
 
-    // Body proportions for Stage 3.
-    m_SourceHipHeight = m_SourceRig->Proportions().HipHeight;
-    m_TargetHipHeight = m_TargetRig->Proportions().HipHeight;
+    // Stage 3 hip scale. The rig's hip height is in model space and includes the
+    // rest scale of the hips' ancestors; the hip translation is local to the hips' parent.
+    float sourceHipHeight = m_SourceRig->Proportions().HipHeight;
+    float targetHipHeight = m_TargetRig->Proportions().HipHeight;
+    if (const auto* hipsCr = FindCanonical(HumanBone::Hips))
+    {
+        if (hipsCr->HasSource)
+            sourceHipHeight = HipHeightInParentSpace(sourceSkeleton, hipsCr->SourceBoneIndex, sourceHipHeight);
+        if (hipsCr->HasTarget)
+            targetHipHeight = HipHeightInParentSpace(targetSkeleton, hipsCr->TargetBoneIndex, targetHipHeight);
+    }
+    m_HipTranslationScale = (sourceHipHeight > kMinHipHeight) ? (targetHipHeight / sourceHipHeight) : 1.0f;
 
     m_Built = true;
     return true;
@@ -349,6 +384,7 @@ void RetargetNode::ExportForGPU(GPUExport& out) const
     out.TargetParent = m_TargetParent;
     out.TargetTopo   = m_TargetTopo;
     out.TargetRestPos = m_TargetRestPos;
+    out.TargetRestScale = m_TargetRestScale;
 
     // TargetBindLocal: the authored bind local rotation per tgt bone. For
     // non-canonical bones m_TargetRetargetPoseLocal already holds bind_local;
@@ -375,7 +411,7 @@ void RetargetNode::ExportForGPU(GPUExport& out) const
     }
 
     // Stage 3 translation.
-    out.HipScale = (m_SourceHipHeight > 1e-6f) ? (m_TargetHipHeight / m_SourceHipHeight) : 1.0f;
+    out.HipScale = m_HipTranslationScale;
     const auto* hipsCr = FindCanonical(HumanBone::Hips);
     if (hipsCr)
     {
@@ -518,15 +554,13 @@ void RetargetNode::TranslateStage3(const AnimationPose& sourcePose,
     // Stage 3 — Translation retargeting.
     //   For bones in HumanoidRig.TranslationBones (default: hip):
     //     tgtTranslation = (tgtHipHeight / srcHipHeight) * srcTranslation
+    //   with both hip heights in the space of the hips' parent bone.
     //   Non-TranslationBones get tgtTranslation = tgtRetargetPose.position
     //   (eliminates FBX joint-translation jitter).
     //
     // FillTargetRestPose already wrote rest translations for every target
     // bone, so non-translation bones are correct. We only need to overwrite
     // the bones in TranslationBones.
-
-    const float scale =
-        (m_SourceHipHeight > 1e-6f) ? (m_TargetHipHeight / m_SourceHipHeight) : 1.0f;
 
     for (HumanBone bone : m_TargetRig->TranslationBones())
     {
@@ -535,7 +569,7 @@ void RetargetNode::TranslateStage3(const AnimationPose& sourcePose,
         if (cr->SourceBoneIndex >= sourcePose.BoneCount) continue;
 
         const Mathematics::Vector3 src = sourcePose.Positions[cr->SourceBoneIndex];
-        outPose.Positions[cr->TargetBoneIndex] = src * scale;
+        outPose.Positions[cr->TargetBoneIndex] = src * m_HipTranslationScale;
     }
 }
 

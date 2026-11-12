@@ -78,7 +78,7 @@ TEST(ComponentPickerIcon, TheSelectedRowDrawsItsIconInTheTextColor)
     root->AddChild(std::move(dialog));
 
     InspectorLayoutTesting::InspectorLayoutFixture fixture;
-    fixture.ExtraSheets = {"Assets/UI/controls/SearchDialog.css"};
+    fixture.ExtraSheets = {GE_UI_MODULE_SOURCE_DIR "/Assets/UI/controls/SearchDialog.css"};
     if (!fixture.Build(std::move(root)))
         GTEST_SKIP() << fixture.Diagnostic;
 

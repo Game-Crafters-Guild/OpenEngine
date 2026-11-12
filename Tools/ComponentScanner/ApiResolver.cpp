@@ -54,8 +54,8 @@ bool IsQualifiedIdentifier(std::string_view text)
 }
 
 // The memory a default-constructed value of a Mathematics or color kind holds, component by
-// component: zeros for the vectors, the identity quaternion (x, y, z, w) and matrix (column
-// major), and opaque black for a color.
+// component: zeros for the vectors and the world position, the identity quaternion (x, y, z, w)
+// and matrix (column major), and opaque black for a color.
 std::vector<std::string> DefaultComponents(ApiKind kind)
 {
     switch (kind)
@@ -63,6 +63,7 @@ std::vector<std::string> DefaultComponents(ApiKind kind)
     case ApiKind::Vec2:
         return {"0", "0"};
     case ApiKind::Vec3:
+    case ApiKind::WorldPosition:
         return {"0", "0", "0"};
     case ApiKind::Vec4:
         return {"0", "0", "0", "0"};
@@ -378,6 +379,13 @@ bool ApiResolver::ReadFieldDefault(const ModuleDraft& module, const Draft& recor
         {
             Refuse(header.File, field.DeclLine, "the matrix field `" + field.Name + "` has an initializer the description cannot read",
                    "leave the field without an initializer (the identity)");
+            return false;
+        }
+        // The C# world position has no constructor: its field initializer is the origin only.
+        if (kind == ApiKind::WorldPosition)
+        {
+            Refuse(header.File, field.DeclLine, "the world position field `" + field.Name + "` has an initializer that the C# WorldPosition cannot take",
+                   "leave the field without an initializer (the origin)");
             return false;
         }
         // The constructor's parameters: x, y[, z[, w]] for a vector, w, x, y, z for a

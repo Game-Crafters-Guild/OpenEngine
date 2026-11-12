@@ -3,11 +3,11 @@
 #include "Panels/SettingsPanel.h"
 #include "Panels/InspectorPanel.h"
 #include "Editor/Settings/ExperimentalRenderingSettingsPage.h"
-#include "Editor/Entities/DDGIVolumeComponentTraits.h"
 #include "Prefabs/PrefabHierarchyRows.h"
 #include "PlayMode/PlayModeManager.h"
 #include "Scene/SceneEditorController.h"
 #include "Editor/Settings/InterfaceSettingsPage.h"
+#include "Editor/Settings/StartupSettingsPage.h"
 #include "Editor/Settings/AssetPreviewSettings.h"
 #include "Editor/Settings/InfoCardAppearanceSettings.h"
 #include "Editor/Settings/GameUIScaleSettingsPage.h"
@@ -473,11 +473,10 @@ void EditorApplication::InitializeAssetsGridAndSmartFolderSettings(SettingsPanel
     Editor::RegisterExperimentalRenderingSettingsCategory();
     // Interface (context-menu backend) likewise.
     Editor::RegisterInterfaceSettingsCategory();
-    // DDGIVolume owns its inspector/hierarchy icon through the component-traits
-    // registry rather than another branch in the built-in icon chains.
-    Editor::RegisterDDGIVolumeComponentTraits();
+    // Startup: what the editor opens on start.
+    Editor::RegisterStartupSettingsCategory();
     // Prefabs: the pick climb, the Hierarchy glyph and rows, the context menu entries, the Assets tile.
-    Editor::RegisterPrefabEditor(*m_ChangeNotifications, m_ThumbnailProvider.get(),
+    Editor::RegisterPrefabEditor(*m_ChangeNotifications, m_UndoRedo.get(), m_ThumbnailProvider.get(),
                                  [this]() { return m_PlayMode && m_PlayMode->IsPlayingOrPaused(); },
                                  [this]() { return m_SceneEditor ? m_SceneEditor->GetDocument() : nullptr; });
     // Shared info-card background / outline / shadow on UI > Appearance.

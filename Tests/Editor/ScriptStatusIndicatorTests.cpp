@@ -34,7 +34,7 @@ TEST(ScriptStatusIndicator, EachManagedStateReadsAsItsOwnStatus)
     EXPECT_EQ(Describe(NativeScriptState::None, ScriptAssemblyState::Loaded, 3),
               (ScriptStatusDisplay{"C# scripts loaded (3 types)", "is-ok"}));
     EXPECT_EQ(Describe(NativeScriptState::None, ScriptAssemblyState::Failed),
-              (ScriptStatusDisplay{"C# build failed - see Log", "is-fail"}));
+              (ScriptStatusDisplay{"C# scripts failed - see Log", "is-fail"}));
     EXPECT_EQ(Describe(NativeScriptState::Loaded, ScriptAssemblyState::Disabled),
               (ScriptStatusDisplay{"C# scripting is off in this build, C++ modules loaded", "is-ok"}));
 }
@@ -71,7 +71,7 @@ TEST(ScriptStatusIndicator, AFailureOnEitherSideBringsTheLogForwardOnce)
     EXPECT_EQ(label.GetText(), "Building C# scripts...");
     indicator.Update(ScriptAssemblyStatus{ScriptAssemblyState::Failed, 0});
     indicator.Update(ScriptAssemblyStatus{ScriptAssemblyState::Failed, 0});
-    EXPECT_EQ(label.GetText(), "C# build failed - see Log");
+    EXPECT_EQ(label.GetText(), "C# scripts failed - see Log");
     EXPECT_EQ(logShown, 1) << "a failure that persists across frames must not keep pulling the Log forward";
 
     indicator.Update(ScriptAssemblyStatus{ScriptAssemblyState::Loaded, 4});

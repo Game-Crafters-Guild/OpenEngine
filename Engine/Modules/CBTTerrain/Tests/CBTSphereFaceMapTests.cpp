@@ -204,17 +204,3 @@ TEST(CBTSphereFaceMap, DegenerateEditNoRegions)
     const SphereEditRegions regions = ClassifySphereCapEdit(0.0f, 0.0f, 0.0f, 0.1f);
     EXPECT_EQ(regions.Count, 0u);
 }
-
-// Page-table face-stride layout: face f's page-table region [f*faceStride, (f+1)*faceStride) is the
-// offset the shader (cbt_sculpt.glsl CBT_SculptTableEntry) and SphereSculptLayer both index; the six
-// face regions tile the table exactly with no overlap and no gap.
-TEST(CBTSphereFaceMap, PageTableFaceRegionsTileExactly)
-{
-    uint32_t expectedBase = 0u;
-    for (uint32_t f = 0; f < kCubeFaceCount; ++f)
-    {
-        EXPECT_EQ(f * kSculptPageTableFaceStride, expectedBase) << "face " << f << " table offset";
-        expectedBase += kSculptPageTableFaceStride;
-    }
-    EXPECT_EQ(expectedBase, kSculptPageTableEntries) << "the six face regions must tile the table";
-}

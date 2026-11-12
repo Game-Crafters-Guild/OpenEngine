@@ -1,0 +1,100 @@
+/* SceneViewport (Apps/Editor/Include/SceneView/SceneViewport/SceneViewport.h): the children of one Scene View pane.
+   The pane itself, the quad tiling and the active outline in quad view are in theme/scene-view.css. */
+
+.scene-viewport-active-outline {
+    position: absolute;
+    left: 0;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 75;
+    border-style: solid;
+    border-width: 0;
+    border-color: transparent;
+    box-shadow: none;
+}
+
+.scene-viewport-label {
+    position: absolute;
+    right: 14px;
+    bottom: 14px;
+    min-width: 48px;
+    padding: 3px 7px;
+    color: var(--ui_color_text_bright);
+    background-color: var(--ui_color_viewport_label_background);
+    font-size: 11px;
+    font-family: var(--ui_font_family);
+    line-height: normal;
+    border-radius: 4px;
+    text-align: center;
+    white-space: nowrap;
+    pointer-events: none;
+    z-index: 40;
+}
+
+/* The hover pill: the pane places it beside the pointer, above the measure labels and the active outline. The pill
+   sets its own left and top: a bottom here stretches it to the pane's height. */
+.scene-view-hover-pill {
+    position: absolute;
+    left: 0;
+    max-width: min(320px, 70vw);
+    padding: 5px 14px;
+    background-color: rgba(0, 0, 0, 0.59);
+    color: #f0f0f0;
+    font-size: 14px;
+    font-family: var(--ui_font_family);
+    font-weight: 500;
+    line-height: normal;
+    border-radius: 999px;
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    pointer-events: none;
+    opacity: 0;
+    z-index: 80;
+}
+
+.scene-view-hdr-test-pattern-overlay {
+    position: absolute;
+    left: 0;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 100%;
+    height: 100%;
+    display: none;
+    pointer-events: none;
+    z-index: 10000;
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+}
+
+.scene-view-measure-overlay {
+    position: absolute;
+    left: 0;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 70;
+}
+
+/* The rulers sit below the rotation gizmo and the tool overlay, so those widgets stay on top of the ruler bands. */
+.scene-view-ruler-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+    pointer-events: none;
+    z-index: 50;
+}

@@ -1,5 +1,6 @@
 #include "Platform/Capabilities.h"
 
+#include "JobSystem/AvailableProcessors.h"
 #include "JobSystem/Types.h"
 
 #include <algorithm>
@@ -44,7 +45,7 @@ std::uint32_t RecommendedWorkerCount()
     const std::uint32_t cores = std::thread::hardware_concurrency();
     return cores > 2 ? std::min(cores - 2, 4u) : 1u;
 #else
-    return std::max(1u, std::thread::hardware_concurrency());
+    return JobSystem::AvailableProcessors::Query().Count;
 #endif
 }
 
@@ -145,7 +146,7 @@ bool PrimaryShortcutModifierIsCommand()
     // iPadOS reports "MacIntel") uses Command; every other host uses Control.
     static const bool isCommand = EM_ASM_INT({
         var platform = (navigator.userAgentData && navigator.userAgentData.platform) ||
-                       navigator.platform || '';
+                       navigator.platform || "";
         return /Mac|iPhone|iPad|iPod/i.test(platform) ? 1 : 0;
     }) != 0;
     return isCommand;

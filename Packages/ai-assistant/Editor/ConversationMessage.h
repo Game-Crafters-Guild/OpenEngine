@@ -114,6 +114,9 @@ struct ConversationMessage
     /// On a finished assistant message: what the turn said beside its text (the
     /// failure and its fix, or why a reply ended short); empty otherwise.
     std::string Notice;
+    /// On a Failed assistant message: the setup check refused the turn before a reply was
+    /// asked for (TurnResult::NotReady), so Notice is the failed step's finding and fix.
+    bool NotReady = false;
     /// The provider's cost estimate for the turn that wrote the message, in US
     /// dollars; shown, never summed. Zero where the provider reports none.
     double CostUsd = 0.0;

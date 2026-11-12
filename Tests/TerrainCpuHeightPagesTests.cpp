@@ -5,13 +5,20 @@
 // the CPU reads the bytes the GPU uploads, overlay included, and the pages the GPU fetched; a dynamic
 // body far from every camera keeps its finest pages; a fetch of a restarted stream never lands in it,
 // and a failed fetch leaves a coarser page answering until a retry lands; a skyline kept across
-// frames (TerrainSkyline) samples again only where its eye, the sun or the pages moved.
+// frames (TerrainSkyline) samples again only where its eye, the sun or the pages moved, and the
+// extraction marches it along the sun's azimuth. On a planet the query reads the drawn pages and
+// layers by direction (its spherical arm), and a pick lands on them.
 
 #include "TerrainECS/SurfaceHeightQuery.h"
+#include "CBTTerrainECS/CBTRenderFeature.h"
+#include "Scene/TerrainPicking.h"
 #include "TerrainECS/PlanarHeightfieldEditCursor.h"
+#include "TerrainECS/Planet/PlanetChart.h"
+#include "TerrainECS/Planet/PlanetPageRequester.h"
 #include "TerrainSkyline.h"
 #include "TerrainECS/TerrainPages.h"
 #include "TerrainECS/TerrainService.h"
+#include "TerrainECS/Systems/TerrainExtractionSystem.h"
 
 #include "PageStreaming/GeneratedHeightPageProvider.h"
 #include "PageStreaming/Height/HeightPageLayer.h"
@@ -19,8 +26,14 @@
 #include "PageStreaming/PageResidency.h"
 #include "PageStreaming/PageStore/PageStoreFormat.h"
 #include "PageStreaming/PageStore/PageStoreReader.h"
+#include "CBTTerrain/CBTPlanetShading.h"
 #include "Components/Terrain/Terrain.h"
+#include "Components/Terrain/TerrainPlanetRelief.h"
 #include "Components/Transform.h"
+#include "Engine/Rendering/RenderOrigin.h"
+#include "Engine/Rendering/RenderServices.h"
+#include "Engine/Rendering/SkyRenderFeature.h"
+#include "Engine/Rendering/SunGlareRenderFeature.h"
 #include "Mathematics/Rect.h"
 #include "ECS/ECSTemplates.h"
 #include "ECS/World.h"
@@ -40,7 +53,9 @@
 #include <iterator>
 #include <map>
 #include <memory>
+#include <numbers>
 #include <span>
+#include <thread>
 #include <vector>
 
 using namespace GameEngine;
@@ -60,7 +75,7 @@ PageStreaming::GeneratedHeightLattice NoiseLattice()
     lattice.TileSamples = 257;
     lattice.TilesX = 4;
     lattice.TilesZ = 4;
-    lattice.Noise = {0.01f, 1.0f, 4u, 7u};
+    lattice.Noise = Terrain::TerrainNoiseStack{0.01f, 4u, 0.5f, 7u};
     return lattice;
 }
 
@@ -97,6 +112,9 @@ std::vector<PageAddress> WindowAround(float32 x, float32 z)
 constexpr uint32 kStream = 1;
 // Level 2 and every coarser level are pinned.
 constexpr uint32 kFirstPinned = 2;
+// A CPU budget whose quarter (4 MiB: 62 pages) does not hold the 81 level-0 pages of the noise
+// terrain, so its CPU windows stay point windows and a page can be outside every window.
+constexpr uint64 kPointWindowCpuBytes = 16ull << 20;
 
 constexpr uint32 kField = 0;
 
@@ -183,24 +201,24 @@ SurfaceHeightQuery EditedQuery(const CpuPages& cpu, uint64 source, uint64 versio
 }
 
 // Every page of `levels`: the state stream kStream's CPU page directory gives it against the
-// residency's own samples of it.
+// residency's own samples of it, and Missing for every other page: the noise source has no absent page.
 void ExpectDirectoryMatchesResidency(const CpuPages& cpu, std::span<const PageStreaming::PageStoreLevel> levels,
                                      const char* when)
 {
     const PageStreaming::CpuPageDirectory directory = cpu.Residency.CpuPages(kStream);
-    ASSERT_EQ(directory.Entries.size(), levels.back().FirstEntry + 1u) << when;
+    ASSERT_FALSE(directory.Empty()) << when;
     for (uint32 level = 0; level < levels.size(); ++level)
         for (uint32 z = 0; z < levels[level].PagesZ; ++z)
             for (uint32 x = 0; x < levels[level].PagesX; ++x)
             {
                 const PageAddress address{0, static_cast<uint8>(level), x, z};
-                std::span<const uint8> samples;
-                const PageStreaming::CpuPageState state = directory.Page(address, samples);
+                const PageStreaming::CpuPageEntry entry = directory.Page(address);
                 const std::vector<uint8>* held = cpu.Residency.Bytes(kStream, address);
-                ASSERT_EQ(state == PageStreaming::CpuPageState::Resident, held != nullptr)
+                ASSERT_EQ(PageStreaming::State(entry),
+                          held ? PageStreaming::CpuPageState::Resident : PageStreaming::CpuPageState::Missing)
                     << when << ": level " << level << " page " << x << ", " << z;
                 if (held)
-                    EXPECT_EQ(samples.data(), held->data()) << when;
+                    EXPECT_EQ(PageStreaming::Bytes(entry), held->data()) << when;
             }
 }
 
@@ -447,9 +465,9 @@ ECS::EntityHandle AddTerrainEntity(ECS::World& world, const Components::Terrain&
                                    float32 z)
 {
     Components::WorldTransform transform;
-    transform.matrix[12] = x;
-    transform.matrix[13] = y;
-    transform.matrix[14] = z;
+    transform.Position.X = x;
+    transform.Position.Y = y;
+    transform.Position.Z = z;
     const ECS::EntityHandle entity = world.CreateEntity();
     world.AddComponentImmediate(entity, terrain);
     world.AddComponentImmediate(entity, transform);
@@ -471,6 +489,25 @@ ECS::EntityHandle AddPlanarTerrain(ECS::World& world, float32 size, float32 x, f
     return AddTerrainEntity(world, terrain, x, 0.0f, z);
 }
 
+// A flat tiled planar terrain of `sizeX` x `sizeZ` meters at one sample per meter, centered on the
+// world origin. Its tile lattice covers whole tiles, so it can reach past the authored size.
+ECS::EntityHandle AddTiledPlanarTerrain(ECS::World& world, float32 sizeX, float32 sizeZ)
+{
+    TerrainService& service = TerrainService::Get();
+    Components::Terrain terrain;
+    terrain.SizeX = sizeX;
+    terrain.SizeZ = sizeZ;
+    terrain.SamplesPerMeter = 1.0f;
+    terrain.BaseSource = Components::TerrainBaseSource::Flat;
+    const TiledTerrainHandle tiled = service.CreateTiledTerrain(service.BuildTiledTerrainConfig(terrain, "", std::nullopt));
+    TiledTerrainData* data = service.GetTiledTerrainData(tiled);
+    data->WorldOriginX = -0.5f * sizeX;
+    data->WorldOriginZ = -0.5f * sizeZ;
+    terrain.TiledTerrainHandle = tiled.Index;
+    terrain.TiledTerrainGeneration = tiled.Generation;
+    return AddTerrainEntity(world, terrain, 0.0f, 0.0f, 0.0f);
+}
+
 // A planet of `radius` metres, centered on the world origin as the renderer draws it.
 ECS::EntityHandle AddPlanet(ECS::World& world, float32 radius)
 {
@@ -486,8 +523,8 @@ void AddBody(ECS::World& world, float32 x, float32 z, Physics::MotionType motion
     Components::PhysicsBody body;
     body.motionType = motion;
     Components::WorldTransform transform;
-    transform.matrix[12] = x;
-    transform.matrix[14] = z;
+    transform.Position.X = x;
+    transform.Position.Z = z;
     const ECS::EntityHandle entity = world.CreateEntity();
     world.AddComponentImmediate(entity, body);
     world.AddComponentImmediate(entity, transform);
@@ -497,7 +534,7 @@ void AddBody(ECS::World& world, float32 x, float32 z, Physics::MotionType motion
 
 TEST(CpuHeightPages, TheCpuPagesHoldTheBytesTheGpuUploadsWithTheOverlayAndItsEdits)
 {
-    TerrainPages pages(nullptr, nullptr, kDesktopHeightPages, kDesktopSurfacePages);
+    TerrainPages pages(nullptr, nullptr, kDesktopHeightPages, DesktopSurfacePageProfile());
     const PageStreaming::PageSource source = NoiseSource();
     const PageStreaming::PageSampleRect rect{300, 300, 420, 380};
     std::map<std::pair<uint32, uint32>, std::vector<float32>> uploads;
@@ -522,8 +559,9 @@ TEST(CpuHeightPages, ADynamicBodyFarFromEveryCameraKeepsItsFinestPages)
 {
     // 64 slots: the pyramid streams (only the top page is pinned), so level 0 near the body comes
     // from its window alone.
-    TerrainPages pages(nullptr, nullptr, HeightPageProfile{64, kDesktopHeightPages.DenseTableWords, 0, 64ull << 20, 4u},
-                       kDesktopSurfacePages);
+    TerrainPages pages(nullptr, nullptr,
+                       HeightPageProfile{64, kDesktopHeightPages.DenseTableWords, 0, kPointWindowCpuBytes, 4u},
+                       DesktopSurfacePageProfile());
     PagedTerrainRequest request = PinnedNoiseRequest(NoiseSource(), nullptr, 0);
     const Mathematics::Vector3 camera{100.0f, 10.0f, 100.0f};
     const PageLevelView view = MakePageLevelView(kPageLevelReferenceRows, 1.0f, 11.0f);
@@ -550,13 +588,13 @@ TEST(CpuHeightPages, ADynamicBodyFarFromEveryCameraKeepsItsFinestPages)
         << "a stale handle reads nothing";
 }
 
-// The narrow CBT arm, pending modifiers and a page table over the GPU cap keep the GPU on the
-// terrain's texture (GpuPages false), and the CPU still reads the terrain's pages; no view at all
-// (no camera) streams the CPU pages too.
+// The narrow CBT arm and pending modifiers keep the GPU on the terrain's texture (GpuPages
+// false), and the CPU still reads the terrain's pages; no view at all (no camera) streams the
+// CPU pages too.
 TEST(CpuHeightPages, ATerrainTheGpuDrawsFromItsTextureStillHasCpuPagesAndPublishesNoTable)
 {
     TerrainPages pages(nullptr, nullptr, HeightPageProfile{64, kDesktopHeightPages.DenseTableWords, 0, 64ull << 20, 4u},
-                       kDesktopSurfacePages);
+                       DesktopSurfacePageProfile());
     PagedTerrainRequest request = PinnedNoiseRequest(NoiseSource(), nullptr, 0);
     request.GpuPages = false;
     const Mathematics::Vector3 camera{300.0f, 10.0f, 300.0f};
@@ -576,8 +614,7 @@ TEST(CpuHeightPages, ATerrainTheGpuDrawsFromItsTextureStillHasCpuPagesAndPublish
     std::vector<uint32> drawn;
     pages.PagedTerrains(drawn);
     EXPECT_TRUE(drawn.empty()) << "the GPU draws its texture: no page table is published";
-    uint64 version = 0;
-    EXPECT_EQ(pages.TableWords(kTerrain, version), nullptr);
+    EXPECT_EQ(pages.PackedTable(kTerrain), nullptr);
     EXPECT_TRUE(pages.DirtyRects().empty()) << "the drawn height never changed source";
     EXPECT_TRUE(pages.Uploads().empty());
 
@@ -596,8 +633,8 @@ TEST(CpuHeightPages, ATerrainTheGpuDrawsFromItsTextureStillHasCpuPagesAndPublish
 TEST(CpuHeightPages, APageTheGpuFetchedAnswersFinestOutsideEveryCpuWindow)
 {
     TerrainPages pages(nullptr, nullptr,
-                       HeightPageProfile{512, kDesktopHeightPages.DenseTableWords, 0, 64ull << 20, 4u},
-                       kDesktopSurfacePages);
+                       HeightPageProfile{512, kDesktopHeightPages.DenseTableWords, 0, kPointWindowCpuBytes, 4u},
+                       DesktopSurfacePageProfile());
     const PagedTerrainRequest request = PinnedNoiseRequest(NoiseSource(), nullptr, 0);
     const Mathematics::Vector3 camera{100.0f, 10.0f, 100.0f};
     const PageLevelView view = MakePageLevelView(kPageLevelReferenceRows, 1.0f, 11.0f);
@@ -727,8 +764,9 @@ TEST(CpuHeightPages, AFailedFetchLeavesACoarserPageAnsweringUntilARetryLands)
 
 TEST(CpuHeightPages, AWindowIsTwoPagesWideWithTheNeighborOnTheNearerSide)
 {
-    TerrainPages pages(nullptr, nullptr, HeightPageProfile{64, kDesktopHeightPages.DenseTableWords, 0, 64ull << 20, 4u},
-                       kDesktopSurfacePages);
+    TerrainPages pages(nullptr, nullptr,
+                       HeightPageProfile{64, kDesktopHeightPages.DenseTableWords, 0, kPointWindowCpuBytes, 4u},
+                       DesktopSurfacePageProfile());
     // The CPU pages alone: the GPU's level-0 pages around the camera would be on the CPU too.
     PagedTerrainRequest request = PinnedNoiseRequest(NoiseSource(), nullptr, 0);
     request.GpuPages = false;
@@ -758,7 +796,7 @@ TEST(CpuHeightPages, AWindowIsTwoPagesWideWithTheNeighborOnTheNearerSide)
 TEST(CpuHeightPages, AChangeOfFramesInFlightKeepsTheCpuPages)
 {
     TerrainPages pages(nullptr, nullptr, HeightPageProfile{64, kDesktopHeightPages.DenseTableWords, 0, 64ull << 20, 4u},
-                       kDesktopSurfacePages);
+                       DesktopSurfacePageProfile());
     const PagedTerrainRequest request = PinnedNoiseRequest(NoiseSource(), nullptr, 0);
     const PageLevelView view = MakePageLevelView(kPageLevelReferenceRows, 1.0f, 11.0f);
     const Mathematics::Vector3 camera{200.0f, 10.0f, 200.0f};
@@ -786,7 +824,7 @@ TEST(CpuHeightPages, BodyWindowsAreBoundedToTheBodiesNearestACamera)
     constexpr uint64 kSixteenPages = 16ull * PageStreaming::kPageSampleCount * sizeof(float32);
     TerrainPages pages(nullptr, nullptr,
                        HeightPageProfile{64, kDesktopHeightPages.DenseTableWords, 0, kSixteenPages, 4u},
-                       kDesktopSurfacePages);
+                       DesktopSurfacePageProfile());
     const PagedTerrainRequest request = PinnedNoiseRequest(NoiseSource(), nullptr, 0);
     const PageLevelView view = MakePageLevelView(kPageLevelReferenceRows, 1.0f, 11.0f);
     const Mathematics::Vector3 camera{100.0f, 10.0f, 100.0f};
@@ -810,8 +848,9 @@ TEST(CpuHeightPages, BodyWindowsAreBoundedToTheBodiesNearestACamera)
 
 TEST(CpuHeightPages, AReaderWindowBringsTheFinestPagesAwayFromEveryCamera)
 {
-    TerrainPages pages(nullptr, nullptr, HeightPageProfile{64, kDesktopHeightPages.DenseTableWords, 0, 64ull << 20, 4u},
-                       kDesktopSurfacePages);
+    TerrainPages pages(nullptr, nullptr,
+                       HeightPageProfile{64, kDesktopHeightPages.DenseTableWords, 0, kPointWindowCpuBytes, 4u},
+                       DesktopSurfacePageProfile());
     PagedTerrainRequest request = PinnedNoiseRequest(NoiseSource(), nullptr, 0);
     request.GpuPages = false; // only the CPU windows want level 0
     const Mathematics::Vector3 camera{100.0f, 10.0f, 100.0f};
@@ -841,8 +880,9 @@ TEST(CpuHeightPages, AReaderWindowBringsTheFinestPagesAwayFromEveryCamera)
 
 TEST(CpuHeightPages, AFetchOfTheFinestPageAnswersFinestBeforeTheNextUpdate)
 {
-    TerrainPages pages(nullptr, nullptr, HeightPageProfile{64, kDesktopHeightPages.DenseTableWords, 0, 64ull << 20, 4u},
-                       kDesktopSurfacePages);
+    TerrainPages pages(nullptr, nullptr,
+                       HeightPageProfile{64, kDesktopHeightPages.DenseTableWords, 0, kPointWindowCpuBytes, 4u},
+                       DesktopSurfacePageProfile());
     PagedTerrainRequest request = PinnedNoiseRequest(NoiseSource(), nullptr, 0);
     request.GpuPages = false;
     const Mathematics::Vector3 camera{100.0f, 10.0f, 100.0f};
@@ -1160,6 +1200,424 @@ TEST(SurfaceHeightTerrain, ThePointPicksTheTerrainUnderItInEveryStorageOrder)
         ASSERT_TRUE(query.IsValid()) << "island first: " << islandFirst;
         EXPECT_FLOAT_EQ(query.FootprintOriginX(), -256.0f);
         EXPECT_FLOAT_EQ(query.FootprintSizeX(), 512.0f);
+    }
+    TerrainService::Shutdown();
+}
+
+// The extraction publishes each view's terrain skyline to the sun glare, marched from the eye along
+// the sun's azimuth. A ridge on +X hides a low sun on +X and does not hide the same sun on -X, while
+// the camera looks along +Z in both cases.
+TEST(SunGlareSkylinePublish, TheSkylineIsMarchedAlongTheSunsAzimuthNotTheCameras)
+{
+    using Engine::Renderer::RenderServices;
+    using Engine::Renderer::SkyRenderFeature;
+    using Engine::Renderer::SunGlareRenderFeature;
+    if (!TerrainService::TryGet())
+        TerrainService::Initialize();
+    {
+        ECS::World world;
+        // 256 m on 33 samples, 8 m apart. Columns 21 to 25 (x = 40 m to 72 m) rise to 64 m.
+        const ECS::EntityHandle entity = AddPlanarTerrain(world, 256.0f, 0.0f, 0.0f);
+        const Components::Terrain* terrain = world.GetComponent<Components::Terrain>(entity);
+        TerrainData* data =
+            TerrainService::Get().GetTerrainData(TerrainHandle{terrain->TerrainDataHandle, terrain->TerrainDataGeneration});
+        ASSERT_NE(data, nullptr);
+        for (uint32 z = 0; z < data->Heightfield.GetHeight(); ++z)
+            for (uint32 x = 21; x <= 25; ++x)
+                data->Heightfield.SetSample(x, z, 0.25f);
+
+        RenderServices services;
+        SunGlareRenderFeature& glare = services.EnsureFeature<SunGlareRenderFeature>();
+        SkyRenderFeature& sky = services.EnsureFeature<SkyRenderFeature>();
+        const Rendering::CameraId camera = services.Views().AllocateCamera("Skyline.Camera");
+        const Rendering::ViewId view = services.Views().AllocateView("Skyline.View", camera);
+        const Mathematics::Vector3 eye{0.0f, 2.0f, 0.0f};
+        Rendering::CameraData cameraData{};
+        cameraData.view = Mathematics::Matrix4x4::LookAt(eye, eye + Mathematics::Vector3{0.0f, 0.0f, 1.0f},
+                                                         Mathematics::Vector3{0.0f, 1.0f, 0.0f});
+        constexpr float32 kFieldOfViewRad = 1.0471976f; // 60 degrees
+        cameraData.proj = Mathematics::Matrix4x4::PerspectiveReverseZ(kFieldOfViewRad, 16.0f / 9.0f, 0.1f, 1000.0f);
+        cameraData.viewProj = cameraData.proj * cameraData.view;
+        Engine::Renderer::SetCameraEye(cameraData, Mathematics::WorldPosition{eye.x, eye.y, eye.z});
+        services.Views().SetCameraData(camera, cameraData, Rendering::CameraRanges{0.1f, 1000.0f});
+        TerrainExtractionSystem extraction(&services);
+
+        // A sun about 6 degrees up: below the ridge on +X, above the flat ground on -X.
+        const float32 horizontal = 1.0f / std::sqrt(1.0f + 0.1f * 0.1f);
+        for (const float32 side : {1.0f, -1.0f})
+        {
+            Rendering::SkySettings settings;
+            settings.scatteringSunDir = Mathematics::Vector3{side * horizontal, 0.1f * horizontal, 0.0f};
+            sky.SetSettings(settings, Rendering::SkySunState{});
+            extraction.Update(world, 1.0f / 60.0f);
+            const float visible = glare.GetSkylineVisibility(view, settings.scatteringSunDir);
+            if (side > 0.0f)
+                EXPECT_LT(visible, 1.0f) << "the ridge on the sun's side does not hide the sun";
+            else
+                EXPECT_EQ(visible, 1.0f) << "a ridge away from the sun hides it";
+        }
+    }
+    TerrainService::Shutdown();
+}
+
+namespace
+{
+
+constexpr float64 kArmPlanetRadius = 2000.0;
+constexpr float32 kArmLayerLift = 3.0f;
+
+// The relief a test planet's pages are generated from, in meters above the reference radius.
+float32 ArmRelief(const Mathematics::Vector3& direction)
+{
+    const Mathematics::Vector3 unit = direction.Normalize();
+    return 25.0f * unit.x + 15.0f * unit.y * unit.z;
+}
+
+// The direction halfway between level-0 lattice samples (x, z) and (x + 1, z + 1) of face `face`.
+Mathematics::Vector3 BetweenSamples(uint8 face, uint32 x, uint32 z, uint32 faceSamples)
+{
+    return (PageStreaming::EqualAngleSampleDirection(face, x, z, faceSamples) +
+            PageStreaming::EqualAngleSampleDirection(face, x + 1u, z + 1u, faceSamples))
+        .Normalize();
+}
+
+// The request of planet `planet`: pages generated from ArmRelief, `layer` as its modifier layer.
+PlanetPagedRequest ArmPlanetRequest(uint32 planet, uint32 faceSamples,
+                                    std::shared_ptr<const PageStreaming::HeightPageLayer> layer)
+{
+    PlanetPagedRequest request;
+    request.Planet = planet;
+    request.GpuPages = false;
+    request.Name = "planet";
+    request.SourceIdentity = 1;
+    request.Shape.ReferenceRadius = kArmPlanetRadius;
+    request.Shape.FaceSamples = faceSamples;
+    PageStreaming::GeneratedPlanetLattice lattice;
+    lattice.ReferenceRadius = kArmPlanetRadius;
+    lattice.FaceSamples = faceSamples;
+    lattice.HeightRow = [](std::span<const Mathematics::Vector3> directions, float32, std::span<float32> outHeights) {
+        for (std::size_t i = 0; i < directions.size(); ++i)
+            outHeights[i] = ArmRelief(directions[i]);
+    };
+    lattice.HeightRange = [](const Mathematics::Vector3&, float32, float32) {
+        return PageStreaming::PageHeightRange{-40.0f, 40.0f};
+    };
+    request.Source.Generated = std::make_shared<const PageStreaming::GeneratedHeightPageProvider>(lattice);
+    request.Modifiers = std::move(layer);
+    request.OverlayVersion = 1;
+    return request;
+}
+
+// Streams `request` with a camera above each of `directions` until each answers at level 0.
+bool StreamUntilFinest(ECS::World& world, const PlanetPagedRequest& request,
+                       const std::vector<Mathematics::Vector3>& directions)
+{
+    std::vector<Mathematics::Vector3> cameras;
+    for (const Mathematics::Vector3& direction : directions)
+        cameras.push_back(direction * static_cast<float32>(kArmPlanetRadius + 5.0));
+    TerrainPages& pages = TerrainService::Get().GetTerrainPages();
+    const PageLevelView view = MakePageLevelView(kPageLevelReferenceRows, 1.0f, 11.0f);
+    for (uint64 frame = 1; frame < 2000; ++frame)
+    {
+        pages.GatherBodyWindows(world);
+        pages.RequestPlanet(request, cameras, view);
+        pages.Update(frame, 1.0f / 60.0f, false, 2);
+        const SurfaceHeightQuery query = pages.PlanetSurfaceQuery(request.Planet);
+        SurfaceHeightSample sample;
+        if (std::ranges::all_of(directions, [&query, &sample](const Mathematics::Vector3& direction) {
+                return query.SampleHeight(direction * 100.0f, SurfaceHeightPolicy::RequireFinest, sample);
+            }))
+            return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return false;
+}
+
+} // namespace
+
+// A planet's query reads the pages it is drawn from by direction: on each face, across a chart edge and
+// at a cube corner it equals the drawn page (its bytes with the layer applied, ApplyToPage) within the
+// height step, and the relief plus the layer within the bilinear error. Away from every window it is coarse.
+TEST(SurfaceHeightSphere, APlanetQueryEqualsTheDrawnPagesOnEveryFaceAtAChartEdgeAndAtACubeCorner)
+{
+    if (!TerrainService::TryGet())
+        TerrainService::Initialize();
+    {
+        ECS::World world;
+        Components::Terrain component;
+        component.Domain = Components::TerrainDomain::Spherical;
+        component.PlanetRadius = static_cast<float32>(kArmPlanetRadius);
+        const ECS::EntityHandle entity = AddTerrainEntity(world, component, 0.0f, 0.0f, 0.0f);
+
+        const uint32 faceSamples = PlanetFaceSamples(kArmPlanetRadius, 2.0f);
+        const PlanetChartLayout layout = ComputePlanetChartLayout(kArmPlanetRadius, faceSamples);
+        const uint8 poleFace =
+            PageStreaming::EqualAngleFacePointOf(Mathematics::Vector3(0.0f, 1.0f, 0.0f), faceSamples).Face;
+        // The first chart edge on the +Y face: a page seam between two charts.
+        const uint32 chartEdge = (1u << layout.Shift) * PageStreaming::kPageOwnedSamples;
+        ASSERT_LT(chartEdge + 1u, faceSamples);
+        constexpr std::size_t kChartEdgePoint = 6;
+        constexpr std::size_t kCornerPoint = 7;
+        const std::vector<Mathematics::Vector3> points = {
+            {1.0f, 0.0f, 0.0f},
+            {-1.0f, 0.0f, 0.0f},
+            {0.0f, 1.0f, 0.0f},
+            {0.0f, -1.0f, 0.0f},
+            {0.0f, 0.0f, 1.0f},
+            {0.0f, 0.0f, -1.0f},
+            BetweenSamples(poleFace, chartEdge - 1u, faceSamples / 2u, faceSamples),
+            Mathematics::Vector3(1.0f, 1.0f, 1.0f).Normalize(),
+            Mathematics::Vector3(1.0f, 0.999f, 0.998f).Normalize()};
+
+        // The layer lifts a block of samples around the chart-edge point and the corner, on their faces.
+        auto layer = std::make_shared<PageStreaming::HeightPageLayer>(
+            PageStreaming::kPageStoreMaxFaces, PageStreaming::BuildPageStoreLevels(faceSamples, faceSamples));
+        std::vector<PageStreaming::PageSampleRect> lifted(PageStreaming::kPageStoreMaxFaces);
+        for (const std::size_t index : {kChartEdgePoint, kCornerPoint})
+        {
+            const PageStreaming::PageFacePoint point = PageStreaming::EqualAngleFacePointOf(points[index], faceSamples);
+            const uint32 x = static_cast<uint32>(point.X);
+            const uint32 z = static_cast<uint32>(point.Z);
+            const PageStreaming::PageSampleRect rect{x > 4u ? x - 4u : 0u, z > 4u ? z - 4u : 0u,
+                                                     std::min(x + 4u, faceSamples - 1u),
+                                                     std::min(z + 4u, faceSamples - 1u)};
+            layer->WriteLevel0(point.Face, rect,
+                               std::vector<float32>(std::size_t{rect.Width()} * rect.Height(), kArmLayerLift));
+            lifted[point.Face] = rect;
+        }
+        const PlanetPagedRequest request = ArmPlanetRequest(static_cast<uint32>(entity.id), faceSamples, layer);
+        ASSERT_TRUE(StreamUntilFinest(world, request, points)) << "the windows' level-0 pages never reached the CPU";
+        TerrainPages& pages = TerrainService::Get().GetTerrainPages();
+
+        // The planet is the terrain under a point on it, and its query is the spherical arm.
+        const SurfaceHeightQuery query =
+            ResolveSurfaceHeightQuery(world, points[2] * static_cast<float32>(kArmPlanetRadius));
+        ASSERT_TRUE(query.IsSpherical());
+        EXPECT_FALSE(query.IsValid()) << "a planar caller sees no footprint";
+        std::vector<float32> drawn;
+        for (std::size_t index = 0; index < points.size(); ++index)
+        {
+            const Mathematics::Vector3& direction = points[index];
+            SurfaceHeightSample sample;
+            ASSERT_TRUE(query.SampleHeight(direction * 1234.0f, SurfaceHeightPolicy::RequireFinest, sample)) << index;
+            EXPECT_EQ(sample.Level, 0u);
+            const PageStreaming::PageFacePoint point = PageStreaming::EqualAngleFacePointOf(direction, faceSamples);
+            const PlanetPageTexel texel = LocatePlanetPageTexel(faceSamples, point, 0u);
+            ASSERT_TRUE(pages.PlanetPageHeights(request.Planet, texel.Address, drawn)) << index;
+            EXPECT_NEAR(sample.Height, SamplePlanetPageTexel(drawn, texel), 1.0e-3) << "point " << index;
+            const PageStreaming::PageSampleRect& rect = lifted[point.Face];
+            const bool inLift = rect.Width() > 1u &&
+                                rect.Contains(static_cast<uint32>(point.X), static_cast<uint32>(point.Z));
+            EXPECT_NEAR(sample.Height, ArmRelief(direction) + (inLift ? kArmLayerLift : 0.0f), 0.01)
+                << "point " << index;
+        }
+
+        // Far from every window the answer is coarse, and a RequireFinest caller gets none.
+        const Mathematics::Vector3 far = Mathematics::Vector3(0.3f, -1.0f, 0.55f).Normalize() * 2000.0f;
+        SurfaceHeightSample coarse;
+        ASSERT_TRUE(query.SampleHeight(far, SurfaceHeightPolicy::AcceptCoarse, coarse));
+        EXPECT_EQ(coarse.Detail, SurfaceHeightDetail::Coarse);
+        EXPECT_GT(coarse.Level, 0u);
+        EXPECT_FALSE(query.SampleHeight(far, SurfaceHeightPolicy::RequireFinest, coarse));
+    }
+    TerrainService::Shutdown();
+}
+
+// A planet covers every point but its center: a point at three times its radius resolves to the
+// planet, and its query reads the drawn page in that direction.
+TEST(SurfaceHeightSphere, APointFarAboveAPlanetReadsTheDrawnHeightInItsDirection)
+{
+    if (!TerrainService::TryGet())
+        TerrainService::Initialize();
+    {
+        ECS::World world;
+        Components::Terrain component;
+        component.Domain = Components::TerrainDomain::Spherical;
+        component.PlanetRadius = static_cast<float32>(kArmPlanetRadius);
+        const ECS::EntityHandle entity = AddTerrainEntity(world, component, 0.0f, 0.0f, 0.0f);
+        const uint32 faceSamples = PlanetFaceSamples(kArmPlanetRadius, 2.0f);
+        const Mathematics::Vector3 direction = Mathematics::Vector3(0.05f, 1.0f, 0.03f).Normalize();
+        const PlanetPagedRequest request = ArmPlanetRequest(static_cast<uint32>(entity.id), faceSamples, nullptr);
+        ASSERT_TRUE(StreamUntilFinest(world, request, {direction}));
+
+        const Mathematics::Vector3 far = direction * static_cast<float32>(3.0 * kArmPlanetRadius);
+        const SurfaceHeightQuery query = ResolveSurfaceHeightQuery(world, far);
+        ASSERT_TRUE(query.IsSpherical()) << "the planet does not cover a point at three times its radius";
+        SurfaceHeightSample sample;
+        ASSERT_TRUE(query.SampleHeight(far, SurfaceHeightPolicy::RequireFinest, sample));
+        const PlanetPageTexel texel =
+            LocatePlanetPageTexel(faceSamples, PageStreaming::EqualAngleFacePointOf(direction, faceSamples), 0u);
+        std::vector<float32> drawn;
+        ASSERT_TRUE(TerrainService::Get().GetTerrainPages().PlanetPageHeights(request.Planet, texel.Address, drawn));
+        EXPECT_NEAR(sample.Height, SamplePlanetPageTexel(drawn, texel), 1.0e-3);
+    }
+    TerrainService::Shutdown();
+}
+
+// With the planet drawn and no page on the CPU, the pick's solver and the sculpt brush's solver both
+// read DrawnPlanetHeight, and both report a miss: no ground loaded means no hit.
+TEST(SurfaceHeightSphere, APlanetWithNoPageOnTheCpuGivesThePickAndTheBrushNoHit)
+{
+    // A fresh service: a test that stops at an ASSERT leaves its pages in the service it shares.
+    if (TerrainService::TryGet())
+        TerrainService::Shutdown();
+    TerrainService::Initialize();
+    {
+        ECS::World world;
+        Components::Terrain component;
+        component.Domain = Components::TerrainDomain::Spherical;
+        component.PlanetRadius = static_cast<float32>(kArmPlanetRadius);
+        const ECS::EntityHandle entity = AddTerrainEntity(world, component, 0.0f, 0.0f, 0.0f);
+        CBTTerrainECS::CBTRenderFeature feature;
+        CBTTerrainECS::CBTRenderFeature::DomainConfig domain{};
+        domain.DomainMode = CBTTerrain::kDomainSpherical;
+        domain.PlanetRadius = static_cast<float32>(kArmPlanetRadius);
+        domain.PlanetEntity = static_cast<uint32>(entity.id);
+        feature.SetActive(true, CBTTerrain::CBTClassifyDesc{}, 8.0f, Components::kNoTerrainSeaLevel, domain, 0u);
+
+        const Mathematics::Vector3 direction = Mathematics::Vector3(0.05f, 1.0f, 0.03f).Normalize();
+        const Mathematics::Ray3D ray{direction * 2500.0f, direction * -1.0f};
+        float32 t = 0.0f;
+        Mathematics::Vector3 position;
+        Mathematics::Vector3 normal;
+        Scene::DrawnPlanetHeight pick{feature};
+        Scene::SolvePlanetSurfaceHit(ray, domain.PlanetRadius, 1.0e5f, pick, t, position, normal);
+        EXPECT_TRUE(pick.Missed) << "the pick hits a planet with no page on the CPU";
+
+        Scene::DrawnPlanetHeight brush{feature};
+        float32 brushT = 2500.0f - domain.PlanetRadius;
+        CBTTerrain::RefinePlanetHit(ray.origin, ray.direction, domain.PlanetRadius, brush, brushT);
+        EXPECT_TRUE(brush.Missed) << "the brush cursor lands on a planet with no page on the CPU";
+    }
+    TerrainService::Shutdown();
+}
+
+// A pick on a planet lands on the drawn pages with their layer applied: the hit's height above the
+// planet radius equals the drawn page's bilinear value.
+TEST(SurfaceHeightSphere, APickOnAPlanetLandsOnTheDrawnPageWithItsLayer)
+{
+    if (!TerrainService::TryGet())
+        TerrainService::Initialize();
+    {
+        ECS::World world;
+        Components::Terrain component;
+        component.Domain = Components::TerrainDomain::Spherical;
+        component.PlanetRadius = static_cast<float32>(kArmPlanetRadius);
+        const ECS::EntityHandle entity = AddTerrainEntity(world, component, 0.0f, 0.0f, 0.0f);
+
+        CBTTerrainECS::CBTRenderFeature feature;
+        CBTTerrainECS::CBTRenderFeature::DomainConfig domain{};
+        domain.DomainMode = CBTTerrain::kDomainSpherical;
+        domain.PlanetRadius = static_cast<float32>(kArmPlanetRadius);
+        domain.PlanetEntity = static_cast<uint32>(entity.id);
+        feature.SetActive(true, CBTTerrain::CBTClassifyDesc{}, 8.0f, Components::kNoTerrainSeaLevel, domain, 0u);
+
+        const Mathematics::Vector3 direction = Mathematics::Vector3(0.05f, 1.0f, 0.03f).Normalize();
+        const Mathematics::Ray3D ray{direction * 2500.0f, direction * -1.0f};
+        float32 t = 0.0f;
+        Mathematics::Vector3 position;
+        Mathematics::Vector3 normal;
+        const uint32 faceSamples = PlanetFaceSamples(kArmPlanetRadius, 2.0f);
+        const PageStreaming::PageFacePoint point = PageStreaming::EqualAngleFacePointOf(direction, faceSamples);
+        const uint32 x = static_cast<uint32>(point.X);
+        const uint32 z = static_cast<uint32>(point.Z);
+        const PageStreaming::PageSampleRect rect{x - 4u, z - 4u, x + 4u, z + 4u};
+        auto layer = std::make_shared<PageStreaming::HeightPageLayer>(
+            PageStreaming::kPageStoreMaxFaces, PageStreaming::BuildPageStoreLevels(faceSamples, faceSamples));
+        layer->WriteLevel0(point.Face, rect,
+                           std::vector<float32>(std::size_t{rect.Width()} * rect.Height(), kArmLayerLift));
+        const PlanetPagedRequest request = ArmPlanetRequest(static_cast<uint32>(entity.id), faceSamples, layer);
+        ASSERT_TRUE(StreamUntilFinest(world, request, {direction}));
+
+        Scene::DrawnPlanetHeight drawnHeight{feature};
+        ASSERT_TRUE(Scene::SolvePlanetSurfaceHit(ray, domain.PlanetRadius, 1.0e5f, drawnHeight, t, position, normal));
+        EXPECT_FALSE(drawnHeight.Missed);
+        const PlanetPageTexel texel = LocatePlanetPageTexel(
+            faceSamples, PageStreaming::EqualAngleFacePointOf(position.Normalize(), faceSamples), 0u);
+        std::vector<float32> drawn;
+        ASSERT_TRUE(TerrainService::Get().GetTerrainPages().PlanetPageHeights(request.Planet, texel.Address, drawn));
+        const float64 expected = SamplePlanetPageTexel(drawn, texel);
+        EXPECT_NEAR(position.Length() - domain.PlanetRadius, expected, 2.0e-3);
+        EXPECT_NEAR(expected, ArmRelief(direction) + kArmLayerLift, 0.01);
+    }
+    TerrainService::Shutdown();
+}
+
+// A 576 x 300 m tiled terrain whose tile lattice reaches past x = 288 m: the terrain ends at its
+// authored edge, so a point 12 m past it finds no terrain and the edge itself still does.
+TEST(SurfaceHeightTerrain, ATiledTerrainEndsAtItsAuthoredSizeNotAtItsTileLattice)
+{
+    if (!TerrainService::TryGet())
+        TerrainService::Initialize();
+    ECS::World world;
+    AddTiledPlanarTerrain(world, 576.0f, 300.0f);
+
+    const SurfaceHeightQuery query = ResolveSurfaceHeightQuery(world, {0.0f, 0.0f, 0.0f});
+    ASSERT_TRUE(query.IsValid());
+    ASSERT_GE(static_cast<float32>(query.LatticeSamplesX() - 1u) * query.LatticeSpacingX(), 588.0f)
+        << "the premise: the tile lattice reaches past x = 300 m";
+    EXPECT_FLOAT_EQ(query.FootprintOriginX(), -288.0f);
+    EXPECT_FLOAT_EQ(query.FootprintSizeX(), 576.0f);
+    EXPECT_FLOAT_EQ(query.FootprintSizeZ(), 300.0f);
+    EXPECT_TRUE(query.ContainsXZ(288.0f, 0.0f));
+    EXPECT_TRUE(query.ContainsXZ(0.0f, 150.0f));
+    EXPECT_FALSE(query.ContainsXZ(300.0f, 0.0f));
+    EXPECT_FALSE(query.ContainsXZ(0.0f, 160.0f));
+    EXPECT_NE(FindSurfaceHeightTerrain(world, {288.0f, 0.0f, 0.0f}).Terrain, nullptr);
+    EXPECT_EQ(FindSurfaceHeightTerrain(world, {300.0f, 0.0f, 0.0f}).Terrain, nullptr);
+    EXPECT_FALSE(ResolveSurfaceHeightQuery(world, {300.0f, 0.0f, 0.0f}).IsValid());
+
+    // The same rule on Z: the lattice of a 300 x 576 m terrain reaches past z = 288 m.
+    ECS::World swapped;
+    AddTiledPlanarTerrain(swapped, 300.0f, 576.0f);
+    const SurfaceHeightQuery swappedQuery = ResolveSurfaceHeightQuery(swapped, {0.0f, 0.0f, 0.0f});
+    ASSERT_TRUE(swappedQuery.IsValid());
+    ASSERT_GE(static_cast<float32>(swappedQuery.LatticeSamplesZ() - 1u) * swappedQuery.LatticeSpacingZ(), 588.0f)
+        << "the premise: the tile lattice reaches past z = 300 m";
+    EXPECT_FLOAT_EQ(swappedQuery.FootprintSizeZ(), 576.0f);
+    EXPECT_TRUE(swappedQuery.ContainsXZ(0.0f, 288.0f));
+    EXPECT_FALSE(swappedQuery.ContainsXZ(0.0f, 300.0f));
+    TerrainService::Shutdown();
+}
+
+// The planet found under a point carries its relief, and the relief shell of P-2 (radius 2000 m,
+// amplitude 50 m) holds the base relief in every direction and ends within the layer margin of it.
+TEST(SurfaceHeightTerrain, APlanetsReliefShellHoldsItsBaseReliefInEveryDirection)
+{
+    if (!TerrainService::TryGet())
+        TerrainService::Initialize();
+    {
+        ECS::World world;
+        Components::Terrain component;
+        component.Domain = Components::TerrainDomain::Spherical;
+        component.PlanetRadius = 2000.0f;
+        component.HeightScale = 20.0f;
+        const ECS::EntityHandle entity = AddTerrainEntity(world, component, 0.0f, 0.0f, 0.0f);
+        const Components::TerrainPlanetRelief relief{50.0f, 6.0f, 4u};
+        world.AddComponentImmediate(entity, relief);
+
+        const SurfaceHeightTerrain found = FindSurfaceHeightTerrain(world, Mathematics::Vector3(0.0f, 2100.0f, 0.0f));
+        ASSERT_NE(found.Relief, nullptr);
+        EXPECT_FLOAT_EQ(found.Relief->Amplitude, 50.0f);
+
+        const PlanetReliefShell shell = PlanetReliefShellOf(component.PlanetRadius, *found.Relief);
+        const float32 envelope = CBTTerrain::kReliefEnvelope * relief.Amplitude;
+        EXPECT_GE(shell.Outer, component.PlanetRadius + envelope);
+        EXPECT_LE(shell.Outer, component.PlanetRadius + 1.25f * envelope);
+        EXPECT_LE(shell.Inner, component.PlanetRadius - envelope);
+        constexpr uint32 kSteps = 64;
+        for (uint32 i = 0; i < kSteps; ++i)
+            for (uint32 j = 0; j < kSteps; ++j)
+            {
+                const float32 theta = std::numbers::pi_v<float32> * (static_cast<float32>(i) + 0.5f) / kSteps;
+                const float32 phi = 2.0f * std::numbers::pi_v<float32> * static_cast<float32>(j) / kSteps;
+                const Mathematics::Vector3 d(std::sin(theta) * std::cos(phi), std::cos(theta),
+                                             std::sin(theta) * std::sin(phi));
+                const float32 radial = component.PlanetRadius + CBTTerrain::PlanetRelief(d.x, d.y, d.z, relief.Amplitude,
+                                                                                         relief.Frequency, relief.Octaves);
+                ASSERT_GE(radial, shell.Inner) << "theta " << theta << " phi " << phi;
+                ASSERT_LE(radial, shell.Outer) << "theta " << theta << " phi " << phi;
+            }
     }
     TerrainService::Shutdown();
 }

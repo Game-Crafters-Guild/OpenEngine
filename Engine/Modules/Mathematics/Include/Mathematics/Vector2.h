@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Mathematics/AnonymousStruct.h"
+#include "Mathematics/MulAdd.h"
 #include <cmath>
 #include <cstddef>
 #include <glm/glm.hpp>
@@ -57,7 +58,7 @@ struct Vector2
 
     static float Dot(const Vector2& a, const Vector2& b)
     {
-        return a.x * b.x + a.y * b.y;
+        return Math::MulAdd(a.x, b.x, a.y * b.y);
     }
 
     // GLM interop.

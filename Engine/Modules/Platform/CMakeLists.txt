@@ -9,7 +9,7 @@ set(PLATFORM_SOURCES
 	Source/Toolbar/ClientToolbar.cpp
 )
 
-# Desktop-only implementations: GLFW clipboard and gamepad mapping, OS shell
+# Desktop-only implementations: GLFW clipboard, OS shell
 # integration, curl HTTP. The wasm list below carries a web-shaped counterpart
 # for each.
 if(NOT EMSCRIPTEN)
@@ -17,7 +17,6 @@ if(NOT EMSCRIPTEN)
 		Source/Window.cpp
 		Source/Display/Display.cpp
 		Source/Clipboard.cpp
-		Source/Gamepad.cpp
 		Source/Shell.cpp
 		Source/HttpClient.cpp
 	)
@@ -31,6 +30,10 @@ list(APPEND PLATFORM_SOURCES Source/HttpHeaderRules.cpp)
 
 # A child process's environment, built from this process's: every platform.
 list(APPEND PLATFORM_SOURCES Source/Process.cpp)
+
+# The secret store (Platform/SecretStore.h): the name and value rules on every platform; the
+# store itself per platform below. The Linux store is chosen where libsecret is probed.
+list(APPEND PLATFORM_SOURCES Source/SecretStore/SecretStore.cpp)
 
 # Speech input (Platform/SpeechInput.h): the Speech framework on macOS, a stub that reports it
 # unavailable everywhere else.
@@ -51,8 +54,7 @@ if(EMSCRIPTEN)
 	# Window/Display ride emscripten's JS GLFW (-s USE_GLFW=3): the canvas is
 	# the one "monitor" and the window. APIs its 3.3 header declares but the
 	# JS library does not implement are kept off the link: glfwGetError is
-	# shimmed inside Window.cpp, and the gamepad-mapping API gets its own web
-	# TU (Gamepad_Web.cpp) that reports no mapping.
+	# shimmed inside Window.cpp.
 	# Native toolbar and context menu reuse the Linux no-op TUs, which the
 	# editor already runs against: the engine draws its own menus, so nothing
 	# is lost by having no OS chrome to install them into. Shell, clipboard
@@ -70,11 +72,11 @@ if(EMSCRIPTEN)
 		Source/Toolbar/Toolbar_Stub.cpp
 		Source/ContextMenu/ContextMenu_Stub.cpp
 		Source/Clipboard_Web.cpp
-		Source/Gamepad_Web.cpp
 		Source/Shell_Web.cpp
 		Source/WebView/WebView_Web.cpp
 		Source/WebEnvironment_Web.cpp
 		Source/WebPersistentStorage.cpp
+		Source/SecretStore/SecretStore_Stub.cpp
 	)
 elseif (WIN32)
 	list(APPEND PLATFORM_SOURCES
@@ -91,6 +93,7 @@ elseif (WIN32)
 		Source/Utf8ToWide_Win32.cpp
 		Source/WebView/WebViewState.cpp
 		Source/WebView/WebViewEnvironment_Win32.cpp
+		Source/SecretStore/SecretStore_Win32.cpp
 	)
 elseif(APPLE)
 	list(APPEND PLATFORM_SOURCES
@@ -104,6 +107,7 @@ elseif(APPLE)
         Source/Display/Display_mac.mm
         Source/Display/DisplayChangeListener_mac.mm
 		Source/WebView/WebView_mac.mm
+		Source/SecretStore/SecretStore_mac.cpp
 	)
 else()
 	list(APPEND PLATFORM_SOURCES
@@ -132,7 +136,8 @@ target_include_directories(Platform
         ${CMAKE_SOURCE_DIR}/Engine/Include
     PRIVATE
         Source
-        # Capabilities.cpp reads the JobSystem's blocking-thread ceiling.
+        # Capabilities.cpp reads the JobSystem's blocking-thread ceiling and available processors.
+        # Its call to JobSystem::AvailableProcessors::Query links through Engine, which links JobSystem.
         ${CMAKE_SOURCE_DIR}/Engine/Modules/JobSystem/Include
 )
 
@@ -151,7 +156,8 @@ endif()
 	    # Required for AssocQueryStringW and related shell helpers used in
 	    # OpenScriptWithProject, and for DwmSetWindowAttribute used by
 	    # the theme helpers. dxgi: per-monitor HDR luminance via IDXGIOutput6::GetDesc1.
-	    target_link_libraries(Platform PRIVATE Shlwapi Dwmapi dwrite ole32 uuid User32 dxgi)
+	    # Advapi32: the Credential Manager calls of the secret store.
+	    target_link_libraries(Platform PRIVATE Shlwapi Dwmapi dwrite ole32 uuid User32 dxgi Advapi32)
 
 	    # WebView2: the loader's import library and <WebView2.h>, from the webview2 port vcpkg.json
 	    # declares for Windows. The Windows web view has no build without them.
@@ -165,7 +171,7 @@ endif()
 
 if (APPLE)
     target_link_libraries(Platform PRIVATE "-framework CoreText" "-framework CoreFoundation" "-framework Cocoa" "-framework WebKit"
-        "-framework AVFoundation" "-framework Speech")
+        "-framework AVFoundation" "-framework Speech" "-framework Security")
 endif()
 
 # Emscripten sets UNIX; keep it out of the Linux desktop-integration probes.
@@ -205,7 +211,21 @@ if (UNIX AND NOT APPLE AND NOT EMSCRIPTEN)
             # zlib) fail the exact versions the system's GTK requires.
             pkg_check_modules(WEBKITGTK QUIET IMPORTED_TARGET NO_CMAKE_PATH NO_CMAKE_ENVIRONMENT_PATH
                 webkit2gtk-4.1 gtk+-x11-3.0)
+            pkg_check_modules(LIBSECRET QUIET IMPORTED_TARGET NO_CMAKE_PATH NO_CMAKE_ENVIRONMENT_PATH libsecret-1)
         endif()
+    endif()
+
+    # The secret store is libsecret, which needs a running secret service at run time. Without
+    # the development package the store reports NoStore and the editor names the environment
+    # variable instead.
+    if (LIBSECRET_FOUND)
+        target_sources(Platform PRIVATE Source/SecretStore/SecretStore_Linux.cpp)
+        target_link_libraries(Platform PRIVATE PkgConfig::LIBSECRET)
+        message(STATUS "libsecret ${LIBSECRET_VERSION} found: the secret store is built")
+    else()
+        target_sources(Platform PRIVATE Source/SecretStore/SecretStore_Stub.cpp)
+        message(STATUS "libsecret not found: the secret store reports NoStore. Install libsecret-devel "
+                       "(Fedora) or libsecret-1-dev (Debian, Ubuntu) to build it.")
     endif()
     if (WEBKITGTK_FOUND AND X11_FOUND)
         add_library(PlatformWebViewGtk MODULE Source/WebView/WebView_Gtk.cpp Source/WebView/WebViewState.cpp)
@@ -416,6 +436,22 @@ if(BUILD_TESTING)
     ge_set_output_tests(PlatformEnvironmentTests)
     ge_stage_runtime_dependencies(PlatformEnvironmentTests)
     add_test(NAME PlatformEnvironmentTests COMMAND PlatformEnvironmentTests)
+
+    # The real secret store of this system, under names unique to the run that the tests delete.
+    add_executable(PlatformSecretStoreTests
+        Tests/SecretStoreTests.cpp
+    )
+
+    target_link_libraries(PlatformSecretStoreTests
+        PRIVATE
+            Engine
+            GTest::gtest
+            GTest::gtest_main
+    )
+
+    ge_set_output_tests(PlatformSecretStoreTests)
+    ge_stage_runtime_dependencies(PlatformSecretStoreTests)
+    add_test(NAME PlatformSecretStoreTests COMMAND PlatformSecretStoreTests)
 
     if(APPLE)
         add_executable(PlatformWebViewPageStyleTests Tests/WebViewPageStyleTests_mac.mm)

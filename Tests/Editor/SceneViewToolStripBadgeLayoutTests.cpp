@@ -11,6 +11,8 @@
 #include "SceneView/SceneViewToolStrip.h"
 #include "SceneView/SceneViewToolStripRegistry.h"
 
+#include "InspectorLayoutFixture.h"
+
 #include "UI/Controls/Label.h"
 #include "UI/Parsers/CSSParser.h"
 #include "UI/UIElement.h"
@@ -66,10 +68,11 @@ constexpr float kHorizontalBadgeLiftPx = 2.0f;
 constexpr const char* kSheets[] = {
     "Assets/UI/theme/tokens.css",
     "Assets/UI/theme/core.css",
-    "Assets/UI/controls/Button.css",
+    GE_UI_MODULE_SOURCE_DIR "/Assets/UI/controls/Button.css",
     "Assets/UI/panels/SceneViewPanel.css",
 };
 
+// A relative path is under the editor's source tree; an absolute path reads as is.
 std::string ReadEditorFile(const std::string& relativePath)
 {
     const std::filesystem::path path = std::filesystem::path(GE_EDITOR_SOURCE_DIR) / relativePath;
@@ -116,6 +119,7 @@ struct BadgeStripFixture
             EXPECT_TRUE(GameEngine::UIParsing::CSSParser::ParseStylesFromString(css, sheet))
                 << "stylesheet did not parse: " << sheetPath;
             sheet.SourceName = sheetPath;
+            sheet.Origin = InspectorLayoutTesting::SheetOrigin(sheetPath);
             Ui->AddStylesheet(std::make_shared<const Stylesheet>(std::move(sheet)));
         }
 

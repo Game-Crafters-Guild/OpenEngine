@@ -128,6 +128,18 @@ namespace GameEngine.Scripting
         private static extern int GE_UIElement_SetScrollY(ulong instanceId, float y);
 
         [DllImport(kLib, CallingConvention = CallingConvention.Cdecl)]
+        private static extern int GE_UIElement_GetProgressMax(ulong instanceId, out float outMax);
+
+        [DllImport(kLib, CallingConvention = CallingConvention.Cdecl)]
+        private static extern int GE_UIElement_SetProgressMax(ulong instanceId, float max);
+
+        [DllImport(kLib, CallingConvention = CallingConvention.Cdecl)]
+        private static extern int GE_UIElement_GetProgressIndeterminate(ulong instanceId, out int outIndeterminate);
+
+        [DllImport(kLib, CallingConvention = CallingConvention.Cdecl)]
+        private static extern int GE_UIElement_SetProgressIndeterminate(ulong instanceId, int indeterminate);
+
+        [DllImport(kLib, CallingConvention = CallingConvention.Cdecl)]
         private static extern int GE_UIElement_GetDropdownSelectedIndex(ulong instanceId, out int outIndex);
 
         [DllImport(kLib, CallingConvention = CallingConvention.Cdecl)]

@@ -1,7 +1,9 @@
 #include "Engine/Rendering/Pipeline/Nodes/ScatterBNode.h"
 
+#include "Engine/Rendering/MeshPoolGroupPlan.h"
 #include "Engine/Rendering/Pipeline/PipelineResourceNames.h"
 #include "Engine/Rendering/RenderServices.h"
+#include "Rendering/Core/GPUDrawStreamBuilder.h"
 
 namespace GameEngine::Engine::Renderer::Pipeline::Nodes
 {
@@ -59,5 +61,15 @@ void ScatterBNode::DeclareForView(ViewDeclare& d)
             : Engine::Renderer::RenderServices::WorldPassDrawScope::All;
 
     d.Services.AddWorldColorRecoverPassForView(d.Frame, d.View.id, t, *keywords, scope);
+}
+
+void ScatterBNode::RequestPausedViewPipelines(const PausedViewPrewarm& prewarm)
+{
+    // The gates of ScheduleWorldOcclusionRecoverScatterForView. The request also covers the view's
+    // phase-A scatter of its first live frame. Draw consolidation adds the group compaction.
+    GPUDrawStreamBuilder* drawStream = prewarm.Services.GetDrawStreamBuilder();
+    if (!drawStream || prewarm.Services.GetProfile().IsCompat() || !prewarm.ReservesOcclusionSliceOnceUnpaused())
+        return;
+    drawStream->RequestScatterPipelines(MeshPoolGroupPlan::ConsolidationEnabled());
 }
 } // namespace GameEngine::Engine::Renderer::Pipeline::Nodes

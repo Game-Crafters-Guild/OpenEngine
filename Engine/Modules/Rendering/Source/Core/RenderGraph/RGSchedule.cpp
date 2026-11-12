@@ -22,6 +22,12 @@ void RGGraph::Schedule()
     m_Level.assign(passCount, 0u);
     m_WorkingSetId.assign(passCount, kInvalidId);
     m_WorkingSetTransitions = 0;
+    for (RGPassRec& pass : m_Passes)
+    {
+        pass.ExecutionQueue = pass.Desc.Queue;
+        pass.EndsSubmission = false;
+        pass.Submission = kInvalidId;
+    }
 
     auto live = [&](RGPassId p) { return !m_Passes[p].Culled; };
 
@@ -455,6 +461,153 @@ void RGGraph::Schedule()
                 ++m_WorkingSetTransitions;
             last = &attSet[p];
         }
+    }
+}
+
+void RGGraph::LinkReach(RGPassId source, RGPassId target)
+{
+    const size_t words = (m_Passes.size() + 63) / 64;
+    auto rowOf = [&](RGPassId pass) { return &m_ScratchReach[pass * words]; };
+    if (source == target || Feeds(source, target))
+        return;
+    const uint64_t* targetRow = rowOf(target);
+    for (RGPassId pass : m_ScheduledOrder)
+    {
+        if (pass != source && !Feeds(pass, source))
+            continue;
+        uint64_t* row = rowOf(pass);
+        for (size_t word = 0; word < words; ++word)
+            row[word] |= targetRow[word];
+        row[target >> 6] |= 1ull << (target & 63);
+    }
+}
+
+bool RGGraph::Feeds(RGPassId from, RGPassId to) const
+{
+    const size_t words = (m_Passes.size() + 63) / 64;
+    return ((m_ScratchReach[from * words + (to >> 6)] >> (to & 63)) & 1ull) != 0;
+}
+
+void RGGraph::AddLayoutTransitionReach()
+{
+    const uint32_t resourceCount = static_cast<uint32_t>(m_Resources.size());
+    auto& layoutOf = m_ScratchLayoutOf;
+    layoutOf.assign(resourceCount, RGImageLayout::Undefined);
+    auto& layoutProducer = m_ScratchLayoutProducer;
+    layoutProducer.assign(resourceCount, kInvalidId);
+    auto& readersSince = m_ScratchReadersSince;
+    PrepareNested(readersSince, resourceCount);
+    EnsurePassAccessIndex();
+
+    for (RGPassId p : m_ScheduledOrder)
+    {
+        for (uint32_t k = m_PassAccOff[p]; k < m_PassAccOff[p + 1]; ++k)
+        {
+            const RGAccessRecord& access = m_Accesses[m_PassAccIdx[k]];
+            const RGResourceId resource = access.Resource;
+            if (m_Resources[resource].Kind != RGResourceKind::Texture)
+                continue;
+            const RGImageLayout layout = AccessInfo(access, m_Passes[p].Desc.Queue).Layout;
+            if (IsWrite(access.Access))
+            {
+                layoutOf[resource] = layout;
+                layoutProducer[resource] = kInvalidId;
+                readersSince[resource].clear();
+                continue;
+            }
+            // A read that changes the layout waits on every read since the last write; a read after it
+            // waits on it. Resource granularity: reads of two subresources in two layouts link too.
+            if (layout != layoutOf[resource])
+            {
+                for (RGPassId source : readersSince[resource])
+                    LinkReach(source, p);
+                layoutOf[resource] = layout;
+                layoutProducer[resource] = p;
+            }
+            else if (layoutProducer[resource] != kInvalidId)
+            {
+                LinkReach(layoutProducer[resource], p);
+            }
+            readersSince[resource].push_back(p);
+        }
+    }
+}
+
+void RGGraph::PlaceQueues(const uint8_t physicalOfLogical[kQueueCount])
+{
+    const uint8_t graphicsPhysical = physicalOfLogical[static_cast<uint32_t>(RGQueue::Graphics)];
+    if (physicalOfLogical[static_cast<uint32_t>(RGQueue::Compute)] == graphicsPhysical)
+        return;
+    AddLayoutTransitionReach();
+
+    const uint32_t n = static_cast<uint32_t>(m_ScheduledOrder.size());
+    auto& nextGraphics = m_ScratchNextGraphics;
+    nextGraphics.assign(n, kInvalidId);
+    for (uint32_t i = n, next = kInvalidId; i-- > 0;)
+    {
+        nextGraphics[i] = next;
+        if (m_Passes[m_ScheduledOrder[i]].Desc.Queue == RGQueue::Graphics)
+            next = m_ScheduledOrder[i];
+    }
+
+    // [runFirst, runEnd): the scheduled indices of the latest graphics-queue run before i.
+    // A compute run (consecutive declared-compute passes) keeps its queue or moves as a whole.
+    uint32_t runFirst = 0;
+    uint32_t runEnd = 0;
+    for (uint32_t i = 0; i < n;)
+    {
+        if (m_Passes[m_ScheduledOrder[i]].Desc.Queue != RGQueue::Compute)
+        {
+            if (physicalOfLogical[static_cast<uint32_t>(m_Passes[m_ScheduledOrder[i]].ExecutionQueue)] == graphicsPhysical)
+            {
+                if (runEnd != i)
+                    runFirst = i;
+                runEnd = i + 1;
+            }
+            ++i;
+            continue;
+        }
+        const uint32_t first = i;
+        while (i < n && m_Passes[m_ScheduledOrder[i]].Desc.Queue == RGQueue::Compute)
+            ++i;
+        uint32_t lastFeeder = kInvalidId;
+        for (uint32_t j = runEnd; lastFeeder == kInvalidId && j-- > runFirst;)
+            for (uint32_t member = first; member < i; ++member)
+                if (Feeds(m_ScheduledOrder[j], m_ScheduledOrder[member]))
+                {
+                    lastFeeder = j;
+                    break;
+                }
+        const RGPassId next = nextGraphics[i - 1];
+        bool besideNext = next != kInvalidId;
+        for (uint32_t member = first; besideNext && member < i; ++member)
+            besideNext = !Feeds(m_ScheduledOrder[member], next);
+        const bool besidePrevious = runEnd > runFirst && lastFeeder != runEnd - 1;
+        if (besidePrevious || besideNext)
+        {
+            // The graphics run signals right after the last pass the compute run reads; the rest overlaps it.
+            if (besidePrevious && lastFeeder != kInvalidId)
+                m_Passes[m_ScheduledOrder[lastFeeder]].EndsSubmission = true;
+            // The next graphics run signals right before the first pass that reads the compute run,
+            // so the passes before that consumer do not wait on the compute run.
+            for (uint32_t j = i; j < n && m_Passes[m_ScheduledOrder[j]].Desc.Queue == RGQueue::Graphics; ++j)
+            {
+                bool consumes = false;
+                for (uint32_t member = first; !consumes && member < i; ++member)
+                    consumes = Feeds(m_ScheduledOrder[member], m_ScheduledOrder[j]);
+                if (!consumes)
+                    continue;
+                if (j > i)
+                    m_Passes[m_ScheduledOrder[j - 1]].EndsSubmission = true;
+                break;
+            }
+            continue;
+        }
+        for (uint32_t member = first; member < i; ++member)
+            m_Passes[m_ScheduledOrder[member]].ExecutionQueue = RGQueue::Graphics;
+        if (runEnd != first)
+            runFirst = first;
+        runEnd = i;
     }
 }
 

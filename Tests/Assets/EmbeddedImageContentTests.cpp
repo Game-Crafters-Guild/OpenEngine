@@ -19,7 +19,8 @@ TEST(EmbeddedImageContent, AnImageWithNeitherBytesNorAssetHasNoContent)
 TEST(EmbeddedImageContent, AnImageWithBytesHasContent)
 {
     EmbeddedImage image{};
-    image.Data = {0x89, 'P', 'N', 'G'};
+    const uint8 png[] = {0x89, 'P', 'N', 'G'};
+    image.Data = ByteBuffer::CopyOf(png);
     EXPECT_TRUE(image.HasContent());
 }
 
@@ -27,6 +28,6 @@ TEST(EmbeddedImageContent, AnAssetBackedImageHasContentWithoutBytes)
 {
     EmbeddedImage image{};
     image.AssetGuid = GUID::Generate();
-    ASSERT_TRUE(image.Data.empty());
+    ASSERT_EQ(image.Data.Size(), 0u);
     EXPECT_TRUE(image.HasContent());
 }

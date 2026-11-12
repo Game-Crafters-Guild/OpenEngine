@@ -19,7 +19,7 @@ struct ContactEvent
     uint64 userDataB = 0;
     ContactState state = ContactState::Persist;
 
-    Vector3 point{0.0f, 0.0f, 0.0f};
+    WorldPosition point{};
     Vector3 normal{0.0f, 1.0f, 0.0f};
     float32 impulse = 0.0f;
 };

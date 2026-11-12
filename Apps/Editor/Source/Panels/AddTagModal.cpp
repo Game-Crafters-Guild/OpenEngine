@@ -118,10 +118,14 @@ void AddTagModal::Show(const std::vector<std::filesystem::path>& paths)
     if (m_NewTagNameField)
         m_NewTagNameField->SetValue("");
     AddClass("visible");
-    if (auto* manager = GetOwnerManager())
+    if (GetOwnerManager() && m_Backdrop)
     {
         UIElement* backdrop = m_Backdrop;
-        manager->PostToUI([manager, backdrop]() { manager->FocusElement(backdrop); });
+        backdrop->PostSafeAction([backdrop]()
+        {
+            if (UIManager* manager = backdrop->GetOwnerManager())
+                manager->FocusElement(backdrop);
+        });
     }
     // Defer building the tag list so the modal appears immediately and the UI stays responsive.
     PostAction([this]() { BuildTagList(); });

@@ -259,10 +259,7 @@ AreaShadowFrameInfo BuildAreaShadowFrameInfo(std::span<const ExtractedLight> lig
     if (!shadowLight)
         return out;
 
-    Mathematics::Vector3 pos{
-        shadowLight->positionWS[0],
-        shadowLight->positionWS[1],
-        shadowLight->positionWS[2]};
+    const Mathematics::Vector3 pos = shadowLight->positionWS - Mathematics::WorldPosition{};
     Mathematics::Vector3 dir{
         shadowLight->directionWS[0],
         shadowLight->directionWS[1],
@@ -307,7 +304,7 @@ AreaShadowFrameInfo BuildAreaShadowFrameInfo(std::span<const ExtractedLight> lig
     }
 
     out.valid = true;
-    out.position = pos;
+    out.position = shadowLight->positionWS;
     out.direction = dir;
     out.lightSize = std::max(extent, 0.001f);
     out.nearPlane = cullNear;
@@ -349,10 +346,7 @@ SpotShadowFrameInfo BuildSpotShadowFrameInfo(std::span<const ExtractedLight> lig
     if (!shadowLight)
         return out;
 
-    Mathematics::Vector3 pos{
-        shadowLight->positionWS[0],
-        shadowLight->positionWS[1],
-        shadowLight->positionWS[2]};
+    const Mathematics::Vector3 pos = shadowLight->positionWS - Mathematics::WorldPosition{};
     Mathematics::Vector3 dir{
         shadowLight->directionWS[0],
         shadowLight->directionWS[1],
@@ -377,7 +371,7 @@ SpotShadowFrameInfo BuildSpotShadowFrameInfo(std::span<const ExtractedLight> lig
     const float fovY = std::clamp(2.0f * halfAngle, 0.02f, 0.98f * kPi);
 
     out.valid = true;
-    out.position = pos;
+    out.position = shadowLight->positionWS;
     out.direction = dir;
     out.nearPlane = std::min(kSpotShadowNearPlane, range * 0.5f);
     out.farPlane = std::max(range, out.nearPlane + 0.1f);
@@ -388,14 +382,14 @@ SpotShadowFrameInfo BuildSpotShadowFrameInfo(std::span<const ExtractedLight> lig
     return out;
 }
 
-void PopulatePointShadowGeometry(PointShadowFrameInfo& out, const Mathematics::Vector3& positionWS,
+void PopulatePointShadowGeometry(PointShadowFrameInfo& out, const Mathematics::WorldPosition& positionWS,
                                  float rawRange, uint32_t tier, uint32_t packedLightIndex,
                                  const PointShadowCameraCull* cull)
 {
     out.packedLightIndex = packedLightIndex;
     out.resolutionTier = tier;
 
-    const Mathematics::Vector3 pos = positionWS;
+    const Mathematics::Vector3 pos = positionWS - Mathematics::WorldPosition{};
     const float range = std::max(rawRange, kPointShadowNearPlane + 0.1f);
 
     // S1 camera culling (only on the declaration + GPU-cull paths, which pass
@@ -430,7 +424,7 @@ void PopulatePointShadowGeometry(PointShadowFrameInfo& out, const Mathematics::V
     }};
 
     out.valid = true;
-    out.position = pos;
+    out.position = positionWS;
     out.nearPlane = std::min(kPointShadowNearPlane, range * 0.5f);
     out.farPlane = std::max(range, out.nearPlane + 0.1f);
     out.lightProj = Mathematics::MakePerspectiveLH_ZO_ReverseZ(
@@ -459,7 +453,7 @@ float PointShadowScreenCoverageRadiusPx(const ::GameEngine::Rendering::CameraDat
 }
 
 std::optional<PointShadowCameraCull> MakePointShadowCullInputs(
-    const ::GameEngine::Rendering::CameraData& camData)
+    const ::GameEngine::Rendering::CameraData& camData, const ::GameEngine::Rendering::CameraRanges& ranges)
 {
     // Degenerate camera (thumbnail before its first update): a zero projection
     // inverts to NaN corners. Skip culling — every face renders (safe fallback).
@@ -467,7 +461,7 @@ std::optional<PointShadowCameraCull> MakePointShadowCullInputs(
         return std::nullopt;
 
     const ::GameEngine::Rendering::CameraDerivedData cam =
-        ::GameEngine::Rendering::DeriveCameraData(camData);
+        ::GameEngine::Rendering::DeriveCameraData(camData, ranges);
 
     PointShadowCameraCull out{};
     out.CameraPosition = cam.Position;

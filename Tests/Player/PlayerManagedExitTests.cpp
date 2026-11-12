@@ -74,7 +74,9 @@ TEST_P(PlayerManagedExit, RequestStopsPlayerAfterTheCurrentFrame)
     EXPECT_NE(output.find("EXIT_PROBE_DESTROY 3"), std::string::npos);
     EXPECT_EQ(output.find("EXIT_PROBE_UNEXPECTED_ACCEPT"), std::string::npos);
     if (std::string(scenario.Mode) == "Refused")
+    {
         EXPECT_NE(output.find("EXIT_PROBE_REFUSED"), std::string::npos);
+    }
 }
 
 std::string ScenarioName(const ::testing::TestParamInfo<ExitScenario>& scenario)

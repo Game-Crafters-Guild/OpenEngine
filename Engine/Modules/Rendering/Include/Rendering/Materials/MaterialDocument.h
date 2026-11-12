@@ -49,6 +49,18 @@ enum class MaterialTextureFilter : uint8_t
 const char* MaterialTextureFilterToString(MaterialTextureFilter f);
 MaterialTextureFilter MaterialTextureFilterFromString(const std::string& s);
 
+// The turns and mirrors that leave a material's pattern the same, up to a shift by whole tiles. A paving
+// seam turns a road's pattern only by a move the pattern allows (PavingSeam.h).
+enum class MaterialPatternSymmetry : uint8_t
+{
+    None = 0,        // no move: running bonds, planks, herringbone and photos (default)
+    Rectangular = 1, // half turns and both mirrors
+    Square = 2       // quarter turns, half turns and both mirrors: square grids and square setts
+};
+
+const char* MaterialPatternSymmetryToString(MaterialPatternSymmetry symmetry);
+MaterialPatternSymmetry MaterialPatternSymmetryFromString(const std::string& s);
+
 struct MaterialShaderGraphPublicProperty
 {
     std::string GraphName;
@@ -149,6 +161,9 @@ struct MaterialDocument
 
     // Sampler filter applied to all textures bound through this material.
     MaterialTextureFilter textureFilter = MaterialTextureFilter::Trilinear;
+
+    // The symmetry of the albedo pattern, set by its author. Omitted from serialization when None.
+    MaterialPatternSymmetry patternSymmetry = MaterialPatternSymmetry::None;
 
     // Enabled user shader keywords (§2). Authored-static: one fixed set per
     // material (one extra variant, never 2^N). Stored sanitized+deduped, capped

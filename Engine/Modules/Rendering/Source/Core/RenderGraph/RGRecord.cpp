@@ -11,6 +11,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <string_view>
 #include <vector>
 
 #ifndef GE_ENABLE_GPU_PROFILING
@@ -158,6 +159,27 @@ RenderPassDesc::StoreOp ToStoreOp(RGStoreOp op)
         case RGStoreOp::Store: break;
     }
     return RenderPassDesc::StoreOp::Store;
+}
+
+// Appends as much of `part` as fits before the last byte of a `capacity`-byte field; returns the new length.
+size_t AppendCut(char* destination, size_t capacity, size_t used, std::string_view part)
+{
+    const size_t count = std::min(part.size(), capacity - 1 - used);
+    std::memcpy(destination + used, part.data(), count);
+    return used + count;
+}
+
+// Writes "<first>" or "<first>.<second>" into a fixed name field, cut to fit and NUL-terminated.
+template <size_t N>
+void CopyRowName(char (&destination)[N], std::string_view first, std::string_view second)
+{
+    size_t used = AppendCut(destination, N, 0, first);
+    if (!second.empty())
+    {
+        used = AppendCut(destination, N, used, ".");
+        used = AppendCut(destination, N, used, second);
+    }
+    destination[used] = '\0';
 }
 
 } // namespace
@@ -452,7 +474,10 @@ void RGFrame::RecordAndSubmit()
     // whole R1/R2 split is byte-identical to pre-fork when the env kill switch is
     // off or no pool is injected. Barriers / BeginRenderPass / submit stay serial.
     m_Secondary.clear();
-    if (ParallelRecordEnabled())
+    // A query active across vkCmdExecuteCommands needs inherited queries, so a
+    // frame with pipeline statistics on records every pass inline.
+    const bool statisticsOn = m_ProfilingEnabled && m_PipelineStatisticsEnabled;
+    if (ParallelRecordEnabled() && !statisticsOn)
         RecordSecondariesParallel();
 
     // Barrier-batch lookup by scheduled index. The export batch (sentinel
@@ -544,6 +569,8 @@ void RGFrame::RecordAndSubmit()
     // timestampValidBits gate (skip the bracket on unsupported families).
     IQueryPool* qp = m_ProfilingEnabled ? resetPool : nullptr;
     m_ProfilingCurrent.clear();
+    m_ProfilingScopesCurrent.clear();
+    m_ProfilingSegmentsCurrent.clear();
     bool queryResetDone = false;
 
     const std::vector<RGSubmission>& submissions = m_Graph.Submissions();
@@ -665,11 +692,7 @@ void RGFrame::RecordAndSubmit()
             if (m_ProfilingEnabled)
             {
                 RGPassTiming t;
-                const char* src = name ? name : "RGPass";
-                size_t len = std::strlen(src);
-                if (len > sizeof(t.Name) - 1)
-                    len = sizeof(t.Name) - 1;
-                std::memcpy(t.Name, src, len); // t.Name is zero-initialized
+                CopyRowName(t.Name, name ? name : "RGPass", {});
                 t.PassId = p;
                 t.Phase = m_Graph.PassPhase(p);
                 t.Queue = m_Graph.PassQueue(p); // declared queue, not the submission label
@@ -687,6 +710,9 @@ void RGFrame::RecordAndSubmit()
             // CreateSecondaryCommandList failure) always falls back to inline.
             CommandList* secondary = (p < m_Secondary.size()) ? m_Secondary[p].get() : nullptr;
             bool inRenderPass = false;
+            const bool passStatistics = m_ProfilingEnabled && qp && statisticsOn;
+            const uint32_t passRow = static_cast<uint32_t>(m_ProfilingCurrent.size() - 1);
+            assert((!passStatistics || !secondary) && "RenderGraph: a statistics frame records every pass inline");
             if (attRange.second > 0)
             {
                 RenderPassDesc rp;
@@ -696,6 +722,14 @@ void RGFrame::RecordAndSubmit()
                 cl->BeginRenderPass(rp);
                 inRenderPass = true;
                 ++m_Stats.RenderPassesBegun;
+            }
+            // A pass's query begins and ends inside its render pass: its scopes' queries
+            // record there, and Vulkan needs a query to begin and end in the same render pass.
+            if (passStatistics)
+            {
+                BeginPassStatistics(*qp, cl, sub.PhysicalQueue, m_ProfilingCurrent[passRow]);
+                if (m_ProfilingCurrent[passRow].StatisticsQuery != ~0u)
+                    ArmProfilerScopes(*qp, cl, passRow);
             }
 
             if (secondary && inRenderPass)
@@ -709,8 +743,13 @@ void RGFrame::RecordAndSubmit()
                 ctx.m_AttFirst = attRange.first;
                 ctx.m_AttCount = attRange.second;
                 ctx.m_KeyDirty = true; // every pass, incl. attachment-less — no stale key leaks
+                ctx.m_ProfilerScopesArmed = m_ScopeRecord.Armed;
                 m_Exec[p].Invoke(m_Exec[p].Fn, ctx);
+                ctx.m_ProfilerScopesArmed = false;
             }
+
+            if (m_ScopeRecord.Armed)
+                FinishProfilerScopes();
 
             if (inRenderPass)
                 cl->EndRenderPass();
@@ -846,9 +885,16 @@ void RGFrame::RecordAndSubmit()
         const uint32_t fif = m_Device->GetFramesInFlight() > 0 ? m_Device->GetFramesInFlight() : 1u;
         if (m_ProfilingPendingBySlot.size() < fif)
             m_ProfilingPendingBySlot.resize(fif);
-        std::swap(m_ProfilingPendingBySlot[m_Device->GetFrameIndex() % fif], m_ProfilingCurrent);
+        RGProfilingPending& pending = m_ProfilingPendingBySlot[m_Device->GetFrameIndex() % fif];
+        std::swap(pending.Passes, m_ProfilingCurrent);
+        std::swap(pending.Scopes, m_ProfilingScopesCurrent);
+        std::swap(pending.Segments, m_ProfilingSegmentsCurrent);
+        std::swap(pending.Skipped, m_ProfilingSkippedCurrent);
         m_ProfilingCurrent.clear();
+        m_ProfilingScopesCurrent.clear();
+        m_ProfilingSegmentsCurrent.clear();
     }
+    m_ProfilingSkippedCurrent.clear();
 }
 
 IDevice::GpuSyncToken RGFrame::SubmissionToken(RGQueue queue) const
@@ -869,18 +915,305 @@ void RGFrame::SetProfilingEnabled(bool enabled)
 #endif
     if (!m_ProfilingEnabled)
     {
+        m_PipelineStatisticsEnabled = false; // the counters ride on the profiled rows
         std::lock_guard lock(m_ProfilingMutex);
         m_ProfilingLatest.clear();
+        m_ProfilingScopesLatest.clear();
+        m_ProfilingSkippedLatest.clear();
+        m_ProfilingSkippedCurrent.clear();
         m_LastResolveStats = RGProfilingResolveStats{};
-        for (auto& slot : m_ProfilingPendingBySlot)
-            slot.clear();
+        for (RGProfilingPending& slot : m_ProfilingPendingBySlot)
+        {
+            slot.Passes.clear();
+            slot.Scopes.clear();
+            slot.Segments.clear();
+            slot.Skipped.clear();
+        }
     }
 }
 
-std::vector<RGFrame::RGPassTiming> RGFrame::LastFrameTimings() const
+void RGFrame::NoteSkippedPass(const char* name, RGSkippedPassState state)
+{
+    if (!m_ProfilingEnabled)
+        return;
+    RGSkippedPass row;
+    CopyRowName(row.Name, name ? name : "RGPass", {});
+    row.State = state;
+    m_ProfilingSkippedCurrent.push_back(row);
+}
+
+void RGFrame::SetPipelineStatisticsEnabled(bool enabled)
+{
+#if GE_ENABLE_GPU_PROFILING
+    m_PipelineStatisticsEnabled = enabled;
+#else
+    m_PipelineStatisticsEnabled = false;
+    (void)enabled;
+#endif
+}
+
+bool RGFrame::PipelineStatisticsSupported() const
+{
+    IQueryPool* qp = m_Device ? m_Device->GetQueryPool() : nullptr;
+    return qp && qp->IsValid() && qp->SupportsPipelineStatistics();
+}
+
+void RGFrame::BeginPassStatistics(IQueryPool& queryPool, CommandList* commandList, uint8_t physicalQueue, RGPassTiming& timing)
+{
+    if (!queryPool.SupportsPipelineStatistics())
+    {
+        timing.StatisticsState = RGPassStatisticsState::Unsupported;
+        return;
+    }
+    // The pool counts graphics stages, so its queries need a graphics-capable queue.
+    if (physicalQueue != m_PhysicalQueueOf[static_cast<uint32_t>(RGQueue::Graphics)])
+    {
+        timing.StatisticsState = RGPassStatisticsState::NotGraphicsQueue;
+        return;
+    }
+    timing.StatisticsQuery = queryPool.BeginPipelineStats(commandList);
+    timing.StatisticsState = timing.StatisticsQuery == ~0u ? RGPassStatisticsState::QueriesUsedUp
+                                                      : RGPassStatisticsState::NotReady;
+}
+
+void RGContext::SetArmedProfilerScope(const char* scope)
+{
+    m_Frame->SetProfilerScope(scope, Cmd);
+}
+
+void RGFrame::ArmProfilerScopes(IQueryPool& queryPool, CommandList* commandList, uint32_t passRow)
+{
+    m_ScopeRecord = RGScopeRecordState{};
+    m_ScopeRecord.Armed = true;
+    m_ScopeRecord.QueryPool = &queryPool;
+    m_ScopeRecord.Commands = commandList;
+    m_ScopeRecord.PassRow = passRow;
+    m_ScopeRecord.SegmentQuery = m_ProfilingCurrent[passRow].StatisticsQuery;
+}
+
+void RGFrame::SetProfilerScope(const char* scope, const CommandList* commandList)
+{
+    // A secondary recorded on a worker never matches the armed inline command list.
+    if (!m_ScopeRecord.Armed || commandList != m_ScopeRecord.Commands)
+        return;
+    if (scope == m_ScopeRecord.OpenScope ||
+        (scope && m_ScopeRecord.OpenScope && std::strcmp(scope, m_ScopeRecord.OpenScope) == 0))
+        return;
+    assert((!scope || std::strchr(scope, '.') == nullptr) && "RGContext::SetProfilerScope: a scope name has no dot");
+    CloseProfilerScope();
+    if (!scope)
+        return;
+
+    IQueryPool& qp = *m_ScopeRecord.QueryPool;
+    CommandList* cl = m_ScopeRecord.Commands;
+    if (m_ScopeRecord.SegmentQuery != ~0u)
+        qp.EndPipelineStats(cl, m_ScopeRecord.SegmentQuery);
+    m_ScopeRecord.SegmentQuery = ~0u;
+
+    RGScopeTiming timing;
+    const RGPassTiming& pass = m_ProfilingCurrent[m_ScopeRecord.PassRow];
+    CopyRowName(timing.Name, pass.Name, scope);
+    timing.PassRow = m_ScopeRecord.PassRow;
+    timing.BeginQuery = qp.WriteTimestamp(cl, TimestampPoint::SpanBegin);
+    timing.StatisticsQuery = qp.BeginPipelineStats(cl);
+    timing.StatisticsState =
+        timing.StatisticsQuery == ~0u ? RGPassStatisticsState::QueriesUsedUp : RGPassStatisticsState::NotReady;
+    m_ProfilingScopesCurrent.push_back(timing);
+    m_ScopeRecord.OpenScope = scope;
+    m_ScopeRecord.OpenScopeCpuBegin = std::chrono::steady_clock::now();
+}
+
+void RGFrame::CloseProfilerScope()
+{
+    if (!m_ScopeRecord.OpenScope)
+        return;
+    IQueryPool& qp = *m_ScopeRecord.QueryPool;
+    CommandList* cl = m_ScopeRecord.Commands;
+    RGScopeTiming& timing = m_ProfilingScopesCurrent.back();
+    if (timing.StatisticsQuery != ~0u)
+        qp.EndPipelineStats(cl, timing.StatisticsQuery);
+    timing.EndQuery = qp.WriteTimestamp(cl, TimestampPoint::SpanEnd);
+    timing.CpuMs =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - m_ScopeRecord.OpenScopeCpuBegin)
+            .count();
+    m_ScopeRecord.OpenScope = nullptr;
+    // The pass's counters continue in a new segment.
+    m_ScopeRecord.SegmentQuery = qp.BeginPipelineStats(cl);
+    m_ProfilingSegmentsCurrent.push_back({m_ScopeRecord.PassRow, m_ScopeRecord.SegmentQuery});
+}
+
+void RGFrame::FinishProfilerScopes()
+{
+    CloseProfilerScope();
+    if (m_ScopeRecord.SegmentQuery != ~0u)
+        m_ScopeRecord.QueryPool->EndPipelineStats(m_ScopeRecord.Commands, m_ScopeRecord.SegmentQuery);
+    m_ScopeRecord = RGScopeRecordState{};
+}
+
+namespace
+{
+void AddStatistics(PipelineStatistics& total, const PipelineStatistics& part)
+{
+    total.InputAssemblyVertices += part.InputAssemblyVertices;
+    total.InputAssemblyPrimitives += part.InputAssemblyPrimitives;
+    total.VertexShaderInvocations += part.VertexShaderInvocations;
+    total.ClippingInvocations += part.ClippingInvocations;
+    total.ClippingPrimitives += part.ClippingPrimitives;
+    total.FragmentShaderInvocations += part.FragmentShaderInvocations;
+    total.ComputeShaderInvocations += part.ComputeShaderInvocations;
+}
+
+void SubtractStatistics(PipelineStatistics& total, const PipelineStatistics& part)
+{
+    // The counters are unsigned: a part larger than its total wraps the remainder.
+    assert(part.InputAssemblyVertices <= total.InputAssemblyVertices &&
+           part.InputAssemblyPrimitives <= total.InputAssemblyPrimitives &&
+           part.VertexShaderInvocations <= total.VertexShaderInvocations &&
+           part.ClippingInvocations <= total.ClippingInvocations &&
+           part.ClippingPrimitives <= total.ClippingPrimitives &&
+           part.FragmentShaderInvocations <= total.FragmentShaderInvocations &&
+           part.ComputeShaderInvocations <= total.ComputeShaderInvocations &&
+           "RenderGraph: the scope rows exceed their pass row");
+    total.InputAssemblyVertices -= part.InputAssemblyVertices;
+    total.InputAssemblyPrimitives -= part.InputAssemblyPrimitives;
+    total.VertexShaderInvocations -= part.VertexShaderInvocations;
+    total.ClippingInvocations -= part.ClippingInvocations;
+    total.ClippingPrimitives -= part.ClippingPrimitives;
+    total.FragmentShaderInvocations -= part.FragmentShaderInvocations;
+    total.ComputeShaderInvocations -= part.ComputeShaderInvocations;
+}
+
+bool HasCounts(const PipelineStatistics& statistics)
+{
+    return statistics.InputAssemblyVertices != 0 || statistics.InputAssemblyPrimitives != 0 ||
+           statistics.VertexShaderInvocations != 0 || statistics.ClippingInvocations != 0 ||
+           statistics.ClippingPrimitives != 0 || statistics.FragmentShaderInvocations != 0 ||
+           statistics.ComputeShaderInvocations != 0;
+}
+
+// A pass row is Measured only when every part of its counters was measured.
+void FoldStatisticsPart(RGFrame::RGPassTiming& pass, RGFrame::RGPassStatisticsState partState,
+                        const PipelineStatistics& part)
+{
+    if (pass.StatisticsState != RGFrame::RGPassStatisticsState::Measured)
+        return;
+    if (partState != RGFrame::RGPassStatisticsState::Measured)
+    {
+        pass.StatisticsState = partState;
+        return;
+    }
+    AddStatistics(pass.Statistics, part);
+}
+} // namespace
+
+void RGFrame::ResolveProfilerScopes(IQueryPool* qp)
+{
+    RGProfilingPending& pending =
+        m_ProfilingPendingBySlot[m_Device->GetFrameIndex() % static_cast<uint32_t>(m_ProfilingPendingBySlot.size())];
+    for (const RGStatisticsSegment& segment : pending.Segments)
+    {
+        PipelineStatistics part;
+        const bool measured = qp && segment.Query != ~0u && qp->GetPipelineStatsResult(segment.Query, part);
+        const RGPassStatisticsState state = measured ? RGPassStatisticsState::Measured
+                                            : segment.Query == ~0u ? RGPassStatisticsState::QueriesUsedUp
+                                                                   : RGPassStatisticsState::NotReady;
+        FoldStatisticsPart(pending.Passes[segment.PassRow], state, part);
+    }
+    for (RGScopeTiming& scope : pending.Scopes)
+    {
+        if (qp && scope.StatisticsQuery != ~0u && qp->GetPipelineStatsResult(scope.StatisticsQuery, scope.Statistics))
+            scope.StatisticsState = RGPassStatisticsState::Measured;
+        FoldStatisticsPart(pending.Passes[scope.PassRow], scope.StatisticsState, scope.Statistics);
+        QueryResult begin;
+        QueryResult end;
+        if (qp && scope.BeginQuery != ~0u && scope.EndQuery != ~0u && qp->GetTimestampResult(scope.BeginQuery, begin) &&
+            begin.Available && qp->GetTimestampResult(scope.EndQuery, end) && end.Available && end.Value >= begin.Value)
+            scope.GpuSpanMs = qp->TimestampToMs(end.Value - begin.Value);
+    }
+    // One row per (pass, scope): the first row of a scope adds the counters and spans of its other ranges.
+    size_t kept = 0;
+    for (size_t i = 0; i < pending.Scopes.size(); ++i)
+    {
+        RGScopeTiming& scope = pending.Scopes[i];
+        size_t first = kept;
+        for (size_t k = 0; k < kept; ++k)
+            if (pending.Scopes[k].PassRow == scope.PassRow && std::strcmp(pending.Scopes[k].Name, scope.Name) == 0)
+                first = k;
+        if (first == kept)
+        {
+            if (kept != i)
+                pending.Scopes[kept] = scope;
+            ++kept;
+            continue;
+        }
+        RGScopeTiming& row = pending.Scopes[first];
+        row.CpuMs += scope.CpuMs;
+        row.GpuSpanMs += scope.GpuSpanMs;
+        if (row.StatisticsState == RGPassStatisticsState::Measured)
+        {
+            if (scope.StatisticsState == RGPassStatisticsState::Measured)
+                AddStatistics(row.Statistics, scope.Statistics);
+            else
+                row.StatisticsState = scope.StatisticsState;
+        }
+    }
+    pending.Scopes.resize(kept);
+    AddProfilerRemainderRows(pending);
+}
+
+// The counters a pass records outside its scopes go into the row "<pass>.Other", so the scope rows of a
+// pass always add up to its pass row. A pass with no scope row or a zero remainder gets no row.
+void RGFrame::AddProfilerRemainderRows(RGProfilingPending& pending)
+{
+    constexpr size_t kNoRow = ~size_t{0};
+    size_t passBegin = 0;
+    while (passBegin < pending.Scopes.size())
+    {
+        const uint32_t passRow = pending.Scopes[passBegin].PassRow;
+        const RGPassTiming& pass = pending.Passes[passRow];
+        // A pass row that is not Measured holds only part of its counters, so it gets no remainder.
+        const bool measured = pass.StatisticsState == RGPassStatisticsState::Measured;
+        PipelineStatistics remainder = pass.Statistics;
+        double scopeSpanMs = 0.0;
+        size_t otherRow = kNoRow;
+        size_t passEnd = passBegin;
+        for (; passEnd < pending.Scopes.size() && pending.Scopes[passEnd].PassRow == passRow; ++passEnd)
+        {
+            const RGScopeTiming& scope = pending.Scopes[passEnd];
+            if (measured)
+                SubtractStatistics(remainder, scope.Statistics);
+            scopeSpanMs += scope.GpuSpanMs;
+            if (std::string_view(scope.Name).ends_with(".Other"))
+                otherRow = passEnd;
+        }
+        // A Measured pass row holds every scope's counters, so the remainder does not go below zero.
+        if (!measured || !HasCounts(remainder))
+        {
+            passBegin = passEnd;
+            continue;
+        }
+        if (otherRow != kNoRow)
+        {
+            AddStatistics(pending.Scopes[otherRow].Statistics, remainder);
+            passBegin = passEnd;
+            continue;
+        }
+        RGScopeTiming other;
+        CopyRowName(other.Name, pass.Name, "Other");
+        other.PassRow = passRow;
+        other.Statistics = remainder;
+        other.StatisticsState = RGPassStatisticsState::Measured;
+        // The pass span outside the scopes; a scope span includes the cost of its own queries.
+        other.GpuSpanMs = std::max(0.0, pass.GpuSpanMs - scopeSpanMs);
+        pending.Scopes.insert(pending.Scopes.begin() + static_cast<std::ptrdiff_t>(passEnd), other);
+        passBegin = passEnd + 1;
+    }
+}
+
+RGFrame::RGProfilingSnapshot RGFrame::LastFrameProfiling() const
 {
     std::lock_guard lock(m_ProfilingMutex);
-    return m_ProfilingLatest;
+    return {m_ProfilingLatest, m_ProfilingScopesLatest, m_ProfilingSkippedLatest, m_LastResolveStats};
 }
 
 RGFrame::RGProfilingResolveStats RGFrame::LastResolveStats() const
@@ -902,6 +1235,9 @@ RGFrame::RGProfilingResolveStats RGFrame::ResolvePassGpuTimestamps(std::vector<R
     const bool havePool = qp && qp->IsValid();
     for (RGPassTiming& t : pend)
     {
+        // Read before the timestamp checks below can skip the row.
+        if (havePool && t.StatisticsQuery != ~0u && qp->GetPipelineStatsResult(t.StatisticsQuery, t.Statistics))
+            t.StatisticsState = RGPassStatisticsState::Measured;
         if (t.BeginQuery == ~0u || t.EndQuery == ~0u)
         {
             // Pool cap exceeded at write time — only meaningful when a pool
@@ -1027,7 +1363,7 @@ void RGFrame::ResolveProfiling()
     if (m_ProfilingPendingBySlot.empty())
         return;
     const uint32_t slot = m_Device->GetFrameIndex() % static_cast<uint32_t>(m_ProfilingPendingBySlot.size());
-    std::vector<RGPassTiming>& pend = m_ProfilingPendingBySlot[slot];
+    std::vector<RGPassTiming>& pend = m_ProfilingPendingBySlot[slot].Passes;
     if (pend.empty())
         return;
 
@@ -1036,6 +1372,7 @@ void RGFrame::ResolveProfiling()
         qp = nullptr;
 
     const RGProfilingResolveStats stats = ResolvePassGpuTimestamps(pend, qp);
+    ResolveProfilerScopes(qp);
     if (qp && !m_LoggedFirstGpuResolve)
     {
         m_LoggedFirstGpuResolve = true;
@@ -1047,9 +1384,14 @@ void RGFrame::ResolveProfiling()
     {
         std::lock_guard lock(m_ProfilingMutex);
         m_ProfilingLatest = pend; // copy-assign: both vectors retain capacity
+        m_ProfilingScopesLatest = m_ProfilingPendingBySlot[slot].Scopes;
+        m_ProfilingSkippedLatest = m_ProfilingPendingBySlot[slot].Skipped;
         m_LastResolveStats = stats;
     }
     pend.clear();
+    m_ProfilingPendingBySlot[slot].Scopes.clear();
+    m_ProfilingPendingBySlot[slot].Segments.clear();
+    m_ProfilingPendingBySlot[slot].Skipped.clear();
     // Mandatory: once the slot resets and indices are reused, a stale cache
     // would serve last frame's values for new queries.
     if (qp)

@@ -15,17 +15,15 @@
 namespace GameEngine::TerrainECS
 {
 
-/// What a surface page bake reads (design page-streaming 3.8): the lattice, splat range, ground write
-/// and modifier stacks of a tiled terrain. Every pointer of a stack points into this object, so a job
+/// What a surface page bake reads (design page-streaming 3.8): the lattice, ground write and
+/// modifier stacks of a tiled terrain. Every pointer of a stack points into this object, so a job
 /// bakes from it while the scene changes. TerrainModifierSystem::SnapshotSurfaceBake makes it.
 struct TerrainSurfaceBakeInputs
 {
     TiledTerrainConfig Config;
     float32 WorldOriginX = 0.0f; // world-space corner of tile (0, 0)
     float32 WorldOriginZ = 0.0f;
-    float32 SplatBakeMinH = 0.0f;
-    float32 SplatBakeMaxH = 0.0f;
-    bool SplatBakeRangeValid = false;
+    bool ResidentSplatsBaked = false; // TiledTerrainData::ResidentSplatsBaked
     TerrainColorGroundWrite GroundWrite;
 
     /// The height and splat stack, the grass stack and the color writers, each in its bake order.

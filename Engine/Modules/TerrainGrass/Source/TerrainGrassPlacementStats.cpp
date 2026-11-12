@@ -134,7 +134,8 @@ void TerrainGrassPlacementStats::Poll(Rendering::IDevice* device)
             placement.PlacedInstances += block.Draws[lod].InstanceCount;
         }
         placement.CandidatesConsidered = block.CandidatesConsidered;
-        placement.CellsVisible = block.CellsVisible;
+        placement.CellsCounted = block.CellsCounted;
+        placement.CellsPlaced = block.CellsPlaced;
         placement.AcceptedBlades = block.AcceptedBlades;
         // The GPU writes the scale as float bits so it can share the counter block with the
         // integer tallies; memcpy rather than a reinterpret so no strict-aliasing rule is bent.

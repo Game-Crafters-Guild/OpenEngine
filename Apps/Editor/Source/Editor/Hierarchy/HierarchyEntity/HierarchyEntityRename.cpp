@@ -3,6 +3,7 @@
 
 #include "EditorChangeNotifications.h"
 #include "UndoRedo/EntityComponentsEdit.h"
+#include "UndoRedo/UndoRedoService.h"
 
 #include "Components/Name.h"
 #include "UI/Controls/Label.h"
@@ -45,6 +46,9 @@ bool CommitEntityRename(ECS::World& world, ECS::EntityHandle entity, const std::
     if (!ValidateEntityName(name).empty() || !entity.IsValid() || !world.IsValid(entity))
         return false;
 
+    // The Name commit is announced inside the compound, so what it records joins the rename's step.
+    if (undo)
+        undo->BeginCompound(kRenameEntityLabel);
     const bool renamed = CommitEntityComponentsEdit(world, entity, undo, notifications, kRenameEntityLabel, [&]()
     {
         Components::Name value{};
@@ -60,6 +64,8 @@ bool CommitEntityRename(ECS::World& world, ECS::EntityHandle entity, const std::
         notifications->NotifyComponentChanged(
             {&world, entity, ECS::GetComponentTypeId<Components::Name>(), EditorChangeNotifications::ChangeKind::Commit});
     }
+    if (undo)
+        undo->EndCompound();
     return renamed;
 }
 

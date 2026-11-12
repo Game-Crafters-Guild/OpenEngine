@@ -30,15 +30,13 @@ struct ViewCullingContext
     Matrix4x4 ViewProjMatrix;
     Vector4 FrustumPlanes[6];
 
-    Vector3 CameraPosition;
     Vector3 CameraForward;
     float NearPlane = 0.1f;
     float FarPlane = 1000.0f;
 
-    // Camera-relative culling origin (Earth-scale precision): the view's render
-    // origin in world meters, or (0,0,0) when inactive. Copied verbatim into
-    // ViewCullingInput::cameraRelativeOrigin. See that field for the rationale.
-    Vector3 CameraRelativeOrigin{0.0f, 0.0f, 0.0f};
+    // The view's render origin sector. The view matrices and the planes above take points
+    // relative to its origin. Copied into ViewCullingInput::originSector.
+    Mathematics::Vector3Int OriginSector{0, 0, 0};
 
     // The candidate range this view operates on. Today both fields cover the
     // whole GPUScene (FirstInstance=0, InstanceCount=scene-&gt;GetInstanceCount());
@@ -63,6 +61,30 @@ struct ViewCullingContext
     GPUScene* Scene = nullptr;
 };
 
+/// The culling input of a view: every view field of the context, copied once for every strategy.
+inline ViewCullingInput MakeViewCullingInput(const ViewCullingContext& context)
+{
+    ViewCullingInput input{};
+    input.viewId = context.Id;
+    input.cascadeIndex = context.CascadeIndex;
+    input.viewMatrix = context.ViewMatrix;
+    input.projMatrix = context.ProjMatrix;
+    input.viewProjMatrix = context.ViewProjMatrix;
+    for (int i = 0; i < 6; ++i)
+        input.frustumPlanes[i] = context.FrustumPlanes[i];
+    input.cameraForward = context.CameraForward;
+    input.originSector = context.OriginSector;
+    input.nearPlane = context.NearPlane;
+    input.farPlane = context.FarPlane;
+    input.firstInstance = context.FirstInstance;
+    input.instanceCount = context.InstanceCount;
+    input.renderLayerMask = context.Layers;
+    input.dropEditorHidden = context.DropEditorHidden;
+    input.frameIndex = context.FrameIndex;
+    input.deltaTime = context.DeltaTime;
+    return input;
+}
+
 // Strategy interface for per-view culling. `RenderServices::ScheduleViewCulling`
 // (Phase 3d) iterates the engine's active views and calls `ScheduleCulling`
 // once per view; the strategy decides what work to enqueue. Implementations
@@ -85,6 +107,10 @@ public:
     // (visibility-layout, pending views) is collected across all strategies
     // before a single batched dispatch.
     virtual void ScheduleCulling(const ViewCullingContext& ctx) = 0;
+
+    // True when the strategy reserves the phase-B occlusion slice of the view's own cull
+    // (ViewCullingInput::reserveOcclusionSlice).
+    virtual bool ReservesOcclusionSlice() const { return false; }
 };
 
 } // namespace Rendering

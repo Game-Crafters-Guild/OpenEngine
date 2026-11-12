@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+
 namespace GameEngine
 {
 namespace Mathematics
@@ -30,6 +32,16 @@ struct Rect
     {
         return X < other.Right() && Right() > other.X &&
                Y < other.Bottom() && Bottom() > other.Y;
+    }
+
+    /// True when the rect has no area: a width or height of zero, negative or NaN.
+    bool IsEmpty() const { return !(Width > 0.0f && Height > 0.0f); }
+
+    /// The area both rects cover. Empty (IsEmpty) when they do not overlap.
+    Rect Intersection(const Rect& other) const
+    {
+        return FromEdges(std::max(X, other.X), std::max(Y, other.Y),
+                         std::min(Right(), other.Right()), std::min(Bottom(), other.Bottom()));
     }
 
     /// Grow (or shrink, if margin is negative) equally on every side.

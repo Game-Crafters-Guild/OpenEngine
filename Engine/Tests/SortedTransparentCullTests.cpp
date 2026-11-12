@@ -1,9 +1,8 @@
 // Sorted transparent CPU frustum cull (CullTransparentsToFrustum) with mock
 // spheres: in/out/straddle/behind, the "culled don't reach the drain"
-// invariant, the empty (zero-cost) path, and the camera-relative rebase that
-// keeps sector-tagged (planetary) transparents culling identically to the GPU
-// path. (Back-to-front ORDERING is covered by SortedTransparentRunTests +
-// GPUSortTests — the sort itself lives on the GPU as of S2.)
+// invariant, the empty (zero-cost) path, and the sector composition that keeps
+// a far transparent culling as it does near the origin. The back-to-front order
+// runs on the GPU: SortedTransparentRunTests and GPUSortTests cover it.
 
 #include <gtest/gtest.h>
 
@@ -12,6 +11,7 @@
 #include "Mathematics/MatrixOps.h"
 #include "Rendering/Camera/CameraDerivation.h" // DeriveCameraData (Forward convention pin)
 #include "Rendering/Common/Frustum.h" // ExtractFrustumPlanes
+#include "Rendering/Core/GPUScene.h"    // PackSector, SectorLocalPointRelativeTo
 
 #include <cmath>
 #include <cstring>
@@ -26,7 +26,7 @@ namespace Rndr = GameEngine::Rendering;
 namespace {
 TransparentSphere MakeSphere(uint32_t key, float x, float y, float z, float radius)
 {
-    return TransparentSphere{key, {x, y, z}, radius};
+    return TransparentSphere{key, Rndr::Vector3(x, y, z), radius};
 }
 
 // Camera at `eye` looking down +Z (left-handed), 90 deg vertical FOV, square
@@ -43,8 +43,6 @@ void MakeForwardFrustum(const Math::Vector3& eye, Rndr::Vector4* outPlanes)
     const Math::Matrix4x4 viewProj = proj * view;
     Rndr::ExtractFrustumPlanes(viewProj, outPlanes);
 }
-
-const Rndr::Vector3 kNoOrigin{0.0f, 0.0f, 0.0f};
 } // namespace
 
 TEST(SortedTransparentCull, KeepsInside_DropsOutsideAndBehind)
@@ -61,13 +59,13 @@ TEST(SortedTransparentCull, KeepsInside_DropsOutsideAndBehind)
     };
 
     std::pmr::vector<TransparentCentroid> visible;
-    const uint32_t culled = CullTransparentsToFrustum(candidates, planes, kNoOrigin, visible);
+    const uint32_t culled = CullTransparentsToFrustum(candidates, planes, visible);
 
     EXPECT_EQ(culled, 3u);
     ASSERT_EQ(visible.size(), 1u);
     EXPECT_EQ(visible[0].Key, 0u); // only the centred sphere survives
-    // Survivors keep their WORLD centre (the drain's depth key reads it).
-    EXPECT_FLOAT_EQ(visible[0].Center[2], 10.0f);
+    // Survivors keep their center (the depth key reads it).
+    EXPECT_FLOAT_EQ(visible[0].Center.z, 10.0f);
 }
 
 TEST(SortedTransparentCull, EdgeStraddlingSphereIsKept)
@@ -84,12 +82,12 @@ TEST(SortedTransparentCull, EdgeStraddlingSphereIsKept)
     const std::vector<TransparentSphere> fullyOut = {MakeSphere(8, 20.0f, 0.0f, 10.0f, 1.0f)};
 
     std::pmr::vector<TransparentCentroid> keep;
-    EXPECT_EQ(CullTransparentsToFrustum(straddle, planes, kNoOrigin, keep), 0u);
+    EXPECT_EQ(CullTransparentsToFrustum(straddle, planes, keep), 0u);
     ASSERT_EQ(keep.size(), 1u);
     EXPECT_EQ(keep[0].Key, 7u);
 
     std::pmr::vector<TransparentCentroid> drop;
-    EXPECT_EQ(CullTransparentsToFrustum(fullyOut, planes, kNoOrigin, drop), 1u);
+    EXPECT_EQ(CullTransparentsToFrustum(fullyOut, planes, drop), 1u);
     EXPECT_TRUE(drop.empty());
 }
 
@@ -110,7 +108,7 @@ TEST(SortedTransparentCull, CulledInstancesNeverReachTheDrain)
         candidates.push_back(MakeSphere(100u + i, 0.0f, 0.0f, -50.0f, 1.0f));
 
     std::pmr::vector<TransparentCentroid> visible;
-    const uint32_t culled = CullTransparentsToFrustum(candidates, planes, kNoOrigin, visible);
+    const uint32_t culled = CullTransparentsToFrustum(candidates, planes, visible);
     EXPECT_EQ(culled, 20u);
     ASSERT_EQ(visible.size(), 3u);
 }
@@ -127,20 +125,17 @@ TEST(SortedTransparentCull, AllCulledYieldsEmpty)
         candidates.push_back(MakeSphere(i, 0.0f, 0.0f, -20.0f, 1.0f)); // all behind
 
     std::pmr::vector<TransparentCentroid> visible;
-    EXPECT_EQ(CullTransparentsToFrustum(candidates, planes, kNoOrigin, visible), 5u);
+    EXPECT_EQ(CullTransparentsToFrustum(candidates, planes, visible), 5u);
     EXPECT_TRUE(visible.empty());
 }
 
-// Camera-relative rebase (S2, sector-tagged transparents): culling a scene
-// translated to a large world offset with the matching origin must reproduce
-// the near-origin decisions bit-for-bit — the plane translation and the
-// centre-minus-origin difference are the exact arithmetic the GPU cull
-// performs, so the two paths can never disagree on a planetary instance.
-TEST(SortedTransparentCull, CameraRelativeRebaseMatchesNearOriginDecisions)
+// Sector composition: candidates in a far sector, composed against the camera's
+// sector, cull with the planes of the relative view exactly as the same scene does
+// at the origin.
+TEST(SortedTransparentCull, FarSectorCompositionMatchesNearOriginDecisions)
 {
-    // Reference: camera at the origin.
-    Rndr::Vector4 refPlanes[6];
-    MakeForwardFrustum(Math::Vector3(0.0f, 0.0f, 0.0f), refPlanes);
+    Rndr::Vector4 planes[6];
+    MakeForwardFrustum(Math::Vector3(0.0f, 0.0f, 0.0f), planes);
     const std::vector<TransparentSphere> refCandidates = {
         MakeSphere(0, 0.0f, 0.0f, 10.0f, 1.0f),  // visible
         MakeSphere(1, 30.0f, 0.0f, 10.0f, 1.0f), // outside the 45 deg cone
@@ -148,24 +143,22 @@ TEST(SortedTransparentCull, CameraRelativeRebaseMatchesNearOriginDecisions)
         MakeSphere(3, 9.0f, 0.0f, 10.0f, 1.0f),  // near the edge, inside
     };
     std::pmr::vector<TransparentCentroid> refVisible;
-    const uint32_t refCulled =
-        CullTransparentsToFrustum(refCandidates, refPlanes, kNoOrigin, refVisible);
+    const uint32_t refCulled = CullTransparentsToFrustum(refCandidates, planes, refVisible);
 
-    // Same scene translated by a planetary-scale offset, with a camera (and
-    // therefore frustum) translated identically and the matching origin.
-    const Rndr::Vector3 origin{2097152.0f, 0.0f, 4194304.0f}; // sector-aligned magnitude
-    Rndr::Vector4 farPlanes[6];
-    MakeForwardFrustum(Math::Vector3(origin.x, origin.y, origin.z), farPlanes);
+    // The camera in a sector about 300 km out; the same centers stored local to the next
+    // sector in +X, so the composition crosses one sector boundary.
+    const Math::Vector3Int cameraSector{293, 0, -4};
+    uint32_t p0 = 0, p1 = 0;
+    Rndr::PackSector(cameraSector.x + 1, cameraSector.y, cameraSector.z, p0, p1);
+    const float sectorSize = static_cast<float>(Math::kWorldSectorSize);
     std::vector<TransparentSphere> farCandidates = refCandidates;
     for (TransparentSphere& c : farCandidates)
     {
-        c.Center[0] += origin.x;
-        c.Center[1] += origin.y;
-        c.Center[2] += origin.z;
+        const Rndr::Vector3 local(c.Center.x - sectorSize, c.Center.y, c.Center.z);
+        c.Center = Rndr::SectorLocalPointRelativeTo(local, p0, p1, cameraSector);
     }
     std::pmr::vector<TransparentCentroid> farVisible;
-    const uint32_t farCulled =
-        CullTransparentsToFrustum(farCandidates, farPlanes, origin, farVisible);
+    const uint32_t farCulled = CullTransparentsToFrustum(farCandidates, planes, farVisible);
 
     EXPECT_EQ(farCulled, refCulled);
     ASSERT_EQ(farVisible.size(), refVisible.size());
@@ -193,7 +186,7 @@ TEST(SortedTransparentCull, DerivedCameraForwardPointsIntoTheView)
     cam.proj = proj;
     cam.viewProj = viewProj;
 
-    const Rndr::CameraDerivedData derived = Rndr::DeriveCameraData(cam);
+    const Rndr::CameraDerivedData derived = Rndr::DeriveCameraData(cam, {0.1f, 500.0f});
 
     // Position round-trips.
     EXPECT_NEAR(derived.Position.x, eye.x, 1e-4f);

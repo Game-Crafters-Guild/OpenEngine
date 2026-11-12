@@ -64,6 +64,12 @@ namespace GameEngine.Scripting
             public uint Target;
         }
 
+        public struct SaveFileInfo
+        {
+            public ulong SizeBytes;
+            public DateTimeOffset LastWriteTime; // UTC
+        }
+
         [DllImport(kLib, CallingConvention = CallingConvention.Cdecl)]
         private static extern int GE_Platform_Initialize(
             [MarshalAs(UnmanagedType.LPUTF8Str)] string appName,
@@ -99,6 +105,13 @@ namespace GameEngine.Scripting
         private static extern int GE_Platform_DeleteSaveFile(
             [MarshalAs(UnmanagedType.LPUTF8Str)] string slot,
             [MarshalAs(UnmanagedType.LPUTF8Str)] string name);
+        [DllImport(kLib, CallingConvention = CallingConvention.Cdecl)]
+        private static extern int GE_Platform_DeleteSaveSlot([MarshalAs(UnmanagedType.LPUTF8Str)] string slot);
+        [DllImport(kLib, CallingConvention = CallingConvention.Cdecl)]
+        private static extern int GE_Platform_GetSaveFileInfo(
+            [MarshalAs(UnmanagedType.LPUTF8Str)] string slot,
+            [MarshalAs(UnmanagedType.LPUTF8Str)] string name,
+            out ulong sizeBytes, out long lastWriteUnixMs);
         [DllImport(kLib, CallingConvention = CallingConvention.Cdecl)]
         private static extern int GE_Platform_ListSlots(byte[]? buffer, int bufferSize, out int length);
         [DllImport(kLib, CallingConvention = CallingConvention.Cdecl)]
@@ -189,6 +202,20 @@ namespace GameEngine.Scripting
 
         public static Result DeleteSaveFile(string slot, string name)
             => (Result)GE_Platform_DeleteSaveFile(slot, name);
+
+        public static Result DeleteSaveSlot(string slot)
+            => (Result)GE_Platform_DeleteSaveSlot(slot);
+
+        public static Result GetSaveFileInfo(string slot, string name, out SaveFileInfo info)
+        {
+            info = default;
+            var result = (Result)GE_Platform_GetSaveFileInfo(slot, name, out var sizeBytes, out var lastWriteUnixMs);
+            if (result != Result.Ok)
+                return result;
+            info.SizeBytes = sizeBytes;
+            info.LastWriteTime = DateTimeOffset.FromUnixTimeMilliseconds(lastWriteUnixMs);
+            return Result.Ok;
+        }
 
         public static Result ListSlots(out string[] slots)
             => ReadLineList(GE_Platform_ListSlots, out slots);

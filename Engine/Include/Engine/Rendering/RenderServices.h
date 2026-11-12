@@ -15,6 +15,7 @@
 #include "Assets/AssetManager.h"     // AssetLoadHandle in m_TextureLoadHandles
 #include "Rendering/ShaderCache/ShaderPackageIO.h"
 #include "Components/Rendering/Light.h"
+#include "Mathematics/WorldPosition.h"
 #include "Engine/Rendering/DrawCommandProducer.h"
 #include "Engine/Rendering/IRenderFeature.h"
 #include "Engine/Rendering/SceneColorGrab.h"
@@ -62,6 +63,8 @@
 #include "Engine/Rendering/SkinPaletteAtlas.h"
 #include "Rendering/Core/RenderGraph/RGFrame.h"
 #include "JobSystem/TaskHandle.h"
+#include "Mathematics/Vector3.h"
+#include "Mathematics/Vector3Int.h"
 #include "Types/Types.h"
 #include <filesystem>
 
@@ -177,8 +180,8 @@ struct RenderPipelineBlueprint;
 // This is the first step towards Forward+/Deferred lighting extraction from ECS.
 struct ExtractedLight
 {
+    Mathematics::WorldPosition positionWS{}; // exact; each upload rounds it to fp32 once
     GameEngine::Components::LightType type{GameEngine::Components::LightType::Directional};
-    float positionWS[3]{0.0f, 0.0f, 0.0f};
     float range{10.0f};
     float directionWS[3]{0.0f, -1.0f, 0.0f}; // shine (+Z / col2); surface->light is -dir
     float rightWS[3]{1.0f, 0.0f, 0.0f};
@@ -211,6 +214,8 @@ struct ExtractedLight
     // contribution sort so equal-contribution lights keep a frame-stable order
     // independent of ECS iteration order.
     uint32 SortId{0};
+    // Fills the last 4 bytes of the 8-byte alignment, so the struct has no padding.
+    uint32 LayoutPad{0};
 };
 
 // The engine shades up to kMaxDirectionalLights directionals per world, but
@@ -968,6 +973,9 @@ class RenderServices
     // survivors into runs. Empty-set early-out costs nothing. Called by the
     // world node before its opaque pass so the peel sees the active flag.
     void BuildSortedTransparentForView(Rendering::ViewId viewId);
+    // Asks the device for the pipelines of the screen-space shadow mask passes. The world node of a
+    // paused view calls it when the view's world pass takes the mask.
+    void RequestScreenSpaceShadowPipelines();
     // True when this frame's sorted transparent pass owns the view's Blend draws,
     // so the opaque batch path must peel them. Read by recordEntityBatch.
     bool IsSortedTransparentActive(Rendering::ViewId viewId) const;
@@ -1931,7 +1939,7 @@ class RenderServices
     void CreateFallbackBuffers();
     void CreateDeviceDefaultBuffers();
     void CreateShadowFallbackResources();
-    void InitializePerFrameWritePool();
+    bool InitializePerFrameWritePool();
 
     // Q6 device-lost re-provision (design §8). Registered as an IDevice
     // device-rebuilt callback in Initialize(); fires on the render thread inside
@@ -2498,9 +2506,11 @@ class RenderServices
         std::vector<DrawCommand> Commands;
         std::vector<std::byte> PcBytes;
         // Camera snapshot from the build (the drain's GPU key must use the
-        // same values the CPU run metric + overflow order used).
-        float CameraPos[3]{};
-        float CameraForward[3]{};
+        // same values the CPU run metric + overflow order used). CameraPos is
+        // relative to the origin of OriginSector.
+        Mathematics::Vector3 CameraPos{};
+        Mathematics::Vector3 CameraForward{};
+        Mathematics::Vector3Int OriginSector{};
         bool Active = false;
         uint64_t Frame = ~0ull;
         // One warning per drain-bail EPISODE, not per frame: a persistently

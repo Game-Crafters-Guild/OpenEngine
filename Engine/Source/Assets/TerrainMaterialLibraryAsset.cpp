@@ -291,7 +291,7 @@ bool TerrainMaterialLibraryAsset::Load()
     return ok;
 }
 
-bool TerrainMaterialLibraryAsset::LoadFromData(const Vector<uint8>& data)
+bool TerrainMaterialLibraryAsset::LoadFromData(std::span<const uint8> data)
 {
     const std::string text(reinterpret_cast<const char*>(data.data()), data.size());
     const bool ok = ParseFromText(text);

@@ -7,7 +7,7 @@
 #include "Editor/Settings/SettingsStore.h"
 #include "Engine/Build/GameConfig.h"
 #include "Engine/GameUI/UIScaleProjectSettings.h"
-#include "GameViewController.h"
+#include "GameView/GameViewController.h"
 #include "Logger/Logger.h"
 #include "Panels/MovieRecorderPanel.h"
 #include "PlayMode/PlayModeManager.h"

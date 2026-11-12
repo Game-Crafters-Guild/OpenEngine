@@ -594,17 +594,13 @@ struct OceanRenderer
     // @ge-range 1 4096
     float32 MaxScale = 512.0f;
 
-    // Surface geometry budget for the camera-following concentric LOD rings. The
-    // default 2x maps closely to 50 cells per tile and resolves noticeably more
-    // near-camera wave shape. Combine with GeometryDownSampleFactor to trade
-    // detail for fewer triangles; the compatible budget is
-    // 256 * UpSample / DownSample and is clamped to [8, 1024].
-    // @ge-tooltip Multiplier for the camera-centered ocean grid density.
-    uint32 GeometryUpSampleFactor = 2;
+    // Density of the camera-following ring mesh: cells per ring tile side =
+    // 8 * GeometryUpSampleFactor / GeometryDownSampleFactor, kept even, clamped to [8, 64].
+    // @ge-tooltip Water mesh detail near the camera: 3 is the default; 4 for close shots. Cells per tile side = 8 x Up / Down, 8 to 64.
+    uint32 GeometryUpSampleFactor = 3;
 
-    // Surface geometry budget divider. 1 keeps the upsampled density; 2 quarters
-    // the triangle count, 4 sixteenths it, and so on.
-    // @ge-tooltip Divider for ocean grid density and triangle count.
+    // Divides the ring mesh density (see GeometryUpSampleFactor).
+    // @ge-tooltip Lowers the water mesh detail: 1 is the default; 2 for slow GPUs, with a quarter of the triangles. Cells per tile side = 8 x Up / Down.
     uint32 GeometryDownSampleFactor = 1;
 
     // Scales the dispersion gravity fed to every wave sim (FFT + dynamic waves),

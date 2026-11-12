@@ -35,7 +35,7 @@ namespace GameEngine.Scripting
     /// <summary>
     /// Where a ray met a surface.
     /// </summary>
-    [StructLayout(LayoutKind.Explicit, Size = 32)]
+    [StructLayout(LayoutKind.Explicit, Size = 56)]
     public struct Hit
     {
         /// <summary>
@@ -51,6 +51,8 @@ namespace GameEngine.Scripting
         public float Distance;
         [FieldOffset(16)]
         public Quaternion Facing = new Quaternion(0f, 0f, 0f, 1f);
+        [FieldOffset(32)]
+        public WorldPosition At;
     }
 
     /// <summary>
@@ -114,7 +116,7 @@ namespace GameEngine.Scripting
     {
         public const uint AllLayers = 4294967295u;
 
-        private static readonly BindingTable s_Table = BindingTable.Acquire("Probe", 0x3CE903C383382CFBUL, 17);
+        private static readonly BindingTable s_Table = BindingTable.Acquire("Probe", 0xB58E708290E36253UL, 17);
         private static readonly delegate* unmanaged[Cdecl]<uint*, int> s_CallCount = (delegate* unmanaged[Cdecl]<uint*, int>)s_Table[0];
         private static readonly delegate* unmanaged[Cdecl]<byte*, int, byte*, int, int*, int> s_Echo = (delegate* unmanaged[Cdecl]<byte*, int, byte*, int, int*, int>)s_Table[1];
         private static readonly delegate* unmanaged[Cdecl]<SoundOptions*, int> s_GetLastOptions = (delegate* unmanaged[Cdecl]<SoundOptions*, int>)s_Table[2];
@@ -129,7 +131,7 @@ namespace GameEngine.Scripting
         private static readonly delegate* unmanaged[Cdecl]<ColorLinear*, ColorLinear*, int> s_SwapTint = (delegate* unmanaged[Cdecl]<ColorLinear*, ColorLinear*, int>)s_Table[11];
         private static readonly delegate* unmanaged[Cdecl]<int> s_Throw = (delegate* unmanaged[Cdecl]<int>)s_Table[12];
         private static readonly delegate* unmanaged[Cdecl]<Vector3*, Vector3*, Hit*, float, byte*, int> s_TryCast = (delegate* unmanaged[Cdecl]<Vector3*, Vector3*, Hit*, float, byte*, int>)s_Table[13];
-        private static readonly delegate* unmanaged[Cdecl]<Vector3*, uint*, byte*, int> s_TryNearest = (delegate* unmanaged[Cdecl]<Vector3*, uint*, byte*, int>)s_Table[14];
+        private static readonly delegate* unmanaged[Cdecl]<WorldPosition*, uint*, byte*, int> s_TryNearest = (delegate* unmanaged[Cdecl]<WorldPosition*, uint*, byte*, int>)s_Table[14];
         private static readonly delegate* unmanaged[Cdecl]<uint, ScriptCallbackData*, ulong*, int> s_SubscribeTouched = (delegate* unmanaged[Cdecl]<uint, ScriptCallbackData*, ulong*, int>)s_Table[15];
         private static readonly delegate* unmanaged[Cdecl]<ulong, int> s_UnsubscribeTouched = (delegate* unmanaged[Cdecl]<ulong, int>)s_Table[16];
 
@@ -300,7 +302,7 @@ namespace GameEngine.Scripting
         /// Finds the entity nearest to a point.
         /// </summary>
         /// <remarks>Call it on the main thread. A call from any other thread, or from a job, throws EngineCallException.</remarks>
-        public static bool TryNearest(Vector3 point, out Entity outEntity)
+        public static bool TryNearest(WorldPosition point, out Entity outEntity)
         {
             uint outEntityValue = 0xFFFFFFFFu;
             byte result = default;

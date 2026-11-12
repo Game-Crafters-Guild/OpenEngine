@@ -8,6 +8,7 @@
 #include "TerrainECS/TerrainAtlas.h" // kAtlasUpgradeFadeSeconds (device-free, pure)
 #include "TerrainECS/TerrainReprovisionDebounce.h" // coalesce SamplesPerMeter/size drags
 #include "Types/FlatMap.h"
+#include "Types/FlatSet.h"
 #include "Types/Types.h"
 
 #include <memory>
@@ -66,6 +67,9 @@ struct AtlasResidencySnapshot
 class TerrainExtractionSystem : public ECS::ISystem
 {
 public:
+    // Tile streaming and atlas fades follow the view while the game is paused.
+    static constexpr ECS::SystemTime Time = ECS::SystemTime::Real;
+
     explicit TerrainExtractionSystem(Engine::Renderer::RenderServices* renderServices);
     ~TerrainExtractionSystem() override;
 
@@ -132,6 +136,7 @@ private:
     // so a teardown outside this system (scene close, entity delete, component remove)
     // would otherwise hand a reused index the previous terrain's state.
     void ForgetRetiredTiledTerrains(TerrainService& service);
+    void ForgetDestroyedSizeRefusals(const ECS::World& world);
 
     // The stand-in a coarse patch of `tile` uploads: the tile's own when it matches this
     // resolution, extent, height scale and heightfield version, else one built into
@@ -237,9 +242,11 @@ private:
     std::vector<float32> m_AtlasCoarseScratch;
     std::unordered_set<uint32> m_AtlasCoarseBuilt;
 
-    // Warn-once (keyed by TiledTerrainHandle index): the atlas indirection table silently caps at
-    // kAtlasMaxTiles.
-    std::unordered_set<uint32> m_AtlasOverCapWarnedTiled;
+    // The entities whose planar size PlanarTerrainSizeError refuses, so the refusal logs once. An
+    // entity leaves the set when its size is accepted or the entity is destroyed. The set empties
+    // when the world starts a new run of entity handles (World::GetEntityHandleEpoch).
+    FlatSet<ECS::EntityHandle> m_SizeRefusedEntities;
+    uint64 m_SizeRefusalHandleEpoch = 0;
 
     // Settle gate for a tiled terrain's structural re-provision (SamplesPerMeter / world size),
     // keyed by TiledTerrainHandle index. A resolution/size change from an inspector drag emits a

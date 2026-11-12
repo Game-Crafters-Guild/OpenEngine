@@ -6,3 +6,7 @@ target_include_directories(Serialization INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/I
 target_compile_features(Serialization INTERFACE cxx_std_20)
 find_package(nlohmann_json CONFIG REQUIRED)
 target_link_libraries(Serialization INTERFACE Mathematics nlohmann_json::nlohmann_json)
+
+if(BUILD_TESTING AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/Tests/CMakeLists.txt")
+    add_subdirectory(Tests)
+endif()

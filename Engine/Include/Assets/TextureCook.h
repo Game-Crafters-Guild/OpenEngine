@@ -196,7 +196,11 @@ bool ResolveTextureCookInputs(
 bool IsTextureCookSourceExtension(const std::string& extensionLower);
 bool NeedsTextureCook(const TextureCookInputs& inputs, TextureCookOutput output);
 
-// A relocation-independent artifact name shared by build staging and loading.
+// The output's name in logs and in artifact names ("Uncompressed", "BC7").
+const char* TextureCookOutputName(TextureCookOutput output);
+
+// A relocation-independent artifact name shared by build staging and loading:
+// "<guid>-<output>-<source hash>-<config hash>.ktx2". The GUID and the output identify the artifact.
 // cacheRoot/Tex is chosen by the owning asset mount, outside this key recipe.
 std::string TextureCookArtifactName(const GUID& guid, uint64 sourceHash,
                                     const TextureCookInputs& inputs, TextureCookOutput output);
@@ -204,8 +208,18 @@ std::string TextureCookArtifactName(const GUID& guid, uint64 sourceHash,
 // The normal-variance companion's file beside its parent artifact, under the parent's key.
 std::filesystem::path TextureCookVarianceCompanionPath(const std::filesystem::path& parentArtifact);
 
+// Removes the files beside `kept` that it supersedes: the artifacts of the same GUID and output
+// under another source or config, their companions and their temporary files. The artifacts of the
+// GUID's other outputs stay, because one source can cook to more than one output.
+void RemoveSupersededTextureCookArtifacts(const std::filesystem::path& kept, const GUID& guid,
+                                          TextureCookOutput output);
+
 // FNV-1a-64 over the full source payload (same recipe as the LOD cook key).
 uint64 ComputeTextureCookSourceHash(const uint8* bytes, size_t size);
+
+// The same hash of the file at `source`, read through a fixed buffer: no buffer of the file's size.
+// Nullopt when the file cannot be opened or read.
+std::optional<uint64> ComputeTextureCookSourceFileHash(const std::filesystem::path& source);
 
 // The config half of the cache key: settings, color space, swizzle, output, the cook version, the
 // normal-variance companion version (HasNormalVarianceCompanion) and the versions of the libraries that

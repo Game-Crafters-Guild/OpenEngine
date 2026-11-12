@@ -3,6 +3,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <span>
@@ -17,11 +18,16 @@ using GameEngine::Hashing::Fnv1a64Values;
 using GameEngine::Hashing::HashCombine;
 using GameEngine::Hashing::HashPointer;
 using GameEngine::Hashing::kFnv1a64OffsetBasis;
+using GameEngine::Hashing::kGoldenRatio64;
+using GameEngine::Hashing::SplitMix64;
+using GameEngine::Hashing::UnitDraw;
 
 static_assert(Fnv1a64(std::string_view{}) == 0xcbf29ce484222325ull);
 static_assert(Fnv1a64("a") == 0xaf63dc4c8601ec8cull);
 static_assert(Fnv1a64("foobar") == 0x85944171f73967e8ull);
 static_assert(GameEngine::HashStringId("foobar") == 0x85944171f73967e8ull);
+// One pinned draw: a change to the mix or to the bits the draw keeps changes every seeded result.
+static_assert(UnitDraw(7, 11, 13, 17) == 0.469842135906219482421875f);
 
 TEST(Fnv1aTests, MatchesStandardKnownVectors)
 {
@@ -52,10 +58,49 @@ TEST(Fnv1aTests, ValuesHashTheCountThenTheBytes)
 
 TEST(Fnv1aTests, HashPointerMixesTheAddress)
 {
-    // SplitMix64's finalizer of the address: these values pin the mix the UI's identity keys use.
-    EXPECT_EQ(HashPointer(reinterpret_cast<const void*>(std::uintptr_t{1})), 0x5692161d100b05e5ull);
-    EXPECT_EQ(HashPointer(reinterpret_cast<const void*>(std::uintptr_t{0x1000})), 0xf06041805d06b780ull);
-    EXPECT_EQ(HashPointer(nullptr), 0u);
+    // SplitMix64 of the address: these values pin the mix the UI's identity keys use.
+    EXPECT_EQ(HashPointer(reinterpret_cast<const void*>(std::uintptr_t{1})), 0x910a2dec89025cc1ull);
+    EXPECT_EQ(HashPointer(reinterpret_cast<const void*>(std::uintptr_t{0x1000})), 0xd73a9a3d941e7ec7ull);
+    EXPECT_EQ(HashPointer(nullptr), 0xe220a8397b1dcdafull);
+}
+
+TEST(Fnv1aTests, SplitMix64MatchesTheReferenceGenerator)
+{
+    // The first three outputs of the reference splitmix64.c (Vigna, prng.di.unimi.it/splitmix64.c)
+    // with the seed 1234567. The generator adds the increment to its state before each output.
+    constexpr std::uint64_t kSeed = 1234567;
+    EXPECT_EQ(SplitMix64(kSeed), 6457827717110365317ull);
+    EXPECT_EQ(SplitMix64(kSeed + kGoldenRatio64), 3203168211198807973ull);
+    EXPECT_EQ(SplitMix64(kSeed + 2 * kGoldenRatio64), 9817491932198370423ull);
+}
+
+TEST(Fnv1aTests, UnitDrawIsAPureFunctionOfEachInput)
+{
+    const float draw = UnitDraw(7, 11, 13, 17);
+    EXPECT_EQ(UnitDraw(7, 11, 13, 17), draw);
+    EXPECT_NE(UnitDraw(8, 11, 13, 17), draw) << "seed";
+    EXPECT_NE(UnitDraw(7, 12, 13, 17), draw) << "agent";
+    EXPECT_NE(UnitDraw(7, 11, 14, 17), draw) << "tick";
+    EXPECT_NE(UnitDraw(7, 11, 13, 18), draw) << "index";
+}
+
+TEST(Fnv1aTests, UnitDrawIsUniformOverTheUnitInterval)
+{
+    constexpr std::uint64_t kDrawCount = 100000;
+    constexpr std::size_t kBinCount = 16;
+    constexpr double kMeanTolerance = 0.01;
+    std::array<std::uint64_t, kBinCount> bins{};
+    double sum = 0.0;
+    for (std::uint64_t index = 0; index < kDrawCount; ++index)
+    {
+        const float draw = UnitDraw(42, 3, 5, index);
+        ASSERT_GE(draw, 0.0f);
+        ASSERT_LT(draw, 1.0f);
+        sum += draw;
+        ++bins[static_cast<std::size_t>(draw * kBinCount)];
+    }
+    EXPECT_NEAR(sum / static_cast<double>(kDrawCount), 0.5, kMeanTolerance);
+    EXPECT_EQ(std::ranges::count(bins, std::uint64_t{0}), 0) << "every sixteenth of [0, 1) gets a draw";
 }
 
 TEST(Fnv1aTests, HashCombineKeepsItsValuesAndTheirOrder)

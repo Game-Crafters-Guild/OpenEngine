@@ -4454,7 +4454,7 @@ static std::string MakeCppEntitySystemBody(const std::string& name)
            "{\n"
            "    void ForEach(GameEngine::Components::Transform& /*transform*/, float /*dt*/)\n"
            "    {\n"
-           "        // Runs per entity with a Transform. e.g. transform.matrix[13] += dt; (Y)\n"
+           "        // Runs per entity with a Transform. e.g. transform.Position.Y += dt;\n"
            "    }\n"
            "};\n";
 }

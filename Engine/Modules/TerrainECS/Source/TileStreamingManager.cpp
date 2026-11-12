@@ -12,6 +12,20 @@
 namespace GameEngine::TerrainECS
 {
 
+namespace
+{
+// Dispatch order: priority order, but a first load goes before an upgrade in the same frustum class.
+bool DispatchesBefore(TileState stateA, const TileStreamingPriority& a,
+                      TileState stateB, const TileStreamingPriority& b)
+{
+    const bool upgradeA = stateA == TileState::UpgradeRequested;
+    const bool upgradeB = stateB == TileState::UpgradeRequested;
+    if (upgradeA != upgradeB && a.InFrustum == b.InFrustum)
+        return upgradeB;
+    return a < b;
+}
+} // namespace
+
 TileStreamingManager::TileStreamingManager(JobSystem::WorkStealingThreadPool* jobSystem,
                                            const StreamingConfig& config)
     : m_Config(config)
@@ -68,6 +82,7 @@ TileStreamingManager::Stats TileStreamingManager::GetStats() const
                 ++stats.TilesLoading;
                 break;
             case TileState::Requested:
+            case TileState::UpgradeRequested:
                 ++stats.TilesPending;
                 break;
             default:
@@ -203,8 +218,7 @@ void TileStreamingManager::EvaluateTilePriorities(
                     it->second->LodState == TileLodState::Coarse &&
                     !stream.TeleportModeActive)
                 {
-                    tracker.State = TileState::Requested;
-                    tracker.Priority.IsUpgrade = true;
+                    tracker.State = TileState::UpgradeRequested;
                     if (!tracker.Result)
                     {
                         tracker.Result = std::make_shared<TileGenerationResult>();
@@ -224,13 +238,15 @@ void TileStreamingManager::DispatchPendingJobs(TerrainStream& stream, const Tile
     std::vector<TileCoord> requested;
     for (auto& [coord, tracker] : stream.Trackers)
     {
-        if (tracker.State == TileState::Requested)
+        if (tracker.State == TileState::Requested || tracker.State == TileState::UpgradeRequested)
             requested.push_back(coord);
     }
 
     std::sort(requested.begin(), requested.end(),
         [&stream](const TileCoord& a, const TileCoord& b) {
-            return stream.Trackers[a].Priority < stream.Trackers[b].Priority;
+            const TileTracker& trackerA = stream.Trackers[a];
+            const TileTracker& trackerB = stream.Trackers[b];
+            return DispatchesBefore(trackerA.State, trackerA.Priority, trackerB.State, trackerB.Priority);
         });
 
     for (const auto& coord : requested)
@@ -240,7 +256,7 @@ void TileStreamingManager::DispatchPendingJobs(TerrainStream& stream, const Tile
 
         auto& tracker = stream.Trackers[coord];
 
-        if (tracker.Priority.IsUpgrade)
+        if (tracker.State == TileState::UpgradeRequested)
         {
             // Upgrade: skip coarse, go directly to full.
             DispatchFullJob(stream, tiled, tracker, coord);
@@ -292,7 +308,7 @@ void TileStreamingManager::DispatchCoarseJob(TerrainStream& stream,
         result->CoarseHeightfield.Resize(coarseRes, coarseRes, 0.0f);
         FillTiledBaseRegion(result->CoarseHeightfield, config, terrainOriginX, terrainOriginZ,
                             worldOriginX, worldOriginZ, tileWorld, tileWorld, 0, 0,
-                            static_cast<int32>(coarseRes) - 1, static_cast<int32>(coarseRes) - 1);
+                            static_cast<int32>(coarseRes) - 1, static_cast<int32>(coarseRes) - 1, 0.0f);
 
         // Compute min/max.
         float32 minH = std::numeric_limits<float32>::max();
@@ -361,7 +377,7 @@ void TileStreamingManager::DispatchFullJob(TerrainStream& stream,
         result->FullHeightfield.Resize(fullW, fullH, 0.0f);
         FillTiledBaseRegion(result->FullHeightfield, config, terrainOriginX, terrainOriginZ,
                             worldOriginX, worldOriginZ, tileWorld, tileWorld, 0, 0,
-                            static_cast<int32>(fullW) - 1, static_cast<int32>(fullH) - 1);
+                            static_cast<int32>(fullW) - 1, static_cast<int32>(fullH) - 1, 0.0f);
 
         // Compute accurate min/max.
         float32 minH = std::numeric_limits<float32>::max();
@@ -542,8 +558,7 @@ void TileStreamingManager::IntegrateCompletedTiles(TerrainStream& stream,
             }
             else
             {
-                // Defer upgrade — EvaluateTilePriorities will schedule it
-                // via the priority system on the next frame.
+                // EvaluateTilePriorities requests the upgrade on the next frame.
                 tracker.State = TileState::Active;
             }
             break;
@@ -645,6 +660,12 @@ void TileStreamingManager::HandleTeleportMode(
     std::vector<TileCoord> toCancel;
     for (auto& [coord, tracker] : stream.Trackers)
     {
+        // Teleport mode loads coarse only: a waiting upgrade goes back to Active and keeps its Coarse data.
+        if (tracker.State == TileState::UpgradeRequested)
+        {
+            tracker.State = TileState::Active;
+            continue;
+        }
         if (tracker.State == TileState::Active || tracker.State == TileState::Idle)
             continue;
 

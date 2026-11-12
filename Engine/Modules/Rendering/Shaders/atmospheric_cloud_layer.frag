@@ -14,7 +14,7 @@ layout(set = 0, binding = 1) uniform sampler2D uDepth;
 
 layout(set = 0, binding = 2, std140) uniform ViewParamsBlock
 {
-    // 160 B core prefix of the shared ViewParams list.
+    // 176 B core prefix of the shared ViewParams list.
 #define GE_VP_MAT4(name) mat4 name;
 #define GE_VP_VEC4(name) vec4 name;
 #define GE_VIEWPARAMS_CORE_ONLY 1
@@ -186,7 +186,7 @@ void main()
     pV.xyz /= max(pV.w, 1e-6);
 
     float worldLimit = sky
-        ? max(max(ViewParams.ge_nearFar.y, pc.atmosFloorHeight + pc.atmosLayerDepth) * 12.0, 1000.0)
+        ? max(max(ViewParams.ge_viewRanges.y, pc.atmosFloorHeight + pc.atmosLayerDepth) * 12.0, 1000.0)
         : length(pV.xyz);
     vec3 viewDirV = normalize(pV.xyz);
     vec3 viewDirWS = normalize(transpose(mat3(ViewParams.ge_view)) * viewDirV);

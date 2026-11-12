@@ -18,10 +18,89 @@
 
 #include "Platform/WebView.h"
 
-#include <emscripten.h>
+#include <emscripten/em_js.h>
 
 #include <cstdint>
 #include <string>
+
+// The JS side of WebViewWeb. Elements live in Module.__geWebViews keyed by the
+// view's id. EM_JS bodies take named parameters: -Wpedantic refuses the
+// dollar-sign argument names of EM_ASM.
+// clang-format off
+EM_JS(void, GeWebViewCreate, (std::uint32_t id), {
+    Module.__geWebViews = Module.__geWebViews || {};
+    var frame = document.createElement("iframe");
+    frame.style.position = "absolute";
+    frame.style.border = "0";
+    frame.style.margin = "0";
+    frame.style.padding = "0";
+    // Above the canvas, below anything the shell puts on top of both.
+    frame.style.zIndex = "10";
+    frame.style.display = "none";
+    // Under COEP a cross-origin frame loads only when it is credentialless; it loads without the user's sign-in.
+    frame.setAttribute("credentialless", "");
+    frame.setAttribute("allow", "autoplay; encrypted-media; picture-in-picture");
+    document.body.appendChild(frame);
+    Module.__geWebViews[id] = frame;
+});
+
+EM_JS(void, GeWebViewLoadUrl, (std::uint32_t id, const char* url), {
+    var frame = (Module.__geWebViews || {})[id];
+    if (!frame)
+        return;
+    // srcdoc outranks src: remove it so that a LoadURL after a LoadHTML navigates.
+    frame.removeAttribute("srcdoc");
+    frame.src = UTF8ToString(url);
+});
+
+EM_JS(void, GeWebViewLoadHtml, (std::uint32_t id, const char* html), {
+    var frame = (Module.__geWebViews || {})[id];
+    if (!frame)
+        return;
+    // Dropping src keeps the pair unambiguous in the other direction:
+    // a frame told to show inline HTML must not race a still-loading
+    // navigation from an earlier LoadURL.
+    frame.removeAttribute("src");
+    frame.srcdoc = UTF8ToString(html);
+});
+
+EM_JS(void, GeWebViewSetBackgroundColor, (std::uint32_t id, int r, int g, int b), {
+    var frame = (Module.__geWebViews || {})[id];
+    if (frame)
+        frame.style.backgroundColor = "rgb(" + r + "," + g + "," + b + ")";
+});
+
+EM_JS(void, GeWebViewRemove, (std::uint32_t id), {
+    var views = Module.__geWebViews || {};
+    var frame = views[id];
+    if (frame && frame.parentNode)
+        frame.parentNode.removeChild(frame);
+    delete views[id];
+});
+
+EM_JS(void, GeWebViewApply, (std::uint32_t id, int x, int y, int width, int height, int visible), {
+    var frame = (Module.__geWebViews || {})[id];
+    if (!frame)
+        return;
+    // The canvas's page offset is read on every apply: the shell is free
+    // to lay the canvas out however it likes, and a cached offset would
+    // leave the frame behind the first time the page reflows.
+    var canvas = Module["canvas"] || document.querySelector("canvas");
+    var originX = 0;
+    var originY = 0;
+    if (canvas)
+    {
+        var rect = canvas.getBoundingClientRect();
+        originX = rect.left + window.scrollX;
+        originY = rect.top + window.scrollY;
+    }
+    frame.style.left = (originX + x) + "px";
+    frame.style.top = (originY + y) + "px";
+    frame.style.width = width + "px";
+    frame.style.height = height + "px";
+    frame.style.display = visible ? "block" : "none";
+});
+// clang-format on
 
 namespace GameEngine
 {
@@ -42,33 +121,7 @@ std::uint32_t NextWebViewId()
 class WebViewWeb final : public IWebView
 {
   public:
-    explicit WebViewWeb(std::uint32_t id) : m_Id(id)
-    {
-        EM_ASM({
-            var id = $0;
-            Module.__geWebViews = Module.__geWebViews || {};
-            var frame = document.createElement('iframe');
-            frame.style.position = 'absolute';
-            frame.style.border = '0';
-            frame.style.margin = '0';
-            frame.style.padding = '0';
-            // Above the canvas, below anything the shell puts on top of both.
-            frame.style.zIndex = '10';
-            frame.style.display = 'none';
-            // The editor page is cross-origin isolated (COOP+COEP) because the
-            // threaded build needs SharedArrayBuffer. Under COEP a cross-origin
-            // iframe must either send its own COEP header — no ordinary website
-            // does — or be marked credentialless, or the browser refuses the
-            // frame outright and shows "refused to connect". The parent's own
-            // COEP: credentialless does NOT cover nested documents; only this
-            // attribute does. It costs the frame its credentials, so embedded
-            // pages load logged out.
-            frame.setAttribute('credentialless', '');
-            frame.setAttribute('allow', 'autoplay; encrypted-media; picture-in-picture');
-            document.body.appendChild(frame);
-            Module.__geWebViews[id] = frame;
-        }, m_Id);
-    }
+    explicit WebViewWeb(std::uint32_t id) : m_Id(id) { GeWebViewCreate(m_Id); }
 
     ~WebViewWeb() override { Destroy(); }
 
@@ -76,18 +129,7 @@ class WebViewWeb final : public IWebView
     {
         if (m_Destroyed)
             return false;
-        EM_ASM({
-            var frame = (Module.__geWebViews || {})[$0];
-            if (!frame)
-                return;
-            // srcdoc outranks src whenever both are present, so a frame that
-            // ever showed inline HTML would keep showing it and every later
-            // navigation would silently do nothing. Callers do exactly that:
-            // WebPanel seeds a dark placeholder through LoadHTML, then calls
-            // LoadURL.
-            frame.removeAttribute('srcdoc');
-            frame.src = UTF8ToString($1);
-        }, m_Id, url.c_str());
+        GeWebViewLoadUrl(m_Id, url.c_str());
         return true;
     }
 
@@ -99,16 +141,7 @@ class WebViewWeb final : public IWebView
         // is replaced atomically. The baseURL a caller passes cannot be honoured
         // — srcdoc content resolves relative URLs against this page — which only
         // affects relative links, and callers embed absolute ones.
-        EM_ASM({
-            var frame = (Module.__geWebViews || {})[$0];
-            if (!frame)
-                return;
-            // Dropping src keeps the pair unambiguous in the other direction:
-            // a frame told to show inline HTML must not race a still-loading
-            // navigation from an earlier LoadURL.
-            frame.removeAttribute('src');
-            frame.srcdoc = UTF8ToString($1);
-        }, m_Id, html.c_str());
+        GeWebViewLoadHtml(m_Id, html.c_str());
         return true;
     }
 
@@ -147,11 +180,7 @@ class WebViewWeb final : public IWebView
     {
         if (m_Destroyed)
             return;
-        EM_ASM({
-            var frame = (Module.__geWebViews || {})[$0];
-            if (frame)
-                frame.style.backgroundColor = 'rgb(' + $1 + ',' + $2 + ',' + $3 + ')';
-        }, m_Id, (int)r, (int)g, (int)b);
+        GeWebViewSetBackgroundColor(m_Id, r, g, b);
     }
 
     bool BeginFileDrag(const std::filesystem::path& /*path*/) override { return false; }
@@ -164,13 +193,7 @@ class WebViewWeb final : public IWebView
         if (m_Destroyed)
             return;
         m_Destroyed = true;
-        EM_ASM({
-            var views = Module.__geWebViews || {};
-            var frame = views[$0];
-            if (frame && frame.parentNode)
-                frame.parentNode.removeChild(frame);
-            delete views[$0];
-        }, m_Id);
+        GeWebViewRemove(m_Id);
     }
 
   private:
@@ -178,31 +201,7 @@ class WebViewWeb final : public IWebView
     {
         if (m_Destroyed)
             return;
-        EM_ASM({
-            var frame = (Module.__geWebViews || {})[$0];
-            if (!frame)
-                return;
-            // The canvas's page offset is read on every apply: the shell is free
-            // to lay the canvas out however it likes, and a cached offset would
-            // leave the frame behind the first time the page reflows.
-            var canvas = Module['canvas'] || document.querySelector('canvas');
-            // One declaration per statement: EM_ASM's body is a macro argument,
-            // so a comma outside parentheses splits it and the C preprocessor
-            // hands the compiler half a statement.
-            var originX = 0;
-            var originY = 0;
-            if (canvas)
-            {
-                var rect = canvas.getBoundingClientRect();
-                originX = rect.left + window.scrollX;
-                originY = rect.top + window.scrollY;
-            }
-            frame.style.left = (originX + $1) + 'px';
-            frame.style.top = (originY + $2) + 'px';
-            frame.style.width = $3 + 'px';
-            frame.style.height = $4 + 'px';
-            frame.style.display = $5 ? 'block' : 'none';
-        }, m_Id, m_X, m_Y, m_Width, m_Height, m_Visible ? 1 : 0);
+        GeWebViewApply(m_Id, m_X, m_Y, m_Width, m_Height, m_Visible ? 1 : 0);
     }
 
     std::uint32_t m_Id = 0;

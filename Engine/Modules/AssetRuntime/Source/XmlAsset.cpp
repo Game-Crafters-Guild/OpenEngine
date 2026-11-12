@@ -9,7 +9,7 @@ bool XmlAsset::Load()
 {
     try
     {
-        Vector<uint8> bytes;
+        ByteBuffer bytes;
         if (!ReadFileBytesShared(GetPath(), bytes))
         {
             SetState(AssetState::Failed);
@@ -25,7 +25,7 @@ bool XmlAsset::Load()
     }
 }
 
-bool XmlAsset::LoadFromData(const Vector<uint8>& data)
+bool XmlAsset::LoadFromData(std::span<const uint8> data)
 {
     try
     {

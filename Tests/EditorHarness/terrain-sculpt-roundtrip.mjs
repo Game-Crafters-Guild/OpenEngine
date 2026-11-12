@@ -4,8 +4,8 @@
 // The operation nobody could drive from automation before: prove that a brush edit
 // on a live terrain reaches the terrain's heights, survives a save/reload cycle, and
 // comes back rendering. Runs against BOTH terrain domains — a planar terrain sculpts
-// through the zone brush (payload -> .tzone sidecar), a planet through the sphere
-// sculpt layer (-> .tsculpt sidecar).
+// through the zone brush (payload -> .tzone sidecar), a planet through its height
+// layer (-> .gepage sidecar).
 //
 // Every assertion is effect-side. A handler's `ok: true` is never treated as evidence:
 // the payload magnitude, the terrain heightfield statistics, and the sidecar bytes on
@@ -115,6 +115,18 @@ function heightStats(t) {
     return { min: h.min, max: h.max, mean: h.mean, range: h.range };
 }
 
+// A planet's surface radius along `dir`, in metres: the pick a viewport stroke runs, so it reads
+// the relief with the height layer on it.
+async function surfaceRadius(dir) {
+    const probe = await call('terrain_sculpt_dab', { probe_only: true, dir });
+    return Math.hypot(...probe.point);
+}
+
+// True when the scene has unsaved changes. A planet's unsaved height layer counts.
+async function sceneDirty() {
+    return (await call('get_editor_state')).sceneDirty === true;
+}
+
 function statsEqual(a, b, eps = 1e-9) {
     if (!a || !b) return false;
     return Math.abs(a.min - b.min) <= eps && Math.abs(a.max - b.max) <= eps
@@ -152,6 +164,8 @@ async function runCase({ label, createCommand, sculpt, sidecarExt }) {
 
     const before = heightStats(terrain);
     check(`${label}: baseline heightfield readable`, before !== null, JSON.stringify(before));
+    const planetDir = sculpt.dir ?? sculpt.pos;
+    const radiusBefore = sculpt.dir ? await surfaceRadius(planetDir) : 0;
 
     step(`${label}: sculpt`);
     const dab = await call('terrain_sculpt_dab', sculpt);
@@ -173,9 +187,7 @@ async function runCase({ label, createCommand, sculpt, sidecarExt }) {
         check(`${label}: sculpt version advanced`,
               dab.sculptVersion.after > dab.sculptVersion.before,
               `${dab.sculptVersion.before} -> ${dab.sculptVersion.after}`);
-        const stats = await call('get_terrain_stats');
-        check(`${label}: sculpt store reports edits`, stats.sculpt?.hasEdits === true);
-        check(`${label}: sculpt store needs save`, stats.sculpt?.needsSave === true);
+        check(`${label}: the unsaved height layer marks the scene dirty`, await sceneDirty());
     }
 
     // The IPC stroke and the viewport stroke share TerrainBrushTool::ApplyStrokePhase, so a
@@ -242,14 +254,12 @@ async function runCase({ label, createCommand, sculpt, sidecarExt }) {
                   `(max ${before.max.toFixed(6)} -> ${afterSculpt.max.toFixed(6)})`);
         }
     } else {
-        // A planet has no planar heightfield; the CPU-authoritative composed height at the
-        // dab direction is the equivalent oracle.
-        const dir = sculpt.dir ?? sculpt.pos;
-        const probe = await call('get_terrain_stats', { probe_dir: dir });
-        check(`${label}: composed sculpt height is non-zero at the dab`,
-              Math.abs(probe.sculpt?.probeComposed ?? 0) > 0,
-              `probeComposed=${probe.sculpt?.probeComposed}`);
-        afterSculpt = { probeComposed: probe.sculpt.probeComposed };
+        // A planet has no planar heightfield; the surface radius at the dab direction is the
+        // equivalent oracle.
+        const radius = await surfaceRadius(planetDir);
+        check(`${label}: a raise stroke raised the surface`, radius > radiusBefore,
+              `radius ${radiusBefore.toFixed(4)} -> ${radius.toFixed(4)} m`);
+        afterSculpt = { radius };
     }
 
     step(`${label}: save`);
@@ -320,11 +330,13 @@ async function runCase({ label, createCommand, sculpt, sidecarExt }) {
                       `(unsculpted ${before.mean.toFixed(9)}), drift ${drift.toExponential(2)}`);
             }
         } else {
-            const probe = await call('get_terrain_stats', { probe_dir: sculpt.dir ?? sculpt.pos });
-            check(`${label}: sculpt survived the round trip`,
-                  Math.abs(probe.sculpt?.probeComposed ?? 0) > 0,
-                  `probeComposed=${probe.sculpt?.probeComposed}`);
-            check(`${label}: restored sculpt needs no re-save`, probe.sculpt?.needsSave === false);
+            // The layer saves losslessly, so the reloaded surface is the pre-save surface.
+            const radius = await surfaceRadius(planetDir);
+            const drift = afterSculpt ? Math.abs(radius - afterSculpt.radius) : Infinity;
+            check(`${label}: sculpt survived the round trip`, drift < 1e-3,
+                  `reloaded radius ${radius.toFixed(4)} vs pre-save ${afterSculpt?.radius?.toFixed(4)} ` +
+                  `(unsculpted ${radiusBefore.toFixed(4)}) m`);
+            check(`${label}: the loaded height layer needs no save`, !(await sceneDirty()));
         }
 
         // Renders: the render feature published a live instance with a valid heightmap.
@@ -457,7 +469,7 @@ async function main() {
         cases.push({
             label: 'spherical',
             createCommand: 'create_planet_5km',
-            sidecarExt: '.tsculpt',
+            sidecarExt: '.gepage',
             sculpt: { dir: [0, 1, 0], end_dir: [0.2, 1, 0], count: 12,
                       radius: 200, strength: 40, mode: 'raise' },
         });

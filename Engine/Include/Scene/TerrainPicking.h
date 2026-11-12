@@ -11,6 +11,7 @@
 #include <utility>
 
 namespace GameEngine::ECS { class World; }
+namespace GameEngine::CBTTerrainECS { class CBTRenderFeature; }
 
 namespace GameEngine::Scene
 {
@@ -18,9 +19,11 @@ namespace GameEngine::Scene
 struct TerrainPickHit
 {
     GameEngine::ECS::EntityHandle Entity{};
-    Mathematics::Vector3          WorldPosition{};
+    Mathematics::Vector3          Point{};
     Mathematics::Vector3          WorldNormal{};
     float32                       Distance = 0.0f;
+    // The height came from a page coarser than the finest: the finest page there was not on the CPU.
+    bool                          CoarseHeight = false;
 };
 
 // Coarse samples marched along the ray's traversal of a terrain's world AABB, then a fixed
@@ -212,7 +215,7 @@ inline bool MarchPlanetChordSurface(const Mathematics::Vector3& o, const Mathema
 //     ground is 339.60 m ahead, so the pick is 336.71 m short. The failure is a wrong hit, not
 //     a miss: nothing downstream can tell it apart from a good one.
 //   * Non-convergence: over a 32-azimuth sweep of the visible disc from a 1.5 R orbit the worst
-//     positional error is 175.81 m, nearly twice the relief envelope, at 94.9% of the
+//     positional error is 175.19 m, nearly twice the relief envelope, at 94.9% of the
 //     silhouette — a ray that runs all six iterations and stops off both spheres.
 //   * No seed: a near-limb ray that clears the reference sphere but would graze a relief peak
 //     has no analytic root at all and reports nothing: 33 of 3937 drawn rays in that sweep.
@@ -273,6 +276,17 @@ inline bool SolvePlanetSurfaceHit(const Mathematics::Ray3D& ray, float32 radius,
     outNormal = outPos.Normalize();
     return true;
 }
+
+/// The drawn planet's height above its radius by direction (CBTRenderFeature::SampleSphereSurfaceHeight),
+/// as SolvePlanetSurfaceHit and the planet gizmos call it. A direction with no page on the CPU answers 0
+/// and sets Missed: the caller then reports no hit.
+struct DrawnPlanetHeight
+{
+    const CBTTerrainECS::CBTRenderFeature& Feature;
+    bool Missed = false;
+
+    float32 operator()(float32 dx, float32 dy, float32 dz);
+};
 
 // Cast a ray against the active terrain in the world and return the closest hit, refined to
 // the surface. Planar terrains are marched over their heightfield footprint; the spherical

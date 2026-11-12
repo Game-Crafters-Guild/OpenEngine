@@ -49,6 +49,12 @@ public:
     bool DeclareForView(Engine::Renderer::Pipeline::ViewDeclare& d, uint32_t frameIndex,
                         ::GameEngine::Rendering::RenderGraph::RGTexture* outGraphTexture = nullptr);
 
+    // Asks the device for the pipeline that DeclareForView binds when the colour it grabs has the
+    // attachment of `source`: the MSAA resolve for a multisampled colour, else the copy. The build
+    // runs off the calling thread.
+    void RequestPipeline(::GameEngine::Rendering::IDevice& device,
+                         const ::GameEngine::Rendering::PipelineFormatKey& source);
+
     bool IsReady(uint32_t viewId, uint32_t frameIndex) const
     {
         auto it = m_GrabsByView.find(viewId);

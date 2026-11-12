@@ -29,6 +29,8 @@
 #include "Rendering/Materials/Shader/ShaderMeta.h"
 #include "SharedHeadlessDevice.h"
 #include "StagedTestPaths.h"
+#include "TestCameraEye.h"
+
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -157,7 +159,7 @@ class WaterReflectionSlices
         camera.viewProj = viewProj;
         camera.cameraPos.y = 50.0f;
         const CameraId cam = m_Rs->Views().AllocateCamera("WaterSlicesCam");
-        m_Rs->Views().SetCameraData(cam, camera);
+        m_Rs->Views().SetCameraData(cam, ::GameEngine::Tests::TestCameraWithEye(camera), {0.5f, 600.0f});
         m_View = m_Rs->Views().AllocateView("WaterSlicesView", cam);
         m_Rs->Views().SetViewRenderLayerMask(m_View, GameEngine::Rendering::RenderLayerMask::Default());
         Rendering::ViewClearConfig clear{};

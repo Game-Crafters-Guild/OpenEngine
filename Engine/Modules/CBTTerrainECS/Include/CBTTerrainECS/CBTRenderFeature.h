@@ -18,7 +18,6 @@
 #include "CBTTerrain/CBTActivityReadback.h"
 #include "CBTTerrain/CBTInstance.h"
 #include "CBTTerrain/CBTKernelSet.h"
-#include "CBTTerrain/SphereSculptLayer.h"
 #include "CBTTerrain/CBTUpdateRestGate.h"
 #include "CBTTerrainECS/CBTTreeSeed.h"
 #include "CBTTerrainECS/CBTValidationReadback.h"
@@ -26,6 +25,7 @@
 #include "Components/Terrain/Terrain.h" // kNoTerrainSeaLevel
 #include "Engine/Rendering/DrawBindings.h"
 #include "Engine/Rendering/IRenderFeature.h"
+#include "Mathematics/Vector3.h"
 #include "Rendering/Materials/Shader/ShaderVariantKey.h"
 
 namespace GameEngine::Rendering
@@ -82,6 +82,7 @@ class CBTRenderFeature final : public Engine::Renderer::IRenderFeature
         float ReliefAmplitude = 60.0f;
         float ReliefFrequency = 6.0f;
         uint32_t ReliefOctaves = 4u; // fBM octaves for the sphere relief (matches TerrainPlanetRelief default)
+        uint32_t PlanetEntity = 0u;  // the active planet's entity id: the key of its height page layer
         // Domain SHAPE only. A terrain's materials do not travel this path: both domains read the
         // terrain material table (TerrainRenderFeature), which TerrainExtractionSystem authors from
         // the same component this config is built from.
@@ -139,12 +140,25 @@ class CBTRenderFeature final : public Engine::Renderer::IRenderFeature
         m_ForceVertexEval.store(true, std::memory_order_relaxed);
         m_UpdateAtRest.store(false, std::memory_order_relaxed);
     }
+    // Debug (get_terrain_stats `census`): the next recorded update counts the pool census
+    // (CBTTerrain::CBTPoolCensus), at rest too. At rest that update serves no split and no merge, so the
+    // census counts the rest tree and leaves it as it is.
+    void RequestPoolCensus()
+    {
+        m_PoolCensusRequested.store(true, std::memory_order_relaxed);
+        m_UpdateAtRest.store(false, std::memory_order_relaxed);
+    }
+    // CBTRenderNode, at the point an update records: true once per RequestPoolCensus, and the census then
+    // belongs to this update (GetPoolCensusRecord).
+    bool ConsumePoolCensusRequest();
+    // The GetUpdateRecordCount value of the newest update that counted the census; 0 = none yet.
+    uint64_t GetPoolCensusRecord() const { return m_PoolCensusRecord.load(std::memory_order_relaxed); }
     bool IsActive() const { return m_Active; }
     // The terrain's depth can change unless its update is at rest (IsUpdateAtRest): a tree that
     // splits or merges, and a sculpt or streamed height edit, change depth with a static camera
     // and no other elision key moving. Read by the frame spine before this frame's update is
     // decided, so besides the last decision it reports every change that will make this frame's
-    // update run: one SetActive or RequestForceVertexEval announced, a pending full re-evaluation,
+    // update run: one SetActive, RequestForceVertexEval or RequestPoolCensus announced, a pending full re-evaluation,
     // a held tree restart, and a terrain retire or a new height source the node has not consumed
     // yet (read live from TerrainRenderFeature). A camera or render-extent change is not reported:
     // every depth-derived reader keys on those itself.
@@ -158,10 +172,10 @@ class CBTRenderFeature final : public Engine::Renderer::IRenderFeature
     // changed left the tree at rest (CBTUpdateRestGate), and neither an edited region nor a full
     // vertex re-evaluation is pending. The draw then reads the buffers the last update wrote.
     bool IsUpdateAtRest(const CBTTerrain::CBTFrameParams& params);
-    // True when the inputs IsUpdateAtRest last compared equal the update before them: the camera
-    // holds still, so the update about to be recorded applies the rest rule
-    // (CBTTerrain::CBTClassifyDesc::Settle) and the tree settles to the one tree the pose asks for.
-    bool InputsHeld() const { return m_RestGate.InputsHeld(); }
+    // CBTTerrain::CBTClassifyDesc::Settle for the update about to be recorded, from the inputs IsUpdateAtRest
+    // last compared: above 0 while the camera holds still, so the tree settles to the one tree the pose asks
+    // for; kSettleLasted once the rest has lasted CBTUpdateRestGate::kKeepProbeSettle.
+    uint32_t RestSettle() const { return m_RestGate.Settle(); }
     // For the update about to be declared into `frame`: its readback slot (invalid = unread).
     // `forced` = the update re-evaluates every vertex (GateVertexEval 0).
     CBTTerrain::CBTActivitySlot BeginUpdateActivityReadback(const Rendering::RenderGraph::RGFrame& frame,
@@ -190,19 +204,10 @@ class CBTRenderFeature final : public Engine::Renderer::IRenderFeature
     CBTTerrain::CBTInstance& GetInstance() { return m_Instance; }
     CBTValidationReadback& GetValidationReadback() { return m_ValidationReadback; }
 
-    // Planet editing (plan §planet-editing): the AUTHORITATIVE editable sculpt layer (dab +
-    // baked terrain-modifier stack) now lives in TerrainService — the two writers (editor
-    // brush + TerrainModifierSystem) span modules the feature cannot reach. The feature only
-    // UPLOADS it: BuildFrameParams reads TerrainService's version + atlas into this frame's
-    // ring slot (gated). CBTUpdateSystem reads TerrainService's version + dirty (face,rect) to
-    // drive Classify; the physics colliders read TerrainService's mirror directly.
-
-    // The CPU-authoritative planet surface height (metres above PlanetRadius) at a world
-    // direction: procedural relief (from the active planet tuning) + TerrainService's editable
-    // sculpt layer — the SAME height the GPU VertexEval displaces to. The editor brush refines
-    // its ray->planet hit against this so the cursor tracks tall relief / sculpt instead of
-    // drifting on the analytic base sphere (#488 follow-up). `dir` need not be unit.
-    float SampleSphereSurfaceHeight(float dx, float dy, float dz) const;
+    /// The drawn planet's height in meters above PlanetRadius in world direction `direction` (need not
+    /// be unit): its CPU pages and layers as they are drawn (SurfaceHeightQuery's spherical arm), from a
+    /// coarser page where the finest is not on the CPU. False when no page there is on the CPU. Main thread.
+    bool SampleSphereSurfaceHeight(const Mathematics::Vector3& direction, float32& outHeight) const;
 
     // Restarts the tree from its roots when CBTTreeSeed names a reason: a domain change, a retire
     // (ConsumeTerrainRetire), a drawn-terrain switch (the last BuildFrameParams) or a lowered cap.
@@ -244,6 +249,11 @@ class CBTRenderFeature final : public Engine::Renderer::IRenderFeature
     bool BuildFrameParams(Engine::Renderer::RenderServices& rs, Rendering::ViewId viewId,
                           uint32_t renderWidth, uint32_t renderHeight, uint32_t frameIndex,
                           CBTTerrain::CBTFrameParams& out);
+
+    // The terrain's authored size in terrain uv (CBTFrameParams::SurfaceExtent, the classify cull's and
+    // the draw clip's extent): x, z per axis, kCBTSurfaceUnclipped where the lattice does not reach past
+    // it and on a spherical domain; zw = 0.
+    static Mathematics::Vector4 SurfaceExtentOf(const TerrainECS::TerrainInstanceInfo& terrain, uint32_t domainMode);
 
     // The real terrain heightmap bound by the most recent BuildFrameParams, or an
     // invalid handle when the flat 1x1 default is in use (no terrain / heightmap not
@@ -377,13 +387,6 @@ class CBTRenderFeature final : public Engine::Renderer::IRenderFeature
     uint32_t m_DrawSurfacePlaneBits = 0u;
     std::array<Rendering::TextureHandle, 4> m_DrawSurfacePlanes{};
     CBTTerrain::CBTClassifyDesc m_Classify{};
-    // Planet-editing sculpt upload gate (v2): the authoritative paged sculpt store lives in
-    // TerrainService (dab + baked modifier stack, shared across modules); the feature only uploads
-    // it. The gate refreshes each ring slot once per sculpt version so an idle edited planet uploads
-    // nothing; the scratches hold the copied page pool + page table for that upload.
-    CBTTerrain::SphereSculptUploadGate m_SphereSculptUploadGate;
-    std::vector<float> m_SphereSculptScratch;
-    std::vector<uint32_t> m_SphereSculptTableScratch;
     float m_TargetPixelError = Components::kDefaultTerrainTargetPixelError;
     float m_AppliedSplitThresholdPx = 0.0f;
     uint32_t m_AppliedRenderHeightPx = 0u;
@@ -402,7 +405,7 @@ class CBTRenderFeature final : public Engine::Renderer::IRenderFeature
     bool m_TerrainRetireGenerationSynced = false;
     // This frame's ring element (CBTFrameRingSlot of the unwrapped frame counter), stashed
     // by BuildFrameParams so BuildDrawCommand can offset-bind the per-slot graphics buffers
-    // (surface params + sculpt atlas).
+    // (surface params).
     uint32_t m_FrameSlot = 0u;
     // Phase E: last-uploaded indirection-table version per ring slot. The atlas rows are
     // re-uploaded to a ring slot only when the residency table changed since that slot was last
@@ -431,6 +434,8 @@ class CBTRenderFeature final : public Engine::Renderer::IRenderFeature
     // Set on init / tree re-seed / planet-param change; consumed once at update-record time
     // to force a full-pool VertexEval (the quiescence gate skips unchanged bisectors).
     std::atomic<bool> m_ForceVertexEval{true};
+    std::atomic<bool> m_PoolCensusRequested{false};
+    std::atomic<uint64_t> m_PoolCensusRecord{0};
     bool m_SphereShadingSignalLogged = false; // one-shot GE_CBT.SphereShading signal
     // The real terrain heightmap bound this frame (invalid = flat default). Set by
     // BuildFrameParams, read by CBTRenderNode for the CBT.Update read edge.

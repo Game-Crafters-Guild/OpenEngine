@@ -14,8 +14,7 @@ add_library(CBTTerrain OBJECT
     Source/CBTActivityReadback.cpp
     Source/CBTTreeAudit.cpp
     Source/TerrainShadowGrid.cpp
-    Source/SphereSculptLayer.cpp
-    Source/SphereSculptSerialization.cpp
+    Source/CBTPlanetRelief.cpp
 )
 
 target_compile_features(CBTTerrain PUBLIC cxx_std_20)
@@ -57,8 +56,7 @@ if(GLSLC_EXECUTABLE)
     set(CBT_KERNELS_SRC ${CBT_SHADER_DIR}/cbt_kernels.comp)
     set(CBT_KERNELS_SPV ${CBT_SHADER_OUTPUT_DIR}/cbt_kernels.comp.spv)
     set(CBT_KERNELS_INCLUDES ${CBT_SHADER_DIR}/cbt_layout.glsl ${CBT_SHADER_DIR}/cbt_domain.glsl
-        ${CBT_SHADER_DIR}/cbt_atlas.glsl ${CBT_SHADER_DIR}/cbt_sculpt.glsl
-        ${CBT_SHADER_DIR}/cbt_analytic.glsl ${CBT_SHADER_DIR}/cbt_deep_decode.glsl
+        ${CBT_SHADER_DIR}/cbt_atlas.glsl ${CBT_SHADER_DIR}/cbt_deep_decode.glsl
         ${CBT_SHADER_DIR}/cbt_page.glsl ${CBT_SHADER_DIR}/cbt_height_chain.glsl
         ${CBT_SHADER_DIR}/cbt_planar_demand.glsl)
 
@@ -196,6 +194,20 @@ if(BUILD_TESTING)
             COMMENT "Extracting the projection normal decode from cbt_surface.glsl"
             VERBATIM)
 
+        # The instance flags the terrain draw hands the fragment's receive-shadows gate.
+        set(CBT_INSTANCE_FLAGS_HEADER ${CMAKE_CURRENT_BINARY_DIR}/generated/CBTInstanceFlagsExtracted.h)
+        add_custom_command(
+            OUTPUT ${CBT_INSTANCE_FLAGS_HEADER}
+            COMMAND ${CMAKE_COMMAND} -DSRC=${CBT_SHADER_DIR}/cbt_vertex_modifier.glsl
+                                     -DOUT=${CBT_INSTANCE_FLAGS_HEADER}
+                                     "-DBEGIN_MARKER=// GE_SHARED_CBT_INSTANCE_FLAGS_BEGIN"
+                                     "-DEND_MARKER=// GE_SHARED_CBT_INSTANCE_FLAGS_END"
+                                     -P ${CMAKE_CURRENT_SOURCE_DIR}/Tests/ExtractShaderBlock.cmake
+            DEPENDS ${CBT_SHADER_DIR}/cbt_vertex_modifier.glsl
+                    ${CMAKE_CURRENT_SOURCE_DIR}/Tests/ExtractShaderBlock.cmake
+            COMMENT "Extracting the instance flags from cbt_vertex_modifier.glsl"
+            VERBATIM)
+
         # The terrain's sun-space clearance map: the shared block the bake kernel and both shading
         # callers compile (the scan step, the per-sample caster, the receiver's lookup).
         set(TERRAIN_SHADOW_GLSL
@@ -251,13 +263,16 @@ if(BUILD_TESTING)
             ${CBT_BLEND_SELECTION_HEADER}
             ${CBT_TANGENT_DECODE_HEADER}
             ${CBT_PROJ_NORMAL_HEADER}
+            ${CBT_INSTANCE_FLAGS_HEADER}
             Tests/CBTMaterialBlendTests.cpp
             Tests/CBTProjNormalSignTests.cpp
+            Tests/CBTInstanceFlagsTests.cpp
             Tests/CBTLayoutTests.cpp
             Tests/CBTNearBiasTests.cpp
             Tests/CBTScreenTargetTests.cpp
             Tests/CBTResourceTests.cpp
             Tests/CBTKernelSetTests.cpp
+            Tests/CBTTestLogEnvironment.cpp
             Tests/CBTKernelWideVectorTests.cpp
             Tests/CBTInstanceTests.cpp
             Tests/CBTUpdateNodeTests.cpp
@@ -272,17 +287,9 @@ if(BUILD_TESTING)
             Tests/CBTScaleAuditTests.cpp
             Tests/CBTDemandAuditTests.cpp
             Tests/CBTSphereFaceMapTests.cpp
-            Tests/SphereSculptLayerTests.cpp
-            Tests/SphereSculptSerializationTests.cpp
-            Tests/SphereSculptShapeAccuracyTests.cpp
-            Tests/SphereSculptEscalationTests.cpp
-            Tests/SphereSculptUndoTests.cpp
             Tests/CBTPlanetShadingTests.cpp
-            Tests/CBTSphereSculptReEvalTests.cpp
-            Tests/CBTEditDrivenRetessTests.cpp
             Tests/CBTFarFieldDrainProbeTests.cpp
             Tests/CBTFarFieldReseedTests.cpp
-            Tests/CBTLookBackPriorityTests.cpp
             Tests/CBTPlanarDemandGateTests.cpp
             Tests/CBTBringUpDrainTests.cpp
             Tests/CBTRestartRefineTests.cpp
@@ -290,6 +297,7 @@ if(BUILD_TESTING)
             Tests/CBTPlanarScaleAuditTests.cpp
             Tests/CBTNearFieldMergeTests.cpp
             Tests/CBTParentMergeMetricTests.cpp
+            Tests/CBTEditDrivenRetessTests.cpp
             Tests/CBTWatertightnessTests.cpp
             Tests/CBTContentAwareSplitTests.cpp
             Tests/CBTHeightChainTests.cpp

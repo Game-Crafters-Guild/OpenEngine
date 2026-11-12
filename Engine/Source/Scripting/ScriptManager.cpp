@@ -76,7 +76,7 @@ std::future<HotReloadPipeline::PipelineStats> MakeFinishedReload(HotReloadResult
     return promise.get_future();
 }
 
-uint32 ReadLittleEndian(const Vector<uint8>& bytes, size_t offset, size_t width)
+uint32 ReadLittleEndian(std::span<const uint8> bytes, size_t offset, size_t width)
 {
     uint32 value = 0;
     for (size_t i = 0; i < width; ++i)
@@ -86,7 +86,7 @@ uint32 ReadLittleEndian(const Vector<uint8>& bytes, size_t offset, size_t width)
 
 // True when bytes are a PE image whose CLI header data directory is present:
 // a .NET assembly, as opposed to a native DLL or any other file.
-bool IsDotNetAssemblyImage(const Vector<uint8>& bytes)
+bool IsDotNetAssemblyImage(std::span<const uint8> bytes)
 {
     constexpr size_t kPeOffsetField = 0x3C;
     constexpr size_t kCoffHeaderSize = 20;
@@ -119,11 +119,11 @@ bool IsDotNetAssemblyImage(const Vector<uint8>& bytes)
 
 // Writes sourceBytes to destination unless it already holds the same bytes, so
 // an unchanged prebuilt assembly is not rewritten on every mount.
-bool WriteIfContentDiffers(const Vector<uint8>& sourceBytes, const std::filesystem::path& destination,
+bool WriteIfContentDiffers(std::span<const uint8> sourceBytes, const std::filesystem::path& destination,
                            std::string& outError)
 {
-    Vector<uint8> destinationBytes;
-    if (ReadFileBytesShared(destination, destinationBytes) && destinationBytes == sourceBytes)
+    ByteBuffer destinationBytes;
+    if (ReadFileBytesShared(destination, destinationBytes) && std::ranges::equal(destinationBytes, sourceBytes))
         return true;
     std::error_code ec;
     std::filesystem::create_directories(destination.parent_path(), ec);
@@ -495,10 +495,10 @@ void ScriptManager::LoadInitialScriptAssembly()
             // Robust stub detection: scan for ReferenceAssembly attribute marker instead of size heuristics
             bool isReferenceStub = false;
             {
-                Vector<uint8> data;
+                ByteBuffer data;
                 if (ReadFileBytesShared(assemblyPath, data))
                 {
-                    const std::string_view view(reinterpret_cast<const char*>(data.data()), data.size());
+                    const std::string_view view(reinterpret_cast<const char*>(data.Data()), data.Size());
                     if (view.find("ReferenceAssembly") != std::string_view::npos)
                     {
                         isReferenceStub = true;
@@ -1201,7 +1201,7 @@ bool ScriptManager::ResolvePrebuiltPackageAssembly(const PackageCodeModule& modu
 
     const std::filesystem::path outDir = PackageAssembliesDirectory(editorKind);
     std::string error;
-    Vector<uint8> dllBytes;
+    ByteBuffer dllBytes;
     if (!ReadFileBytesShared(declaredDll, dllBytes))
     {
         Logger::Log::Error("[Packages] cannot read prebuilt assembly '{}' of package '{}'; check that the file is "
@@ -1225,7 +1225,7 @@ bool ScriptManager::ResolvePrebuiltPackageAssembly(const PackageCodeModule& modu
 
     const std::filesystem::path declaredPdb = std::filesystem::path(declaredDll).replace_extension(".pdb");
     const std::filesystem::path stagedPdb = outDir / declaredPdb.filename();
-    Vector<uint8> pdbBytes;
+    ByteBuffer pdbBytes;
     const bool shipsPdb = std::filesystem::is_regular_file(declaredPdb, ec);
     if (shipsPdb && !ReadFileBytesShared(declaredPdb, pdbBytes))
         error = "cannot read '" + declaredPdb.string() + "'";
@@ -2140,23 +2140,23 @@ String ScriptManager::GetAsyncHotReloadStatus() const
     float progress = m_HotReloadPipeline->GetProgress();
     if (progress < 0.25f)
     {
-        return "🔧 Compiling scripts... (" + std::to_string(int(progress * 100)) + "%)";
+        return "Compiling scripts... (" + std::to_string(int(progress * 100)) + "%)";
     }
     else if (progress < 0.50f)
     {
-        return "📁 Loading assembly files... (" + std::to_string(int(progress * 100)) + "%)";
+        return "Loading assembly files... (" + std::to_string(int(progress * 100)) + "%)";
     }
     else if (progress < 0.75f)
     {
-        return "🔄 Preparing assembly context... (" + std::to_string(int(progress * 100)) + "%)";
+        return "Preparing assembly context... (" + std::to_string(int(progress * 100)) + "%)";
     }
     else if (progress < 1.0f)
     {
-        return "⚡ Swapping assemblies... (" + std::to_string(int(progress * 100)) + "%)";
+        return "Swapping assemblies... (" + std::to_string(int(progress * 100)) + "%)";
     }
     else
     {
-        return "✅ Hot-reload completed successfully";
+        return "Hot-reload completed successfully";
     }
 }
 

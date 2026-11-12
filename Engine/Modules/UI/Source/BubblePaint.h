@@ -1,33 +1,17 @@
 #pragma once
 
+#include "BorderPaint.h"
 #include "Mathematics/Vector2.h"
-#include "UI/ResolvedStyle.h"
 #include "UI/UIPrimitive.h"
 
 #include <array>
 #include <cstdint>
 
-namespace GameEngine
-{
-
-// The one border color the painter draws on all four edges (a UIPrimitive has one BorderColor):
-// the color of the first side with a width, because an undrawn side's color has alpha 0.
-// 0 when no side has a width.
-inline uint32_t DrawnBorderColor(const ResolvedStyle& style)
-{
-    const Box4& bw = style.Layout.BorderWidth;
-    const BorderColorsTRBL& c = style.Visual.BorderColor;
-    if (bw.Top > 0)    return c.Top;
-    if (bw.Right > 0)  return c.Right;
-    if (bw.Bottom > 0) return c.Bottom;
-    if (bw.Left > 0)   return c.Left;
-    return 0;
-}
-
-} // namespace GameEngine
-
 namespace GameEngine::UI
 {
+
+// The side of the bubble that an arrow sits on: the arrow points away from it.
+BoxSide ArrowEdge(ArrowDirection direction);
 
 // A pointer arrow on the edge of a bubble (a tooltip or a popover) that points at an anchor.
 // Physical px. The base of the arrow lies on the outer edge of the bubble's border: Height runs

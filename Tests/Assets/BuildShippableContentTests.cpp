@@ -48,6 +48,8 @@ TEST(ShippableContent, SourceAndBuildFilesDenied)
     EXPECT_FALSE(AssetCollector::IsShippableContent(fs::path("Game.csproj")));
     EXPECT_FALSE(AssetCollector::IsShippableContent(fs::path("obj/Debug/x.json")));
     EXPECT_FALSE(AssetCollector::IsShippableContent(fs::path("Tools/bin/tool.dat")));
+    // The scene editor's backup copy is a registered scene; an Always folder must not ship it.
+    EXPECT_FALSE(AssetCollector::IsShippableContent(fs::path("Scenes/Castle.Backup.scene")));
     EXPECT_FALSE(AssetCollector::IsShippableContent(fs::path(".DS_Store")));
 }
 

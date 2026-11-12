@@ -1,13 +1,29 @@
 #include "Inspectors/MaterialInspectorSections.h"
 
 #include "Inspectors/InspectorDragHelpers.h"
+#include "Inspectors/InspectorUIHelpers.h"
+#include "Rendering/Materials/MaterialDocument.h"
+#include "UI/Controls/Dropdown.h"
 #include "UI/Controls/FloatField.h"
 #include "UI/Controls/Foldout.h"
 #include "UI/Controls/Label.h"
 #include "UI/Controls/Slider.h"
 
+#include <vector>
+
 namespace GameEngine::Editor
 {
+
+namespace
+{
+
+constexpr const char* kPatternSymmetryTooltip =
+    "The turns and mirrors that leave the pattern the same. Square: a square grid or square stones, the same "
+    "after a quarter turn. Rectangular: a grid of oblong tiles, the same after a half turn or a mirror. "
+    "None: brick rows, planks, herringbone and photo textures. A Spline Paving's Blend seam bends the tile "
+    "lines of a Square or Rectangular pattern and fades a None pattern.";
+
+} // namespace
 
 std::unique_ptr<Foldout> MakeMaterialPropertiesFoldout()
 {
@@ -54,6 +70,19 @@ Label* AddMaterialWarning(UIElement* parent, const std::string& text)
     Label* raw = line.get();
     parent->AddChild(std::move(line));
     return raw;
+}
+
+Dropdown* AddMaterialPatternSymmetryRow(UIElement* parent, MaterialPatternSymmetry symmetry)
+{
+    std::vector<Dropdown::Option> options;
+    for (const MaterialPatternSymmetry option :
+         {MaterialPatternSymmetry::None, MaterialPatternSymmetry::Rectangular, MaterialPatternSymmetry::Square})
+    {
+        const std::string name = MaterialPatternSymmetryToString(option);
+        options.push_back({name, name});
+    }
+    return InspectorUI::AddDropdownRow(parent, "Pattern Symmetry", options, static_cast<int>(symmetry),
+                                       kPatternSymmetryTooltip);
 }
 
 void MakeMaterialRowInactive(const InspectorDrag::SliderWithFloatValueRow& row)

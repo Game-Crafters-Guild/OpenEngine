@@ -1,6 +1,7 @@
 #include "Inspectors/BuiltInInspectorRegistration.h"
 
 #include "DayCycle/DayCycleProfile/DayCycleProfileInspector.h"
+#include "Inspectors/ShipRules/ShipRuleRow.h"
 #include "Editor/Registries/EditorPluginRegistry.h"
 #include "Inspectors/AmbientLightInspector.h"
 #include "Inspectors/PostProcessEffects/AmbientOcclusionEffectInspector.h"
@@ -31,7 +32,6 @@
 #include "Inspectors/MaterialInspector.h"
 #include "Inspectors/MeasureInspector.h"
 #include "Inspectors/Navigation/NavigationAgentInspector.h"
-#include "Inspectors/Navigation/NavigationSourceComponentTraits.h"
 #include "Inspectors/Navigation/NavigationSurfaceInspector.h"
 #include "Inspectors/MeshRendererInspector.h"
 #include "Inspectors/ModelInspector.h"
@@ -101,7 +101,7 @@ void RegisterBuiltInInspectors()
     RegisterSplineWallInspector();
     RegisterSplineExtrudeInspector();
     RegisterSplinePavingInspector();
-    RegisterNavigationSourceComponentTraits();
+    RegisterBuiltInComponentTraits();
     RegisterBloomEffectInspector();
     RegisterChromaticAberrationEffectInspector();
     RegisterDepthOfFieldEffectInspector();
@@ -139,6 +139,7 @@ void RegisterBuiltInInspectors()
     RegisterModelInspector();
     RegisterTextureInspector();
     RegisterAudioInspector();
+    Editor::ShipRuleRow::Register();
     RegisterCubeLutAssetInspector();
     Editor::RegisterDayCycleProfileInspector();
     RegisterScriptInspector();

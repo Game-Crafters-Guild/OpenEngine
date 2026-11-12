@@ -43,11 +43,9 @@
 #define GE_SURFACE_INPUTS_AT_CENTROID
 #endif
 
-// A surface input at the pixel centre. A centroid input on a partially covered MSAA pixel is taken
-// at its covered samples' centroid, which moves from pixel to pixel along a triangle edge, so its
-// screen derivatives there are wrong; derivatives that must hold across the edge take this instead.
-// interpolateAtOffset needs the device's sampleRateShading (GE_INTERPOLATION_FUNCTIONS); without it
-// the input is its centroid value, and the derivatives keep their error along those edges.
+// A surface input at the pixel centre, for screen derivatives that must hold across a triangle edge. On a partly
+// covered MSAA pixel a centroid input sits at the covered samples' centroid, which moves along the edge, so its
+// derivatives there are wrong. Without GE_INTERPOLATION_FUNCTIONS the input stays at its centroid and keeps that error.
 #if defined(GE_SURFACE_INPUTS_AT_CENTROID) && defined(GE_INTERPOLATION_FUNCTIONS)
 #define GE_SURFACE_INPUT_AT_CENTRE(input) interpolateAtOffset(input, vec2(0.0))
 #else
@@ -279,6 +277,7 @@ layout(set = 0, binding = 49) uniform sampler2D ge_prepassDepth;
 layout(set = 0, binding = 5) uniform CameraUBO {
 #include "../Includes/camera_ubo_fields.glsl"
 } Cam;
+#include "../Includes/camera_relative.glsl" // GE_RenderOriginWorld: the origin of the pass's camera
 #endif
 
 // Always bound: per-view light data (directionals + ambient). Layout is locked
@@ -297,6 +296,10 @@ layout(set = 0, binding = 6) uniform LightUBO {
 } Light;
 
 #include "../Includes/view_params.glsl"
+#if !defined(FORWARD_PLUS) \
+    || (!defined(LIGHTING_MODEL_STANDARD_PBR) && !defined(LIGHTING_MODEL_SHADOW_ONLY))
+#include "../Includes/view_linear_depth.glsl"
+#endif
 
 // Every shape that shades colour reads the view's exposure state: its output is scene colour,
 // stored at the frame's pre-exposure P (GE_PreExposure). Shapes that shade no colour (depth only,
@@ -747,17 +750,20 @@ void main()
     si.TBN = mat3(T, B, N);
 #endif
 
-    // View direction.
+    // View direction, from the eye relative to the render origin, the frame of vPosRel.
 #if defined(FORWARD_PLUS) \
     && (defined(LIGHTING_MODEL_STANDARD_PBR) || defined(LIGHTING_MODEL_SHADOW_ONLY))
-    // With Forward+ lit path, camera position is precomputed in ViewParams UBO.
-    vec3 camPosWS = ge_cameraPosWS.xyz;
+    // The lit Forward+ path reads the view's precise eye from ViewParams.
+    vec3 eyeRel = ge_cameraPosRel.xyz;
+    si.linearDepth = (ge_viewRel * vec4(vPosRel, 1.0)).z;
 #else
-    vec3 camPosWS = Cam.uCameraPos.xyz;
+    // Every other shape reads the eye of the camera that draws the pass: in a shadow pass (keyword-less)
+    // that is the light's camera, while ViewParams holds the receiver view.
+    vec3 eyeRel = Cam.uCameraPos.xyz - GE_RenderOriginWorld();
+    si.linearDepth = GE_ViewLinearDepth(vPosRel);
 #endif
-    si.viewDirWS = normalize(camPosWS - vPosWS);
+    si.viewDirWS = normalize(eyeRel - vPosRel);
     si.screenUV = gl_FragCoord.xy * ge_screenSize.zw;
-    si.linearDepth = (ge_view * vec4(vPosWS, 1.0)).z;
 
     // Populate per-texture UV transforms.
 #ifdef GE_COMPAT_PROFILE
@@ -793,7 +799,7 @@ void main()
     float parallaxPrepassDepth = GE_ParallaxPrepassDepth();
     {
         bool perspective = ge_proj[2][3] != 0.0;
-        float eyeDistance = length(camPosWS - vPosWS);
+        float eyeDistance = length(eyeRel - vPosRel);
         si.prepassDepthOffset = GE_ParallaxOffsetToDepth(gl_FragCoord.z, ge_proj[2][2], perspective,
                                                          parallaxPrepassDepth, eyeDistance);
         si.prepassDepthOffsetError = GE_ParallaxOffsetError(gl_FragCoord.z, ge_proj[2][2], perspective,
@@ -816,7 +822,7 @@ void main()
 #ifdef GE_PARALLAX_WRITES_DEPTH
     // Written before any discard, on every path that reaches the end, so no covered sample keeps an
     // undefined depth.
-    gl_FragDepth = GE_ParallaxFragmentDepth(so, length(camPosWS - vPosWS));
+    gl_FragDepth = GE_ParallaxFragmentDepth(so, length(eyeRel - vPosRel));
 #endif
 
 #if defined(GE_DEPTH_ONLY_FRAGMENT) || defined(GE_MOTION_VECTORS)
@@ -916,7 +922,7 @@ void main()
   #ifdef FORWARD_PLUS
     // Forward+ path: traverse the cluster's light list.
     // Use view-space Z (not Euclidean distance) so cascade splits match.
-    float linearDepth = (ge_view * vec4(vPosWS, 1.0)).z;
+    float linearDepth = (ge_viewRel * vec4(vPosRel, 1.0)).z;
     finalColor = GE_AccumulateClusteredLighting(
         so, V, vPosWS, vPosRel,
         gl_FragCoord.xy, linearDepth);
@@ -930,7 +936,7 @@ void main()
     vec3 shadowTint = vec3(1.0); // glass transmittance between the light and this surface
     #ifdef HAS_SHADOWS
     // Use view-space Z (not Euclidean distance) so cascade splits match.
-    float viewZ = (Cam.uV * vec4(vPosWS, 1.0)).z;
+    float viewZ = (Cam.uVRel * vec4(vPosRel, 1.0)).z;
     shadowFactor = GE_SampleShadow(vPosRel, so.normalWS, viewZ, L, gl_FragCoord.xy);
     shadowTint = ge_lastShadowTint;
     #endif
@@ -976,10 +982,10 @@ void main()
 #ifdef HAS_SHADOWS
     vec3 Lrs = normalize(-Light.uLightDirWorld.xyz);
   #ifdef FORWARD_PLUS
-    float linearDepthRs = (ge_view * vec4(vPosWS, 1.0)).z;
+    float linearDepthRs = (ge_viewRel * vec4(vPosRel, 1.0)).z;
     shadowFactorRs = GE_SampleShadow(vPosRel, so.normalWS, linearDepthRs, Lrs, gl_FragCoord.xy);
   #else
-    float viewZRs = (Cam.uV * vec4(vPosWS, 1.0)).z;
+    float viewZRs = (Cam.uVRel * vec4(vPosRel, 1.0)).z;
     shadowFactorRs = GE_SampleShadow(vPosRel, so.normalWS, viewZRs, Lrs, gl_FragCoord.xy);
   #endif
 #endif

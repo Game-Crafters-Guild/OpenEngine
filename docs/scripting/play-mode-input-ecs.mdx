@@ -116,7 +116,7 @@ public static class Movement
         Input.BindKey(Gameplay, MoveY, Key.S, -1f);
         Input.BindKey(Gameplay, MoveY, Key.W, 1f);
         Input.BindGamepadAxis(Gameplay, MoveX, GamepadAxis.LeftX);
-        Input.BindGamepadAxis(Gameplay, MoveY, GamepadAxis.LeftY, -1f);
+        Input.BindGamepadAxis(Gameplay, MoveY, GamepadAxis.LeftY);
     }
 
     // -1 to 1 on each axis; A and D together cancel.
@@ -141,6 +141,7 @@ public static class Controls
 Notes:
 - Before an input system runs (in the editor, outside play), a poll answers the default (`false`, zero, an empty `ActionState`) and a call that changes input does nothing.
 - `BindKey`, `BindMouseButton`, `BindMouseAxis`, `BindGamepadButton` and `BindGamepadAxis` each name their device and take its own enum. On an axis action, a held key or mouse button adds its scale to the value, and `BindMouseAxis` (pointer motion or the wheel) and `BindGamepadAxis` (a stick or trigger) add the axis times their scale. A gamepad button drives button actions only.
+- A stick reads +1 pushed right on its X axis and +1 pushed up on its Y axis. To invert an axis, for example a look axis, bind it with a negative scale: `Input.BindGamepadAxis(Gameplay, LookY, GamepadAxis.RightY, -1f)`.
 - An id of 0 throws `ArgumentException`. A call from a thread the engine does not run (`Task.Run`, a timer) throws `EngineCallException`.
 - A context's actions are live while the context is enabled, which it is from its first action on. `SetContextEnabled` switches a context off and on (a menu over gameplay, a vehicle); `PushContext` and `PopContext` order contexts, the top one first, when two hold the same action.
 

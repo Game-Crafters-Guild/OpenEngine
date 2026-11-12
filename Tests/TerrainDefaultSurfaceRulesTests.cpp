@@ -62,10 +62,7 @@ MeasuredTerrain MakeIslandScaleTerrain()
 {
     MeasuredTerrain t{};
     t.Heightfield = Terrain::HeightfieldData(kIslandDim, kIslandDim);
-    FillHeightfieldBaseRegion(t.Heightfield, Components::TerrainBaseSource::ProceduralNoise,
-                              nullptr, 0, 0,
-                              static_cast<int32>(kIslandDim) - 1,
-                              static_cast<int32>(kIslandDim) - 1);
+    t.Heightfield.FillRegionWithNoise(4.0f, 1.0f, 0, 0, static_cast<int32>(kIslandDim) - 1, static_cast<int32>(kIslandDim) - 1, 5, 42);
 
     t.SpacingX = kIslandWorldSize / static_cast<float32>(kIslandDim - 1);
     t.SpacingZ = t.SpacingX;
@@ -117,7 +114,11 @@ std::array<uint32, 4> DominantCounts(const std::vector<uint8>& splat)
 // volume weight of 1 everywhere — which is what Shape::Global resolves to.
 std::vector<uint8> BakeDefaultRules(const MeasuredTerrain& t)
 {
-    const auto rules = MakeDefaultTerrainSurfaceRules();
+    // The range TerrainService::GetHeightRangeMeters reports for this terrain.
+    float32 minH = t.MinH;
+    float32 maxH = t.MaxH;
+    WidenToNominalHeightBand(minH, maxH, kNominalHeightBandTop);
+    const auto rules = MakeDefaultTerrainSurfaceRules(minH * kIslandHeightScale, maxH * kIslandHeightScale);
     std::vector<uint8> splat(static_cast<std::size_t>(kIslandDim) * kIslandDim * 4, 0u);
 
     for (uint32 z = 0; z < kIslandDim; ++z)
@@ -131,7 +132,7 @@ std::vector<uint8> BakeDefaultRules(const MeasuredTerrain& t)
                                                             t.SpacingX, t.SpacingZ);
             const TerrainRuleSample sample = MakeTerrainRuleSample(
                 normal.x, normal.y, normal.z, t.Heightfield.GetSample(x, z),
-                kIslandHeightScale, t.MinH, t.HeightRange, worldX, worldZ);
+                kIslandHeightScale, worldX, worldZ);
 
             uint8* pixel = &splat[(static_cast<std::size_t>(z) * kIslandDim + x) * 4];
             for (uint32 r = 0; r < rules.RuleCount; ++r)
@@ -163,11 +164,11 @@ TEST(TerrainDefaultSurfaceRules, RealGroundReachesEveryDefaultSlopeBand)
 
     std::vector<float32> slopeNorm;
     std::vector<float32> slopeDegrees;
-    std::vector<float32> heightMetres;
+    std::vector<float32> heightMeters;
     std::vector<float32> heightNormalized;
     slopeNorm.reserve(static_cast<std::size_t>(kIslandDim) * kIslandDim);
     slopeDegrees.reserve(slopeNorm.capacity());
-    heightMetres.reserve(slopeNorm.capacity());
+    heightMeters.reserve(slopeNorm.capacity());
     heightNormalized.reserve(slopeNorm.capacity());
 
     for (uint32 z = 0; z < kIslandDim; ++z)
@@ -177,11 +178,11 @@ TEST(TerrainDefaultSurfaceRules, RealGroundReachesEveryDefaultSlopeBand)
                                                         t.SpacingX, t.SpacingZ);
             const TerrainRuleSample s = MakeTerrainRuleSample(
                 n.x, n.y, n.z, t.Heightfield.GetSample(x, z), kIslandHeightScale,
-                t.MinH, t.HeightRange, 0.0f, 0.0f);
+                0.0f, 0.0f);
             slopeNorm.push_back(s.SlopeNormalized);
             slopeDegrees.push_back(s.SlopeDegrees);
-            heightMetres.push_back(s.HeightMetres);
-            heightNormalized.push_back(s.HeightNormalized);
+            heightMeters.push_back(s.HeightMeters);
+            heightNormalized.push_back((t.Heightfield.GetSample(x, z) - t.MinH) / t.HeightRange);
         }
 
     const float32 slopeNormP50 = Percentile(slopeNorm, 0.50f);
@@ -190,9 +191,9 @@ TEST(TerrainDefaultSurfaceRules, RealGroundReachesEveryDefaultSlopeBand)
     const float32 degP50 = Percentile(slopeDegrees, 0.50f);
     const float32 degP95 = Percentile(slopeDegrees, 0.95f);
     const float32 degMax = *std::max_element(slopeDegrees.begin(), slopeDegrees.end());
-    const float32 mP05 = Percentile(heightMetres, 0.05f);
-    const float32 mP50 = Percentile(heightMetres, 0.50f);
-    const float32 mP95 = Percentile(heightMetres, 0.95f);
+    const float32 mP05 = Percentile(heightMeters, 0.05f);
+    const float32 mP50 = Percentile(heightMeters, 0.50f);
+    const float32 mP95 = Percentile(heightMeters, 0.95f);
 
     std::printf("\n[measured] %.0f m terrain, HeightScale %.0f, %u samples/side\n",
                 kIslandWorldSize, kIslandHeightScale, kIslandDim);
@@ -203,7 +204,7 @@ TEST(TerrainDefaultSurfaceRules, RealGroundReachesEveryDefaultSlopeBand)
     std::printf("[measured] slope degrees more : p75=%.2f p90=%.2f p99=%.2f\n",
                 Percentile(slopeDegrees, 0.75f), Percentile(slopeDegrees, 0.90f),
                 Percentile(slopeDegrees, 0.99f));
-    std::printf("[measured] height metres      : p05=%.2f p50=%.2f p95=%.2f\n",
+    std::printf("[measured] height meters      : p05=%.2f p50=%.2f p95=%.2f\n",
                 mP05, mP50, mP95);
     std::printf("[measured] height normalized  : p50=%.3f p75=%.3f p90=%.3f p95=%.3f p99=%.3f\n",
                 Percentile(heightNormalized, 0.50f), Percentile(heightNormalized, 0.75f),
@@ -276,4 +277,41 @@ TEST(TerrainDefaultSurfaceRules, DefaultRowsPlaceSlopeMaterialsOnRealGround)
 
     EXPECT_GT(after[1], 0u) << "the default rows must put rock on steep ground";
     EXPECT_GT(after[2], 0u) << "the default rows must put dirt somewhere";
+}
+
+// ---- 2 · The snow row in meters ---------------------------------------------
+
+// The snow row is placed in meters from the range at creation, then reads meters: the same
+// ground, stored at Height Scale 256 or 1300, gets the same weight.
+TEST(TerrainDefaultSurfaceRules, SnowRowIsInMetersAndReadsTheSameAtEveryHeightScale)
+{
+    const auto rules = MakeDefaultTerrainSurfaceRules(0.0f, 1300.0f);
+    const Components::TerrainRuleCondition& snowHeight = rules.Rules[3].Conditions[0];
+    EXPECT_EQ(snowHeight.Kind, Components::TerrainRuleConditionKind::HeightMeters);
+    EXPECT_FLOAT_EQ(snowHeight.Min, kDefaultSnowRangeFractionMin * 1300.0f);
+    EXPECT_FLOAT_EQ(snowHeight.Feather, kDefaultSnowRangeFractionFeather * 1300.0f);
+
+    for (const float32 heightScale : {256.0f, 1300.0f})
+    {
+        const TerrainRuleSample summit =
+            MakeTerrainRuleSample(0.0f, 1.0f, 0.0f, 1200.0f / heightScale, heightScale, 0.0f, 0.0f);
+        const TerrainRuleSample valley =
+            MakeTerrainRuleSample(0.0f, 1.0f, 0.0f, 300.0f / heightScale, heightScale, 0.0f, 0.0f);
+        EXPECT_FLOAT_EQ(EvaluateTerrainSurfaceRuleWeight(rules.Rules[3], summit, SurfaceRuleNoiseSample), 1.0f)
+            << "heightScale " << heightScale;
+        EXPECT_FLOAT_EQ(EvaluateTerrainSurfaceRuleWeight(rules.Rules[3], valley, SurfaceRuleNoiseSample), 0.0f)
+            << "heightScale " << heightScale;
+    }
+}
+
+// #6332: a heightmap in meters (Height Scale 1) with ground from -45 m to 300 m. The snow row
+// sits near the summits, not on the lowlands a band of [0, 1] m would cover.
+TEST(TerrainDefaultSurfaceRules, SnowRowOnAMetersHeightmapStaysOffTheLowlands)
+{
+    const auto rules = MakeDefaultTerrainSurfaceRules(-45.0f, 300.0f);
+    const float32 heightScale = 1.0f;
+    const TerrainRuleSample lowland = MakeTerrainRuleSample(0.0f, 1.0f, 0.0f, 50.0f, heightScale, 0.0f, 0.0f);
+    const TerrainRuleSample summit = MakeTerrainRuleSample(0.0f, 1.0f, 0.0f, 295.0f, heightScale, 0.0f, 0.0f);
+    EXPECT_FLOAT_EQ(EvaluateTerrainSurfaceRuleWeight(rules.Rules[3], lowland, SurfaceRuleNoiseSample), 0.0f);
+    EXPECT_FLOAT_EQ(EvaluateTerrainSurfaceRuleWeight(rules.Rules[3], summit, SurfaceRuleNoiseSample), 1.0f);
 }

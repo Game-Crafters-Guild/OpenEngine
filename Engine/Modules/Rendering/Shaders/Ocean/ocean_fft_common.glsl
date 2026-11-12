@@ -1,5 +1,6 @@
 // Shared parameters + spectrum math for the ocean FFT compute chain.
-// Faithful port of the reference's FFTSpectrum.compute + OceanWaveSpectrum (MIT):
+// Faithful port of Crest's FFTSpectrum.compute + OceanWaveSpectrum at db0658ff
+// ("the reference" below; MIT, see Engine/Modules/Ocean/NOTICE):
 // per-octave power LUT, Pierson-Moskowitz wind term, deep-water dispersion,
 // directional spreading, Gaussian amplitudes, and the per-cascade frequency
 // band split. v1 targets full parity; v2 optimizes (resolution/cascade tiers).

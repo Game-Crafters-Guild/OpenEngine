@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Mathematics/MulAdd.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -7,14 +9,14 @@
 namespace GameEngine::Math
 {
 
-constexpr float Lerp(float a, float b, float t) { return a + (b - a) * t; }
+constexpr float Lerp(float a, float b, float t) { return MulAdd(b - a, t, a); }
 constexpr float InverseLerp(float a, float b, float v) { return (b != a) ? (v - a) / (b - a) : 0.0f; }
 constexpr float Clamp01(float t) { return t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t); }
 
 constexpr float SmoothStep(float edge0, float edge1, float x)
 {
     float t = Clamp01((x - edge0) / (edge1 - edge0));
-    return t * t * (3.0f - 2.0f * t);
+    return t * t * MulAdd(-2.0f, t, 3.0f);
 }
 
 // The quintic step: like SmoothStep, with zero first and second derivatives at
@@ -22,7 +24,7 @@ constexpr float SmoothStep(float edge0, float edge1, float x)
 constexpr float SmootherStep(float edge0, float edge1, float x)
 {
     float t = Clamp01((x - edge0) / (edge1 - edge0));
-    return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f);
+    return t * t * t * MulAdd(t, MulAdd(t, 6.0f, -15.0f), 10.0f);
 }
 
 // The fractional part, in [0, 1): x - floor(x). Negative inputs wrap upward

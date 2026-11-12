@@ -39,6 +39,7 @@
 #include "Components/Terrain/TerrainGrass.h"
 #include "Core/ApplicationPaths.h"
 #include "Logger/Logger.h"
+#include "Mathematics/WorldPosition.h"
 
 #include <algorithm>
 #include <cmath>
@@ -649,6 +650,7 @@ public:
 
             const auto& lodMesh = m_Feature.GetBladeLod(lod);
             Engine::Renderer::DrawCommand cmd{};
+            cmd.Producer = m_DrawProducer;
             cmd.InternedPipeline = pipelineId;
             cmd.Material = material;
             cmd.VertexFlags = kBladeColourVertexFlags;
@@ -711,6 +713,7 @@ private:
     TerrainGrassRenderFeature& m_Feature;
     TerrainECS::TerrainRenderFeature& m_TerrainFeature;
     Engine::Renderer::RenderServices& m_RenderServices;
+    const Rendering::DrawProducerId m_DrawProducer = Rendering::DrawProducerRegistry::Register("Grass");
     // One material + one interned pipeline per GrassDrawMode, resolved lazily the
     // first frame a view draws in that mode.
     Engine::Renderer::Material* m_Materials[kGrassDrawModeCount] = {};
@@ -884,10 +887,10 @@ std::optional<GrassShaderLocation> FindGrassShaderLocation(bool cookedPrograms)
     return location;
 }
 
-bool CompileGrassComputePipeline(Rendering::IDevice& device, const GrassShaderLocation& location,
-                                 const GrassComputeProgram& program, bool compat,
-                                 Rendering::ComputePipelineId& outId,
-                                 Rendering::PipelineHandle& outPipeline)
+// Compiles `program` and interns its pipeline. Builds no backend pipeline.
+bool InternGrassComputePipeline(Rendering::IDevice& device, const GrassShaderLocation& location,
+                                const GrassComputeProgram& program, bool compat,
+                                Rendering::ComputePipelineId& outId)
 {
     namespace fs = std::filesystem;
     const char* shaderFile = program.ShaderFile;
@@ -898,11 +901,13 @@ bool CompileGrassComputePipeline(Rendering::IDevice& device, const GrassShaderLo
         // No shader compiler at runtime: load this stage's ahead-of-time cooked WGSL (staged
         // beside the executable, named "<stage>.wgsl") instead of compiling from source.
         const fs::path cookedProgram = location.Dir / (std::string(shaderFile) + ".wgsl");
-        if (!ReadFileBytesShared(cookedProgram, computeProgram) || computeProgram.empty())
+        ByteBuffer cookedBytes;
+        if (!ReadFileBytesShared(cookedProgram, cookedBytes) || cookedBytes.Size() == 0)
         {
             Logger::Log::Error("TerrainGrass: cooked program not found ({}.wgsl)", shaderFile);
             return false;
         }
+        computeProgram.assign(cookedBytes.begin(), cookedBytes.end());
     }
     else
     {
@@ -948,7 +953,14 @@ bool CompileGrassComputePipeline(Rendering::IDevice& device, const GrassShaderLo
     }
     cd.DebugName = debugName;
     outId = device.InternComputePipeline(cd);
-    outPipeline = device.GetOrCreateComputePipeline(outId);
+    return outId.IsValid();
+}
+
+// The backend pipeline of `id`, built on the calling thread when no build is warm.
+bool CreateGrassComputePipeline(Rendering::IDevice& device, Rendering::ComputePipelineId id,
+                                const char* debugName, Rendering::PipelineHandle& outPipeline)
+{
+    outPipeline = device.GetOrCreateComputePipeline(id);
     if (!outPipeline.IsValid())
     {
         Logger::Log::Error("TerrainGrass: {} pipeline creation failed", debugName);
@@ -958,15 +970,13 @@ bool CompileGrassComputePipeline(Rendering::IDevice& device, const GrassShaderLo
 }
 } // namespace
 
-bool TerrainGrassRenderFeature::EnsureComputePipeline(Engine::Renderer::RenderServices& rs)
+bool TerrainGrassRenderFeature::InternComputePipelines(Engine::Renderer::RenderServices& rs)
 {
-    if (m_ComputePipeline.IsValid() && m_PlanPipeline.IsValid() && m_ClassifyPipeline.IsValid())
+    if (m_ClassifyPipelineId.IsValid() && m_PlanPipelineId.IsValid() && m_ComputePipelineId.IsValid())
         return true;
-    if (m_ComputePipelineAttempted)
+    if (m_ComputePipelinesInternAttempted || !m_Device)
         return false;
-    m_ComputePipelineAttempted = true;
-    if (!m_Device)
-        return false;
+    m_ComputePipelinesInternAttempted = true;
     const bool compat = rs.GetProfile().IsCompat();
     const std::optional<GrassShaderLocation> location = FindGrassShaderLocation(
         m_Device->PreferredShaderSource() == Rendering::ShaderSourceKind::Wgsl);
@@ -975,12 +985,32 @@ bool TerrainGrassRenderFeature::EnsureComputePipeline(Engine::Renderer::RenderSe
         Logger::Log::Warning("TerrainGrass: placement compute shader not found");
         return false;
     }
-    if (!CompileGrassComputePipeline(*m_Device, *location, kGrassClassifyProgram, compat, m_ClassifyPipelineId,
-                                     m_ClassifyPipeline)
-        || !CompileGrassComputePipeline(*m_Device, *location, kGrassPlanProgram, compat, m_PlanPipelineId,
-                                        m_PlanPipeline)
-        || !CompileGrassComputePipeline(*m_Device, *location, kGrassPlaceProgram, compat, m_ComputePipelineId,
-                                        m_ComputePipeline))
+    return InternGrassComputePipeline(*m_Device, *location, kGrassClassifyProgram, compat, m_ClassifyPipelineId)
+           && InternGrassComputePipeline(*m_Device, *location, kGrassPlanProgram, compat, m_PlanPipelineId)
+           && InternGrassComputePipeline(*m_Device, *location, kGrassPlaceProgram, compat, m_ComputePipelineId);
+}
+
+void TerrainGrassRenderFeature::RequestPlacementPipelines(Engine::Renderer::RenderServices& rs)
+{
+    if (!InternComputePipelines(rs))
+        return;
+    for (const Rendering::ComputePipelineId id : {m_ClassifyPipelineId, m_PlanPipelineId, m_ComputePipelineId})
+        m_Device->RequestComputePipeline(id);
+}
+
+bool TerrainGrassRenderFeature::EnsureComputePipeline(Engine::Renderer::RenderServices& rs)
+{
+    if (m_ComputePipeline.IsValid() && m_PlanPipeline.IsValid() && m_ClassifyPipeline.IsValid())
+        return true;
+    if (m_ComputePipelineAttempted)
+        return false;
+    m_ComputePipelineAttempted = true;
+    if (!InternComputePipelines(rs)
+        || !CreateGrassComputePipeline(*m_Device, m_ClassifyPipelineId, kGrassClassifyProgram.DebugName,
+                                       m_ClassifyPipeline)
+        || !CreateGrassComputePipeline(*m_Device, m_PlanPipelineId, kGrassPlanProgram.DebugName, m_PlanPipeline)
+        || !CreateGrassComputePipeline(*m_Device, m_ComputePipelineId, kGrassPlaceProgram.DebugName,
+                                       m_ComputePipeline))
         return false;
     Logger::Log::Info("TerrainGrass: placement compute pipeline ready");
     return true;
@@ -1301,19 +1331,17 @@ bool TerrainGrassRenderFeature::ResolvePlaceParams(
     out.CellWindow[2] = static_cast<int32>(plan.CellSpan);
     out.CellWindow[3] = static_cast<int32>(terrainParamsCount);
 
-    // The origin ResolveCameraData derives for the draw; the stored camera FindCameraData returns
-    // carries none.
-    const Components::WorldSectorCoord origin = Engine::Renderer::ComputeRenderOriginSector(
-        camera->cameraPos.x, camera->cameraPos.y, camera->cameraPos.z);
+    // The origin ResolveCameraData uses for the draw.
+    const Mathematics::Vector3Int origin = Engine::Renderer::CameraRenderOriginSector(*camera);
     out.RenderOriginSector[0] = origin.x;
     out.RenderOriginSector[1] = origin.y;
     out.RenderOriginSector[2] = origin.z;
-    out.RenderOriginSector[3] = static_cast<int32>(Engine::Renderer::kSectorSize);
+    out.RenderOriginSector[3] = static_cast<int32>(Mathematics::kWorldSectorSize);
 
-    // A conservative vertical extent for the cell AABB: no blade can root outside the terrain's
-    // own height range, and none can reach higher than the tallest authored blade.
+    // The height range of every blade root. The classify kernel adds the tallest blade for the range fit's
+    // band box, and the blade reach for a cell's own box.
     out.Bounds[0] = summary.WorldMinY;
-    out.Bounds[1] = summary.WorldMaxY + summary.MaxBladeHeight;
+    out.Bounds[1] = summary.WorldMaxY;
     out.Bounds[2] = plan.Lod1StartDistance;
     // Cells are rejected on centre distance, so allow the half-diagonal before the cell's near
     // corner could still be inside the range.
@@ -1322,6 +1350,12 @@ bool TerrainGrassRenderFeature::ResolvePlaceParams(
     // per-terrain value, or its per-ring total would stop being a bound on the per-cell sum.
     out.Summary[0] = summary.MaxNearDensity;
     out.Summary[1] = summary.MinFalloff;
+    out.Summary[2] = summary.MinBladeWidth;
+    out.Summary[3] = summary.MinBladeHeight;
+    out.FloorThinning.x = summary.MaxBladeWidth;
+    out.FloorThinning.y = summary.MinFarThinning;
+    out.BladeReach = summary.MaxBladeReach;
+    out.MaxBladeHeight = summary.MaxBladeHeight;
     return true;
 }
 

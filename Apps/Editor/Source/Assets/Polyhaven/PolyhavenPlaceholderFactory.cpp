@@ -69,9 +69,9 @@ static void OrientBillboard(Components::Transform& xf,
     // col0 = camera-right = (dz, 0, -dx)   (u increases left-to-right from camera)
     // col1 = toward camera in XZ = (dx, 0, dz)
     // col2 = down = (0, -1, 0)             (v=0 at top, v=1 at bottom → image right-side-up)
-    xf.matrix[0]  =  dz * scaleX; xf.matrix[1]  = 0.0f;     xf.matrix[2]  = -dx * scaleX; xf.matrix[3]  = 0.0f;
-    xf.matrix[4]  =  dx;          xf.matrix[5]  = 0.0f;     xf.matrix[6]  =  dz;          xf.matrix[7]  = 0.0f;
-    xf.matrix[8]  =  0.0f;        xf.matrix[9]  = -scaleY;  xf.matrix[10] =  0.0f;        xf.matrix[11] = 0.0f;
+    xf.Basis[0] = glm::vec3(dz * scaleX, 0.0f, -dx * scaleX);
+    xf.Basis[1] = glm::vec3(dx, 0.0f, dz);
+    xf.Basis[2] = glm::vec3(0.0f, -scaleY, 0.0f);
 }
 
 // Dedicated plane mesh for billboards — same geometry as PlaneGuid() but a
@@ -167,9 +167,7 @@ PolyhavenPlaceholderFactory::PlaceholderResult PolyhavenPlaceholderFactory::Crea
     // Transform at drop position, oriented toward camera
     Components::Transform xf{};
     xf.SetIdentity();
-    xf.matrix[12] = worldPos.x;
-    xf.matrix[13] = worldPos.y;
-    xf.matrix[14] = worldPos.z;
+    xf.Position = Mathematics::WorldPosition::FromVector3(worldPos);
     OrientBillboard(xf, worldPos, cameraPos, scaleX, scaleY);
     world.AddComponentImmediate(e, xf);
 
@@ -228,8 +226,8 @@ void PolyhavenPlaceholderFactory::OrientToFaceCamera(
     if (auto* xf = world.GetComponentForWrite<Components::Transform>(entity))
     {
         // Preserve the existing column scales (aspect ratio) when re-orienting.
-        float sx = std::sqrt(xf->matrix[0] * xf->matrix[0] + xf->matrix[1] * xf->matrix[1] + xf->matrix[2] * xf->matrix[2]);
-        float sy = std::sqrt(xf->matrix[8] * xf->matrix[8] + xf->matrix[9] * xf->matrix[9] + xf->matrix[10] * xf->matrix[10]);
+        float sx = glm::length(xf->Basis[0]);
+        float sy = glm::length(xf->Basis[2]);
         if (sx < 1e-6f) sx = 1.0f;
         if (sy < 1e-6f) sy = 1.0f;
         OrientBillboard(*xf, worldPos, cameraPos, sx, sy);

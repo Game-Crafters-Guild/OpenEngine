@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Types/ByteBuffer.h"
 #include "Types/Types.h"
 
 #include <any>
@@ -16,7 +17,8 @@ struct AssetDecodeInput
     std::optional<uint64> PrefixBytes;
 };
 
-/// What a parser names on the reader thread for one decode (AssetParser::ResolveDecodeInputs).
+/// What a parser names on the reader thread for one decode (AssetParser::ResolveDecodeInputs, or
+/// AssetParser::ResolveDecodeInputsWithoutBytes before the read).
 struct AssetDecodeInputs
 {
     /// The files the decode reads besides its asset's own bytes.
@@ -32,7 +34,7 @@ struct AssetDecodeInputs
 /// could not be read; and the parser's plan (AssetDecodeInputs::Plan).
 struct AssetDecodeInputFiles
 {
-    FastHashMap<String, std::optional<Vector<uint8>>> Files;
+    FastHashMap<String, std::optional<ByteBuffer>> Files;
     std::any Plan;
 };
 
@@ -56,17 +58,17 @@ class ScopedAssetDecodeInputFiles
 /// Reads `input` from the disk through the shared-open path (AssetCore/SharedFileRead.h): the whole file, or at
 /// most its first PrefixBytes. The AssetIOService's reader and ReadAssetDecodeInputFile outside a decode use it.
 /// @return False when the file cannot be opened or read.
-bool ReadAssetDecodeInputFromDisk(const AssetDecodeInput& input, Vector<uint8>& bytes);
+bool ReadAssetDecodeInputFromDisk(const AssetDecodeInput& input, ByteBuffer& bytes);
 
 /// The bytes of `input` for this thread's decode, valid for the publishing scope or for `storage`. Inside an
 /// AssetIOService decode: what its reader read, or null for a path it did not read, found absent, or that was
 /// taken; it never reads the disk. Anywhere else: the file, read into `storage`, or null when it cannot be read.
-const Vector<uint8>* ReadAssetDecodeInputFile(const AssetDecodeInput& input, Vector<uint8>& storage);
+const ByteBuffer* ReadAssetDecodeInputFile(const AssetDecodeInput& input, ByteBuffer& storage);
 
 /// Moves the bytes of `input` into `bytes`, for a file the decode keeps (a glTF's external image). Inside an
 /// AssetIOService decode: what its reader read, and the path then reads as absent for the rest of that decode.
 /// Anywhere else: the file, read from the disk. @return False when the file is absent or cannot be read.
-bool TakeAssetDecodeInputFile(const AssetDecodeInput& input, Vector<uint8>& bytes);
+bool TakeAssetDecodeInputFile(const AssetDecodeInput& input, ByteBuffer& bytes);
 
 /**
  * @brief The plan the parser resolved on the reader thread for the decode running on this thread

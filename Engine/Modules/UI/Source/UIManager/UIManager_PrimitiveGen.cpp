@@ -12,7 +12,7 @@
 #include "../TextShapeCache.h"
 #include "UI/UIFrameBufferRing.h"
 #include "UI/UIPrimitive.h"
-#include "../BubblePaint.h"
+#include "../BorderPaint.h"
 #include "UI/NineSliceLayout.h"
 #include "UI/GlyphRunEmitter.h"
 #include "UI/TextSelectionFill.h"
@@ -34,6 +34,7 @@ using namespace GameEngine::Rendering::Text;
 #include <functional>
 #include <limits>
 #include <numbers>
+#include <optional>
 #include <string_view>
 
 static constexpr size_t kInitialClipStackCapacity = 8;
@@ -223,8 +224,8 @@ constexpr int kMaxBorderDecorationPrimitives = 4096;
 
 // Emit `border-style: dotted` as evenly spaced square dots along each present
 // edge. Dots run the straight edges only; a per-corner inset keeps them clear
-// of rounded corners so the pattern never bunches at a curve. The stroke uses
-// the max of the four edge widths (dotted borders are drawn uniformly).
+// of rounded corners so the pattern never bunches at a curve. Each dot takes the
+// color of its side; the dot size comes from the max of the four edge widths.
 // x/y/w/h are the physical-px element rect; cs converts CSS-logical widths and
 // radii to physical px.
 void EmitDottedBorder(std::vector<UI::UIPrimitive>& outPrims, const ResolvedStyle& style,
@@ -233,7 +234,6 @@ void EmitDottedBorder(std::vector<UI::UIPrimitive>& outPrims, const ResolvedStyl
                       uint16_t clipIdx, float opacity)
 {
     const Box4& bw = style.Layout.BorderWidth;
-    const uint32_t packedColor = UI::PackFromARGB(DrawnBorderColor(style));
     const float borderWidth = std::max({bw.Top, bw.Right, bw.Bottom, bw.Left}) * cs;
     const float dotSize = std::max(2.0f * cs, borderWidth * 2.0f);
     const float pitch = dotSize * 3.0f;
@@ -248,11 +248,12 @@ void EmitDottedBorder(std::vector<UI::UIPrimitive>& outPrims, const ResolvedStyl
     const float cornerInset = std::max(dotSize * 0.5f, radius * 0.55f);
 
     int emitted = 0;
-    auto emitDot = [&](float dotX, float dotY) {
+    auto emitDot = [&](float dotX, float dotY, BoxSide side) {
         if (emitted >= kMaxBorderDecorationPrimitives)
             return;
         ++emitted;
-        UI::UIPrimitive dot = UI::MakeRect(dotX, dotY, dotSize, dotSize, packedColor,
+        UI::UIPrimitive dot = UI::MakeRect(dotX, dotY, dotSize, dotSize,
+                                           UI::PackFromARGB(BorderSideColor(style.Visual.BorderColor, side)),
                                            dotSize * 0.5f, dotSize * 0.5f,
                                            dotSize * 0.5f, dotSize * 0.5f);
         UI::SetClip(dot, clipIdx);
@@ -268,36 +269,38 @@ void EmitDottedBorder(std::vector<UI::UIPrimitive>& outPrims, const ResolvedStyl
     {
         if (emitted >= kMaxBorderDecorationPrimitives)
             break;
-        if (bw.Top > 0.0f) emitDot(dotX, top);
-        if (bw.Bottom > 0.0f) emitDot(dotX, bottom);
+        if (bw.Top > 0.0f) emitDot(dotX, top, BoxSide::Top);
+        if (bw.Bottom > 0.0f) emitDot(dotX, bottom, BoxSide::Bottom);
     }
     for (float dotY = y + cornerInset; dotY <= y + h - cornerInset - dotSize; dotY += pitch)
     {
         if (emitted >= kMaxBorderDecorationPrimitives)
             break;
-        if (bw.Left > 0.0f) emitDot(left, dotY);
-        if (bw.Right > 0.0f) emitDot(right, dotY);
+        if (bw.Left > 0.0f) emitDot(left, dotY, BoxSide::Left);
+        if (bw.Right > 0.0f) emitDot(right, dotY, BoxSide::Right);
     }
 }
 
 // Emit `border-style: dashed` by walking the element's rounded-rect perimeter
 // and stamping dash line primitives with gaps between them. Walking the whole
 // perimeter (rather than dashing each edge independently) keeps the dash/gap
-// pattern continuous through the corners. The stroke uses the max of the four
-// edge widths. x/y/w/h are the physical-px element rect; cs converts
-// CSS-logical widths and radii to physical px.
+// pattern continuous through the corners. A dash takes the color of its side,
+// and a side without a width gets no dashes; a corner arc splits at its middle.
+// The stroke uses the max of the four edge widths. x/y/w/h are the physical-px
+// element rect; cs converts CSS-logical widths and radii to physical px.
 void EmitDashedBorder(std::vector<UI::UIPrimitive>& outPrims, const ResolvedStyle& style,
                       const CornerRadiiTLTRBRBL& usedRadii,
                       float x, float y, float w, float h, float cs,
                       uint16_t clipIdx, float opacity)
 {
     const Box4& bw = style.Layout.BorderWidth;
-    const uint32_t packedColor = UI::PackFromARGB(DrawnBorderColor(style));
     const float borderWidth = std::max({bw.Top, bw.Right, bw.Bottom, bw.Left}) * cs;
+    // Side is the side of the path segment that ends at the point.
     struct BorderPathPoint
     {
         float X;
         float Y;
+        BoxSide Side;
     };
 
     const float dashLength = std::max(6.0f * cs, borderWidth * 4.0f);
@@ -327,22 +330,22 @@ void EmitDashedBorder(std::vector<UI::UIPrimitive>& outPrims, const ResolvedStyl
 
     std::vector<BorderPathPoint> path;
     path.reserve(48);
-    auto appendPoint = [&path](float pointX, float pointY) {
+    auto appendPoint = [&path](float pointX, float pointY, BoxSide side) {
         if (path.empty() || std::abs(path.back().X - pointX) > 0.001f ||
             std::abs(path.back().Y - pointY) > 0.001f)
         {
-            path.push_back({pointX, pointY});
+            path.push_back({pointX, pointY, side});
         }
     };
     // Elliptical corner arc: x rides cos against the horizontal semi-axis,
     // y rides sin against the vertical one. A corner with either axis zero
     // is square (css-backgrounds-3 §5) and contributes only its end point.
     auto appendArc = [&](float centerX, float centerY, const CornerRadius& radius,
-                         float startAngle, float endAngle) {
+                         float startAngle, float endAngle, BoxSide sideBefore, BoxSide sideAfter) {
         if (radius.X <= 0.0f || radius.Y <= 0.0f)
         {
             appendPoint(centerX + std::cos(endAngle) * radius.X,
-                        centerY + std::sin(endAngle) * radius.Y);
+                        centerY + std::sin(endAngle) * radius.Y, sideAfter);
             return;
         }
 
@@ -355,19 +358,19 @@ void EmitDashedBorder(std::vector<UI::UIPrimitive>& outPrims, const ResolvedStyl
             const float t = static_cast<float>(step) / static_cast<float>(steps);
             const float angle = startAngle + (endAngle - startAngle) * t;
             appendPoint(centerX + std::cos(angle) * radius.X,
-                        centerY + std::sin(angle) * radius.Y);
+                        centerY + std::sin(angle) * radius.Y, step * 2 <= steps ? sideBefore : sideAfter);
         }
     };
 
-    appendPoint(left + radiusTL.X, top);
-    appendPoint(right - radiusTR.X, top);
-    appendArc(right - radiusTR.X, top + radiusTR.Y, radiusTR, -pi * 0.5f, 0.0f);
-    appendPoint(right, bottom - radiusBR.Y);
-    appendArc(right - radiusBR.X, bottom - radiusBR.Y, radiusBR, 0.0f, pi * 0.5f);
-    appendPoint(left + radiusBL.X, bottom);
-    appendArc(left + radiusBL.X, bottom - radiusBL.Y, radiusBL, pi * 0.5f, pi);
-    appendPoint(left, top + radiusTL.Y);
-    appendArc(left + radiusTL.X, top + radiusTL.Y, radiusTL, pi, pi * 1.5f);
+    appendPoint(left + radiusTL.X, top, BoxSide::Top);
+    appendPoint(right - radiusTR.X, top, BoxSide::Top);
+    appendArc(right - radiusTR.X, top + radiusTR.Y, radiusTR, -pi * 0.5f, 0.0f, BoxSide::Top, BoxSide::Right);
+    appendPoint(right, bottom - radiusBR.Y, BoxSide::Right);
+    appendArc(right - radiusBR.X, bottom - radiusBR.Y, radiusBR, 0.0f, pi * 0.5f, BoxSide::Right, BoxSide::Bottom);
+    appendPoint(left + radiusBL.X, bottom, BoxSide::Bottom);
+    appendArc(left + radiusBL.X, bottom - radiusBL.Y, radiusBL, pi * 0.5f, pi, BoxSide::Bottom, BoxSide::Left);
+    appendPoint(left, top + radiusTL.Y, BoxSide::Left);
+    appendArc(left + radiusTL.X, top + radiusTL.Y, radiusTL, pi, pi * 1.5f, BoxSide::Left, BoxSide::Top);
 
     bool drawing = true;
     float patternRemaining = dashLength;
@@ -382,11 +385,13 @@ void EmitDashedBorder(std::vector<UI::UIPrimitive>& outPrims, const ResolvedStyl
         if (segmentLength <= 0.001f)
             continue;
 
+        const bool sidePaints = BorderSideWidth(bw, end.Side) > 0.0f;
+        const uint32_t packedColor = UI::PackFromARGB(BorderSideColor(style.Visual.BorderColor, end.Side));
         float segmentOffset = 0.0f;
         while (segmentOffset < segmentLength - 0.001f)
         {
             const float chunkLength = std::min(patternRemaining, segmentLength - segmentOffset);
-            if (drawing && chunkLength > 0.001f)
+            if (drawing && sidePaints && chunkLength > 0.001f)
             {
                 const float startT = segmentOffset / segmentLength;
                 const float endT = (segmentOffset + chunkLength) / segmentLength;
@@ -1068,11 +1073,6 @@ bool UIManager::ElementRectIntersectsNearestClip(const UIElement* el) const
            x + w > 0.0f && y + h > 0.0f;
 }
 
-namespace
-{
-
-// An element as a log line names it: `#id`, else its first class, else
-// "an element", followed by its nearest ancestor that has an id.
 std::string DescribeElementForLog(const UIElement& el)
 {
     std::string text = !el.GetId().empty()          ? "#" + el.GetId()
@@ -1088,8 +1088,6 @@ std::string DescribeElementForLog(const UIElement& el)
     }
     return text;
 }
-
-} // namespace
 
 uint32_t UIManager::WriteElementTransformSlot(UIElement* el, uint32_t parentIdx)
 {
@@ -2325,15 +2323,20 @@ void UIManager::GeneratePrimitivesForElement(UIElement* el, PrimitiveGenContext&
             UI::SetClip(prim, clipIdx);
             UI::SetOpacity(prim, ctx.EffectiveOpacity);
 
+            // The box before its ring and effects: the shape of each side band in another color.
+            std::optional<UI::UIPrimitive> boxShape;
+            UI::SolidBorderSides borderSides{};
+            uint32_t ringColor = 0u;
             if (hasBorder && vs.BorderStyle == BorderStyle::Solid)
             {
-                const uint32_t bc = DrawnBorderColor(style);
-                UI::AddBorderLTRB(prim,
-                    SnapBorderWidth(style.Layout.BorderWidth.Left * cs),
-                    SnapBorderWidth(style.Layout.BorderWidth.Top * cs),
-                    SnapBorderWidth(style.Layout.BorderWidth.Right * cs),
-                    SnapBorderWidth(style.Layout.BorderWidth.Bottom * cs),
-                    UI::PackFromARGB(bc));
+                boxShape = prim;
+                const Box4& bw = style.Layout.BorderWidth;
+                const BorderColorsTRBL& bc = vs.BorderColor;
+                borderSides.Widths = {SnapBorderWidth(bw.Top * cs), SnapBorderWidth(bw.Right * cs),
+                                      SnapBorderWidth(bw.Bottom * cs), SnapBorderWidth(bw.Left * cs)};
+                borderSides.Colors = {UI::PackFromARGB(bc.Top), UI::PackFromARGB(bc.Right),
+                                      UI::PackFromARGB(bc.Bottom), UI::PackFromARGB(bc.Left)};
+                ringColor = UI::AddBorderRing(prim, borderSides);
             }
 
             if (hasShadow)
@@ -2356,6 +2359,8 @@ void UIManager::GeneratePrimitivesForElement(UIElement* el, PrimitiveGenContext&
 
             ctx.Primitives.push_back(prim);
 
+            if (boxShape)
+                UI::AppendBorderSidesInOtherColors(ctx.Primitives, *boxShape, borderSides, ringColor);
             if (hasBorder && vs.BorderStyle == BorderStyle::Dotted)
                 EmitDottedBorder(ctx.Primitives, style, usedRadii, px, py, pw, ph, cs, clipIdx, ctx.EffectiveOpacity);
             else if (hasBorder && vs.BorderStyle == BorderStyle::Dashed)

@@ -11,6 +11,7 @@
 #include "ECS/Component/ComponentFieldRegistry.h"
 #include "ECS/UnresolvedComponentStore.h"
 #include "Logger/Logger.h"
+#include "Types/FlatMap.h"
 #include "Types/GeometricReserve.h"
 #include <algorithm>
 #include <array>
@@ -147,14 +148,14 @@ EntityHandle Archetype::RemoveEntityUnsafe(EntityLocation loc)
         return EntityHandle::Invalid();
 
     EntityHandle moved = m_Table->RemoveEntity(loc);
-    // Change signaling: swap-and-pop rewrote the vacated slot with the
-    // chunk's last row — every column of this chunk changed for gated
-    // consumers (covers all destroy paths, remove-component moves, and the
-    // MoveEntity source side).
-    if (world)
+    // Change signaling: the removal wrote the table's last row into the vacated
+    // slot, so every column of loc's chunk changed for gated consumers (all
+    // destroy paths, remove-component moves, the MoveEntity source side).
+    // A chunk that the removal emptied has left the table and gets no stamp.
+    if (world && loc.ChunkIndex < m_Table->GetChunkCount())
         m_Table->StampAllColumnVersions(loc.ChunkIndex, world->NextGlobalSystemVersion());
 
-    // The last entity in the chunk was swapped into loc's position.
+    // The table's last row now sits at loc.
     if (moved.IsValid() && world)
     {
         world->UpdateEntityLocationUnsafe(moved, this, loc);
@@ -1312,7 +1313,7 @@ void World::MoveEntity(EntityHandle entity, Archetype* from, Archetype* to)
         }
     }
 
-    // Remove from old archetype (swap-and-pop within chunk).
+    // Remove from the old archetype; its table's last row moves into fromLoc.
     from->RemoveEntityUnsafe(fromLoc);
 
     // Update metadata to new location.
@@ -2653,6 +2654,20 @@ namespace
 {
 constexpr uint32_t kWorldSnapshotMagic = 0x57435345; // ECSW
 constexpr uint32_t kWorldSnapshotVersion = 2;
+
+// True when `archetype` holds a type that declares NotInWorldSnapshot (ComponentFlags.h).
+bool HoldsNotInWorldSnapshotType(const Archetype* archetype)
+{
+    if (!archetype)
+        return false;
+    for (const ComponentTypeId typeId : archetype->GetSignature().GetComponents())
+    {
+        const ComponentRegistry::ComponentInfo* info = ComponentRegistry::GetComponentInfo(typeId);
+        if (info && HasAnyFlag(info->Flags, ComponentFlags::NotInWorldSnapshot))
+            return true;
+    }
+    return false;
+}
 }
 
 std::vector<uint8_t> World::SerializeWorld()
@@ -2672,14 +2687,32 @@ std::vector<uint8_t> World::SerializeWorld()
     append(kWorldSnapshotMagic);
     append(kWorldSnapshotVersion);
     append(static_cast<uint32_t>(entityMetadata.size()));
+    const std::size_t freeCountOffset = result.size();
     append(static_cast<uint32_t>(freeIndices.size()));
     append(m_EntityHandleEpoch);
 
+    FlatMap<const Archetype*, bool> skippedArchetypes;
+    std::vector<EntityIndex> skippedIndices;
     for (EntityIndex i = 0; i < entityMetadata.size(); ++i)
     {
         const auto& metadata = entityMetadata[i];
         append(metadata.version);
+        bool skipped = false;
         if (metadata.alive)
+        {
+            const bool* known = skippedArchetypes.Find(metadata.archetype);
+            skipped = known ? *known
+                            : skippedArchetypes.InsertOrAssign(metadata.archetype,
+                                                               HoldsNotInWorldSnapshotType(metadata.archetype));
+        }
+        // An entity of a NotInWorldSnapshot type is a free slot, lowest index popped first.
+        // Its version stays, so the next create in the slot issues a new handle.
+        if (skipped)
+        {
+            skippedIndices.push_back(i);
+            append(uint32_t{0});
+        }
+        else if (metadata.alive)
         {
             EntityHandle entity(i, metadata.version);
             auto entityData = SerializeEntityUnsafe(entity);
@@ -2693,6 +2726,10 @@ std::vector<uint8_t> World::SerializeWorld()
     }
     for (const auto index : freeIndices)
         append(index);
+    for (auto it = skippedIndices.rbegin(); it != skippedIndices.rend(); ++it)
+        append(*it);
+    const auto freeCount = static_cast<uint32_t>(freeIndices.size() + skippedIndices.size());
+    std::memcpy(result.data() + freeCountOffset, &freeCount, sizeof(freeCount));
 
     return result;
 }
@@ -3329,33 +3366,12 @@ std::vector<EntityHandle> World::CreateBatchFromBundle(size_t count, const Compo
 }
 
 // ============================================================================
-// CHUNK COMPACTION
+// SPARE CHUNKS
 // ============================================================================
 
-uint32_t Archetype::CompactChunks()
+uint32_t Archetype::FreeSpareChunks()
 {
-    if (!m_Table || !world)
-        return 0;
-
-    return m_Table->CompactChunks(
-        [this](uint32_t oldChunkIdx, uint32_t newChunkIdx, ArchetypeChunk& chunk)
-        {
-            // Update all entities in the relocated chunk to their new chunk index.
-            const EntityHandle* handles = chunk.GetEntityHandles();
-            uint32_t count = chunk.GetCount();
-            for (uint32_t i = 0; i < count; ++i)
-            {
-                EntityHandle eh = handles[i];
-                if (eh.index < world->entityMetadata.size())
-                {
-                    auto& md = world->entityMetadata[eh.index];
-                    if (md.archetype == this && md.chunkIndex == static_cast<uint16_t>(oldChunkIdx))
-                    {
-                        md.chunkIndex = static_cast<uint16_t>(newChunkIdx);
-                    }
-                }
-            }
-        });
+    return m_Table ? m_Table->FreeSpareChunks() : 0;
 }
 
 // ============================================================================
@@ -3438,12 +3454,11 @@ size_t World::CompactAllChunks()
     size_t totalFreed = 0;
     for (auto& [sig, archetype] : archetypes)
     {
-        totalFreed += archetype->CompactChunks();
+        totalFreed += archetype->FreeSpareChunks();
     }
 
-    // Chunk layout changed (empty chunks freed, others may have been swapped).
-    // Bump structural version so caches relying on "data location may have moved"
-    // signals (e.g. user-side change tracking) can detect the invalidation.
+    // Chunk memory was freed (no row moved). Bump the structural version so that
+    // caches keyed on it drop any chunk address they hold.
     if (totalFreed > 0)
         structuralChangeVersion.fetch_add(1, std::memory_order_relaxed);
 

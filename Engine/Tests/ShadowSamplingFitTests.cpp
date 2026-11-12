@@ -23,6 +23,8 @@
 #include "Engine/Rendering/RenderOrigin.h"
 #include "Mathematics/Matrix4x4.h"
 #include "Mathematics/MatrixOps.h"
+#include "Mathematics/Vector3Int.h"
+#include "Mathematics/WorldPosition.h"
 
 #include <gtest/gtest.h>
 
@@ -43,7 +45,7 @@ namespace
 // A cascade-shaped fit pair, derived exactly the way ComputeCascadeLightVP
 // derives it with the origin active: rotation-only look-at + explicit -R*eye
 // translation (never MakeLookAtLH(eye, eye+dir)), reverse-Z ortho, and the
-// origin-relative twin through the production ComputeRebasedOrthoLightVP
+// origin-relative twin through the production ComputeRebasedLightVP
 // primitive (sector 0 => byte-copy).
 void MakeCascadeLightVPPair(const Vector3& lightPos, const Vector3& lightDir, float halfExtent,
                             float depthRange, const int32_t sector[3], Matrix4x4& outVP,
@@ -68,14 +70,13 @@ void MakeCascadeLightVPPair(const Vector3& lightPos, const Vector3& lightDir, fl
                                  static_cast<double>(v[6]) * lightPos.y +
                                  static_cast<double>(v[10]) * lightPos.z));
     outVP = proj * view;
-    outVPRel = outVP;
-    Renderer::ComputeRebasedOrthoLightVP(rotView.Data(), proj.Data(), outVP.Data(), lightPos.x,
-                                         lightPos.y, lightPos.z, sector, outVPRel.Data());
+    outVPRel = Renderer::ComputeRebasedLightVP(rotView, proj, outVP, WorldPosition::FromVector3(lightPos),
+                                               Vector3Int{sector[0], sector[1], sector[2]});
 }
 
-void OriginWorld(int32_t sx, int32_t sy, int32_t sz, float out[3])
+Vector3 OriginWorld(int32_t sx, int32_t sy, int32_t sz)
 {
-    Renderer::SectorToWorld(Components::WorldSectorCoord{sx, sy, sz}, out[0], out[1], out[2]);
+    return Renderer::SectorToWorld(Mathematics::Vector3Int{sx, sy, sz});
 }
 
 // A frame whose per-cascade fits are all distinct (guards cascade-index
@@ -87,14 +88,13 @@ CascadeFrameData MakeFrame(int32_t sx, int32_t sy, int32_t sz)
     f.RenderOriginSector[0] = sx;
     f.RenderOriginSector[1] = sy;
     f.RenderOriginSector[2] = sz;
-    float o[3];
-    OriginWorld(sx, sy, sz, o);
+    const Vector3 o = OriginWorld(sx, sy, sz);
     for (uint32_t i = 0; i < f.NumCascades; ++i)
     {
         const float half = 20.0f * static_cast<float>(i + 1);
         const float span = 150.0f + 40.0f * static_cast<float>(i);
         const float k = static_cast<float>(i);
-        MakeCascadeLightVPPair(Vector3{o[0] + 3.0f * k, o[1] + 100.0f, o[2] - 2.0f * k},
+        MakeCascadeLightVPPair(Vector3{o.x + 3.0f * k, o.y + 100.0f, o.z - 2.0f * k},
                                Vector3{-0.4f, -1.0f, -0.3f}, half, span, f.RenderOriginSector,
                                f.LightVP[i], f.LightVPRel[i]);
         f.OrthoHalfExtent[i] = half;
@@ -107,12 +107,12 @@ CascadeFrameData MakeFrame(int32_t sx, int32_t sy, int32_t sz)
 // A divergent snapshot: the fit of content rendered a few frames ago from a
 // different camera — different translation AND different extents — committed
 // under `sector`.
-ShadowMapRenderFeature::CascadeContentFit MakeDivergentFit(const float originWorld[3],
+ShadowMapRenderFeature::CascadeContentFit MakeDivergentFit(const Vector3& originWorld,
                                                            const int32_t sector[3])
 {
     ShadowMapRenderFeature::CascadeContentFit fit{};
     MakeCascadeLightVPPair(
-        Vector3{originWorld[0] + 27.0f, originWorld[1] + 90.0f, originWorld[2] + 11.0f},
+        Vector3{originWorld.x + 27.0f, originWorld.y + 90.0f, originWorld.z + 11.0f},
         Vector3{-0.5f, -1.0f, -0.2f}, 55.0f, 240.0f, sector, fit.LightVP, fit.LightVPRel);
     fit.Sector[0] = sector[0];
     fit.Sector[1] = sector[1];
@@ -132,8 +132,7 @@ TEST(ShadowSamplingFit, DeferredCascadeSamplesRetainedRelFitNotCurrentFit)
     // unchanged, and NOT the current frame's fit.
     const int32_t sx = 5, sy = 0, sz = -2;
     const CascadeFrameData frame = MakeFrame(sx, sy, sz);
-    float o[3];
-    OriginWorld(sx, sy, sz, o);
+    const Vector3 o = OriginWorld(sx, sy, sz);
 
     const uint32_t c = 2; // per-cascade values are distinct; pick a middle slot
     const ShadowMapRenderFeature::CascadeContentFit fit =
@@ -167,8 +166,7 @@ TEST(ShadowSamplingFit, DeferredCascadeReanchorsAcrossSectorStep)
 
     // Content committed one sector step ago.
     const int32_t oldSector[3] = {sx - 1, sy, sz + 2};
-    float oldOrigin[3];
-    OriginWorld(oldSector[0], oldSector[1], oldSector[2], oldOrigin);
+    const Vector3 oldOrigin = OriginWorld(oldSector[0], oldSector[1], oldSector[2]);
     const ShadowMapRenderFeature::CascadeContentFit fit = MakeDivergentFit(oldOrigin, oldSector);
 
     const uint32_t c = 1;
@@ -231,12 +229,11 @@ TEST(ShadowSamplingFit, NoSnapshotFallsBackToCurrentFrame)
     // field contents.
     const int32_t sx = 5, sy = 0, sz = -2;
     const CascadeFrameData frame = MakeFrame(sx, sy, sz);
-    float o[3];
-    OriginWorld(sx, sy, sz, o);
+    const Vector3 o = OriginWorld(sx, sy, sz);
 
     ShadowMapRenderFeature::CascadeContentFit invalid{};
     const int32_t junkSector[3] = {sx + 40, sy - 7, sz + 13};
-    MakeCascadeLightVPPair(Vector3{o[0] + 500.0f, o[1] + 40.0f, o[2]},
+    MakeCascadeLightVPPair(Vector3{o.x + 500.0f, o.y + 40.0f, o.z},
                            Vector3{-0.1f, -1.0f, -0.7f}, 999.0f, 5.0f, junkSector,
                            invalid.LightVP, invalid.LightVPRel);
     invalid.Sector[0] = junkSector[0];

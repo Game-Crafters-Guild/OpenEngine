@@ -7,13 +7,22 @@
 #include <gtest/gtest.h>
 
 #include "Terrain/TerrainSizingNotice.h"
+#include "TerrainECS/PageLevelRule.h"
+#include "TerrainECS/TerrainPages.h"
 #include "TerrainECS/TerrainSizingPlan.h"
+#include "UI/UIElement.h"
 
+#include <regex>
 #include <string>
 
+using GameEngine::uint64;
+using GameEngine::UIElement;
+using GameEngine::Editor::AddTerrainSizingNotice;
 using GameEngine::Editor::DescribeTerrainResidency;
 using GameEngine::Editor::DescribeTerrainSizing;
 using GameEngine::TerrainECS::DeriveTerrainSizingPlan;
+using GameEngine::TerrainECS::kPinWholePyramidCacheFraction;
+using GameEngine::TerrainECS::PlatformHeightPageProfile;
 using GameEngine::TerrainECS::TerrainHeightSource;
 using GameEngine::TerrainECS::TerrainSizingPlan;
 
@@ -25,26 +34,44 @@ bool Contains(const std::string& haystack, const std::string& needle)
 }
 } // namespace
 
-TEST(TerrainSizingNotice, ASmallTerrainReportsItsResolutionAndThatItDoesNotStream)
+// A small terrain whose whole height pyramid fits a quarter of the platform's page cache does not
+// stream, so the author is told it fits in memory. On Steam Deck the pyramid streams.
+TEST(TerrainSizingNotice, ASmallTerrainReportsItsResolutionAndThatNothingStreams)
 {
     const TerrainSizingPlan plan = DeriveTerrainSizingPlan(1024.0f, 1024.0f, 1.0f);
     const std::string text = DescribeTerrainSizing(plan);
+    const uint64 pinCap = PlatformHeightPageProfile().Slots / kPinWholePyramidCacheFraction;
 
-    EXPECT_TRUE(Contains(text, "1025 x 1025")) << text;
-    EXPECT_TRUE(Contains(text, "one tile, no streaming")) << text;
+    EXPECT_TRUE(Contains(text, "1,025 x 1,025")) << text;
+    if (plan.HeightPages <= pinCap)
+        EXPECT_TRUE(Contains(text, " - fits in memory, nothing streams (120 pages)")) << text;
+    else
+        EXPECT_TRUE(Contains(text, "1 x 1 streamed tiles")) << text;
 }
 
-// The plan derives a tile grid for every terrain because the service needs one, and for a
-// non-square sub-cap terrain that grid has several tiles in it. The author must still be told
-// this terrain is a single heightmap that does not stream.
-TEST(TerrainSizingNotice, ANonSquareSmallTerrainStillReportsThatItDoesNotStream)
+// A 576 x 300 m terrain is two 300 m tiles of 513 samples: 1025 samples along X, 513 along Z.
+TEST(TerrainSizingNotice, ANonSquareTerrainReportsTheSampleCountOfEachAxis)
 {
-    const TerrainSizingPlan plan = DeriveTerrainSizingPlan(512.0f, 128.0f, 1.0f);
-    ASSERT_EQ(plan.Source, TerrainHeightSource::Single);
-    ASSERT_GT(plan.TotalTiles, 1u) << "the derived grid really does have several tiles";
+    const std::string text = DescribeTerrainSizing(DeriveTerrainSizingPlan(576.0f, 300.0f, 1.0f));
 
-    EXPECT_TRUE(Contains(DescribeTerrainSizing(plan), "one tile, no streaming"))
-        << DescribeTerrainSizing(plan);
+    EXPECT_TRUE(Contains(text, "1,025 x 513 samples")) << text;
+}
+
+// Two 300 m tiles store samples for 600 m along X, past the authored 576 m, so the notice states that
+// memory and the tile grid first, where a short panel shows it. The terrain draws only 576 m, so no
+// notice states a drawn size. Four 300 m tiles cover 1200 m exactly, so that notice states no stored size.
+TEST(TerrainSizingNotice, ATileGridPastTheAuthoredSizeReportsTheStoredSizeFirst)
+{
+    const std::string overhang = DescribeTerrainSizing(DeriveTerrainSizingPlan(576.0f, 300.0f, 1.0f));
+    const std::string exact = DescribeTerrainSizing(DeriveTerrainSizingPlan(1200.0f, 300.0f, 1.0f));
+
+    EXPECT_TRUE(overhang.starts_with(
+        "Stores samples for 600 m x 300 m (2 x 1 tiles of 300 m), more than it draws. 1,025 x 513 samples"))
+        << overhang;
+    EXPECT_TRUE(exact.starts_with("2,049 x 513 samples")) << exact;
+    EXPECT_FALSE(Contains(overhang, "drawn")) << overhang;
+    EXPECT_FALSE(Contains(exact, "Stores")) << exact;
+    EXPECT_FALSE(Contains(exact, "drawn")) << exact;
 }
 
 TEST(TerrainSizingNotice, ATiledTerrainReportsItsTileGrid)
@@ -56,14 +83,14 @@ TEST(TerrainSizingNotice, ATiledTerrainReportsItsTileGrid)
     EXPECT_TRUE(Contains(text, "8 x 8 streamed tiles")) << text;
 }
 
-// Detail is quoted in metres per texel because that is the unit an author reasons in — "0.5 m
-// per texel on an 8 km island" — not samples per metre, and never raw sample counts alone.
-TEST(TerrainSizingNotice, DetailIsQuotedInMetresPerTexel)
+// Detail is quoted in meters per sample because that is the unit an author reasons in ("0.5 m
+// per sample on an 8 km island"), not samples per meter, and never raw sample counts alone.
+TEST(TerrainSizingNotice, DetailIsQuotedInMetersPerSample)
 {
     EXPECT_TRUE(Contains(DescribeTerrainSizing(DeriveTerrainSizingPlan(4096.0f, 4096.0f, 2.0f)),
-                         "0.50 m per texel"));
+                         "0.5 m per sample"));
     EXPECT_TRUE(Contains(DescribeTerrainSizing(DeriveTerrainSizingPlan(4096.0f, 4096.0f, 0.5f)),
-                         "2.0 m per texel"));
+                         "2 m per sample"));
 }
 
 TEST(TerrainSizingNotice, AFullyResidentTerrainSaysAllOfItIsAtFullDetail)
@@ -128,4 +155,28 @@ TEST(TerrainSizingNotice, ADegenerateTerrainProducesNoWordingRatherThanNonsense)
 
     EXPECT_TRUE(DescribeTerrainSizing(plan).empty());
     EXPECT_TRUE(DescribeTerrainResidency(plan).empty());
+}
+
+// Counts and lengths group their digits as the size refusal does: "250,001", not "250001".
+TEST(TerrainSizingNotice, ALargeTerrainGroupsTheDigitsOfEveryNumber)
+{
+    const TerrainSizingPlan plan = DeriveTerrainSizingPlan(250000.0f, 250000.0f, 1.0f);
+    const std::string text = DescribeTerrainSizing(plan) + " " + DescribeTerrainResidency(plan);
+    const std::regex ungrouped("[0-9]{4}");
+
+    ASSERT_FALSE(DescribeTerrainResidency(plan).empty());
+    EXPECT_FALSE(std::regex_search(text, ungrouped)) << text;
+}
+
+// A size that creation refuses has no tiles and no memory, so the panel shows only the refusal
+// notice and no summary rows. The control: a valid size adds the rows.
+TEST(TerrainSizingNotice, ARefusedSizeAddsNoSummaryRows)
+{
+    UIElement refused;
+    AddTerrainSizingNotice(&refused, 2000000.0f, 2000000.0f, 1.0f);
+    UIElement valid;
+    AddTerrainSizingNotice(&valid, 8192.0f, 8192.0f, 2.0f);
+
+    EXPECT_TRUE(refused.GetChildren().empty());
+    EXPECT_EQ(valid.GetChildren().size(), 2u);
 }

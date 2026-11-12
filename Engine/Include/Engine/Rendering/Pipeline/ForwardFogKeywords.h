@@ -4,9 +4,19 @@
 
 #include <string>
 
+namespace GameEngine::Engine::Renderer
+{
+struct PostProcessSettings;
+} // namespace GameEngine::Engine::Renderer
+
 namespace GameEngine::Engine::Renderer::Pipeline
 {
 struct ViewDeclare;
+
+/// The height fog rule: HeightFog when `settings` make the height fog active
+/// (PostProcessSettings::IsHeightFogActive) and the view's render graph publishes the HeightFogParams
+/// buffer. HeightFogPassKeyword and WorldPassViewKeywords both apply it.
+Rendering::MaterialKeyword HeightFogKeyword(const PostProcessSettings& settings, bool heightFogParamsPublished);
 
 /// The HeightFog pass keyword a view's colour passes draw with: set when the view's effective
 /// height fog is active (PostProcessSettings::IsHeightFogActive) and its render graph published

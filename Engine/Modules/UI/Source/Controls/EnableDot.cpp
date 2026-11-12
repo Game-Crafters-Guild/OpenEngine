@@ -1,5 +1,6 @@
 #include "UI/Controls/EnableDot.h"
 
+#include "UI/StyleUtil.h"
 #include "UI/UIElement.h"
 #include "UI/UIEvents.h"
 
@@ -8,21 +9,10 @@
 
 namespace GameEngine {
 
-namespace
-{
-void SetClassPresent(UIElement& element, const std::string& className, bool present)
-{
-    if (present)
-        element.AddClass(className);
-    else
-        element.RemoveClass(className);
-}
-} // namespace
-
 EnableDot::EnableDot()
 {
     AddClass("enable-dot");
-    // Control styling is an Editor-shipped UIStyle asset, as Toggle's is.
+    // Control styling is a UI module UIStyle asset, as Toggle's is.
     RequestSubtreeStyleAssetPath("UI/controls/EnableDot/EnableDot.css", "editor");
 
     auto mark = std::make_unique<UIElement>();
@@ -37,7 +27,7 @@ void EnableDot::SetInactive(bool inactive)
     if (m_Inactive == inactive)
         return;
     m_Inactive = inactive;
-    SetClassPresent(*this, "enable-dot-inactive", inactive);
+    UIUtil::SetClassPresent(*this, "enable-dot-inactive", inactive);
 }
 
 void EnableDot::OnEvent(UIEvent& e)
@@ -53,9 +43,9 @@ void EnableDot::OnToggleStateChanged()
 {
     if (!m_Mark)
         return;
-    SetClassPresent(*m_Mark, "enable-dot-mark-mixed", IsMixed());
-    SetClassPresent(*m_Mark, "enable-dot-mark-on", !IsMixed() && IsChecked());
-    SetClassPresent(*m_Mark, "enable-dot-mark-off", !IsMixed() && !IsChecked());
+    UIUtil::SetClassPresent(*m_Mark, "enable-dot-mark-mixed", IsMixed());
+    UIUtil::SetClassPresent(*m_Mark, "enable-dot-mark-on", !IsMixed() && IsChecked());
+    UIUtil::SetClassPresent(*m_Mark, "enable-dot-mark-off", !IsMixed() && !IsChecked());
 }
 
 } // namespace GameEngine

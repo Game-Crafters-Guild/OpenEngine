@@ -328,10 +328,10 @@ TEST_F(MarkupSceneSchemaTest, AnUnreadableEntryKeepsItsSlotAndSavesAsAuthored)
     }
 
     ECS::World world;
-    Scene::SceneDegradation degradation;
     Scene::SceneReadOptions options{};
-    options.outDegradation = &degradation;
-    ASSERT_TRUE(Scene::ReadSceneInto(world, path, options));
+    const Scene::SceneInstantiateResult readResult = Scene::ReadSceneInto(world, path, options);
+    ASSERT_TRUE(readResult);
+    const Scene::SceneDegradation& degradation = readResult.Degradation;
     ASSERT_EQ(degradation.skips.size(), 1u);
     EXPECT_EQ(degradation.skips[0].field, "entry1");
     EXPECT_TRUE(degradation.skips[0].preserved);
@@ -513,10 +513,10 @@ TEST_F(MarkupSceneSchemaTest, AnEditEntryRoundTripsItsChanges)
             << "Markup.entry0 = Edit|User|5|\"\"|\"teleported\"\n";
     }
     ECS::World refused;
-    Scene::SceneDegradation degradation;
     Scene::SceneReadOptions options{};
-    options.outDegradation = &degradation;
-    ASSERT_TRUE(Scene::ReadSceneInto(refused, bad, options));
+    const Scene::SceneInstantiateResult readResult = Scene::ReadSceneInto(refused, bad, options);
+    ASSERT_TRUE(readResult);
+    const Scene::SceneDegradation& degradation = readResult.Degradation;
     ASSERT_EQ(degradation.skips.size(), 1u);
     const MarkupECS::MarkupNotes* badNotes = service.FindNotes(refused, FindByTag(refused, "d"));
     ASSERT_NE(badNotes, nullptr);

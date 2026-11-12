@@ -295,7 +295,7 @@ void VisualProfilerPanel::BuildUI()
     AddChild(std::move(boundChart));
 
     // Frame history charts: CPU on top (blue), GPU below (orange). Series come
-    // from AccumulateLiveHistory over LastFrameTimings(); GPU stays flat at 0
+    // from AccumulateLiveHistory over LastFrameProfiling().Passes; GPU stays flat at 0
     // when the device has no timestamp pool (browser WebGPU).
     auto msFormatter = [](float v) {
         char buf[32];
@@ -583,9 +583,9 @@ void VisualProfilerPanel::RefreshToolbar(Rendering::RenderGraph::RGFrame* render
             m_StatusLabel->SetText("profiler disarmed");
         else
         {
-            // LastFrameTimings is the previous resolved slot; the charts roll
+            // The last frame profiling is the previous resolved slot; the charts roll
             // that locally in AccumulateLiveHistory.
-            auto timings = renderGraph->LastFrameTimings();
+            auto timings = renderGraph->LastFrameProfiling().Passes;
             double sumCpu = 0.0;
             for (const auto& t : timings) sumCpu += t.CpuMs;
             const bool span = renderGraph->TimingSemantics() == Rendering::TimestampSemantics::EncoderSpan;
@@ -674,7 +674,7 @@ void VisualProfilerPanel::RebuildPassSnapshot(Rendering::RenderGraph::RGFrame* r
         // RenderGraph exposes only the last resolved frame's per-pass timings; the
         // per-history-index scrub source is a Stage 2e item, so a live cursor
         // still reads the latest frame.
-        timings = renderGraph->LastFrameTimings();
+        timings = renderGraph->LastFrameProfiling().Passes;
     }
     if (timings.empty())
         return; // hold the last snapshot (matches the old RefreshRows early-out)
@@ -786,7 +786,7 @@ void VisualProfilerPanel::AccumulateLiveHistory(Rendering::RenderGraph::RGFrame*
 {
     if (!renderGraph)
         return;
-    auto timings = renderGraph->LastFrameTimings();
+    auto timings = renderGraph->LastFrameProfiling().Passes;
     if (timings.empty())
         return;
     double sumCpu = 0.0;
@@ -822,7 +822,7 @@ void VisualProfilerPanel::SnapshotHistoryForFreeze(Rendering::RenderGraph::RGFra
     // latest frame so the list isn't empty.
     if (!renderGraph)
         return;
-    auto timings = renderGraph->LastFrameTimings();
+    auto timings = renderGraph->LastFrameProfiling().Passes;
     if (timings.empty())
         return;
     double sumCpu = 0.0;

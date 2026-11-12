@@ -22,6 +22,8 @@
 #include "Logger/Logger.h"
 
 #include <algorithm>
+#include <cmath>
+#include <format>
 #include <limits>
 #include <cstddef>
 #include <cstdio>
@@ -387,10 +389,14 @@ public:
         if (!c->TerrainAssetGuid.IsNull())
         {
             const GUID g = c->TerrainAssetGuid.ToGuid();
-            outLines.push_back(std::string("Terrain.terrainAsset = \"") + g.ToString() + "\"");
+            outLines.push_back(std::string(kTerrainHeightmapSceneField) + " = \"" + g.ToString() + "\"");
         }
         outLines.push_back("Terrain.terrainAssetType = " + std::to_string(c->TerrainAssetType));
         outLines.push_back("Terrain.baseSource = " + std::to_string(static_cast<uint32>(c->BaseSource)));
+        if (c->HeightFunction[0] != '\0')
+            outLines.push_back("Terrain.heightFunction = " + FormatQuoted(c->HeightFunction));
+        if (c->BaseSeed != 0)
+            outLines.push_back("Terrain.baseSeed = " + std::to_string(c->BaseSeed));
         outLines.push_back("Terrain.sizeX = " + FormatFloat(c->SizeX));
         outLines.push_back("Terrain.sizeZ = " + FormatFloat(c->SizeZ));
         outLines.push_back("Terrain.heightScale = " + FormatFloat(c->HeightScale));
@@ -405,17 +411,29 @@ public:
         if (c->Domain == Components::TerrainDomain::Spherical)
         {
             outLines.push_back("Terrain.planetRadius = " + FormatFloat(c->PlanetRadius));
-            // The sphere sculpt payload ref (.tsculpt sidecar) — the planet analogue of a
-            // zone's payload line. The texels live in the sidecar; only the ref serializes.
-            if (!c->SphereSculptGuid.IsNull())
-                outLines.push_back(std::string("Terrain.sphereSculpt = \"")
-                                   + c->SphereSculptGuid.ToGuid().ToString() + "\"");
+            // The mode and the value in its unit; Auto, the default, writes neither.
+            if (c->AtmosphereMode != Components::TerrainAtmosphereMode::Auto)
+                outLines.push_back("Terrain.atmosphereMode = " +
+                                   std::to_string(static_cast<uint32>(c->AtmosphereMode)));
+            if (c->AtmosphereMode == Components::TerrainAtmosphereMode::ShareOfRadius)
+                outLines.push_back("Terrain.atmosphereShare = " + FormatFloat(c->AtmosphereShare));
+            if (c->AtmosphereMode == Components::TerrainAtmosphereMode::HeightMeters)
+                outLines.push_back("Terrain.atmosphereHeight = " + FormatFloat(c->AtmosphereHeight));
+            // The height layer ref, the planet analogue of a zone's payload line: the pages live
+            // in the .gepage; only the ref serializes.
+            if (!c->HeightLayerGuid.IsNull())
+                outLines.push_back(std::string("Terrain.heightLayer = \"")
+                                   + c->HeightLayerGuid.ToGuid().ToString() + "\"");
         }
 
         // Advanced: the CBT screen-space split target. MaxDepth is auto-derived (not a
         // user field), and MaxDepthOverride and DebugView are debug-only runtime knobs —
         // none of the three serializes (DebugView is still settable, see ApplyProperty).
         outLines.push_back("Terrain.targetPixelError = " + FormatFloat(c->TargetPixelError));
+        // What the terrain keeps behind the camera; the default writes nothing.
+        if (c->BehindCameraDetail != Components::TerrainBehindCameraDetail::ReleaseWhenNeeded)
+            outLines.push_back("Terrain.behindCameraDetail = " +
+                               std::to_string(static_cast<uint32>(c->BehindCameraDetail)));
         // The authored water surface height. Only a set level serializes: the unset sentinel is
         // the lowest float, which would round-trip through the 6-digit formatter as a different
         // (equally inert) value and clutter every planar scene.
@@ -473,8 +491,8 @@ public:
         // orphaning the old TerrainData/TiledTerrainData slot and recreating
         // from scratch.
         TerrainECS::ClearUnresolvedTerrainHandles(c);
-        // A load from a scene file names the terrain's baked-terrain cache identity; an
-        // edit through this schema outside a load keeps the one it has.
+        // A load from a scene file names the scene part of the terrain's surface page store
+        // identity; an edit through this schema outside a load keeps the one it has.
         if (ctx.SceneFile != nullptr && ctx.Resolver != nullptr)
             c.BakeOriginScene = ctx.Resolver->GetOrCreateAssetGuid(*ctx.SceneFile);
 
@@ -519,12 +537,34 @@ public:
         {
             uint32 v = 0;
             if (!ParseU32(value, v, outError)) return false;
-            if (v > static_cast<uint32>(Components::TerrainBaseSource::Flat))
+            if (v < static_cast<uint32>(Components::TerrainBaseSource::HeightmapAsset) ||
+                v > static_cast<uint32>(Components::TerrainBaseSource::Function))
             {
-                if (outError) *outError = "baseSource must be 0-2";
+                if (outError) *outError = "baseSource must be 1 (Heightmap), 2 (Flat) or 3 (Function)";
                 return false;
             }
             c.BaseSource = static_cast<Components::TerrainBaseSource>(v);
+        }
+        else if (property == "heightfunction")
+        {
+            std::string name;
+            if (!ParseQuotedString(value, name) || name.size() >= Components::kTerrainHeightFunctionNameCapacity)
+            {
+                if (outError)
+                    *outError = std::format("heightFunction must be a quoted name of at most {} characters",
+                                            Components::kTerrainHeightFunctionNameCapacity - 1u);
+                return false;
+            }
+            std::ranges::fill(c.HeightFunction, '\0');
+            std::ranges::copy(name, c.HeightFunction);
+        }
+        else if (property == "baseseed")
+        {
+            if (ParseIntegerToken(value, c.BaseSeed) != IntegerTokenResult::Ok)
+            {
+                if (outError) *outError = "baseSeed must be an unsigned 64-bit integer";
+                return false;
+            }
         }
         else if (property == "sizex")
         {
@@ -556,31 +596,72 @@ public:
         else if (property == "planetradius")
         {
             if (!ParseF32(value, c.PlanetRadius, outError)) return false;
+            if (!(c.PlanetRadius > 0.0f))
+            {
+                if (outError)
+                    *outError = "planetRadius must be above 0: it is the planet's radius in meters";
+                return false;
+            }
         }
-        else if (property == "spheresculpt")
+        else if (property == "atmospheremode")
+        {
+            uint32 v = 0;
+            if (!ParseU32(value, v, outError)) return false;
+            if (v > static_cast<uint32>(Components::TerrainAtmosphereMode::HeightMeters))
+            {
+                if (outError)
+                    *outError = "atmosphereMode must be 0 (auto), 1 (share of radius) or 2 (height in meters)";
+                return false;
+            }
+            c.AtmosphereMode = static_cast<Components::TerrainAtmosphereMode>(v);
+        }
+        else if (property == "atmosphereheight")
+        {
+            if (!ParseF32(value, c.AtmosphereHeight, outError)) return false;
+            // The radius bound is in TerrainECS::AtmosphereHeightMeters: the lines apply in file order.
+            if (!(c.AtmosphereHeight > 0.0f && std::isfinite(c.AtmosphereHeight)))
+            {
+                if (outError)
+                    *outError = "atmosphereHeight must be above 0 and finite: it is the atmosphere's height above the "
+                                "planet radius in meters";
+                return false;
+            }
+        }
+        else if (property == "atmosphereshare")
+        {
+            if (!ParseF32(value, c.AtmosphereShare, outError)) return false;
+            if (!(c.AtmosphereShare > 0.0f && c.AtmosphereShare <= 1.0f))
+            {
+                if (outError)
+                    *outError = "atmosphereShare must be above 0 and at most 1: it is the atmosphere's height as a "
+                                "share of the planet radius (Earth's is 0.0157)";
+                return false;
+            }
+        }
+        else if (property == "heightlayer")
         {
             SceneValue sv{};
             if (!ParseValue(value, sv, outError)) return false;
             if (sv.Kind == SceneValueKind::Int && sv.IntValue == 0)
             {
-                c.SphereSculptGuid.Clear();
+                c.HeightLayerGuid.Clear();
             }
             else if (sv.Kind == SceneValueKind::String)
             {
                 try
                 {
                     GUID g(sv.StringValue);
-                    c.SphereSculptGuid.Set(g);
+                    c.HeightLayerGuid.Set(g);
                 }
                 catch (...)
                 {
-                    if (outError) *outError = "sphereSculpt must be a GUID string";
+                    if (outError) *outError = "heightLayer must be a GUID string";
                     return false;
                 }
             }
             else
             {
-                if (outError) *outError = "sphereSculpt must be a GUID string";
+                if (outError) *outError = "heightLayer must be a GUID string";
                 return false;
             }
         }
@@ -601,6 +682,19 @@ public:
         else if (property == "targetpixelerror")
         {
             if (!ParseF32(value, c.TargetPixelError, outError)) return false;
+        }
+        else if (property == "behindcameradetail")
+        {
+            uint32 v = 0;
+            if (!ParseU32(value, v, outError)) return false;
+            if (v > static_cast<uint32>(Components::TerrainBehindCameraDetail::AlwaysRelease))
+            {
+                if (outError)
+                    *outError = "behindCameraDetail must be 0 (always keep), 1 (release when needed) or 2 "
+                                "(always release)";
+                return false;
+            }
+            c.BehindCameraDetail = static_cast<Components::TerrainBehindCameraDetail>(v);
         }
         else if (property == "sealevel")
         {
@@ -802,11 +896,11 @@ public:
         if (!c || !visitor)
             return;
 
-        // The sphere sculpt sidecar is a real dependency edge: without it a packaged /
-        // copied project would drop the .tsculpt and the planet would load unsculpted.
-        const GUID sculpt = c->SphereSculptGuid.ToGuid();
-        if (!sculpt.IsNull())
-            visitor(sculpt, AssetType::TerrainSphereSculptData, std::string_view{}, "spheresculpt");
+        // The height layer is a dependency edge: without it a packaged or copied project
+        // drops the .gepage and the planet loads unsculpted.
+        const GUID heightLayer = c->HeightLayerGuid.ToGuid();
+        if (!heightLayer.IsNull())
+            visitor(heightLayer, AssetType::TerrainHeightLayer, std::string_view{}, "heightlayer");
 
         // The material library is a dependency edge: without it a packaged project would drop
         // the .terrainmatlib and every terrain would shade from the built-in materials.
@@ -2548,6 +2642,8 @@ public:
         if (!c) return;
         SerializeEffectBase(*c, "TerrainNoiseEffect", outLines);
         outLines.push_back(std::string("TerrainNoiseEffect.blend = ") + std::to_string(static_cast<uint32>(c->Blend)));
+        outLines.push_back(std::string("TerrainNoiseEffect.mode = ") + std::to_string(static_cast<uint32>(c->Mode)));
+        outLines.push_back(std::string("TerrainNoiseEffect.preset = ") + std::to_string(static_cast<uint32>(c->Preset)));
         outLines.push_back(std::string("TerrainNoiseEffect.frequency = ") + FormatFloat(c->Frequency));
         outLines.push_back(std::string("TerrainNoiseEffect.amplitude = ") + FormatFloat(c->Amplitude));
         outLines.push_back(std::string("TerrainNoiseEffect.octaves = ") + std::to_string(c->Octaves));
@@ -2582,6 +2678,28 @@ public:
             if (property == "blend")
             {
                 if (!ParseBlend(ctx, value, BlendSet::HeightOperatorsAndPool, c.Blend, outError)) return false;
+            }
+            else if (property == "mode")
+            {
+                uint32 v = 0;
+                if (!ParseU32(value, v, outError)) return false;
+                if (v > static_cast<uint32>(Components::TerrainNoiseMode::Generated))
+                {
+                    if (outError) *outError = "mode must be 0 (Displace) or 1 (Generated)";
+                    return false;
+                }
+                c.Mode = static_cast<Components::TerrainNoiseMode>(v);
+            }
+            else if (property == "preset")
+            {
+                uint32 v = 0;
+                if (!ParseU32(value, v, outError)) return false;
+                if (v > static_cast<uint32>(Components::TerrainNoisePreset::Rugged))
+                {
+                    if (outError) *outError = "preset must be 0 (Rolling), 1 (Smooth) or 2 (Rugged)";
+                    return false;
+                }
+                c.Preset = static_cast<Components::TerrainNoisePreset>(v);
             }
             else if (property == "frequency")   { if (!ParseF32(value, c.Frequency, outError)) return false; }
             else if (property == "amplitude")   { if (!ParseF32(value, c.Amplitude, outError)) return false; }
@@ -2826,6 +2944,8 @@ public:
         outLines.push_back("TerrainSurfaceRulesEffect.ruleCount = " + std::to_string(ruleCount));
         outLines.push_back(std::string("TerrainSurfaceRulesEffect.respectClaims = ")
                            + (c->RespectClaims ? "true" : "false"));
+        outLines.push_back(std::string("TerrainSurfaceRulesEffect.provisionedDefaults = ")
+                           + (c->ProvisionedDefaults ? "true" : "false"));
 
         for (uint32 r = 0; r < ruleCount; ++r)
         {
@@ -2870,7 +2990,11 @@ public:
         bool handled = false;
         if (!ApplyEffectBaseProperty(c, property, value, outError, handled)) return false;
         if (!handled && !ApplyRuleProperty(ctx, c, property, value, outError))
+        {
+            // A refused condition kind stays on its row as RefusedKind, so the Inspector can name it.
+            world.AddComponentImmediate(entity, c);
             return false;
+        }
 
         world.AddComponentImmediate(entity, c);
         return true;
@@ -2921,6 +3045,8 @@ private:
         }
         if (property == "respectclaims")
             return ParseBool(value, c.RespectClaims, outError);
+        if (property == "provisioneddefaults")
+            return ParseBool(value, c.ProvisionedDefaults, outError);
 
         uint32 ruleIndex = 0;
         if (!PeelIndexedSegment(property, "rule", ruleIndex))
@@ -2982,12 +3108,21 @@ private:
         {
             uint32 v = 0;
             if (!ParseU32(value, v, outError)) return false;
-            if (v > static_cast<uint32>(Components::TerrainRuleConditionKind::Noise))
+            using Kind = Components::TerrainRuleConditionKind;
+            const bool known = v == static_cast<uint32>(Kind::SlopeDegrees) ||
+                               v == static_cast<uint32>(Kind::SlopeNormalized) ||
+                               v == static_cast<uint32>(Kind::HeightMeters) ||
+                               v == static_cast<uint32>(Kind::Noise) ||
+                               v == static_cast<uint32>(Kind::LatitudeDegrees);
+            if (!known)
             {
-                if (outError) *outError = "Unknown TerrainRuleConditionKind " + std::to_string(v);
+                cond.RefusedKind = static_cast<uint8>(std::min<uint32>(v, std::numeric_limits<uint8>::max()));
+                if (outError)
+                    *outError = RefusedRuleConditionKindMessage(ruleIndex, conditionIndex, v);
                 return false;
             }
             cond.Kind = static_cast<Components::TerrainRuleConditionKind>(v);
+            cond.RefusedKind = 0;
             return true;
         }
         if (property == "curve")
@@ -3070,6 +3205,19 @@ void EnsureTerrainSceneSchemasRegistered()
         RegisterIfMissing(std::make_unique<TerrainPaintZoneSchema>());
         RegisterIfMissing(std::make_unique<TerrainColorZoneSchema>());
     });
+}
+
+std::string RefusedRuleConditionKindMessage(uint32 ruleIndex, uint32 conditionIndex, uint32 refusedKind)
+{
+    // Kind 3 measured height as a fraction of the terrain's range; no kind replaces it one to one.
+    constexpr uint32 kRemovedHeightFractionKind = 3;
+    const std::string where =
+        "Rule " + std::to_string(ruleIndex + 1) + ", Condition " + std::to_string(conditionIndex + 1);
+    if (refusedKind == kRemovedHeightFractionKind)
+        return where + " measures height as a fraction of the range, which is not supported. Pick "
+                       "Height (meters) under Measures and type the band in meters above the terrain's base.";
+    return where + " has kind " + std::to_string(refusedKind)
+         + ", which is not a condition kind. Pick a kind under Measures.";
 }
 
 } // namespace GameEngine::Scene

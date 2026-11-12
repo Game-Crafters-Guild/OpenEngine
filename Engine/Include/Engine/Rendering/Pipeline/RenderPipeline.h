@@ -3,19 +3,29 @@
 #include "Assets/RenderPipelineAsset.h"
 #include "Engine/Rendering/Pipeline/RenderPipelineNodes.h"
 #include "Rendering/Camera/CameraTypes.h"
+#include "Rendering/Materials/Shader/ShaderVariantKey.h"
 #include "Types/FlatMap.h"
+#include "Types/StringHash.h"
+#include "Types/Types.h"
 
 #include <array>
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 #include "Rendering/Core/PassPhase.h"
 #include "Rendering/Core/Device.h"
+
+namespace GameEngine::Rendering
+{
+struct ShaderMeta;
+}
 
 // Explicit imports from the Rendering module (CodingStyle: no namespace-scope using-directives in headers).
 namespace GameEngine::Engine::Renderer
@@ -58,6 +68,10 @@ enum class PipelineIssueCode : uint8_t
     // (a Warning). PipelineCompileReport logs it once per graph.
     DepthPrepassFeederMoved,
 };
+
+// Copies the reflection of shader package `package` into `out` and returns true, or returns false
+// when it has none for that package.
+using ShaderMetaLookup = std::function<bool(const std::string& package, Rendering::ShaderMeta& out)>;
 
 // What a compile does with a pass whose type no registered factory provides.
 enum class UnknownPassTypes : uint8_t
@@ -157,10 +171,18 @@ class RenderPipelineCompiler
     // `unknownPassTypes` decides whether a pass of an unregistered type refuses the blueprint or
     // waits for the project's scripts; a blueprint with waiting passes hashes differently from the
     // same source compiled with them, so the full graph replaces it once its types register.
+    // `preloadedMeta` serves a package's reflection without a file read; a package it does not
+    // serve is read from disk. A compile reads each package once, however many passes name it.
     RenderPipelineBlueprint Compile(const GameEngine::RenderPipelineAsset& asset,
                                     const RenderPipelineNodeRegistry& registry,
                                     Rendering::ShaderSourceKind sourceKind = Rendering::ShaderSourceKind::SpirV,
-                                    UnknownPassTypes unknownPassTypes = UnknownPassTypes::Refused) const;
+                                    UnknownPassTypes unknownPassTypes = UnknownPassTypes::Refused,
+                                    const ShaderMetaLookup& preloadedMeta = {}) const;
+
+    // The distinct shaderPkg paths of the asset's passes after the shaderSourceOverrides of
+    // `sourceKind` resolve, in pass order. Empty when the asset does not parse.
+    static std::vector<std::string> ShaderPackagesOf(const GameEngine::RenderPipelineAsset& asset,
+                                                     Rendering::ShaderSourceKind sourceKind);
 };
 
 // Runtime instance bound to a RenderServices. Owns node instances; drives
@@ -222,25 +244,70 @@ class RenderPipelineInstance
     // ExposureHistory.
     Rendering::RenderGraph::RGBuffer FindPreExposureSource(uint32_t textureResourceId) const;
 
-    // Collect interned graphics-pipeline ids from all nodes that have a base
-    // pipeline. Used for PSO pre-warming.
-    std::vector<Rendering::GraphicsPipelineId> CollectBaseGraphicsPipelineIds(Rendering::IDevice& device) const;
-
   private:
     friend struct ViewDeclare;
+    friend struct PausedViewPrewarm;
 
     // Imports and publishes Names::View::BloomSampleDelta, a pool texture of the single-sample resolve's
     // size and format. Nothing is created when `resolve` is invalid or multisampled.
     void DeclareBloomSampleDelta(Rendering::RenderGraph::RGFrame& frame, Rendering::ViewId viewId,
                                  Rendering::RenderGraph::RGTexture resolve);
 
+    // A paused view (ViewDesc::worldPaused) runs only the nodes that declare for it (uploads): one
+    // pass clears its single-sample target to the view's clear colour, and every pipeline output of
+    // the view names that target.
+    void DeclarePausedView(Rendering::RenderGraph::RGFrame& frame, const Rendering::ViewDesc& view,
+                           const ViewTargetsRG& vt);
+    // A paused view records the keywords its world pass would draw with now, and the formats if it
+    // never drew, so the scene warm builds its pipelines during the pause.
+    void RecordPausedViewWarmKeys(Rendering::RenderGraph::RGFrame& frame, const Rendering::ViewDesc& view,
+                                  const ViewTargetsRG& vt);
+    // Every enabled per-view node of a paused view asks for the pipelines of the view's first live frame.
+    void RequestPausedViewPipelines(const Rendering::RenderGraph::RGFrame& frame, const Rendering::ViewDesc& view,
+                                    const ViewTargetsRG& vt);
+    // The enabled nodes that the internal-resolution split reads. Without a RenderScaleUpscale node, a view
+    // without TAA does not split. Without a DepthResolve node, which publishes the single-sample
+    // View.DepthResolved, a multisampled view does not split.
+    struct RenderScaleSplitNodes
+    {
+        bool HasRenderScaleUpscale = false;
+        bool HasDepthResolve = false;
+    };
+    RenderScaleSplitNodes FindRenderScaleSplitNodes() const;
+    // The extent at which a view's live frame draws the world, read from its targets. Split* is the
+    // internal-resolution split's extent, equal to Width and Height when the view does not split.
+    // MsaaBlocker says why a multisampled view cannot split, and is null when it can.
+    struct ViewRasterExtent
+    {
+        uint32_t Samples = 1;
+        uint32_t Width = 0;
+        uint32_t Height = 0;
+        float Scale = 1.0f;
+        bool CrossingAvailable = false;
+        const char* MsaaBlocker = nullptr;
+        bool SplitEligible = false;
+        uint32_t SplitWidth = 0;
+        uint32_t SplitHeight = 0;
+    };
+    ViewRasterExtent FindViewRasterExtent(const Rendering::RenderGraph::RGFrame& frame, const Rendering::ViewDesc& view,
+                                          const ViewTargetsRG& vt, const RenderScaleSplitNodes& splitNodes) const;
+    static uint32_t ScaledEvenExtent(uint32_t extent, float scale);
+    // The colour attachment that `ref` names in the live frame of the view that `vt` targets: a view
+    // target after the MSAA-off collapse in Declare, or a blueprint texture. No format for any other ref.
+    Rendering::RenderGraph::RGAttachmentKeyInput LiveColorTargetInput(const Rendering::RenderGraph::RGFrame& frame,
+                                                                      const ViewTargetsRG& vt,
+                                                                      std::string_view ref) const;
+    // The format key of the world pass of the view that `vt` targets, from its colour and depth
+    // targets. Empty without a colour target or for a formatless one.
+    std::optional<Rendering::PipelineFormatKey> WorldColorTargetsFormatKey(const Rendering::RenderGraph::RGFrame& frame,
+                                                                           const ViewTargetsRG& vt) const;
     // RenderGraph path: rg-free node (re)instantiation on blueprint dirty (the
     // EnsureBuilt branch is old-graph-coupled via node->Disable(rg); a
     // Declare-driven instance owns no old-graph passes to disable).
     void EnsureNodeInstances();
     // Blackboard lookups (per-view first, then frame scope).
-    Rendering::RenderGraph::RGTexture TableTexture(Rendering::ViewId viewId, const std::string& name) const;
-    PipelineBufferBindingRG TableBuffer(Rendering::ViewId viewId, const std::string& name) const;
+    Rendering::RenderGraph::RGTexture TableTexture(Rendering::ViewId viewId, std::string_view name) const;
+    PipelineBufferBindingRG TableBuffer(Rendering::ViewId viewId, std::string_view name) const;
     // Lazy base-name materialization for the Declare path (the EnsureBuilt
     // path prebuilds names on blueprint apply; Declare grows them on demand).
     const std::string& DeclarePassName(uint32_t nodeIdx, Rendering::ViewId viewId,
@@ -257,22 +324,24 @@ class RenderPipelineInstance
     // (basis falls back to the render extent).
     Rendering::RenderGraph::RGTexture MaterializeTexture(Rendering::RenderGraph::RGFrame& frame,
                                                  Rendering::ViewId viewId,
-                                                 const std::string& name, uint32_t renderW,
+                                                 std::string_view name, uint32_t renderW,
                                                  uint32_t renderH, uint32_t outputW = 0,
                                                  uint32_t outputH = 0);
     PipelineBufferBindingRG MaterializeBuffer(Rendering::RenderGraph::RGFrame& frame,
-                                              Rendering::ViewId viewId, const std::string& name,
+                                              Rendering::ViewId viewId, std::string_view name,
                                               uint32_t renderW, uint32_t renderH);
     // A "perFrameCopies" buffer: this frame's copy, which starts as the previous frame's contents.
     PipelineBufferBindingRG MaterializeBufferCopies(Rendering::RenderGraph::RGFrame& frame,
-                                                    const std::string& name, const std::string& poolName,
+                                                    std::string_view name, const std::string& poolName,
                                                     Rendering::BufferDesc desc);
     static void DeclareBufferCarry(Rendering::RenderGraph::RGFrame& frame,
                                    Rendering::RenderGraph::RGBuffer previous,
                                    Rendering::RenderGraph::RGBuffer current, size_t sizeBytes,
                                    const char* passName);
     struct ResourceDescription;
-    const ResourceDescription* FindResourceDescription(const std::string& name) const;
+    const ResourceDescription* FindResourceDescription(std::string_view name) const;
+    // The colour attachment of a blueprint texture. No format for a null or non-texture description.
+    static Rendering::RenderGraph::RGAttachmentKeyInput DescribedColorInput(const ResourceDescription* description);
 
     // Dynamic resolution: feed the last resolved frame's GPU cost to the
     // controller and let it move the render scale. No-op outside Dynamic mode.
@@ -284,7 +353,7 @@ class RenderPipelineInstance
     RenderPipelineBlueprint m_Blueprint{};
     // Descriptions belong to this blueprint generation, keyed by its resource names.
     // SetBlueprint rebuilds them, including cached refusals of invalid descriptions.
-    std::unordered_map<std::string, std::unique_ptr<ResourceDescription>> m_ResourceDescriptions;
+    FastHashMap<std::string, std::unique_ptr<ResourceDescription>, StringHash, std::equal_to<>> m_ResourceDescriptions;
     bool m_BlueprintDirty = false;
     bool m_WarnedDrsArmedProfiler = false;
     bool m_WarnedRenderScaleUnderMsaa = false;
@@ -298,6 +367,13 @@ class RenderPipelineInstance
 
     // Outputs cached as name -> resourceRef string
     std::unordered_map<std::string, std::string> m_Outputs;
+
+    // The first enabled WorldRender pass with a node: its own keywords (nullopt = none), whether an
+    // enabled pass ahead of it publishes HeightFogParams, and whether an enabled DepthPrepass runs
+    // ahead of it. A paused view's warm keys read all three.
+    std::optional<Rendering::MaterialKeyword> m_WorldRenderPassKeywords;
+    bool m_HeightFogParamsBeforeWorldRender = false;
+    bool m_DepthPrepassBeforeWorldRender = false;
 
     // RenderGraph path: the per-frame blackboard (reset at the top of every Declare).
     PipelineFrameResources m_FrameResources;

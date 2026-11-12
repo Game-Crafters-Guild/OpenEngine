@@ -30,7 +30,7 @@ ParticleStackAsset::ParticleStackAsset(const GUID& guid, const std::filesystem::
 
 bool ParticleStackAsset::Load()
 {
-    Vector<uint8> bytes;
+    ByteBuffer bytes;
     if (!ReadFileBytesShared(GetPath(), bytes))
     {
         m_Diagnostics = {{"stack", "Cannot read " + GetPath().string()}};
@@ -40,7 +40,7 @@ bool ParticleStackAsset::Load()
     return LoadFromData(bytes);
 }
 
-bool ParticleStackAsset::LoadFromData(const Vector<uint8>& data)
+bool ParticleStackAsset::LoadFromData(std::span<const uint8> data)
 {
     const bool loaded = Adopt(data);
     if (!loaded && m_Compiled)
@@ -59,7 +59,7 @@ void ParticleStackAsset::Unload()
     SetState(AssetState::Unloaded);
 }
 
-bool ParticleStackAsset::ReloadFromData(const Vector<uint8>& data)
+bool ParticleStackAsset::ReloadFromData(std::span<const uint8> data)
 {
     // A refused file keeps the last valid stack running; the asset stays loaded.
     return Adopt(data);
@@ -80,7 +80,7 @@ bool ParticleStackAsset::Save() const
 
 bool ParticleStackAsset::CookFile(const std::filesystem::path& file, std::string& error)
 {
-    Vector<uint8> bytes;
+    ByteBuffer bytes;
     if (!ReadFileBytesShared(file, bytes))
     {
         error = "Cannot read the particle stack";

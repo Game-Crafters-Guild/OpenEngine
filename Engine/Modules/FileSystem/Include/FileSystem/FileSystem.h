@@ -28,6 +28,10 @@ bool CopyTree(const std::filesystem::path& from, const std::filesystem::path& to
 /// not reserve it. Use PublishFile after writing the complete contents.
 std::filesystem::path MakeTemporarySiblingPath(const std::filesystem::path& target);
 
+/// True when `fileName` has the shape of a MakeTemporarySiblingPath name:
+/// `<target>.<pid>-<rest>.tmp`, with a decimal process id.
+bool IsTemporarySiblingName(std::string_view fileName);
+
 /// Make the bytes already written to `temp` the contents of `target`, consuming
 /// `temp` either way unless both paths already name the same file (a no-op).
 /// Every caller that builds a file beside its destination

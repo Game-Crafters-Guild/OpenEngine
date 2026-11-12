@@ -20,6 +20,9 @@ class RecipeEditJournal;
 class SplineRecipeSystem : public ECS::ISystem
 {
 public:
+    // The rebuild delays are authoring delays, so recipes rebuild while paused.
+    static constexpr ECS::SystemTime Time = ECS::SystemTime::Real;
+
     explicit SplineRecipeSystem(Engine::Renderer::RenderServices* renderServices);
     ~SplineRecipeSystem() override;
 

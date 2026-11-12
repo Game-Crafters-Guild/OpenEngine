@@ -7,7 +7,7 @@
 // through GlslShim.h by TerrainSurfaceRuleGpuParityTests, which sweeps them against the
 // C++ headers. An edit here is an edit to what that gate measures.
 //
-// UNITS AND CONVENTIONS — the rule vocabulary has two units for slope and two for
+// UNITS AND CONVENTIONS — the rule vocabulary has two units for slope and one for
 // height, and reading a band in the wrong one silently moves a material:
 //
 //   SlopeDegrees      the true surface angle from horizontal, [0, 90], measured from the
@@ -17,11 +17,9 @@
 //                     from heights normalized to [0, 1] against metre spacing, so the
 //                     quantity is squashed by the terrain's HeightScale, so a threshold in
 //                     it is not a fixed angle. Prefer SlopeDegrees.
-//   HeightMetres      METRES ABOVE THE TERRAIN'S BASE — the normalized height sample times
+//   HeightMeters      meters above the terrain's base: the normalized height sample times
 //                     HeightScale. NOT world-space Y: the terrain entity's own Y
 //                     translation is not folded in, matching the other modifier effects.
-//   HeightNormalized  `(h - minH) / heightRange` over the terrain's live global range, so
-//                     the band chases the heightfield.
 //   Noise             the terrain's own gradient-noise basis at ONE octave, remapped to
 //                     [0, 1].
 //
@@ -45,8 +43,7 @@
 // scene file stores; renumbering either side silently re-reads authored bands.
 const uint GE_RULE_KIND_SLOPE_DEGREES     = 0u;
 const uint GE_RULE_KIND_SLOPE_NORMALIZED  = 1u;
-const uint GE_RULE_KIND_HEIGHT_METRES     = 2u;
-const uint GE_RULE_KIND_HEIGHT_NORMALIZED = 3u;
+const uint GE_RULE_KIND_HEIGHT_METERS     = 2u;
 const uint GE_RULE_KIND_NOISE             = 4u;
 
 // Mirror Components::TerrainRuleFalloffCurve.
@@ -115,8 +112,7 @@ struct GESurfaceRuleSample
 {
     float SlopeNormalized;
     float SlopeDegrees;
-    float HeightMetres;
-    float HeightNormalized;
+    float HeightMeters;
     float WorldX;
     float WorldZ;
 };
@@ -148,17 +144,17 @@ float GE_GradientNoise2D(float x, float z, uint seed)
     float fx = x - float(ix);
     float fz = z - float(iz);
 
-    float u = fx * fx * (3.0f - 2.0f * fx);
-    float v = fz * fz * (3.0f - 2.0f * fz);
+    float u = fx * fx * fma(-2.0f, fx, 3.0f);
+    float v = fz * fz * fma(-2.0f, fz, 3.0f);
 
     float n00 = GE_Grad(GE_GradHash(ix,     iz,     seed), fx,        fz);
     float n10 = GE_Grad(GE_GradHash(ix + 1, iz,     seed), fx - 1.0f, fz);
     float n01 = GE_Grad(GE_GradHash(ix,     iz + 1, seed), fx,        fz - 1.0f);
     float n11 = GE_Grad(GE_GradHash(ix + 1, iz + 1, seed), fx - 1.0f, fz - 1.0f);
 
-    float nx0 = n00 + u * (n10 - n00);
-    float nx1 = n01 + u * (n11 - n01);
-    return nx0 + v * (nx1 - nx0);
+    float nx0 = fma(u, n10 - n00, n00);
+    float nx1 = fma(u, n11 - n01, n01);
+    return fma(v, nx1 - nx0, nx0);
 }
 
 // The field a Noise condition bands (mirror SurfaceRuleNoiseSample): ONE octave at unit
@@ -166,18 +162,16 @@ float GE_GradientNoise2D(float x, float z, uint seed)
 // second scale is a second condition, not a second octave.
 float GE_SurfaceRuleNoise(float worldX, float worldZ, float frequency, uint seed)
 {
-    return clamp(0.5f + 0.5f * GE_GradientNoise2D(worldX * frequency, worldZ * frequency, seed),
+    return clamp(fma(0.5f, GE_GradientNoise2D(worldX * frequency, worldZ * frequency, seed), 0.5f),
                  0.0f, 1.0f);
 }
 
 // ---- Row maths (mirror TerrainSurfaceRuleEval.h) -----------------------------
 
 // Build a texel's measurements from what the bake already has in hand (mirror
-// MakeTerrainRuleSample). `heightRange` is the caller's already-guarded
-// max(SplatMaxH - SplatMinH, eps).
+// MakeTerrainRuleSample).
 GESurfaceRuleSample GE_MakeSurfaceRuleSample(float normalX, float normalY, float normalZ,
                                              float sampleHeight, float heightScale,
-                                             float splatMinHeight, float heightRange,
                                              float worldX, float worldZ)
 {
     GESurfaceRuleSample s;
@@ -187,10 +181,9 @@ GESurfaceRuleSample GE_MakeSurfaceRuleSample(float normalX, float normalY, float
     float gradX = -normalX * invY * heightScale;
     float gradZ = -normalZ * invY * heightScale;
     s.SlopeDegrees = atan(sqrt(gradX * gradX + gradZ * gradZ)) * (180.0f / 3.14159265f);
-    // Terrain-LOCAL metres: the normalized sample scaled back up, with no terrain entity
+    // Terrain-local meters: the normalized sample scaled back up, with no terrain entity
     // translation folded in.
-    s.HeightMetres = sampleHeight * heightScale;
-    s.HeightNormalized = (sampleHeight - splatMinHeight) / heightRange;
+    s.HeightMeters = sampleHeight * heightScale;
     s.WorldX = worldX;
     s.WorldZ = worldZ;
     return s;
@@ -202,8 +195,7 @@ float GE_SurfaceRuleConditionValue(uint kind, GESurfaceRuleSample s)
 {
     if (kind == GE_RULE_KIND_SLOPE_NORMALIZED)  return s.SlopeNormalized;
     if (kind == GE_RULE_KIND_SLOPE_DEGREES)     return s.SlopeDegrees;
-    if (kind == GE_RULE_KIND_HEIGHT_METRES)     return s.HeightMetres;
-    if (kind == GE_RULE_KIND_HEIGHT_NORMALIZED) return s.HeightNormalized;
+    if (kind == GE_RULE_KIND_HEIGHT_METERS)     return s.HeightMeters;
     return 0.0f;
 }
 

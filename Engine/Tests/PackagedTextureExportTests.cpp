@@ -1,4 +1,5 @@
 #include "Assets/AssetManager.h"
+#include "Assets/AssetRegistry.h"
 #include "Assets/RuntimeHumanoidProfile.h"
 #include "Assets/TextureAsset.h"
 #include "Assets/TextureCook.h"
@@ -73,12 +74,11 @@ protected:
         elf[0] = 0x7f; elf[1] = 'E'; elf[2] = 'L'; elf[3] = 'F';
         elf[4] = 2; elf[5] = 1; elf[18] = 62;
         WriteFile(Runtime / "Player", {elf.data(), elf.size()});
-        ApplicationConfig config;
-        config.WorkspaceDirectory = Project.string();
-        config.AssetDirectory = Assets.string();
-        config.AssetDatabaseFile = (Project / "AssetDatabase.assetdb").string();
-        config.AssetDatabaseCacheDirectory = (Project / ".Cache/AssetDatabase").string();
-        ASSERT_TRUE(Engine.Initialize(config));
+        Config.WorkspaceDirectory = Project.string();
+        Config.AssetDirectory = Assets.string();
+        Config.AssetDatabaseFile = (Project / "AssetDatabase.assetdb").string();
+        Config.AssetDatabaseCacheDirectory = (Project / ".Cache/AssetDatabase").string();
+        ASSERT_TRUE(Engine.Initialize(Config));
         Engine.GetAssetManager().WaitForStartupScan();
         ASSERT_TRUE(Engine.GetAssetManager().GetRegistry().SetMetaValue(
             Assets / "Color.tga", kTextureUsageMetaKey, "color"));
@@ -96,6 +96,7 @@ protected:
     const fs::path Runtime = Temporary.Path() / "Runtime";
     const fs::path Output = Temporary.Path() / "Export";
     const TextureGpuTranscodeTarget PreviousTarget = TextureAsset::GetGpuTranscodeTarget();
+    ApplicationConfig Config;
     EngineCore Engine;
 };
 } // namespace
@@ -296,17 +297,23 @@ TEST_F(PackagedTextureExportTest, AProjectCacheThatCannotBeWrittenDoesNotFailThe
     EXPECT_FALSE(fs::exists(Output / "Assets/Color.tga")) << "the export did not stage its cooked textures";
 }
 
-// Publishing a cooked texture into the project cache removes that texture's artifacts under older
-// keys there (an editor that adopts the export's artifact never cooks it, so never sweeps them);
-// another texture's files stay.
+// Publishing a cooked texture into the project cache removes that texture's artifacts of the same
+// output under older keys there (an editor that adopts the export's artifact never cooks it, so
+// never sweeps them); the texture's artifact of another output and another texture's files stay.
 TEST_F(PackagedTextureExportTest, PublishingIntoTheProjectCacheRemovesTheTexturesOlderArtifacts)
 {
     const GUID color = Engine.GetAssetManager().GetRegistry().GetAssetGUID(Assets / "Color.tga");
     ASSERT_FALSE(color.IsNull());
+    const TextureCookOutput output =
+        IsTextureCookEncoderAvailable() ? TextureCookOutput::BC7 : TextureCookOutput::Uncompressed;
+    const TextureCookOutput otherOutput =
+        output == TextureCookOutput::BC7 ? TextureCookOutput::Uncompressed : TextureCookOutput::BC7;
     const fs::path cache = Project / ".Cache/Tex";
-    const fs::path stale = cache / (color.ToString() + "-0000000000000000-0000000000000000.ktx2");
-    const fs::path other = cache / (GUID::Generate().ToString() + "-0000000000000000-0000000000000000.ktx2");
+    const fs::path stale = cache / TextureCookArtifactName(color, 0, TextureCookInputs{}, output);
+    const fs::path otherOutputArtifact = cache / TextureCookArtifactName(color, 0, TextureCookInputs{}, otherOutput);
+    const fs::path other = cache / TextureCookArtifactName(GUID::Generate(), 0, TextureCookInputs{}, output);
     WriteFile(stale, "an artifact under an older key");
+    WriteFile(otherOutputArtifact, "the texture's artifact of another output");
     WriteFile(other, "another texture's artifact");
     BuildSettings build;
     build.platformName = "Linux";
@@ -324,6 +331,61 @@ TEST_F(PackagedTextureExportTest, PublishingIntoTheProjectCacheRemovesTheTexture
     for (const auto& name : DirectoryNames(cache))
         current += name.rfind(color.ToString(), 0) == 0 ? 1 : 0;
     EXPECT_FALSE(fs::exists(stale)) << "the colour texture's older artifact stayed in the project cache";
-    EXPECT_EQ(current, 1u) << "the colour texture's current artifact is not the one file left for it";
+    EXPECT_TRUE(fs::exists(otherOutputArtifact)) << "the color texture's artifact of another output was removed";
+    EXPECT_EQ(current, 2u) << "the color texture's files are not its current artifact and its other output's";
     EXPECT_TRUE(fs::exists(other)) << "another texture's artifact was removed";
+}
+
+// A terrain heightmap that carries a usage still ships its source: TerrainService decodes the
+// source by path for 16-bit samples, and the cooked payload holds 8 bits. An entity field and a
+// prefab override's field both count; a texture bound through another field ships its payload only.
+TEST_F(PackagedTextureExportTest, ATerrainHeightmapWithAUsageShipsItsSource)
+{
+    // The registry opens its dependency cache only for a project whose database exists at
+    // mount, as an editor session after the first one does.
+    Engine.Shutdown();
+    WriteFile(Assets / "Ridge.tga", ImageBytes());
+    ASSERT_TRUE(fs::exists(Config.AssetDatabaseFile));
+    ASSERT_TRUE(Engine.Initialize(Config));
+    Engine.GetAssetManager().WaitForStartupScan();
+    AssetRegistry& registry = Engine.GetAssetManager().GetRegistry();
+    const GUID height = registry.GetAssetGUID(Assets / "Height.tga");
+    const GUID color = registry.GetAssetGUID(Assets / "Color.tga");
+    const GUID ridge = registry.GetAssetGUID(Assets / "Ridge.tga");
+    ASSERT_FALSE(height.IsNull());
+    ASSERT_FALSE(color.IsNull());
+    ASSERT_FALSE(ridge.IsNull());
+    ASSERT_TRUE(registry.SetMetaValue(Assets / "Height.tga", kTextureUsageMetaKey, "packed"));
+    ASSERT_TRUE(registry.SetMetaValue(Assets / "Ridge.tga", kTextureUsageMetaKey, "packed"));
+    const fs::path scene = Assets / "Scenes/Field.scene";
+    WriteFile(scene, "[scene name=\"Field\" version=1]\n\n[entity id=\"e_ground\"]\n"
+                     "Terrain.terrainAsset = \"" + height.ToString() + "\"\n"
+                     "Terrain.layerAlbedo0 = \"" + color.ToString() + "\"\n\n"
+                     "[prefab id=\"hill\" source=\"Prefabs/Hill.prefab\"]\n"
+                     "lid/Terrain.terrainAsset = \"" + ridge.ToString() + "\"\n");
+    ASSERT_TRUE(registry.RegisterAsset(scene));
+    const GUID sceneGuid = registry.GetAssetGUID(scene);
+    ASSERT_FALSE(sceneGuid.IsNull());
+    ASSERT_FALSE(registry.RefreshDependencies(sceneGuid).empty()) << "the scene names no asset";
+    ASSERT_FALSE(registry.GetResolvedDependencyEdges(sceneGuid).empty()) << "the scene has no dependency edge";
+
+    BuildSettings build;
+    build.platformName = "Linux";
+    build.projectRoot = Project;
+    build.prebuiltPlayerDirectory = Runtime;
+    build.outputDirectory = Output;
+    build.compileScripts = false;
+    build.buildConfiguration = "Release";
+    build.playerConfig.gameName = "TextureExportProbe";
+    build.scenes = {"Scenes/Field.scene"};
+    BuildPipeline pipeline(nullptr);
+    BuildProgress progress;
+    ASSERT_TRUE(pipeline.Execute(build, [&progress](const BuildProgress& current) { progress = current; }))
+        << progress.statusMessage << '\n' << testing::PrintToString(progress.errors);
+    ASSERT_TRUE(fs::exists(Output / "Assets/Scenes/Field.scene")) << "the scene did not ship";
+    EXPECT_TRUE(fs::exists(Output / "Assets/Height.tga")) << "the terrain heightmap's source did not ship";
+    EXPECT_TRUE(fs::exists(Output / "Assets/Ridge.tga")) << "the prefab override's heightmap source did not ship";
+    EXPECT_FALSE(fs::exists(Output / "Assets/Color.tga")) << "a layer texture's source shipped beside its payload";
+    Terrain::HeightfieldData heightfield;
+    EXPECT_TRUE(heightfield.LoadFromPNG16(Output / "Assets/Height.tga"));
 }

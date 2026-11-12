@@ -37,6 +37,8 @@ using GameEngine::ECS::Entity;
 using GameEngine::ECS::World;
 using GameEngine::Mathematics::Matrix4x4;
 using GameEngine::Mathematics::Vector3;
+using GameEngine::Mathematics::WorldPosition;
+using GameEngine::SplineRecipes::UnboundedConformRun;
 
 using GameEngine::SplineRecipes::ConformRayDown;
 using GameEngine::SplineLayout::WorldCenterlineLength;
@@ -465,7 +467,7 @@ TEST_F(SplineDrapeTests, ConformSurfaceRevisionMovesWhenABakeMovesTheGround)
     const Vector3 sample(0.0f, 5.0f, 0.0f);
     Vector3 before;
     ASSERT_TRUE(GameEngine::SplineRecipes::ConformRayDown(*world, sample, {}, before));
-    const uint64_t revisionBefore = GameEngine::SplineRecipes::ConformSurfaceRevision(*world, /*conforms by raycast*/ nullptr);
+    const uint64_t revisionBefore = ConformSurfaceRevision(*world, /*conforms by raycast*/ nullptr, UnboundedConformRun());
 
     // What a lowering TerrainHeightOffsetEffect leaves behind on its first bake.
     RebakeTerrainToNormalizedHeight(handle, -2.0f);
@@ -476,7 +478,7 @@ TEST_F(SplineDrapeTests, ConformSurfaceRevisionMovesWhenABakeMovesTheGround)
     EXPECT_NEAR(after.y, -2.0f, 0.05f);
     ASSERT_GT(std::abs(before.y - after.y), 1.0f) << "the ground did not move; the case is void";
 
-    EXPECT_NE(GameEngine::SplineRecipes::ConformSurfaceRevision(*world, /*conforms by raycast*/ nullptr), revisionBefore)
+    EXPECT_NE(ConformSurfaceRevision(*world, /*conforms by raycast*/ nullptr, UnboundedConformRun()), revisionBefore)
         << "ground moved by 2 m and the surface revision did not: a conformed piece would "
            "keep its pre-bake altitude with nothing to schedule a re-place";
 }
@@ -492,12 +494,12 @@ TEST_F(SplineDrapeTests, ConformSurfaceRevisionIsQuiescentWhenNothingMoves)
     ASSERT_NE(world, nullptr);
     CreateTerrainAtNormalizedHeight(*world, 0.25f);
 
-    const uint64_t first = GameEngine::SplineRecipes::ConformSurfaceRevision(*world, /*conforms by raycast*/ nullptr);
+    const uint64_t first = ConformSurfaceRevision(*world, /*conforms by raycast*/ nullptr, UnboundedConformRun());
     // Casting rays is what a rebuild does; reading the ground must not move the digest.
     Vector3 hit;
     ASSERT_TRUE(GameEngine::SplineRecipes::ConformRayDown(*world, Vector3(0.0f, 5.0f, 0.0f), {}, hit));
-    EXPECT_EQ(GameEngine::SplineRecipes::ConformSurfaceRevision(*world, /*conforms by raycast*/ nullptr), first);
-    EXPECT_EQ(GameEngine::SplineRecipes::ConformSurfaceRevision(*world, /*conforms by raycast*/ nullptr), first);
+    EXPECT_EQ(ConformSurfaceRevision(*world, /*conforms by raycast*/ nullptr, UnboundedConformRun()), first);
+    EXPECT_EQ(ConformSurfaceRevision(*world, /*conforms by raycast*/ nullptr, UnboundedConformRun()), first);
 }
 
 // The heightfield version cannot carry this alone. A terrain with NO modifiers never
@@ -526,20 +528,20 @@ TEST_F(SplineDrapeTests, ConformSurfaceRevisionMovesWhenAModifierFreeTerrainIsMo
     const Vector3 sample(0.0f, 20.0f, 0.0f);
     Vector3 before;
     ASSERT_TRUE(GameEngine::SplineRecipes::ConformRayDown(*world, sample, {}, before));
-    const uint64_t revisionBefore = GameEngine::SplineRecipes::ConformSurfaceRevision(*world, /*conforms by raycast*/ nullptr);
+    const uint64_t revisionBefore = ConformSurfaceRevision(*world, /*conforms by raycast*/ nullptr, UnboundedConformRun());
 
     // Move the terrain entity 5 m up: not one heightfield sample changes, no bake
     // runs, and the ground under the sample is 5 m above what the pieces measured.
     auto* xf = world->GetComponentForWrite<WorldTransform>(terrainEntity);
     ASSERT_NE(xf, nullptr);
-    xf->matrix[13] += 5.0f;
+    xf->Position.Y += 5.0;
 
     Vector3 after;
     ASSERT_TRUE(GameEngine::SplineRecipes::ConformRayDown(*world, sample, {}, after));
     ASSERT_NEAR(after.y - before.y, 5.0f, 0.05f)
         << "the ground did not move with the entity; the case is void";
 
-    EXPECT_NE(GameEngine::SplineRecipes::ConformSurfaceRevision(*world, /*conforms by raycast*/ nullptr), revisionBefore)
+    EXPECT_NE(ConformSurfaceRevision(*world, /*conforms by raycast*/ nullptr, UnboundedConformRun()), revisionBefore)
         << "a modifier-free terrain moved 5 m and the surface revision did not: its "
            "heightfield version never moves, so nothing would re-place the pieces";
 }
@@ -554,13 +556,13 @@ TEST_F(SplineDrapeTests, ConformSurfaceRevisionTracksTerrainIdentity)
     World* world = GetWorld();
     ASSERT_NE(world, nullptr);
 
-    const uint64_t empty = GameEngine::SplineRecipes::ConformSurfaceRevision(*world, /*conforms by raycast*/ nullptr);
+    const uint64_t empty = ConformSurfaceRevision(*world, /*conforms by raycast*/ nullptr, UnboundedConformRun());
     CreateTerrainAtNormalizedHeight(*world, 0.0f);
-    const uint64_t oneTerrain = GameEngine::SplineRecipes::ConformSurfaceRevision(*world, /*conforms by raycast*/ nullptr);
+    const uint64_t oneTerrain = ConformSurfaceRevision(*world, /*conforms by raycast*/ nullptr, UnboundedConformRun());
     EXPECT_NE(oneTerrain, empty) << "a terrain appearing is ground appearing";
 
     CreateTerrainAtNormalizedHeight(*world, 0.5f);
-    EXPECT_NE(GameEngine::SplineRecipes::ConformSurfaceRevision(*world, /*conforms by raycast*/ nullptr), oneTerrain)
+    EXPECT_NE(ConformSurfaceRevision(*world, /*conforms by raycast*/ nullptr, UnboundedConformRun()), oneTerrain)
         << "a second terrain must move the digest";
 }
 
@@ -634,15 +636,7 @@ void RegisterPickable(World& world, GameEngine::ECS::EntityHandle entity,
     using GameEngine::Engine::Renderer::RenderExtractionSystem;
     RenderExtractionSystem::WorldRenderableRecord rec{};
     rec.entity = entity;
-    for (int i = 0; i < 16; ++i)
-        rec.worldTransform.matrix[i] = 0.0f;
-    rec.worldTransform.matrix[0] = 1.0f;
-    rec.worldTransform.matrix[5] = 1.0f;
-    rec.worldTransform.matrix[10] = 1.0f;
-    rec.worldTransform.matrix[15] = 1.0f;
-    rec.worldTransform.matrix[12] = worldPos.x;
-    rec.worldTransform.matrix[13] = worldPos.y;
-    rec.worldTransform.matrix[14] = worldPos.z;
+    rec.worldTransform.Position = WorldPosition::FromVector3(worldPos);
     rec.worldTransform.Version = 1u;
     rec.hasBounds = true;
     rec.bounds.Box.center = {0.0f, 0.0f, 0.0f};
@@ -668,12 +662,10 @@ GameEngine::ECS::EntityHandle CreateCartOnTheGround(World& world, float halfHeig
     cart.Set(bounds);
 
     WorldTransform xf{};
-    xf.matrix[0] = 2.0f;
-    xf.matrix[5] = 2.0f * halfHeight;
-    xf.matrix[10] = 2.0f;
-    xf.matrix[12] = 0.0f;
-    xf.matrix[13] = halfHeight; // sitting ON the ground, top at 2*halfHeight
-    xf.matrix[14] = 0.0f;
+    xf.Basis[0].x = 2.0f;
+    xf.Basis[1].y = 2.0f * halfHeight;
+    xf.Basis[2].z = 2.0f;
+    xf.Position = WorldPosition{0.0, halfHeight, 0.0}; // sitting ON the ground, top at 2*halfHeight
     cart.Set(xf);
     world.ProcessCommands();
 
@@ -901,7 +893,7 @@ TEST_F(SplineDrapeTests, ReadinessAnswersFromOneFrameWhereTheDigestNeedsTwo)
     terrainEntity.Set(WorldTransform{});
     world->ProcessCommands();
 
-    const uint64_t digestUnprovisioned = GameEngine::SplineRecipes::ConformSurfaceRevision(*world, /*conforms by raycast*/ nullptr);
+    const uint64_t digestUnprovisioned = ConformSurfaceRevision(*world, /*conforms by raycast*/ nullptr, UnboundedConformRun());
     ASSERT_EQ(ConformSurfaceState(*world, RunAtOrigin()), GameEngine::SplineRecipes::ConformSurfaceReadiness::Provisioning);
 
     // A ray confirms what readiness said: there is nothing under the sample.
@@ -913,7 +905,7 @@ TEST_F(SplineDrapeTests, ReadinessAnswersFromOneFrameWhereTheDigestNeedsTwo)
     world->Clear();
     CreateFlatTerrain(*world);
 
-    const uint64_t digestProvisioned = GameEngine::SplineRecipes::ConformSurfaceRevision(*world, /*conforms by raycast*/ nullptr);
+    const uint64_t digestProvisioned = ConformSurfaceRevision(*world, /*conforms by raycast*/ nullptr, UnboundedConformRun());
     EXPECT_EQ(ConformSurfaceState(*world, RunAtOrigin()), GameEngine::SplineRecipes::ConformSurfaceReadiness::Ready);
     EXPECT_TRUE(GameEngine::SplineRecipes::ConformRayDown(*world, Vector3(0.0f, 5.0f, 0.0f), {}, hit))
         << "the state says Ready, so the ground must be there to hit";

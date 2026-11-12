@@ -1,0 +1,53 @@
+---
+title: Noise presets
+description: The relief of a generated terrain comes from a Noise effect in Generated mode; its largest features grow with the terrain's size; Smooth, Rolling, and Rugged set the fine relief; Height Scale sets the height.
+---
+
+A planar terrain whose **Base Source** is **Flat** gets its relief from a **Noise** effect in **Generated** mode on a terrain modifier volume whose **Shape** is **Global**. A new terrain has no such volume, so it is flat at its position. To add relief, select the terrain and click **Add Relief** in its **Base** section: this adds a volume named **Terrain Noise** with the **Rolling** preset and selects it. The terrain evaluates the noise per page when it bakes, so it keeps streaming. The noise is fractal value noise: a sum of octaves. Each octave has features half the size of the octave before it. The **Noise Preset** sets how much height each smaller octave keeps.
+
+## The largest features grow with the terrain
+
+The largest octave is the largest of 250 m, 500 m, 1 km, and so on (250 m x 2^J) that fits at least four times along the terrain's longer side. The smallest octave is always 15.6 m. A larger terrain adds octaves at the top and keeps the same octaves of 250 m and smaller, at the same height: a small hill is the same on every terrain size.
+
+| Longer side | Largest feature | Octaves |
+|---|---|---|
+| Under 2 km | 250 m | 5 |
+| 4 km | 1 km | 7 |
+| 16 km | 4 km | 9 |
+| 250 km | 32 km | 12 |
+
+Each octave above 250 m has the height of the octave below it times 1.41 (the square root of 2): its height grows with the square root of its size. On a 250 km terrain at Height Scale 256, the 32 km octave rises about 1.3 km and the terrain's heights reach about 3.8 km. The octaves above 250 m are in the same places for every preset. They are about a third higher on Smooth than on Rugged: Height Scale sets the octaves of 250 m and smaller together, and Smooth puts more of that height in its 250 m octave.
+
+## The presets
+
+The preset sets the octaves of 250 m and smaller. Each of them has a fixed fraction of the height of the octave before it.
+
+| Preset | Each octave's height as a fraction of the next larger one | Look |
+|---|---|---|
+| **Smooth** | 0.5 | Soft ground with little fine relief |
+| **Rolling** (default) | 0.574 | Hills at every scale |
+| **Rugged** | 0.660 | Broken ground: the fine octaves keep more of their height |
+
+## Height Scale
+
+**Height Scale** is the height of the octaves of 250 m and smaller together: on a terrain under 2 km, the lowest possible point is the terrain's origin and the highest is Height Scale above it. On a larger terrain the larger octaves rise above that, and **Height Range** under Height Scale shows the range that the terrain's heights reach. Height Scale multiplies every octave: half the Height Scale gives half the height at every size.
+
+The volume's **Weight** also multiplies the relief: Weight 0.5 gives half the preset's height at every point, and Weight 1 gives the full preset. The slopes become gentler with the height, and [Surface Rules](surface-rules.mdx) read the new slopes, so a rule that paints steep ground (rock, for example) covers less ground at a lower Weight. The terrain's relief line names the Weight when it is not 1. Height Scale is the terrain's height budget, and Weight is this volume's share of it: for more relief, raise Height Scale.
+
+## Set the preset
+
+Select the **Terrain Noise** volume: the **Select** action on the terrain's relief line selects it. Its **Noise** effect shows **Mode** and, in Generated mode, **Noise Preset**. The rows Frequency, Amplitude, Octaves and the erosion rows belong to **Displace** mode, which adds noise inside a volume's shape through the modifier stack.
+
+A Generated noise is read only on a Global volume, and only by a planar terrain whose Base Source is Flat. On a volume of another shape, or with no Flat terrain in the scene, the effect adds nothing and its inspector says what to change. A volume with **Weight** 0, a disabled volume and a disabled Noise effect add nothing. With several Global volumes in Generated mode, the volume with the highest **Priority** sets the relief, and the inspector of each other volume names the volume that sets it.
+
+```cpp title="Give a terrain broken ground"
+auto& noise = *world.GetComponentForWrite<Components::TerrainNoiseEffect>(terrainNoise);
+noise.Mode = Components::TerrainNoiseMode::Generated;
+noise.Preset = Components::TerrainNoisePreset::Rugged;
+```
+
+`terrainNoise` is the Terrain Noise entity. The scene file writes the effect as `TerrainNoiseEffect.mode` (0 Displace, 1 Generated) and `TerrainNoiseEffect.preset` (0 Rolling, 1 Smooth, 2 Rugged). A value out of range is refused, and the load report names the field.
+
+C# scripts cannot set the Noise Preset yet: the terrain effect components have no C# binding.
+
+A game that needs a different relief (ridges, dunes, islands) computes its own heights with a [height function](height-functions.mdx).

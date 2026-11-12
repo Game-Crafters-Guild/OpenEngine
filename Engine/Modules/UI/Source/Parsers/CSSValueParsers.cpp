@@ -7,6 +7,7 @@
 #include "UI/StyleProperties.h"
 #include "UI/UIStyle.h"
 
+#include "Types/FlatSet.h"
 #include "Types/ParseNumber.h"
 #include "Types/StringUtils.h"
 #include "Logger/Logger.h"
@@ -2292,7 +2293,7 @@ struct BorderShorthandParts
 {
     float Width = 0.0f;
     BorderStyle Style = BorderStyle::Solid;
-    uint32_t Color = 0x000000FFu;
+    uint32_t Color = 0x00000000u;
     bool HasWidth = false;
     bool HasStyle = false;
     bool HasColor = false;
@@ -2347,6 +2348,23 @@ static BorderShorthandParts ScanBorderShorthand(const std::string& value)
     return parts;
 }
 
+// A per-side `dashed` or `dotted` cannot paint, because border-style is one
+// value for the whole box. Warns once per distinct declaration.
+static void WarnPerSideBorderStyle(std::string_view property, const std::string& value, std::string_view style)
+{
+    static std::mutex mutex;
+    static FlatSet<std::string> warned;
+    std::string declaration = std::string(property) + ": " + Trim(value);
+    {
+        std::lock_guard lock(mutex);
+        if (!warned.Insert(declaration))
+            return;
+    }
+    Logger::Log::Warning("UI CSS: '{}' paints its side in the box's border-style, because border-style is one value "
+                         "for the whole box. Write 'border-style: {}' to give every side that style.",
+                         declaration, style);
+}
+
 // "border: <width> <style?> <color>"
 static void ExpandBorderValue(const std::string& value, std::vector<StyleProperty>& outProps)
 {
@@ -2368,32 +2386,23 @@ static void ExpandBorderValue(const std::string& value, std::vector<StylePropert
 }
 
 // "border-<side>: <width> || <style> || <color>" -> that side's width and
-// colour longhands, and nothing else.
+// color longhands, and nothing else.
 //
-// `border-style` in this engine is a WHOLE-BOX property, so a per-side <style>
-// has nowhere per-side to live. It is honoured for the one effect that IS
-// expressible per side: `none` and `hidden` zero THIS side's width, which is
-// the CSS used value and what `border-top: none` has to mean. A visible style
-// keyword (solid/dashed/...) is accepted and deliberately writes nothing: one
-// side must never restyle the other three.
-//
-// A suppressed side leaves its cascaded COLOUR alone rather than zeroing it,
-// matching how the box shorthand treats a component the declaration omits.
-// Nothing downstream reads it either way: DrawnBorderColor takes the colour of
-// the first side with a non-zero WIDTH (UIManager_PrimitiveGen.cpp), so a side
-// zeroed here is skipped whatever colour it holds.
-//
-// Two consequences, both intended and both far narrower than dropping the
-// declaration outright: a per-side `dashed`/`dotted` paints solid, and a
-// per-side width on a box whose border-style is `none` stays invisible, because
-// ResolveUsedBorderWidths zeroes all four widths there.
-static void ExpandBorderSideValue(const std::string& value, StylePropertyId widthId,
-                                  StylePropertyId colorId, std::vector<StyleProperty>& outProps)
+// `border-style` is one value for the whole box. A per-side `none` or `hidden`
+// zeroes the width of this side only. A per-side `solid` writes nothing, and a
+// per-side `dashed` or `dotted` writes nothing and warns once per declaration.
+// A suppressed side keeps its cascaded color; a side without a width paints
+// nothing (BorderPaint.h).
+static void ExpandBorderSideValue(std::string_view property, const std::string& value,
+                                  StylePropertyId widthId, StylePropertyId colorId,
+                                  std::vector<StyleProperty>& outProps)
 {
     if (HasViewportDimension(value))
         return;
     const BorderShorthandParts parts = ScanBorderShorthand(value);
     const bool suppressed = parts.HasStyle && parts.Style == BorderStyle::None;
+    if (parts.HasStyle && (parts.Style == BorderStyle::Dashed || parts.Style == BorderStyle::Dotted))
+        WarnPerSideBorderStyle(property, value, parts.Style == BorderStyle::Dashed ? "dashed" : "dotted");
 
     if (suppressed || parts.HasWidth)
     {
@@ -2413,22 +2422,22 @@ static void ExpandBorderSideValue(const std::string& value, StylePropertyId widt
 
 static void ExpandBorderTopValue(const std::string& value, std::vector<StyleProperty>& outProps)
 {
-    ExpandBorderSideValue(value, StylePropertyId::BorderTopWidth, StylePropertyId::BorderTopColor, outProps);
+    ExpandBorderSideValue("border-top", value, StylePropertyId::BorderTopWidth, StylePropertyId::BorderTopColor, outProps);
 }
 
 static void ExpandBorderRightValue(const std::string& value, std::vector<StyleProperty>& outProps)
 {
-    ExpandBorderSideValue(value, StylePropertyId::BorderRightWidth, StylePropertyId::BorderRightColor, outProps);
+    ExpandBorderSideValue("border-right", value, StylePropertyId::BorderRightWidth, StylePropertyId::BorderRightColor, outProps);
 }
 
 static void ExpandBorderBottomValue(const std::string& value, std::vector<StyleProperty>& outProps)
 {
-    ExpandBorderSideValue(value, StylePropertyId::BorderBottomWidth, StylePropertyId::BorderBottomColor, outProps);
+    ExpandBorderSideValue("border-bottom", value, StylePropertyId::BorderBottomWidth, StylePropertyId::BorderBottomColor, outProps);
 }
 
 static void ExpandBorderLeftValue(const std::string& value, std::vector<StyleProperty>& outProps)
 {
-    ExpandBorderSideValue(value, StylePropertyId::BorderLeftWidth, StylePropertyId::BorderLeftColor, outProps);
+    ExpandBorderSideValue("border-left", value, StylePropertyId::BorderLeftWidth, StylePropertyId::BorderLeftColor, outProps);
 }
 
 // outline: <width> || <style> || <color>, in any order.

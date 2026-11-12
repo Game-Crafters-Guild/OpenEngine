@@ -16,6 +16,7 @@
 #include "UI/Parsers/XMLParser.h"
 #include "UI/Registration/ElementRegistration.h"
 #include "UI/UIManager.h"
+#include "UIManagerSdfRingAccess.h"
 #include "UIRgTestHarness.h"
 
 using namespace GameEngine;
@@ -161,6 +162,56 @@ TEST(UIManagerRenderRGTests, DeclaresPassReadsAndClearAttachment)
     dev->Shutdown();
 }
 
+TEST(UIManagerRenderRGTests, OpaqueInteriorsDeclareAClearedDepthAttachment)
+{
+    auto dev = MakeHeadlessDevice();
+    if (!dev)
+        GTEST_SKIP() << "Device init failed";
+    {
+        UiFixture fx(dev.get(), /*withExternalBinding=*/false);
+        ASSERT_TRUE(fx.Ok);
+        fx.Ui->Update(0.0f, /*interactive=*/false);
+
+        FramePools pools(dev.get());
+        RenderGraph::RGFrame frame(dev.get(), &pools.Persistent, &pools.Transient, &pools.Ring);
+        frame.BeginFrame(1);
+        const RenderGraph::RGTexture target =
+            frame.CreateTexture("Test.Target", MakeTargetDesc("Test.Target"));
+        ASSERT_TRUE(target.IsValid());
+        fx.Ui->RenderRG(frame, target, UI::UITargetSpace::LinearSdr());
+        ASSERT_GT(UIManagerSdfRingAccess::OpaqueInteriorCount(*fx.Ui), 0u) << "#panel is an opaque rect";
+
+        const RenderGraph::RGPassId pass = RGQuery::FindDeclared(frame.Graph(), RGQuery::Exact{"UI Overlay"});
+        ASSERT_NE(pass, RenderGraph::kInvalidId);
+
+        // The depth only orders the pass's own draws: D16 at the target's
+        // size, cleared to the reverse-Z far value, never stored.
+        const RenderGraph::RGAttachmentRec* depth = nullptr;
+        for (const auto& rec : frame.Attachments())
+            if (rec.Pass == pass && rec.IsDepth)
+                depth = &rec;
+        ASSERT_NE(depth, nullptr);
+        EXPECT_FALSE(depth->ReadOnly);
+        EXPECT_EQ(depth->Ops.Load, RenderGraph::RGLoadOp::Clear);
+        EXPECT_EQ(depth->Ops.Store, RenderGraph::RGStoreOp::DontCare);
+        EXPECT_FLOAT_EQ(depth->Ops.Clear.Depth, 0.0f);
+        const RenderGraph::RGResourceDesc& depthDesc = frame.Graph().ResourceDesc(depth->Tex);
+        EXPECT_EQ(depthDesc.Width, 256u);
+        EXPECT_EQ(depthDesc.Height, 128u);
+        EXPECT_EQ(depthDesc.Format, static_cast<uint32_t>(TextureFormat::D16_UNORM));
+
+        bool readsInteriors = false;
+        for (size_t r = 0; r < frame.Graph().ResourceCount(); ++r)
+            if (std::string(frame.Graph().ResourceName(static_cast<RenderGraph::RGResourceId>(r))) == "UISdfOpaque")
+                readsInteriors = frame.Graph().HasReadAccess(pass, static_cast<RenderGraph::RGResourceId>(r));
+        EXPECT_TRUE(readsInteriors) << "the interiors ring must be a declared read";
+
+        frame.Execute();
+        dev->WaitForIdle();
+    }
+    dev->Shutdown();
+}
+
 TEST(UIManagerRenderRGTests, CompositesWithLoadOp)
 {
     auto dev = MakeHeadlessDevice();
@@ -280,9 +331,9 @@ TEST(UIManagerRenderRGTests, StalePublishIsNeverConsumed)
         ASSERT_NE(pass2, RenderGraph::kInvalidId);
         // Frame-2 ids are dense and REUSED (frame-1's src id aliases frame-2's
         // first resource), so a name scan alone can't catch a deleted
-        // FrameIndex compare. The real pin: pass 2 reads NOTHING except the 4
-        // SSBO imports — any other read means the stale publish was consumed
-        // through an aliased id.
+        // FrameIndex compare. The real pin: pass 2 reads NOTHING except the
+        // SSBO imports (the opaque interiors among them) — any other read means
+        // the stale publish was consumed through an aliased id.
         for (size_t r = 0; r < frame.Graph().ResourceCount(); ++r)
         {
             const auto rid = static_cast<RenderGraph::RGResourceId>(r);
@@ -292,7 +343,8 @@ TEST(UIManagerRenderRGTests, StalePublishIsNeverConsumed)
             if (frame.Graph().HasReadAccess(pass2, rid))
             {
                 EXPECT_TRUE(name == "UISdfPrims" || name == "UISdfClips" ||
-                            name == "UISdfDrawOrder" || name == "UISdfTransforms")
+                            name == "UISdfDrawOrder" || name == "UISdfTransforms" ||
+                            name == "UISdfOpaque")
                     << "unexpected UI-pass read of '" << name
                     << "' — a stale publish leaked through an aliased frame-local id";
             }
@@ -394,6 +446,81 @@ TEST(UIManagerRenderRGTests, DrainDoesNotCompoundElementOpacity)
             ASSERT_NE(p, nullptr);
             EXPECT_NEAR(p->Opacity, 0.5f, 1e-3f) << "after drain " << (i + 1);
         }
+    }
+    dev->Shutdown();
+}
+
+namespace
+{
+
+void PumpUiFrame(IDevice* dev, UIManager& ui, FramePools& pools, uint64_t frameIndex)
+{
+    ui.Update(0.016f, /*interactive=*/false);
+    RenderGraph::RGFrame frame(dev, &pools.Persistent, &pools.Transient, &pools.Ring);
+    frame.BeginFrame(frameIndex);
+    const RenderGraph::RGTexture target = frame.CreateTexture("Test.Target", MakeTargetDesc("Test.Target"));
+    ui.RenderRG(frame, target, UI::UITargetSpace::LinearSdr());
+    frame.Execute();
+    dev->WaitForIdle();
+}
+
+} // namespace
+
+// A small UI must not reserve an editor-scale primitive ring on its first frame: the first
+// allocation then opens a new memory block, and that waits behind the GPU work in flight.
+TEST(UIManagerRenderRGTests, SmallUiStartsWithASmallPrimitiveRing)
+{
+    constexpr size_t kSmallUiRingLimit = 16384;
+    auto dev = MakeHeadlessDevice();
+    if (!dev)
+        GTEST_SKIP() << "Device init failed";
+    {
+        UiFixture fx(dev.get(), /*withExternalBinding=*/false);
+        ASSERT_TRUE(fx.Ok);
+        EXPECT_EQ(UIManagerSdfRingAccess::PrimitiveCapacity(*fx.Ui), 0u) << "no ring before the first frame";
+
+        FramePools pools(dev.get());
+        PumpUiFrame(dev.get(), *fx.Ui, pools, 1);
+
+        const size_t capacity = UIManagerSdfRingAccess::PrimitiveCapacity(*fx.Ui);
+        EXPECT_GE(capacity, UIManagerSdfRingAccess::PrimitiveSlots(*fx.Ui));
+        EXPECT_LT(capacity, kSmallUiRingLimit);
+    }
+    dev->Shutdown();
+}
+
+// A UI with more primitives than the first capacity grows the ring and keeps drawing.
+TEST(UIManagerRenderRGTests, LargeUiGrowsThePrimitiveRing)
+{
+    constexpr int kCellCount = 6000;
+    auto dev = MakeHeadlessDevice();
+    if (!dev)
+        GTEST_SKIP() << "Device init failed";
+    {
+        UIRegistration::RegisterBuiltInControls();
+        std::string xml = "<uielement id='root'>";
+        for (int i = 0; i < kCellCount; ++i)
+            xml += "<uielement class='cell' />";
+        xml += "</uielement>";
+        std::unique_ptr<UIElement> root;
+        ASSERT_TRUE(XMLParser::ParseLayoutFromString(xml, root));
+        auto ui = std::make_unique<UIManager>(dev.get());
+        ui->SetRoot(std::move(root));
+        const auto css = std::filesystem::temp_directory_path() / "ui_renderrg_ring_growth.css";
+        {
+            std::ofstream f(css);
+            f << "#root { display: flex; flex-wrap: wrap; width: 256px; height: 128px; }\n"
+                 ".cell { width: 2px; height: 2px; background-color: #336699; }\n";
+        }
+        ASSERT_TRUE(ui->AttachStyleFromFile(css.string()));
+
+        FramePools pools(dev.get());
+        PumpUiFrame(dev.get(), *ui, pools, 1);
+        PumpUiFrame(dev.get(), *ui, pools, 2);
+
+        const size_t slots = UIManagerSdfRingAccess::PrimitiveSlots(*ui);
+        EXPECT_GE(slots, static_cast<size_t>(kCellCount));
+        EXPECT_GE(UIManagerSdfRingAccess::PrimitiveCapacity(*ui), slots);
     }
     dev->Shutdown();
 }

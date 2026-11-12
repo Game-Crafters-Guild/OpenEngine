@@ -138,6 +138,9 @@ struct TerrainGrass
     float32 BladesPerSquareMeter = 21.0f;
     float32 Range = 500.0f;
     float32 DensityFalloff = 2.0f;
+    // How much of the far floor-band thinning applies, 0 to 1. 1 saves the most frame time; 0 draws every blade.
+    // With several grass terrains in the scene, the lowest value applies to all of them.
+    float32 FarThinning = 1.0f;
     float32 PlacementSeed = 3.0f;
     // Voronoi clumping. Blades are laid out by a low-discrepancy sequence, which is anti-clump by
     // construction — a field of it reads as mown rather than grown. A second, coarser, world-

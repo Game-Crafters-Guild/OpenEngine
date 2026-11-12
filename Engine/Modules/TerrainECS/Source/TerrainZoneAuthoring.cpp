@@ -3,46 +3,69 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 
 namespace GameEngine::TerrainECS
 {
+
+namespace
+{
+// Widens [lo, hi] outward to the world texel lattice (multiples of 1 / texelsPerMeter) and caps the
+// span at maxSpanTexels. Every footprint of a zone then samples the same world points.
+void SnapAxisToTexelLattice(float32 lo, float32 hi, float32 texelsPerMeter, float32 maxSpanTexels,
+                            float32& outCenter, float32& outExtent)
+{
+    if (texelsPerMeter <= 0.0f)
+    {
+        outCenter = (lo + hi) * 0.5f;
+        outExtent = (hi - lo) * 0.5f;
+        return;
+    }
+    const float32 loTexel = std::floor(lo * texelsPerMeter);
+    const float32 hiTexel = std::min(std::ceil(hi * texelsPerMeter), loTexel + maxSpanTexels);
+    outCenter = (loTexel + hiTexel) * 0.5f / texelsPerMeter;
+    outExtent = (hiTexel - loTexel) * 0.5f / texelsPerMeter;
+}
+
+// World coordinate of texel `index` of an axis that spans [center - extent, center + extent] in `dim` texels.
+float32 TexelCenterToWorld(float32 center, float32 extent, uint32 index, uint32 dim)
+{
+    const float32 u = dim > 1 ? static_cast<float32>(index) / static_cast<float32>(dim - 1) : 0.5f;
+    return center + (u - 0.5f) * 2.0f * extent;
+}
+} // namespace
 
 ZoneFootprint FitZoneToDab(float32 hitX, float32 hitZ, float32 brushRadius,
                            const ZoneAuthoringSettings& settings)
 {
     const float32 half = std::min(brushRadius + settings.Padding, settings.MaxExtent);
+    const float32 maxSpanTexels = std::floor(2.0f * settings.MaxExtent * settings.TexelsPerMeter);
     ZoneFootprint fp;
-    fp.CenterX = hitX;
-    fp.CenterZ = hitZ;
-    fp.ExtentX = half;
-    fp.ExtentZ = half;
+    SnapAxisToTexelLattice(hitX - half, hitX + half, settings.TexelsPerMeter, maxSpanTexels, fp.CenterX,
+                           fp.ExtentX);
+    SnapAxisToTexelLattice(hitZ - half, hitZ + half, settings.TexelsPerMeter, maxSpanTexels, fp.CenterZ,
+                           fp.ExtentZ);
     return fp;
 }
 
 bool GrowZoneToDab(ZoneFootprint& footprint, float32 hitX, float32 hitZ,
                    float32 brushRadius, const ZoneAuthoringSettings& settings)
 {
-    // Union the existing footprint with the dab's padded AABB, then re-center.
+    // Union the existing footprint with the dab's padded AABB, then re-center on the texel lattice.
     const float32 dabHalf = brushRadius + settings.Padding;
-    const float32 curMinX = footprint.CenterX - footprint.ExtentX;
-    const float32 curMaxX = footprint.CenterX + footprint.ExtentX;
-    const float32 curMinZ = footprint.CenterZ - footprint.ExtentZ;
-    const float32 curMaxZ = footprint.CenterZ + footprint.ExtentZ;
+    const float32 minX = std::min(footprint.CenterX - footprint.ExtentX, hitX - dabHalf);
+    const float32 maxX = std::max(footprint.CenterX + footprint.ExtentX, hitX + dabHalf);
+    const float32 minZ = std::min(footprint.CenterZ - footprint.ExtentZ, hitZ - dabHalf);
+    const float32 maxZ = std::max(footprint.CenterZ + footprint.ExtentZ, hitZ + dabHalf);
 
-    const float32 minX = std::min(curMinX, hitX - dabHalf);
-    const float32 maxX = std::max(curMaxX, hitX + dabHalf);
-    const float32 minZ = std::min(curMinZ, hitZ - dabHalf);
-    const float32 maxZ = std::max(curMaxZ, hitZ + dabHalf);
-
-    const float32 newExtentX = (maxX - minX) * 0.5f;
-    const float32 newExtentZ = (maxZ - minZ) * 0.5f;
-    if (newExtentX > settings.MaxExtent || newExtentZ > settings.MaxExtent)
+    constexpr float32 kNoSpanCap = std::numeric_limits<float32>::max();
+    ZoneFootprint grown;
+    SnapAxisToTexelLattice(minX, maxX, settings.TexelsPerMeter, kNoSpanCap, grown.CenterX, grown.ExtentX);
+    SnapAxisToTexelLattice(minZ, maxZ, settings.TexelsPerMeter, kNoSpanCap, grown.CenterZ, grown.ExtentZ);
+    if (grown.ExtentX > settings.MaxExtent || grown.ExtentZ > settings.MaxExtent)
         return false;
 
-    footprint.CenterX = (minX + maxX) * 0.5f;
-    footprint.CenterZ = (minZ + maxZ) * 0.5f;
-    footprint.ExtentX = newExtentX;
-    footprint.ExtentZ = newExtentZ;
+    footprint = grown;
     return true;
 }
 
@@ -77,25 +100,23 @@ TerrainZonePayload RegrowPayload(const TerrainZonePayload& old,
     if (old.Width < 1 || old.Height < 1 || newWidth < 1 || newHeight < 1)
         return grown;
 
-    // Place each old texel's world center into the new payload by nearest
-    // texel. Constant density makes this an integer offset copy.
-    for (uint32 oz = 0; oz < old.Height; ++oz)
+    // Each new texel reads the old texel nearest its world center, so no new texel inside the old
+    // footprint is left unwritten. On the shared texel lattice the copy is exact.
+    const std::size_t texelBytes = ZonePayloadBytesPerTexel(old.Format);
+    for (uint32 nz = 0; nz < newHeight; ++nz)
     {
-        const float32 v = old.Height > 1 ? static_cast<float32>(oz) / static_cast<float32>(old.Height - 1) : 0.5f;
-        const float32 worldZ = oldFootprint.CenterZ + (v - 0.5f) * 2.0f * oldFootprint.ExtentZ;
-        for (uint32 ox = 0; ox < old.Width; ++ox)
+        const float32 worldZ = TexelCenterToWorld(newFootprint.CenterZ, newFootprint.ExtentZ, nz, newHeight);
+        for (uint32 nx = 0; nx < newWidth; ++nx)
         {
-            const float32 u = old.Width > 1 ? static_cast<float32>(ox) / static_cast<float32>(old.Width - 1) : 0.5f;
-            const float32 worldX = oldFootprint.CenterX + (u - 0.5f) * 2.0f * oldFootprint.ExtentX;
+            const float32 worldX = TexelCenterToWorld(newFootprint.CenterX, newFootprint.ExtentX, nx, newWidth);
 
             float32 tx = 0.0f, tz = 0.0f;
-            WorldToPayloadTexel(newFootprint, newWidth, newHeight, worldX, worldZ, tx, tz);
-            const int32 nx = static_cast<int32>(std::lround(tx));
-            const int32 nz = static_cast<int32>(std::lround(tz));
-            if (nx < 0 || nz < 0 || nx >= static_cast<int32>(newWidth) || nz >= static_cast<int32>(newHeight))
+            WorldToPayloadTexel(oldFootprint, old.Width, old.Height, worldX, worldZ, tx, tz);
+            const int32 ox = static_cast<int32>(std::lround(tx));
+            const int32 oz = static_cast<int32>(std::lround(tz));
+            if (ox < 0 || oz < 0 || ox >= static_cast<int32>(old.Width) || oz >= static_cast<int32>(old.Height))
                 continue;
 
-            const std::size_t texelBytes = ZonePayloadBytesPerTexel(old.Format);
             const std::size_t src = (static_cast<std::size_t>(oz) * old.Width + ox) * texelBytes;
             const std::size_t dst = (static_cast<std::size_t>(nz) * newWidth + nx) * texelBytes;
             std::memcpy(grown.MutableTexelBytes() + dst, old.TexelBytes() + src, texelBytes);

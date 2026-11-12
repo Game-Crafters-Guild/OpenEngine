@@ -90,8 +90,8 @@ void CarvesInChart(const std::vector<NavigationCarve>& carves, const Pathfinding
         }
         Pathfinding::DetourNavMap::CarvePrism& prism = prisms.emplace_back();
         prism.PointCount = kCarveSides;
-        prism.MinY = static_cast<float32>(carve.MinY - chart.Origin.WorldY());
-        prism.MaxY = static_cast<float32>(carve.MaxY - chart.Origin.WorldY());
+        prism.MinY = static_cast<float32>(carve.MinY - chart.Origin.Y);
+        prism.MaxY = static_cast<float32>(carve.MaxY - chart.Origin.Y);
     }
     // The pointers are set once every polygon is in: growing the array would move them.
     for (size_t i = 0; i < prisms.size(); ++i)
@@ -230,8 +230,9 @@ bool NavigationMeshBake::SubmitTiles(const NavigationTerrainSource& terrain, Job
 
         ++m_NextTile;
         m_InFlight.push_back(job);
+        // A bake is bulk work: its tiles run on the Background lane, after the frame's and a load's Normal work.
         if (pool)
-            pool->Submit([job]() { RunTileJob(*job); });
+            pool->Submit([job]() { RunTileJob(*job); }, JobSystem::JobPriority::Background);
         else
             RunTileJob(*job);
     }

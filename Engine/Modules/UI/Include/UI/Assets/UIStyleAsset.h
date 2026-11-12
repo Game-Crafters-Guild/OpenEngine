@@ -12,11 +12,13 @@ class AssetManager;
 
 class UIStyleAsset : public Asset {
 public:
-    UIStyleAsset(const GUID& guid, const std::filesystem::path& path)
-        : Asset(guid, AssetType::UIStyle, path) {}
+    // Every sheet this asset publishes has the cascade origin `origin`. The parser gives a UI
+    // module control sheet StyleOrigin::Control.
+    UIStyleAsset(const GUID& guid, const std::filesystem::path& path, StyleOrigin origin = StyleOrigin::Author)
+        : Asset(guid, AssetType::UIStyle, path), m_Origin(origin) {}
 
     bool Load() override;
-    bool LoadFromData(const Vector<uint8>& data) override;
+    bool LoadFromData(std::span<const uint8> data) override;
     void Unload() override;
 
     const Stylesheet& GetStylesheet() const { return m_Stylesheet; }
@@ -39,8 +41,8 @@ public:
 
   private:
     // Parse an unpublished candidate before replacing the current snapshots.
-    bool ReloadFromData(const Vector<uint8>& data) override;
-    bool ParseFromData(const Vector<uint8>& data);
+    bool ReloadFromData(std::span<const uint8> data) override;
+    bool ParseFromData(std::span<const uint8> data);
 
     struct Segment
     {
@@ -60,6 +62,7 @@ public:
     Stylesheet m_Stylesheet;
     std::vector<Segment> m_Segments;
     std::vector<GUID> m_ImportedStyleGuids;
+    StyleOrigin m_Origin;
     mutable StylesheetHandle m_Handle;
 };
 

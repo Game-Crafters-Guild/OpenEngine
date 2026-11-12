@@ -4,6 +4,7 @@
 #include "Rendering/RenderLayerMask.h"
 #include "Components/Rendering/ExposureCompensationCurve.h"
 #include "Components/Rendering/PostProcessVolume.h" // ExposureMode (exposure is a camera/sensor property)
+#include "Mathematics/Angle.h"
 #include "Mathematics/Curve.h"
 
 #include <algorithm>
@@ -68,21 +69,18 @@ constexpr float32 CameraSensorPresetHeightMm(CameraSensorPreset preset)
 inline float32 CameraFocalLengthMmFromVerticalFov(float32 fovYDegrees,
                                                    float32 sensorHeightMm)
 {
-    constexpr float32 kDegreesToRadians = 0.01745329251994329577f;
     const float32 safeFov = std::clamp(fovYDegrees, 0.1f, 179.0f);
     const float32 safeSensorHeight = std::max(sensorHeightMm, 1.0f);
     return (0.5f * safeSensorHeight) /
-           std::tan(0.5f * safeFov * kDegreesToRadians);
+           std::tan(0.5f * Mathematics::ToRadians(safeFov));
 }
 
 inline float32 CameraVerticalFovFromFocalLengthMm(float32 focalLengthMm,
                                                   float32 sensorHeightMm)
 {
-    constexpr float32 kRadiansToDegrees = 57.29577951308232088f;
     const float32 safeFocalLength = std::max(focalLengthMm, 1.0f);
     const float32 safeSensorHeight = std::max(sensorHeightMm, 1.0f);
-    return 2.0f * std::atan(0.5f * safeSensorHeight / safeFocalLength) *
-           kRadiansToDegrees;
+    return Mathematics::ToDegrees(2.0f * std::atan(0.5f * safeSensorHeight / safeFocalLength));
 }
 
 struct Camera {
@@ -193,6 +191,10 @@ struct Camera {
     // the reference resolution and black-bar the rest. true = expand: reveal a
     // little more world so the image fills the screen (still integer pixels).
     bool PixelPerfectExpand {false};
+
+    // While true, the view this camera drives draws no world: it shows its clear colour with the
+    // UI over it, and culling, extraction and shadows skip it (ViewRegistry::SetViewWorldPaused).
+    bool WorldDrawingPaused {false};
     // Optional jitter/TAA params added by systems, not persisted here
 };
 

@@ -69,32 +69,26 @@ ECS::EntityHandle BranchUnder(ECS::World& world, ECS::EntityHandle ancestor, ECS
     return branch;
 }
 
-Components::Transform TranslationTransform(float x, float y, float z)
-{
-    Components::Transform t{};
-    const float identity[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, x, y, z, 1};
-    std::copy(std::begin(identity), std::end(identity), t.matrix);
-    return t;
-}
-
-// The centre of the entities' world positions; entities without a WorldTransform are left out.
+// A transform at the centre of the entities' world positions, with an identity basis;
+// entities without a WorldTransform are left out.
 Components::Transform CentreOfWorldPositions(ECS::World& world, std::span<const ECS::EntityHandle> entities)
 {
-    float sum[3] = {0.0f, 0.0f, 0.0f};
+    Mathematics::WorldPosition sum{};
     int count = 0;
     for (const ECS::EntityHandle e : entities)
     {
         if (const auto* wt = world.GetComponent<Components::WorldTransform>(e))
         {
-            sum[0] += wt->matrix[12];
-            sum[1] += wt->matrix[13];
-            sum[2] += wt->matrix[14];
+            sum.X += wt->Position.X;
+            sum.Y += wt->Position.Y;
+            sum.Z += wt->Position.Z;
             ++count;
         }
     }
-    if (count == 0)
-        return TranslationTransform(0.0f, 0.0f, 0.0f);
-    return TranslationTransform(sum[0] / count, sum[1] / count, sum[2] / count);
+    Components::Transform centre{};
+    if (count > 0)
+        centre.Position = Mathematics::WorldPosition{sum.X / count, sum.Y / count, sum.Z / count};
+    return centre;
 }
 
 // Appends the states of `from` for entities `into` does not hold yet.
@@ -140,7 +134,8 @@ EmptyParentResult CreateEmptyParent(ECS::World& world,
     world.AddComponentImmediate(newParent, name);
     world.AddComponentImmediate(newParent, pose);
     Components::WorldTransform poseWorld{};
-    std::copy(std::begin(pose.matrix), std::end(pose.matrix), poseWorld.matrix);
+    poseWorld.Position = pose.Position;
+    poseWorld.Basis = pose.Basis;
     world.AddComponentImmediate(newParent, poseWorld);
 
     const ECS::EntityHandle placed[] = {newParent};

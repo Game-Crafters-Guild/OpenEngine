@@ -12,6 +12,11 @@ struct CurveBase;
 using Curve = CurveBase<32>;
 } // namespace GameEngine::Math
 
+namespace GameEngine::Mathematics
+{
+struct WorldPosition;
+} // namespace GameEngine::Mathematics
+
 namespace GameEngine::Scene
 {
 
@@ -98,6 +103,8 @@ bool ParseQuotedString(std::string_view s, std::string& out);
 bool ParseFloat(std::string_view s, float& out);
 bool ParseFloat3(std::string_view s, Float3& out); // "(x, y, z)"
 bool ParseFloat4(std::string_view s, Float4& out); // "(x, y, z, w)"
+// "(x, y, z)" read in double: a position keeps every digit the scene text holds.
+bool ParseWorldPosition(std::string_view s, Mathematics::WorldPosition& out);
 
 // Parse a generic value of the scene schema:
 // bool/number/string/tuple/array and references: @"path", #id, $id, &{guid}
@@ -111,6 +118,8 @@ std::string FormatFloat(float value);
 std::string FormatFloat2(float x, float y);
 std::string FormatFloat3(float x, float y, float z);
 std::string FormatFloat4(float x, float y, float z, float w);
+// "(x, y, z)" in the shortest form that reads back as the same doubles.
+std::string FormatWorldPosition(const Mathematics::WorldPosition& position);
 
 // A Math::Curve as one line of text, every field of every key: "t,v,inTan,outTan,interp,mode" per
 // key, keys separated by ';'. The one format for a curve whose keys may be Smooth, with tangents

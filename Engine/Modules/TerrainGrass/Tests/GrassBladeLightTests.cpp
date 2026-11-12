@@ -280,7 +280,9 @@ TEST(GrassBladeLight, TheLeafCarriesNoFaceOnReflectionAndTheRootAndFarFieldKeepT
         {
             const float weight = Shader::GrassBladeSpecularWeight(rise, farSettle);
             if (farLod >= Shader::kGrassNormalSettleRange)
+            {
                 EXPECT_EQ(weight, 1.0f) << "the far field, far LOD " << farLod << " rise " << rise;
+            }
             EXPECT_LE(weight, previous) << "far LOD " << farLod << " rise " << rise;
             previous = weight;
         }

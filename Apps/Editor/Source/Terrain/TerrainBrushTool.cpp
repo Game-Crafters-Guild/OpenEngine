@@ -1,7 +1,7 @@
 #include "Terrain/TerrainBrushTool.h"
 
 #include "Mathematics/Interpolation.h"
-#include "SceneView/SphereSculptStrokeCommand.h"
+#include "Terrain/Planet/PlanetSculptStrokeCommand.h"
 #include "Terrain/TerrainZoneStrokeCommand.h"
 #include "SceneView/SceneViewController.h"
 #include "Scene/TerrainPicking.h"
@@ -21,6 +21,8 @@
 #include "Engine/Rendering/RenderServices.h"
 #include "Logger/Logger.h"
 #include "Terrain/TerrainTypes.h" // kMaxTerrainMaterialLayers — the paint-role clamp
+#include "TerrainECS/Planet/PlanetPageRequester.h"
+#include "TerrainECS/Planet/PlanetSculptDab.h"
 #include "TerrainECS/TerrainService.h"
 #include "TerrainECS/TerrainZoneAuthoring.h"
 
@@ -111,15 +113,14 @@ ZoneMapping MappingFromWorldTransform(const Components::WorldTransform& xf,
                                       float extentX, float extentZ, uint32_t w, uint32_t h)
 {
     ZoneMapping m;
-    m.PosX = xf.matrix[12];
-    m.PosZ = xf.matrix[14];
-    const float yaw = std::atan2(xf.matrix[8], xf.matrix[10]);
+    const Vector3 position = xf.GetPosition() - Mathematics::WorldPosition{};
+    m.PosX = position.x;
+    m.PosZ = position.z;
+    const float yaw = std::atan2(xf.Basis[2].x, xf.Basis[2].z);
     m.CosYaw = std::cos(yaw);
     m.SinYaw = std::sin(yaw);
-    const float scaleX = std::sqrt(xf.matrix[0] * xf.matrix[0] + xf.matrix[1] * xf.matrix[1]
-                                   + xf.matrix[2] * xf.matrix[2]);
-    const float scaleZ = std::sqrt(xf.matrix[8] * xf.matrix[8] + xf.matrix[9] * xf.matrix[9]
-                                   + xf.matrix[10] * xf.matrix[10]);
+    const float scaleX = Vector3(xf.Basis[0]).Length();
+    const float scaleZ = Vector3(xf.Basis[2]).Length();
     m.RectHalfX = extentX * (scaleX > 0.0f ? scaleX : 1.0f);
     m.RectHalfZ = extentZ * (scaleZ > 0.0f ? scaleZ : 1.0f);
     m.Width = w;
@@ -198,7 +199,7 @@ bool TerrainBrushTool::RaycastTerrain(const GizmoRay& ray, Mathematics::Vector3&
     Scene::TerrainPickHit hit{};
     if (!Scene::RaycastTerrain(ray, *world, kMaxPickDistance, hit))
         return false;
-    outHit = hit.WorldPosition;
+    outHit = hit.Point;
     outNormal = hit.WorldNormal;
     return true;
 }
@@ -240,18 +241,16 @@ bool TerrainBrushTool::RaycastPlanet(const GizmoRay& ray, float radius, Mathemat
     if (t < 0.0f)
         return false;
 
-    // The analytic hit sits on the BASE sphere, which ignores relief + sculpt — so the cursor
-    // drifts off tall features (#488). Refine the hit against the CPU height function (the same
-    // relief + sculpt the GPU displaces to) so it tracks the real surface. A few fixed-point
-    // iterations converge because the height is << radius.
+    // The analytic hit is on the base sphere: refine it onto the drawn pages and layers so the
+    // cursor stays on the surface. No page under the ray on the CPU: no hit.
     if (auto* rs = EngineCore::GetInstance().GetRenderServices())
     {
         if (auto* feature = rs->GetFeature<CBTTerrainECS::CBTRenderFeature>())
         {
-            auto heightFn = [feature](float dx, float dy, float dz) {
-                return feature->SampleSphereSurfaceHeight(dx, dy, dz);
-            };
-            CBTTerrain::RefinePlanetHit(o, d, radius, heightFn, t);
+            Scene::DrawnPlanetHeight height{*feature};
+            CBTTerrain::RefinePlanetHit(o, d, radius, height, t);
+            if (height.Missed)
+                return false;
         }
     }
 
@@ -344,36 +343,32 @@ bool TerrainBrushTool::ApplyStrokePhase(TerrainStrokePhase phase,
     return true;
 }
 
+bool TerrainBrushTool::ResolvePlanetLayer(uint32& outPlanet, uint32& outFaceSamples, float32& outTexel) const
+{
+    ECS::World& world = m_Owner.GetWorld();
+    const ECS::EntityHandle entity = CBTTerrainECS::FindActiveTerrainEntity(world);
+    if (!entity.IsValid())
+        return false;
+    const Components::Terrain& terrain = *world.GetComponent<Components::Terrain>(entity);
+    outTexel = terrain.SamplesPerMeter > 0.0f ? 1.0f / terrain.SamplesPerMeter : 0.0f;
+    outPlanet = entity.id;
+    outFaceSamples = TerrainECS::PlanetFaceSamples(terrain.PlanetRadius, outTexel);
+    return outFaceSamples > 0u;
+}
+
 void TerrainBrushTool::ApplySphereDab(const Mathematics::Vector3& hitDir, float planetRadius)
 {
-    // v1: raise/lower sculpt only on the planet — paint (splat) on the sphere is a
-    // documented v2 (needs a per-face splat layer + the surface's spherical splat path).
-    if (m_Mode == TerrainBrushMode::Paint)
+    // The planet brush raises and lowers; it does not paint.
+    if (m_Mode == TerrainBrushMode::Paint || !(planetRadius > 0.0f))
         return;
-
     auto* svc = TerrainService::TryGet();
-    if (!svc)
+    uint32 planet = 0;
+    uint32 faceSamples = 0;
+    float32 texel = 0.0f;
+    if (!svc || !ResolvePlanetLayer(planet, faceSamples, texel))
         return;
-
-    const float angularRadius = planetRadius > 0.0f ? m_Radius / planetRadius : 0.0f;
-    const bool lower = (m_Mode == TerrainBrushMode::Lower);
-    // Stroked path (sculpt shape-accuracy S3): with GE_TERRAIN_ANALYTIC_MODIFIERS on, the dab is
-    // held as a TRANSIENT analytic placement while the stroke lasts (exact circle at any radius)
-    // and committed to the store on mouse-up (EndSphereStroke -> CommitSphereSculptStroke). Flag
-    // off routes to the immediate store write inside — the pre-S3 path, byte-identical.
-    const CBTTerrain::SphereEditRegions regions = svc->ApplySphereSculptDabStroked(
-        hitDir.x, hitDir.y, hitDir.z, angularRadius, m_Strength, lower);
-
-    if (ZoneDebugEnabled())
-    {
-        for (uint32_t i = 0; i < regions.Count; ++i)
-        {
-            const CBTTerrain::SphereFaceUVRect& r = regions.Rects[i];
-            Logger::Log::Info("Planet.Dab face={} rect=({:.3f},{:.3f},{:.3f},{:.3f}) dir=({:.2f},{:.2f},{:.2f}) angR={:.4f}",
-                              r.Face, r.MinU, r.MinV, r.MaxU, r.MaxV, hitDir.x, hitDir.y, hitDir.z,
-                              angularRadius);
-        }
-    }
+    const float32 amplitude = m_Mode == TerrainBrushMode::Lower ? -m_Strength : m_Strength;
+    svc->ApplyPlanetSculptDab(planet, faceSamples, TerrainECS::PlanetSculptDab(hitDir, m_Radius / planetRadius, amplitude));
 }
 
 void TerrainBrushTool::BeginSphereStroke()
@@ -381,9 +376,17 @@ void TerrainBrushTool::BeginSphereStroke()
     auto* svc = TerrainService::TryGet();
     if (!svc)
         return;
-    svc->BeginSphereSculptStrokeCapture();
-    // Both flags rise together so "a stroke is open" and "a sphere capture is armed" can
-    // never disagree — the End phase closes by which model is open.
+    uint32 faceSamples = 0;
+    float32 texel = 0.0f;
+    m_SphereStrokePlanet = 0;
+    if (ResolvePlanetLayer(m_SphereStrokePlanet, faceSamples, texel))
+    {
+        if (const std::string refusal = svc->PlanetSculptRefusal(m_SphereStrokePlanet, faceSamples, texel);
+            !refusal.empty())
+            Logger::Log::Warning("The brush does not edit the planet: {}", refusal);
+        svc->BeginPlanetSculptStroke(m_SphereStrokePlanet, faceSamples);
+    }
+    // Both flags rise together: the End phase closes the stroke by which model is open.
     m_SphereStroking = true;
     m_IsStroking = true;
 }
@@ -396,21 +399,14 @@ bool TerrainBrushTool::EndSphereStroke()
     auto* svc = TerrainService::TryGet();
     if (!svc)
         return false;
-    // Commit the held stroke's queued dabs to the store FIRST (S3 analytic-while-stroking): the
-    // replay runs the same ApplyDab writes an immediate stroke would have, WHILE the capture is
-    // still active — so the pre-images below are exactly the pages the stroke wrote and the
-    // transient contributes nothing to the undo payload (it is gone by Take). Flag-off strokes
-    // wrote the store immediately; the commit is then an empty no-op.
-    svc->CommitSphereSculptStroke();
-    // Always drain the capture (it must not leak into the next stroke), then decide whether the
-    // stroke warrants an entry: an empty capture means no page was written (missed the planet,
-    // zero strength, paint mode) — nothing to undo.
-    std::vector<CBTTerrain::SphereSculptPageState> before = svc->TakeSphereSculptStrokeCapture();
+    // The capture always ends here, so it never reaches into the next stroke. An empty capture
+    // (the stroke missed the planet, had no strength or painted) records no undo entry.
+    std::vector<PageStreaming::HeightPageLayerPage> before = svc->TakePlanetSculptStroke(m_SphereStrokePlanet);
     if (before.empty() || !m_UndoRedo)
         return false;
-    std::vector<CBTTerrain::SphereSculptPageState> after = svc->SnapshotSphereSculptPages(before);
-    m_UndoRedo->CommitAlreadyApplied(std::make_unique<Editor::SphereSculptStrokeCommand>(
-        svc, std::move(before), std::move(after)));
+    std::vector<PageStreaming::HeightPageLayerPage> after = svc->CopyPlanetSculptPages(m_SphereStrokePlanet, before);
+    m_UndoRedo->CommitAlreadyApplied(std::make_unique<Editor::PlanetSculptStrokeCommand>(
+        svc, m_SphereStrokePlanet, std::move(before), std::move(after)));
     return true;
 }
 
@@ -554,12 +550,11 @@ bool TerrainBrushTool::EnsureActiveZone(const Mathematics::Vector3& hit)
     ECS::EntityHandle e = world->CreateEntity();
 
     Components::Transform xf{};
-    xf.matrix[12] = m_Footprint.CenterX;
-    xf.matrix[13] = hit.y;
-    xf.matrix[14] = m_Footprint.CenterZ;
+    xf.Position = Mathematics::WorldPosition{m_Footprint.CenterX, hit.y, m_Footprint.CenterZ};
     world->AddComponentImmediate(e, xf);
     Components::WorldTransform wxf{};
-    std::memcpy(wxf.matrix, xf.matrix, sizeof(wxf.matrix));
+    wxf.Position = xf.Position;
+    wxf.Basis = xf.Basis;
     world->AddComponentImmediate(e, wxf);
 
     Components::Name nm{};
@@ -672,13 +667,13 @@ void TerrainBrushTool::ApplyDab(const Mathematics::Vector3& hit)
                 }
                 if (auto* xf = world->GetComponentForWrite<Components::Transform>(m_ActiveZone))
                 {
-                    xf->matrix[12] = grown.CenterX;
-                    xf->matrix[14] = grown.CenterZ;
+                    xf->Position.X = grown.CenterX;
+                    xf->Position.Z = grown.CenterZ;
                 }
                 if (auto* wxf = world->GetComponentForWrite<Components::WorldTransform>(m_ActiveZone))
                 {
-                    wxf->matrix[12] = grown.CenterX;
-                    wxf->matrix[14] = grown.CenterZ;
+                    wxf->Position.X = grown.CenterX;
+                    wxf->Position.Z = grown.CenterZ;
                 }
                 if (ZoneDebugEnabled())
                     Logger::Log::Info("Zone.Grow {} extent ({:.1f},{:.1f})->({:.1f},{:.1f}) dim={}x{}",

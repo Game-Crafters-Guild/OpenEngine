@@ -4,6 +4,22 @@
 
 #include <vector>
 
+namespace GameEngine::Components
+{
+struct HeightFieldColliderShape;
+struct WorldTransform;
+} // namespace GameEngine::Components
+
+namespace GameEngine::Mathematics
+{
+struct AABB;
+} // namespace GameEngine::Mathematics
+
+namespace GameEngine::Physics
+{
+class PhysicsWorld;
+} // namespace GameEngine::Physics
+
 namespace GameEngine::PhysicsECS
 {
 
@@ -40,5 +56,20 @@ using HeightFieldDataProvider = HeightFieldData(*)(uint32 handle, uint32 generat
 // Register / query the global heightfield data provider.
 void SetHeightFieldDataProvider(HeightFieldDataProvider provider);
 HeightFieldDataProvider GetHeightFieldDataProvider();
+
+/// The world-space box of sample region [minX, maxX] x [minZ, maxZ] of a heightfield collider of
+/// `sampleCount` samples a side, between raw heights `minRawHeight` and `maxRawHeight`: the region's
+/// local box through the body's full world matrix, padded so a body resting on the region overlaps it.
+/// The box to wake sleeping bodies in when the ground under them changes or goes.
+Mathematics::AABB HeightFieldRegionWorldBox(const Components::WorldTransform& wt,
+                                            const Components::HeightFieldColliderShape& shape, uint32 sampleCount,
+                                            int32 minX, int32 minZ, int32 maxX, int32 maxZ, float32 minRawHeight,
+                                            float32 maxRawHeight);
+
+/// Wakes the dynamic bodies in `wakeBox`. A body whose bottom is under the heightfield's surface below its
+/// center is buried (a heightfield has no caves): it moves up along the heightfield's up axis until its
+/// bottom is the contact distance over the surface. Call it when this heightfield replaces the ground.
+void SettleBodiesOnHeightField(Physics::PhysicsWorld& physicsWorld, const Components::WorldTransform& wt,
+                               const Components::HeightFieldColliderShape& shape, const Mathematics::AABB& wakeBox);
 
 } // namespace GameEngine::PhysicsECS

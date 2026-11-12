@@ -64,8 +64,8 @@ export interface ToolOutput {
   image?: { base64: string; mimeType: "image/png"; filePath?: string; inline: boolean };
   /**
    * The arguments of the call to make next, when the reply has one. MCP adds it
-   * to the JSON as a `next` string beside the data; the CLI prints it as the
-   * last line of stdout, a command ready to paste (src/next-call.ts).
+   * to the JSON as a `next` string beside the data; the CLI prints it on stderr
+   * as `next: <command>`, a command ready to paste (src/next-call.ts).
    */
   next?: Record<string, unknown>;
 }

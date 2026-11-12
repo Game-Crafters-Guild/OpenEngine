@@ -369,7 +369,8 @@ namespace GameEngine.ManagedInteropTests
 
             uint e = world.CreateEmptyEntity("Verify.BuiltInTransform");
 
-            var t = GameEngine.Scripting.Transform.FromTRS(2f, 3f, 4f, 0f, 0f, 0f, 1f, 1f, 1f, 1f);
+            var t = GameEngine.Scripting.Transform.FromTRS(new WorldPosition { X = 2.0, Y = 3.0, Z = 4.0 },
+                System.Numerics.Quaternion.Identity, System.Numerics.Vector3.One);
             ComponentType<GameEngine.Scripting.Transform>.Set(world, e, t);
 
             float[] m = world.GetTransformMatrix(e);
@@ -378,11 +379,11 @@ namespace GameEngine.ManagedInteropTests
             Assert.That(m[14], Is.EqualTo(4f).Within(0.0001f));
 
             var read = ComponentType<GameEngine.Scripting.Transform>.Get(world, e);
-            Assert.That(read.X, Is.EqualTo(2f).Within(0.0001f));
+            Assert.That(read.Position.X, Is.EqualTo(2.0));
         }
 
         /// <summary>
-        /// LH FromTRS: +Y 90° sends +Z toward +X. FromTRSRH is the old transpose.
+        /// LH FromTRS: +Y 90° sends +Z toward +X.
         /// </summary>
         [Test]
         public void BuiltInTransform_FromTRS_YawPositiveSendsZTowardX()
@@ -391,16 +392,13 @@ namespace GameEngine.ManagedInteropTests
             var q = System.Numerics.Quaternion.CreateFromAxisAngle(
                 System.Numerics.Vector3.UnitY, halfPi);
             var t = GameEngine.Scripting.Transform.FromTRS(
-                System.Numerics.Vector3.Zero, q, System.Numerics.Vector3.One);
+                new WorldPosition(), q, System.Numerics.Vector3.One);
             var forward = t.Forward;
             Assert.That(forward.X, Is.EqualTo(1f).Within(1e-4f));
             Assert.That(forward.Y, Is.EqualTo(0f).Within(1e-4f));
             Assert.That(forward.Z, Is.EqualTo(0f).Within(1e-4f));
 
             var back = t.GetRotation();
-            var tRh = GameEngine.Scripting.Transform.FromTRSRH(
-                System.Numerics.Vector3.Zero, q, System.Numerics.Vector3.One);
-            Assert.That(tRh.Forward.X, Is.EqualTo(-1f).Within(1e-4f));
             Assert.That(back.X, Is.EqualTo(q.X).Within(1e-4f));
             Assert.That(back.Y, Is.EqualTo(q.Y).Within(1e-4f));
             Assert.That(back.Z, Is.EqualTo(q.Z).Within(1e-4f));

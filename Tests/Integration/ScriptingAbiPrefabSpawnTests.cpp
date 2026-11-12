@@ -83,7 +83,8 @@ GE_Handle HandleOf(ECS::World& world)
 GE_ECS_Transform AbiTransform(const Components::Transform& transform)
 {
     GE_ECS_Transform out{};
-    std::memcpy(out.matrix, transform.matrix, sizeof(out.matrix));
+    const Mathematics::Matrix4x4 matrix = transform.ToMatrix4x4(transform.GetPosition() - Mathematics::WorldPosition{});
+    std::memcpy(out.matrix, matrix.Data(), sizeof(out.matrix));
     return out;
 }
 
@@ -137,9 +138,9 @@ class ScriptingAbiPrefabSpawnTest : public ::testing::Test
         const std::string relative =
             std::filesystem::relative(m_Folder / "Squad.prefab", m_Resolver->GetAssetRoot()).generic_string();
         Scene::SceneReadOptions options{};
-        options.assetResolver = &*m_Resolver;
-        options.assetRootOverride = m_Resolver->GetAssetRoot();
-        const bool loaded = Scene::ReadSceneInto(
+        options.AssetResolver = &*m_Resolver;
+        options.AssetRootOverride = m_Resolver->GetAssetRoot();
+        const auto loaded = Scene::ReadSceneInto(
             world,
             Write("Barracks.scene", "[scene name=\"Barracks\" version=1]\n"
                                     "[entity id=\"spawner\"]\n"
@@ -147,7 +148,7 @@ class ScriptingAbiPrefabSpawnTest : public ::testing::Test
                                         relative + "\" guid=\"" +
                                         squad.ToString() + "\"]\n"),
             options);
-        EXPECT_TRUE(loaded) << Scene::GetLastSceneIOError().message;
+        EXPECT_TRUE(loaded) << loaded.Error->message;
         return loaded ? squad : GUID::Null();
     }
 
@@ -176,7 +177,7 @@ TEST_F(ScriptingAbiPrefabSpawnTest, SpawnReturnsARootWhoseTreeMatchesThePrefab)
 
     const std::size_t before = world.GetEntityCount();
     const GE_ECS_Transform at = AbiTransform(Components::Transform::FromTRS(
-        Mathematics::Vector3{4.0f, 0.0f, 2.0f}, Mathematics::Quaternion{}, Mathematics::Vector3{1.0f, 1.0f, 1.0f}));
+        Mathematics::WorldPosition{4.0, 0.0, 2.0}, Mathematics::Quaternion{}, Mathematics::Vector3{1.0f, 1.0f, 1.0f}));
     GE_ECS_Entity rootId = 0;
     ASSERT_EQ(EcsTable().SpawnPrefab(HandleOf(world), squad.GetData().data(), &at, 0, &rootId), GE_Result_Ok) << Log();
     ASSERT_NE(rootId, 0u);
@@ -189,8 +190,8 @@ TEST_F(ScriptingAbiPrefabSpawnTest, SpawnReturnsARootWhoseTreeMatchesThePrefab)
     EXPECT_EQ(world.GetComponent<Components::Parent>(root), nullptr);
     const auto* transform = world.GetComponent<Components::Transform>(root);
     ASSERT_NE(transform, nullptr);
-    EXPECT_EQ(transform->GetPosition().x, 4.0f);
-    EXPECT_EQ(transform->GetPosition().z, 2.0f);
+    EXPECT_EQ(transform->GetPosition().X, 4.0);
+    EXPECT_EQ(transform->GetPosition().Z, 2.0);
 
     std::size_t children = 0;
     world.Query<ECS::Read<Components::Parent>>().Each(

@@ -316,8 +316,6 @@ TEST(QueueFairnessTest, BackgroundTaskCompletesDuringBackgroundFlood)
 // flags double-execution via exchange.
 TEST(QueueFairnessTest, FloodPlusWavesConserveEveryTaskExactlyOnce)
 {
-    WorkStealingThreadPool pool(kWorkers);
-
     constexpr size_t kFloodProducers = 4;
     constexpr size_t kFloodPerProducer = 25000;
     constexpr size_t kFloodTasks = kFloodProducers * kFloodPerProducer;
@@ -327,9 +325,12 @@ TEST(QueueFairnessTest, FloodPlusWavesConserveEveryTaskExactlyOnce)
     constexpr size_t kBackgroundTasks = 4096;
     constexpr size_t kTotal = kFloodTasks + kWaveTasks + kBackgroundTasks;
 
+    // Declared before the pool: a job can still use them when an ASSERT returns early.
     std::vector<std::atomic<uint8_t>> executed(kTotal);
     std::atomic<size_t> doubleRuns{0};
     std::atomic<size_t> ran{0};
+    WorkStealingThreadPool pool(kWorkers);
+
     auto body = [&executed, &doubleRuns, &ran](size_t slot) {
         if (executed[slot].exchange(1, std::memory_order_acq_rel) != 0)
         {

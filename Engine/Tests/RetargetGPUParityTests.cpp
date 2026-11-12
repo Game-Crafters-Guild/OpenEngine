@@ -34,6 +34,7 @@
 #include "Rendering/Core/Device.h"
 
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtc/quaternion.hpp>
 
@@ -136,6 +137,33 @@ protected:
         glm::mat4 m = glm::mat4_cast(g);
         if (b > 0) m[3].y = 1.0f;
         std::memcpy(&s.RestLocalMatrix[b * 16], glm::value_ptr(m), 64);
+    }
+
+    // Set the rest rotation and rest scale of one bone, then rebuild the bind pose
+    // and inverse bind of the chain from the rest pose. The child offsets stay at
+    // Y=1 in the scaled space of the parent.
+    static void SetScaledRest(AAnim::SkeletonData& s, uint32_t boneIndex, const Mathematics::Quaternion& rotation,
+                              const Mathematics::Vector3& scale)
+    {
+        SetRestRotation(s, boneIndex, rotation);
+        s.RestScale[boneIndex * 3 + 0] = scale.x;
+        s.RestScale[boneIndex * 3 + 1] = scale.y;
+        s.RestScale[boneIndex * 3 + 2] = scale.z;
+        glm::mat4 world(1.0f);
+        for (uint32_t b = 0; b < s.BoneCount; ++b)
+        {
+            const glm::vec3 t(s.RestTranslation[b * 3 + 0], s.RestTranslation[b * 3 + 1], s.RestTranslation[b * 3 + 2]);
+            const glm::quat r(s.RestRotation[b * 4 + 3], s.RestRotation[b * 4 + 0], s.RestRotation[b * 4 + 1],
+                              s.RestRotation[b * 4 + 2]);
+            const glm::vec3 sc(s.RestScale[b * 3 + 0], s.RestScale[b * 3 + 1], s.RestScale[b * 3 + 2]);
+            const glm::mat4 local =
+                glm::translate(glm::mat4(1.0f), t) * glm::mat4_cast(r) * glm::scale(glm::mat4(1.0f), sc);
+            std::memcpy(&s.RestLocalMatrix[b * 16], glm::value_ptr(local), 64);
+            world = world * local;
+            const glm::mat4 inverseBind = glm::inverse(world);
+            std::memcpy(&s.BindPose[b * 16], glm::value_ptr(world), 64);
+            std::memcpy(&s.InverseBind[b * 16], glm::value_ptr(inverseBind), 64);
+        }
     }
 
     // Build a single-channel rotation animation clip on bone `boneIdx`.
@@ -384,7 +412,9 @@ protected:
                                       tgtLocalPose.Positions[b].y,
                                       tgtLocalPose.Positions[b].z);
             ws.Pose[b].r = tgtLocalPose.Rotations[b].GetGLM();
-            ws.Pose[b].s = glm::vec3(1, 1, 1);
+            ws.Pose[b].s = glm::vec3(tgtLocalPose.Scales[b].x,
+                                      tgtLocalPose.Scales[b].y,
+                                      tgtLocalPose.Scales[b].z);
         }
         ws.ChangedTranslation.assign(tgtSkel.BoneCount, 1u);
         ws.ChangedRotation.assign(tgtSkel.BoneCount, 1u);
@@ -727,6 +757,78 @@ TEST_F(RetargetGPUParityTest, ShortClipRestFallback)
 }
 
 // ---------------------------------------------------------------------------
+// Scenario 3b — scaled root.
+// The target root has the rest pose of an FBX centimeter rig: scale 100 and
+// -90° on X. The inverse bind includes the scale, so the skin matrices keep
+// full size only when the kernel composes the rest scale, as the CPU path does.
+// ---------------------------------------------------------------------------
+
+TEST_F(RetargetGPUParityTest, ScaledRootSkinsAtFullSize)
+{
+    if (!HasDevice()) GTEST_SKIP() << "No Vulkan device available";
+    if (!HasShader()) GTEST_SKIP() << "retarget_full.comp.spv not found";
+
+    const Mathematics::Quaternion centimeterRoot(glm::angleAxis(glm::radians(-90.0f), glm::vec3(1, 0, 0)));
+
+    auto srcSkel = MakeChainSkeleton(3);
+    auto tgtSkel = MakeChainSkeleton(3);
+    SetScaledRest(tgtSkel, 0, centimeterRoot, Mathematics::Vector3(100.0f, 100.0f, 100.0f));
+
+    const std::vector<AAnim::HumanBone> canon = {
+        AAnim::HumanBone::Hips, AAnim::HumanBone::Spine, AAnim::HumanBone::Head };
+    const std::vector<Mathematics::Quaternion> Q(3, Mathematics::Quaternion::Identity());
+    auto srcRig = MakeRig(canon, Q);
+    auto tgtRig = MakeRig(canon, Q);
+    auto map = MakeMap();
+
+    auto clip = MakeRotationClip(1,
+        Mathematics::Quaternion::Identity(),
+        Mathematics::Quaternion(glm::angleAxis(glm::radians(30.0f), glm::vec3(1, 0, 0))),
+        1.0f);
+
+    auto cpu = ComputeCPUReference(srcSkel, tgtSkel, *srcRig, *tgtRig, *map, *clip, 0.5f);
+    auto gpu = DispatchGPU(srcSkel, tgtSkel, *srcRig, *tgtRig, *map, *clip, 0.5f, 3);
+
+    ExpectAtlasMatches(cpu, gpu);
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 3c — non-uniform scale under a rotated parent.
+// The target root turns 90° on Z with rest scale (2, 1, 0.5), and the spine has
+// rest scale (1, 2, 0.5). The clip turns the spine on X, so the spine's world
+// transform has a shear. Only a full affine product matches the CPU palette.
+// ---------------------------------------------------------------------------
+
+TEST_F(RetargetGPUParityTest, NonUniformScaleUnderRotatedParentMatchesCpu)
+{
+    if (!HasDevice()) GTEST_SKIP() << "No Vulkan device available";
+    if (!HasShader()) GTEST_SKIP() << "retarget_full.comp.spv not found";
+
+    auto srcSkel = MakeChainSkeleton(3);
+    auto tgtSkel = MakeChainSkeleton(3);
+    SetScaledRest(tgtSkel, 0, Mathematics::Quaternion(glm::angleAxis(glm::radians(90.0f), glm::vec3(0, 0, 1))),
+                  Mathematics::Vector3(2.0f, 1.0f, 0.5f));
+    SetScaledRest(tgtSkel, 1, Mathematics::Quaternion::Identity(), Mathematics::Vector3(1.0f, 2.0f, 0.5f));
+
+    const std::vector<AAnim::HumanBone> canon = {
+        AAnim::HumanBone::Hips, AAnim::HumanBone::Spine, AAnim::HumanBone::Head };
+    const std::vector<Mathematics::Quaternion> Q(3, Mathematics::Quaternion::Identity());
+    auto srcRig = MakeRig(canon, Q);
+    auto tgtRig = MakeRig(canon, Q);
+    auto map = MakeMap();
+
+    auto clip = MakeRotationClip(1,
+        Mathematics::Quaternion::Identity(),
+        Mathematics::Quaternion(glm::angleAxis(glm::radians(30.0f), glm::vec3(1, 0, 0))),
+        1.0f);
+
+    auto cpu = ComputeCPUReference(srcSkel, tgtSkel, *srcRig, *tgtRig, *map, *clip, 0.5f);
+    auto gpu = DispatchGPU(srcSkel, tgtSkel, *srcRig, *tgtRig, *map, *clip, 0.5f, 3);
+
+    ExpectAtlasMatches(cpu, gpu);
+}
+
+// ---------------------------------------------------------------------------
 // Scenario 4 — animator crossfade.
 // Mid-blend, the CPU path slerps the outgoing clip's pose into the current
 // one before retargeting; the GPU path must produce the same palette. The two
@@ -854,4 +956,45 @@ TEST_F(RetargetGPUParityTest, CrossfadeAboveFullWeightClampsLikeTheCpu)
     auto previous = MakeRotationAndHipClip(2, Mathematics::Quaternion::Identity(), AboutX(-70.0f),
                                            glm::vec3(1.0f, 0.5f, 0.0f), glm::vec3(1.0f, 0.5f, 0.0f), 1.0f);
     ExpectCrossfade(*current, 0.5f, BlendFrom{previous.get(), 1.0f, 1.5f});
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 5 — hips under a scaled root.
+// The target root has rest scale 2 and is the parent of the hips, so the hips
+// rest 2 m above the ground. The clip holds the source hips at their rest
+// height, so the target hips must stay at 2 m on both paths.
+// ---------------------------------------------------------------------------
+
+TEST_F(RetargetGPUParityTest, HipsUnderScaledRootKeepTheirRestHeight)
+{
+    if (!HasDevice()) GTEST_SKIP() << "No Vulkan device available";
+    if (!HasShader()) GTEST_SKIP() << "retarget_full.comp.spv not found";
+
+    constexpr float kRootScale = 2.0f;
+    constexpr uint32_t kTargetHipBone = 1;
+    auto srcSkel = MakeChainSkeleton(3);
+    auto tgtSkel = MakeChainSkeleton(4);
+    SetScaledRest(tgtSkel, 0, Mathematics::Quaternion::Identity(),
+                  Mathematics::Vector3(kRootScale, kRootScale, kRootScale));
+
+    auto srcRig = MakeRig({AAnim::HumanBone::Hips, AAnim::HumanBone::Spine, AAnim::HumanBone::Head},
+                          std::vector<Mathematics::Quaternion>(3, Mathematics::Quaternion::Identity()));
+    auto tgtRig = MakeRig({AAnim::HumanBone::None, AAnim::HumanBone::Hips, AAnim::HumanBone::Spine,
+                           AAnim::HumanBone::Head},
+                          std::vector<Mathematics::Quaternion>(4, Mathematics::Quaternion::Identity()));
+    tgtRig->ProportionsMutable().HipHeight = kRootScale;
+    auto map = MakeMap();
+
+    auto clip = MakeRotationAndHipClip(1, Mathematics::Quaternion::Identity(), AboutX(30.0f),
+                                       glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f), 1.0f);
+
+    auto cpu = ComputeCPUReference(srcSkel, tgtSkel, *srcRig, *tgtRig, *map, *clip, 0.5f);
+    auto gpu = DispatchGPU(srcSkel, tgtSkel, *srcRig, *tgtRig, *map, *clip, 0.5f, 4);
+    ExpectAtlasMatches(cpu, gpu);
+
+    // The skin matrix times the bind pose is the hips' model-space transform.
+    const glm::mat4 skin = glm::make_mat4(&gpu[kTargetHipBone * 16]);
+    const glm::mat4 bind = glm::make_mat4(&tgtSkel.BindPose[kTargetHipBone * 16]);
+    const glm::vec3 hips(skin * bind[3]);
+    EXPECT_NEAR(hips.y, kRootScale, 1e-4f);
 }

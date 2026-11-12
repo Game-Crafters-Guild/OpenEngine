@@ -13,14 +13,13 @@
 #include "Assets/AssetRegistry.h"
 #include "Assets/MaterialAsset.h"
 #include "Assets/ModelAsset.h"
-#include "Core/Application.h"
 #include "Core/Engine.h"
 #include "ECSModules/Rendering/SkeletonStore.h"
 #include "Engine/Rendering/RenderServices.h"
 #include "EngineTestShaderSetup.h"
 #include "Rendering/Common/Utils.h"
 #include "Rendering/Core/Device.h"
-#include "Scripting/ScriptsConfig.h"
+#include "TemporaryWorkspaceEngineFixture.h"
 #include "TestDeviceHelper.h"
 
 #include <atomic>
@@ -29,6 +28,7 @@
 #include <fstream>
 #include <future>
 #include <memory>
+#include <optional>
 #include <string>
 #include <thread>
 
@@ -108,7 +108,7 @@ class HeldModelAsset final : public ModelAsset
         return Finish(!m_Fails && ModelAsset::Load());
     }
 
-    bool LoadFromData(const Vector<uint8>& data) override
+    bool LoadFromData(std::span<const uint8> data) override
     {
         m_Gate.Hold();
         return Finish(!m_Fails && ModelAsset::LoadFromData(data));
@@ -147,7 +147,7 @@ class HeldMaterialAsset final : public MaterialAsset
         return !m_Fails && MaterialAsset::Load();
     }
 
-    bool LoadFromData(const Vector<uint8>& data) override
+    bool LoadFromData(std::span<const uint8> data) override
     {
         m_Gate.Hold();
         return !m_Fails && MaterialAsset::LoadFromData(data);
@@ -158,27 +158,14 @@ class HeldMaterialAsset final : public MaterialAsset
     bool m_Fails = false;
 };
 
-class HeldAssetImportFixture : public testing::Test
+class HeldAssetImportFixture : public TemporaryWorkspaceEngineFixture
 {
   protected:
     void SetUp() override
     {
-        namespace fs = std::filesystem;
-        m_Root = fs::temp_directory_path() / ("held-asset-import-" + GUID::Generate().ToString());
-        fs::create_directories(m_Root / "Assets");
-        ScriptsConfig scripts{};
-        scripts.disableClr = true;
-        scripts.enableHotReload = false;
-        scripts.enableAsyncHotReload = false;
-        scripts.enableAutoProjectGeneration = false;
-        EngineCore& engine = EngineCore::GetInstance();
-        engine.SetScriptsConfig(scripts);
-        ApplicationConfig config{};
-        config.Name = "HeldAssetImportTest";
-        config.WorkspaceDirectory = m_Root.string();
-        config.AssetDirectory = "Assets";
-        ASSERT_TRUE(engine.Initialize(config));
-        m_Initialized = true;
+        TemporaryWorkspaceEngineFixture::SetUp();
+        if (!m_Initialized)
+            return;
         // Asset types come from the type registry's factory: TearDown puts the engine's own back.
         ASSERT_TRUE(Types().TryGetAssetTypeRegistration(AssetType::Model, m_ModelRegistration));
         ASSERT_TRUE(Types().TryGetAssetTypeRegistration(AssetType::Material, m_MaterialRegistration));
@@ -191,7 +178,7 @@ class HeldAssetImportFixture : public testing::Test
         m_Device = CreateVulkanDeviceFast();
         if (!m_Device)
             GTEST_SKIP() << "No Vulkan device available";
-        ASSERT_TRUE(m_Services.Initialize(m_Device.get()));
+        ASSERT_TRUE(m_Services->Initialize(m_Device.get()));
         m_ServicesInitialized = true;
     }
 
@@ -200,11 +187,12 @@ class HeldAssetImportFixture : public testing::Test
         m_Gate.Release();
         if (m_Watchdog.joinable())
             m_Watchdog.join();
-        EngineCore& engine = EngineCore::GetInstance();
         if (m_Initialized)
-            engine.DisableRenderingLoop();
+            EngineCore::GetInstance().DisableRenderingLoop();
         if (m_ServicesInitialized)
-            m_Services.Shutdown();
+            m_Services->Shutdown();
+        // Destroyed while the engine runs: a material system that prewarmed drains on the job system.
+        m_Services.reset();
         if (m_Device)
             m_Device->Shutdown();
         if (m_Initialized)
@@ -219,10 +207,8 @@ class HeldAssetImportFixture : public testing::Test
                 Types().UnregisterAssetType(AssetType::Material);
                 Types().RegisterAssetType(m_MaterialRegistration);
             }
-            engine.Shutdown();
         }
-        std::error_code ec;
-        std::filesystem::remove_all(m_Root, ec);
+        TemporaryWorkspaceEngineFixture::TearDown();
     }
 
     static AssetTypeRegistry& Types()
@@ -283,7 +269,7 @@ class HeldAssetImportFixture : public testing::Test
     ECS::World* EnableRenderingLoop()
     {
         EngineCore& engine = EngineCore::GetInstance();
-        if (!engine.EnableRenderingLoop(&m_Services))
+        if (!engine.EnableRenderingLoop(&*m_Services))
             return nullptr;
         return engine.GetPrimaryWorld();
     }
@@ -298,8 +284,6 @@ class HeldAssetImportFixture : public testing::Test
         return std::chrono::steady_clock::now() - start;
     }
 
-    std::filesystem::path m_Root;
-    bool m_Initialized = false;
     AssetTypeRegistration m_ModelRegistration;
     AssetTypeRegistration m_MaterialRegistration;
     bool m_ModelOverridden = false;
@@ -307,7 +291,8 @@ class HeldAssetImportFixture : public testing::Test
     ImportGate m_Gate;
     std::thread m_Watchdog;
     std::unique_ptr<Rendering::IDevice> m_Device;
-    Engine::Renderer::RenderServices m_Services;
+    // Holds a value until TearDown.
+    std::optional<Engine::Renderer::RenderServices> m_Services{std::in_place};
     bool m_ServicesInitialized = false;
 };
 

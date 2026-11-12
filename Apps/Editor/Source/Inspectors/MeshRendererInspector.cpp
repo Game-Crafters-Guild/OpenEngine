@@ -21,6 +21,7 @@
 
 #include "Inspectors/InspectorComponent/InspectorComponentRowHelpers.h"
 #include "Inspectors/InspectorDragHelpers.h"
+#include "Inspectors/InspectorOverrideRows.h"
 #include "Inspectors/InspectorUIHelpers.h"
 #include "Inspectors/MaterialInspector.h"
 #include "Inspectors/MaterialInspectorSections.h"
@@ -625,18 +626,22 @@ void RegisterMeshRendererInspector()
 
         // ---- Editable fields ----
         ECS::World* w = ctx.World; // used only by helpers that take World* parameter
-        InspectorDrag::AddComponentIntRowWithDrag<Components::MeshRenderer>(ctx.Parent, "MeshId", static_cast<int>(mr->meshId), w, e, n,
+        const ECS::ComponentTypeId rendererType = ECS::GetComponentTypeId<Components::MeshRenderer>();
+        IntField* meshId = InspectorDrag::AddComponentIntRowWithDrag<Components::MeshRenderer>(ctx.Parent, "MeshId", static_cast<int>(mr->meshId), w, e, n,
             [](Components::MeshRenderer& u, int v) { u.meshId = static_cast<uint32>(std::max(0, v)); },
             "Submesh index within the model asset", extras);
+        BindFieldRow(ctx, rendererType, InspectorUI::RowOfControl(meshId), "meshId");
 
-        InspectorDrag::AddComponentRenderLayersRow<Components::MeshRenderer>(
+        MaskField* renderLayers = InspectorDrag::AddComponentRenderLayersRow<Components::MeshRenderer>(
             ctx.Parent, "Render Layers", &Components::MeshRenderer::RenderLayers, w, e, n, undo,
             "Change Render Layers", "The render layers this mesh is on. A view draws it when they share a layer.",
             Editor::kRenderLayersNothingTooltip, extras);
+        BindFieldRow(ctx, rendererType, InspectorUI::RowOfControl(renderLayers), "RenderLayers");
 
-        InspectorDrag::AddShadowCastingRow(ctx.Parent, w, e, n, undo, extras);
+        UIElement* shadowCasting = InspectorDrag::AddShadowCastingRow(ctx.Parent, w, e, n, undo, extras);
+        BindFieldRow(ctx, rendererType, InspectorUI::RowOfControl(shadowCasting), "shadowCasting");
 
-        InspectorDrag::AddToggleRow(ctx.Parent, "Receive Shadows", mr->receiveShadows,
+        Toggle* receiveShadows = InspectorDrag::AddToggleRow(ctx.Parent, "Receive Shadows", mr->receiveShadows,
             [getWorld, e, n, extras](bool v) {
                 auto* w = getWorld ? getWorld() : nullptr;
                 if (!w) return;
@@ -654,8 +659,9 @@ void RegisterMeshRendererInspector()
                     Editor::CommitComponentUpdate(w, ex, n, u);
                 }
             }, "Sample shadow maps when shading this mesh");
+        BindFieldRow(ctx, rendererType, InspectorUI::RowOfControl(receiveShadows), "receiveShadows");
 
-        InspectorDrag::AddToggleRow(ctx.Parent, "Motion Vectors", mr->motionVectors,
+        Toggle* motionVectors = InspectorDrag::AddToggleRow(ctx.Parent, "Motion Vectors", mr->motionVectors,
             [getWorld, e, n, extras](bool v) {
                 auto* w = getWorld ? getWorld() : nullptr;
                 if (!w) return;
@@ -673,6 +679,7 @@ void RegisterMeshRendererInspector()
                     Editor::CommitComponentUpdate(w, ex, n, u);
                 }
             }, "Write per-pixel motion vectors for TAA / motion blur");
+        BindFieldRow(ctx, rendererType, InspectorUI::RowOfControl(motionVectors), "motionVectors");
     };
 
     InspectorRegistry::Get().RegisterComponentInspector<Components::MeshRenderer>(std::move(fn));

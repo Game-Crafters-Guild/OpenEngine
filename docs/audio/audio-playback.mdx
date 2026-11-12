@@ -44,8 +44,13 @@ audio->Play3D(explosionClipGuid, /*world*/ 0, explosionPosition, /*velocity*/ {0
 ::::tab[C#]
 
 :::caution[C# binding pending]
-No managed call yet; tracked as [OpenEngine issue #25](https://github.com/Game-Crafters-Guild/OpenEngine/issues/25). The native calls are `Audio::AudioSystem::Play2D` and `Play3D`.
+No managed call plays a clip and returns its voice yet; tracked as [OpenEngine issue #25](https://github.com/Game-Crafters-Guild/OpenEngine/issues/25). The native calls are `Audio::AudioSystem::Play2D` and `Play3D`. A script plays a clip through an `AudioEmitter` component instead: the clip starts when the component has a `ClipGuid` and `Loop` or `PlayOnStart` is set, and it stops when the script removes the component or clears `ClipGuid`.
 :::
+
+```csharp title="Play a looping track on an entity"
+var music = new AudioEmitter { ClipGuid = musicClip, Loop = true };
+ComponentType<AudioEmitter>.Set(in world, entity, in music);
+```
 
 ::::
 :::::
@@ -86,8 +91,20 @@ audio->Resume(track); // continues from where it paused
 ::::tab[C#]
 
 :::caution[C# binding pending]
-No managed call yet; tracked as [OpenEngine issue #25](https://github.com/Game-Crafters-Guild/OpenEngine/issues/25). The native calls are the `Audio::AudioSystem` members above.
+No managed call sets the pan, pauses or resumes a voice, or reads a voice's state yet; tracked as [OpenEngine issue #25](https://github.com/Game-Crafters-Guild/OpenEngine/issues/25). The native calls are the `Audio::AudioSystem` members above. The `Volume` and `Pitch` of an `AudioEmitter` component reach its playing voice, so a script changes them on the component.
 :::
+
+```csharp title="An engine drone that follows the throttle"
+// Throttle is a component of the game's own.
+public partial struct DroneSystem : IEntitySystem
+{
+    public void Execute(ref AudioEmitter drone, in Throttle throttle)
+    {
+        drone.Pitch = 0.8f + 0.8f * throttle.Value;
+        drone.Volume = 0.4f + 0.6f * throttle.Value;
+    }
+}
+```
 
 ::::
 :::::
@@ -126,8 +143,14 @@ audio->Play3D(engineClipGuid, /*world*/ 0, enginePosition, /*velocity*/ {0.0f, 0
 ::::tab[C#]
 
 :::caution[C# binding pending]
-No managed call yet; tracked as [OpenEngine issue #25](https://github.com/Game-Crafters-Guild/OpenEngine/issues/25). The native types and calls are above.
+No managed call sets the falloff of a voice yet; tracked as [OpenEngine issue #25](https://github.com/Game-Crafters-Guild/OpenEngine/issues/25). The native types and calls are above. The `Attenuation`, `MinDistance`, `MaxDistance`, and `Rolloff` of an `AudioEmitter` component reach its playing voice, so a script changes them on the component.
 :::
+
+```csharp title="Full volume within 50 units of the emitter"
+AudioEmitter emitter = ComponentType<AudioEmitter>.Get(in world, entity);
+emitter.MinDistance = 50.0f;
+ComponentType<AudioEmitter>.Set(in world, entity, in emitter);
+```
 
 ::::
 :::::

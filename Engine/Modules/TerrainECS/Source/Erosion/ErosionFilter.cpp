@@ -15,8 +15,9 @@
 #include "TerrainECS/Erosion/ErosionFilter.h"
 
 #include "Mathematics/Interpolation.h"
-#include "Noise/FractalNoise2D.h"
-#include "Noise/GradientNoise2D.h"
+#include "Mathematics/Transcendental.h"
+#include "Noise/FractalNoise.h"
+#include "Noise/Gradient/GradientNoise2D.h"
 
 #include <algorithm>
 #include <cmath>
@@ -75,7 +76,7 @@ float32 EaseOut(float32 t)
 // above 1 the mask opens up instead.
 float32 PowInv(float32 t, float32 power)
 {
-    return 1.0f - std::pow(1.0f - Math::Clamp01(t), power);
+    return 1.0f - Math::Pow(1.0f - Math::Clamp01(t), power);
 }
 
 // Cell jitter in [-0.5, 0.5] before the kCellJitter scale.
@@ -120,8 +121,9 @@ void BlendedStripes(float32 px, float32 pz, float32 axisX, float32 axisZ, uint32
                                    JitterFromHash(h * 2654435761u) * kCellJitter;
             const float32 phase = kTwoPi * ((px - pivotX) * axisX + (pz - pivotZ) * axisZ);
             const float32 w = (dx != 0 ? wx : 1.0f - wx) * (dz != 0 ? wz : 1.0f - wz);
-            outCos += w * std::cos(phase);
-            outSin += w * std::sin(phase);
+            const Math::SinAndCos wave = Math::SinCos(phase);
+            outCos += w * wave.Cos;
+            outSin += w * wave.Sin;
         }
     }
 }

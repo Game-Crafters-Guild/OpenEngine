@@ -1,0 +1,11 @@
+<UIElement class="scribe-panel-root">
+  <UIElement class="scribe-toolbar">
+    <Label id="ScribeFileName" class="scribe-file-name" />
+    <Label id="ScribeDirtyMark" class="scribe-dirty-mark hidden" text="Unsaved changes" />
+    <Button id="ScribeSave" class="scribe-save" text="Save" />
+  </UIElement>
+  <Label id="ScribeEmpty" class="scribe-empty" />
+  <Label id="ScribeNotice" class="scribe-notice hidden" />
+  <ScrollView id="ScribeOutline" class="scribe-outline" />
+  <UIElement id="ScribeDetails" class="scribe-details inspector-columns" />
+</UIElement>

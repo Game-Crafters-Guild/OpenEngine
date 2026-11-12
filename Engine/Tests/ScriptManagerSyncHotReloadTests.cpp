@@ -216,8 +216,10 @@ TEST(ScriptManagerStartup, InitializeRunsNoDotnetProbeOnTheCallingThread)
     for (const Logger::LogMessage& record : records)
     {
         if (record.ThreadId == callingThread)
+        {
             EXPECT_EQ(record.Message.find("[DotnetHost]"), std::string::npos)
                 << "Initialize ran `dotnet --version` on the calling thread: " << record.Message;
+        }
     }
 }
 

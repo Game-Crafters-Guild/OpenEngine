@@ -4,7 +4,7 @@ namespace GameEngine::Components
 {
 struct Terrain;
 struct TerrainPageCollider;
-struct TerrainPlanetFaceCollider;
+struct TerrainPlanetPageCollider;
 } // namespace GameEngine::Components
 
 namespace GameEngine::ECS
@@ -37,8 +37,8 @@ void ReleaseTerrainOwnedResources(Components::Terrain& terrain);
 /// a PhysicsBody fires both hooks, which is how the pair composes.
 void ReleaseTerrainPageCollider(Components::TerrainPageCollider& collider);
 
-/// Planet-face counterpart of ReleaseTerrainPageCollider.
-void ReleaseTerrainPlanetFaceCollider(Components::TerrainPlanetFaceCollider& collider);
+/// Planet counterpart of ReleaseTerrainPageCollider.
+void ReleaseTerrainPlanetPageCollider(Components::TerrainPlanetPageCollider& collider);
 
 /// Registers the releases above as the world's OnRemove hooks for the terrain
 /// component types, which is what makes World::Clear, World::DestroyEntity and

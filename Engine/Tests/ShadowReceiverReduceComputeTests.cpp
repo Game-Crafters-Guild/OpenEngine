@@ -14,6 +14,7 @@
 // translates to WGSL, whose depth flush differs.
 
 #include "Engine/Rendering/Pipeline/Nodes/ShadowReceiverReduce.h"
+#include "Engine/Rendering/RenderOrigin.h"
 #include "Engine/Rendering/ShadowMapRenderFeature.h"
 #include "Engine/Rendering/ShadowReceiverMeasurement.h"
 
@@ -26,6 +27,7 @@
 #include "Rendering/Common/Utils.h"
 #include "Rendering/Core/Pipeline/PipelineTypes.h"
 #include "Rendering/ShaderCache/ShaderPackageIO.h"
+#include "TestCameraEye.h"
 
 #include "TestDeviceHelper.h"
 
@@ -111,6 +113,7 @@ PinholeCamera MakeCamera(const Vector3& position, float pitchDownDeg, float orth
     cam.Data.cameraPos.x = position.x;
     cam.Data.cameraPos.y = position.y;
     cam.Data.cameraPos.z = position.z;
+    cam.Data = ::GameEngine::Tests::TestCameraWithEye(cam.Data);
     cam.Right = Vector3::Cross(Vector3{0.0f, 1.0f, 0.0f}, cam.Forward).Normalize();
     cam.Up = Vector3::Cross(cam.Forward, cam.Right);
     return cam;
@@ -534,5 +537,26 @@ TEST_P(ShadowReceiverReduceComputeTest, AViewOfSkyOnlyDecodesAsNothingMeasured)
 
 INSTANTIATE_TEST_SUITE_P(Kernels, ShadowReceiverReduceComputeTest,
                          ::testing::Values(kDesktopKernel, kCompatKernel), KernelName);
+
+// An eye 1 mm before a sector boundary rounds onto the boundary in fp32. The setup must
+// reconstruct against the sector the camera drew with, or every receiver moves 1,024 m.
+TEST(ShadowReceiverReduceSetup, ReconstructsAgainstTheSectorTheCameraDrewWith)
+{
+    PinholeCamera cam = MakeCamera(Vector3{0.0f, 18.0f, -30.0f}, 18.0f, 0.0f, kFar);
+    const Mathematics::WorldPosition eye{123.5 * Mathematics::kWorldSectorSize - 0.001, 18.0, -30.0};
+    GameEngine::Engine::Renderer::SetCameraEye(cam.Data, eye);
+    ASSERT_EQ(cam.Data.renderOriginSector[0], 123);
+    ASSERT_EQ(GameEngine::Engine::Renderer::ComputeRenderOriginSector(
+                  Mathematics::WorldPosition::FromVector3(Vector3{cam.Data.cameraPos.x, 0.0f, 0.0f})).x,
+              124)
+        << "the fp32 eye must sit in the next sector, or this test proves nothing";
+
+    const ShadowReceiverReduce::Setup setup =
+        ShadowReceiverReduce::MakeSetup(cam.Data, kNear, kFar, false, Vector3{0.0f, -1.0f, 0.0f},
+                                        kMaxShadowDistance, kWidth, kHeight);
+    EXPECT_EQ(setup.Measured.RenderOriginSector[0], 123);
+    EXPECT_EQ(setup.Measured.RenderOriginSector[1], cam.Data.renderOriginSector[1]);
+    EXPECT_EQ(setup.Measured.RenderOriginSector[2], cam.Data.renderOriginSector[2]);
+}
 
 } // namespace

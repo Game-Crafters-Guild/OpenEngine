@@ -192,6 +192,36 @@ if(BUILD_TESTING)
             COMMENT "Extracting the blade shape pack from grass_clump.glsl"
             VERBATIM)
 
+        # And for the floor-band thinning, so the CPU mirror is checked against the shipped GLSL.
+        set(GRASS_PLACEMENT_GLSL ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/TerrainGrass/grass_placement.glsl)
+        set(GRASS_FLOOR_THINNING_HEADER
+            ${CMAKE_CURRENT_BINARY_DIR}/generated/GrassFloorThinningExtracted.h)
+        add_custom_command(
+            OUTPUT ${GRASS_FLOOR_THINNING_HEADER}
+            COMMAND ${CMAKE_COMMAND} -DSRC=${GRASS_PLACEMENT_GLSL}
+                                     -DOUT=${GRASS_FLOOR_THINNING_HEADER}
+                                     "-DBEGIN_MARKER=// GE_SHARED_GRASS_FLOOR_THINNING_BEGIN"
+                                     "-DEND_MARKER=// GE_SHARED_GRASS_FLOOR_THINNING_END"
+                                     -P ${GRASS_GLSL_SHIM_DIR}/ExtractShaderBlock.cmake
+            DEPENDS ${GRASS_PLACEMENT_GLSL}
+                    ${GRASS_GLSL_SHIM_DIR}/ExtractShaderBlock.cmake
+            COMMENT "Extracting the floor-band thinning from grass_placement.glsl"
+            VERBATIM)
+
+        # And for the classify kernel's per-cell box: the ground range with its slope pad and the blade box.
+        set(GRASS_CELL_BOX_HEADER ${CMAKE_CURRENT_BINARY_DIR}/generated/GrassCellBoxExtracted.h)
+        add_custom_command(
+            OUTPUT ${GRASS_CELL_BOX_HEADER}
+            COMMAND ${CMAKE_COMMAND} -DSRC=${GRASS_PLACEMENT_GLSL}
+                                     -DOUT=${GRASS_CELL_BOX_HEADER}
+                                     "-DBEGIN_MARKER=// GE_SHARED_GRASS_CELL_BOX_BEGIN"
+                                     "-DEND_MARKER=// GE_SHARED_GRASS_CELL_BOX_END"
+                                     -P ${GRASS_GLSL_SHIM_DIR}/ExtractShaderBlock.cmake
+            DEPENDS ${GRASS_PLACEMENT_GLSL}
+                    ${GRASS_GLSL_SHIM_DIR}/ExtractShaderBlock.cmake
+            COMMENT "Extracting the per-cell ground box from grass_placement.glsl"
+            VERBATIM)
+
         # And for the authored colour decode: the shared sRGB curve and the surface's read of the three
         # packed colours, so the decode is checked on the expressions that render.
         set(GRASS_SRGB_TRANSFER_GLSL
@@ -295,6 +325,8 @@ if(BUILD_TESTING)
             ${GRASS_SRGB_TRANSFER_HEADER}
             ${GRASS_COLOR_DECODE_HEADER}
             ${GRASS_BLADE_SHAPE_HEADER}
+            ${GRASS_FLOOR_THINNING_HEADER}
+            ${GRASS_CELL_BOX_HEADER}
             ${GRASS_GROUND_SOURCE_HEADER}
             ${CBT_SURFACE_PAGE_LEVEL_HEADER}
             ${GRASS_CANOPY_HEADER}
@@ -303,6 +335,7 @@ if(BUILD_TESTING)
             ${GRASS_WIND_SEED_HEADER}
             Tests/TerrainGrassPlacementStatsTests.cpp
             Tests/GrassPlacementModelTests.cpp
+            Tests/GrassCellBoxTests.cpp
             Tests/TerrainColorMapApplyTests.cpp
             Tests/GrassPlacementElisionTests.cpp
             Source/GrassPlacementElisionInputs.cpp

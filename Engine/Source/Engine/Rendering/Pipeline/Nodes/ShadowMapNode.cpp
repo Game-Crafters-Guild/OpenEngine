@@ -472,8 +472,8 @@ void ShadowMapNode::DeclareForView(ViewDeclare& d)
     // punctual light infos) and Declare runs the cascade loop, the tint loop, then
     // the area/spot/point families in the SAME order, through the SAME
     // ViewDeclare::PassName forwarder — so pass names, recording order, and the
-    // read/write sets are unchanged. The FIRST cascade's pooled adopt may still
-    // invalidate the cache on a physical-change frame (intended one-frame skip);
+    // read/write sets are unchanged. On a physical-change frame the pooled adopt
+    // keeps the fit cached above, so every cascade renders into the new physical;
     // nothing caches after Declare.
     FeatureDeclareContext fctx = rs->MakeFeatureDeclareContext(
         d.Frame, viewId, m_NumCascades, PunctualResolution(), shadowLight->directionWS,

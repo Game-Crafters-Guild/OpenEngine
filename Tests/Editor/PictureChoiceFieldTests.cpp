@@ -110,6 +110,16 @@ TEST(PictureChoiceField, BuildsOneTilePerChoiceFromItsLayout)
     }
 }
 
+// A choice with no picture class draws no picture frame: the tile is its name and its line.
+TEST(PictureChoiceField, AChoiceWithoutAPictureClassHasNoPicture)
+{
+    PictureChoiceField field({{"Claude", "Anthropic's assistant.", ""}}, 0);
+    ASSERT_EQ(field.GetChildren().size(), 1u);
+    const UIElement* picture = ChildWithClass(*field.GetChildren()[0], "picture-choice-picture");
+    ASSERT_NE(picture, nullptr);
+    EXPECT_TRUE(picture->HasClass("picture-choice-picture-none"));
+}
+
 TEST(PictureChoiceField, APressSelectsAndNotifiesOncePerChange)
 {
     PictureChoiceField field(EyeAndCamera(), 0);

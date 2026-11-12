@@ -2,6 +2,7 @@
 
 #include "SceneView/MountedViewPanels.h"
 
+#include "Core/CpuProfiler.h"
 #include "Core/Engine.h"
 #include "Editor/Settings/SceneViewSettings.h"
 #include "Engine/Rendering/Pipeline/PipelineFrameResources.h"
@@ -10,6 +11,8 @@
 #include "Engine/Rendering/ViewFinalize.h"
 #include "Logger/Logger.h"
 #include "SceneView/SceneViewPanel.h"
+#include "SceneView/SceneViewport/SceneViewport.h"
+#include "SceneView/SceneViewport/SceneViewportRegistry.h"
 #include "Scene/SceneThumbnailCapture.h"
 #include "SceneView/SceneViewController.h"
 #include "UI/Layout/ElementOverrideHelpers.h"
@@ -24,6 +27,7 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <vector>
 
 namespace GameEngine::Editor
 {
@@ -57,10 +61,8 @@ constexpr SceneViewPanel::ViewportSlot kSceneViewSlots[] = {
     SceneViewPanel::ViewportSlot::Side,
 };
 
-// UI external-texture names for the RenderGraph arm, keyed by CONTROLLER (not slot):
-// slots can reassign their view kind, and a name that followed the slot would
-// cross-wire pane textures mid-reassignment. "scene_main" is the CSS-visible
-// main scene name (theme/views.css, theme/scene-view.css).
+// Pane image names are keyed by controller, not by slot, because a slot can change its view kind.
+// "scene_main" is the main scene image of theme/scene-view.css; another controller takes its live pane's name.
 constexpr const char* kSceneQuadExternalNames[3] = {"scene_view_top", "scene_view_front",
                                                     "scene_view_side"};
 
@@ -75,6 +77,11 @@ const char* ExternalSceneNameForController(SceneViewRenderCoordinator::EditorWin
     {
         if (ctx->sceneQuadViews[i].get() == controller)
             return kSceneQuadExternalNames[i];
+    }
+    for (const SceneViewport* viewport : SceneViewportRegistry::GetLive())
+    {
+        if (viewport->GetOwnerManager() == ctx->ui.get() && viewport->GetBinding().Controller == controller)
+            return viewport->GetImageName().c_str();
     }
     return nullptr;
 }
@@ -106,6 +113,17 @@ void HideHdrTestPatternOverlay(UIElement* viewport)
         .Reset(Style::BackgroundRepeatProp)
         .Reset(Style::BackgroundTint);
 }
+
+void TickViewport(SceneViewport& viewport, SceneViewRenderCoordinator::InputFrame& frame)
+{
+    const bool interacting = viewport.Tick(frame.DeltaSeconds, frame.Input, !frame.InputConsumed);
+    if (!interacting)
+        return;
+    if (!frame.ActiveInputController)
+        frame.ActiveInputController = viewport.GetBinding().Controller;
+    if (frame.Input)
+        frame.InputConsumed = true;
+}
 } // namespace
 
 SceneViewPanel* SceneViewRenderCoordinator::SyncMountedPanelControllers(EditorWindowContext* ctx)
@@ -124,8 +142,27 @@ SceneViewPanel* SceneViewRenderCoordinator::SyncMountedPanelControllers(EditorWi
         svPanel->SetSceneControllerForSlot(SceneViewPanel::ViewportSlot::Front, ctx->sceneQuadViews[1].get());
     if (ctx->sceneQuadViews[2])
         svPanel->SetSceneControllerForSlot(SceneViewPanel::ViewportSlot::Side, ctx->sceneQuadViews[2].get());
+    svPanel->BindViewports();
 
     return svPanel;
+}
+
+void SceneViewRenderCoordinator::ForEachLiveViewport(EditorWindowContext* ctx,
+                                                     FunctionRef<void(SceneViewport&)> visit)
+{
+    if (!ctx || !ctx->ui)
+        return;
+    for (SceneViewport* viewport : SceneViewportRegistry::GetLive())
+    {
+        if (viewport->GetOwnerManager() == ctx->ui.get())
+            visit(*viewport);
+    }
+}
+
+void SceneViewRenderCoordinator::TickLiveViewports(EditorWindowContext* ctx, InputFrame& frame)
+{
+    GE_CPU_PROFILE_SCOPE("SceneViewRenderCoordinator.TickLiveViewports");
+    ForEachLiveViewport(ctx, [&frame](SceneViewport& viewport) { TickViewport(viewport, frame); });
 }
 
 void SceneViewRenderCoordinator::ForEachController(EditorWindowContext* windowContext,
@@ -205,14 +242,14 @@ void SceneViewRenderCoordinator::SyncViewportStateAcrossControllers(EditorWindow
     });
 }
 
-bool SceneViewRenderCoordinator::TryResolveRenderableViewportSize(EditorWindowContext* ctx,
+bool SceneViewRenderCoordinator::TryResolveRenderableViewportSize(const UIManager* ui,
                                                                   UIElement* viewport,
                                                                   std::uint32_t& outW,
                                                                   std::uint32_t& outH)
 {
     outW = 1;
     outH = 1;
-    if (!ctx || !viewport)
+    if (!viewport)
         return false;
     if (viewport->HasClass("hidden") || viewport->HasClass("quad-collapsed"))
         return false;
@@ -222,7 +259,7 @@ bool SceneViewRenderCoordinator::TryResolveRenderableViewportSize(EditorWindowCo
     if (vpW <= 1.0f || vpH <= 1.0f)
         return false;
 
-    const float cs = ctx->ui ? ctx->ui->GetContentScale() : 1.0f;
+    const float cs = ui ? ui->GetContentScale() : 1.0f;
     outW = SnapToWholePx(vpW * cs);
     outH = SnapToWholePx(vpH * cs);
     return outW > 1u && outH > 1u;
@@ -232,6 +269,219 @@ bool SceneViewRenderCoordinator::TryResolveRenderableViewportSize(EditorWindowCo
 // its own full-pipeline view into the RenderGraph frame (the old arm's lightweight
 // non-pipeline panes are gone). ORDER CONTRACT: ctx->scene's entry is pushed
 // FIRST when renderable — targets[0] stays the main-scene entry.
+namespace
+{
+bool IsWindowSceneController(const SceneViewRenderCoordinator::EditorWindowContext& ctx,
+                             const SceneViewController* controller)
+{
+    if (controller == ctx.scene.get())
+        return true;
+    for (const auto& quadScene : ctx.sceneQuadViews)
+    {
+        if (quadScene.get() == controller)
+            return true;
+    }
+    return false;
+}
+
+// Visits the live panes of the window bound to a controller outside the window's Scene View set (its main
+// and quad controllers), with the pane's size in physical pixels. A hidden or collapsed pane is skipped.
+void ForEachIndependentViewport(
+    SceneViewRenderCoordinator::EditorWindowContext* ctx,
+    FunctionRef<void(SceneViewport&, SceneViewController&, std::uint32_t, std::uint32_t)> visit)
+{
+    SceneViewRenderCoordinator::ForEachLiveViewport(ctx, [&](SceneViewport& viewport) {
+        SceneViewController* controller = viewport.GetBinding().Controller;
+        if (!controller || IsWindowSceneController(*ctx, controller))
+            return;
+        std::uint32_t width = 1;
+        std::uint32_t height = 1;
+        if (!SceneViewRenderCoordinator::TryResolveRenderableViewportSize(ctx->ui.get(), &viewport, width, height))
+            return;
+        visit(viewport, *controller, width, height);
+    });
+}
+
+// Declares the editor overlays of `controller` onto its pipeline output, when the frame has its span entry.
+void DeclareControllerOverlaysRG(Rendering::RenderGraph::RGFrame& frame, Engine::Renderer::RenderServices* rs,
+                                 std::span<const Engine::Renderer::Pipeline::ViewTargetsRG> targets,
+                                 SceneViewController* controller)
+{
+    for (const auto& vt : targets)
+    {
+        if (vt.View != controller->GetViewId())
+            continue;
+        const auto out = rs->GetPipelineOutputRG(frame, controller->GetViewId());
+        if (!out.IsValid())
+            return; // BindRG owns the warn-once for this state
+        if (frame.Graph().ResourceDesc(out.Out.Id).SampleCount > 1)
+            return; // multisampled output: BindRG skips the bind too
+        controller->DeclareOverlaysRG(frame, out.Out, vt.Depth, rs);
+        return;
+    }
+}
+
+// Binds the image of `controller` to the pane element `viewport`, or resets the pane to its empty
+// placeholder when the controller has no single-sample output this frame. Returns true when bound.
+bool BindPaneImageRG(SceneViewRenderCoordinator::EditorWindowContext* ctx, Rendering::RenderGraph::RGFrame& frame,
+                     Engine::Renderer::RenderServices& rs, Rendering::IDevice& device, UIElement& viewport,
+                     SceneViewController* controller)
+{
+    const char* name = controller ? ExternalSceneNameForController(ctx, controller) : nullptr;
+    bool bound = false;
+    if (controller && name)
+    {
+        if (controller->IsWaitingForExtraction())
+        {
+            bound = controller->GetLastPresentedTexture(device).IsValid();
+        }
+        else
+        {
+            const auto out = rs.GetPipelineOutputRG(frame, controller->GetViewId());
+            bound = out.IsValid() && frame.Graph().ResourceDesc(out.Out.Id).SampleCount <= 1;
+        }
+    }
+    if (!bound)
+    {
+        viewport.Style().Reset(Style::BackgroundImage);
+        return false;
+    }
+    HideHdrTestPatternOverlay(&viewport);
+    // A slot kind reassignment re-points the element on the frame the name changes.
+    UI::Layout::BindViewportTexture(viewport, name);
+    return true;
+}
+
+// Publishes the image of `controller` under its external name for this frame: the finalized pipeline output,
+// the last presented image while the view waits for extraction, or no image.
+void PublishControllerImageRG(SceneViewRenderCoordinator::EditorWindowContext* ctx,
+                              Rendering::RenderGraph::RGFrame& frame, Engine::Renderer::RenderServices* rs,
+                              Rendering::IDevice* device, bool pureRGFrame,
+                              Rendering::TextureFormat presentedFormat, SceneViewController* controller)
+{
+    const char* name = ExternalSceneNameForController(ctx, controller);
+    if (!name)
+        return;
+    const bool isMainScene = controller == ctx->scene.get();
+    if (controller->IsWaitingForExtraction())
+    {
+        // Invalid across a device rebuild: this arm never
+        // reaches the snapshot's Update, so the accessor's
+        // generation compare is the only thing between a
+        // freed id and ImportExternalTexture.
+        const Rendering::TextureHandle cached =
+            controller->GetLastPresentedTexture(*device);
+        if (!cached.IsValid())
+            return;
+        const std::string importName = std::string(name) + ".LastPresented";
+        const Rendering::TextureFormat cachedFormat =
+            device->GetTextureFormat(cached);
+        const Rendering::RenderGraph::RGTexture cachedRG =
+            frame.ImportExternalTexture(
+                importName.c_str(), cached,
+                Rendering::ResourceState::ShaderResource, cachedFormat);
+        if (!cachedRG.IsValid())
+            return;
+        // The cached copy keeps the space of the frame
+        // that rendered it — never the current mode.
+        ctx->ui->SetExternalTextureRG(
+            name, controller->GetLastPresentedWidth(),
+            controller->GetLastPresentedHeight(),
+            controller->GetLastPresentedSpace(), cachedFormat);
+        ctx->ui->PublishExternalTextureRG(name, frame, cachedRG);
+        return;
+    }
+    const auto out = rs->GetPipelineOutputRG(frame, controller->GetViewId());
+    if (!out.IsValid())
+    {
+        ctx->ui->RemoveExternalTexture(name);
+        return;
+    }
+    // UI samples single-sample only (the MSAA guard the
+    // old arm ran through ValidateUiSampleTextureRef).
+    const auto& desc = frame.Graph().ResourceDesc(out.Out.Id);
+    if (desc.SampleCount > 1)
+    {
+        static bool sWarnedMsaaOutput = false;
+        if (!sWarnedMsaaOutput && isMainScene)
+        {
+            Logger::Log::Warning(
+                "Editor RenderGraph: pipeline output for the scene view is multisampled — "
+                "'scene_main' skipped (no resolve in the chain?)");
+            sWarnedMsaaOutput = true;
+        }
+        ctx->ui->RemoveExternalTexture(name);
+        return;
+    }
+    if (pureRGFrame)
+    {
+        // The view's own resolve: everything that composes
+        // this pane — the world, the post chain, and the
+        // overlay and gizmo passes DeclareOverlaysRG just
+        // wrote into the same image — is behind us, so the
+        // finalize's filters see world pixels and nothing
+        // else. Pure frames only: the finalize writes a
+        // TRANSIENT, which has no physical handle until
+        // Execute realizes it (RGFrame::PhysicalOf), and the
+        // hybrid arm below needs one that outlives
+        // declaration.
+        const Engine::Renderer::ViewFinalizeResult finalized =
+            Engine::Renderer::DeclareViewFinalize(
+                frame, out.Out, rs->GetPipelineOutputSpaceRG(), name,
+                Engine::Renderer::ResolveViewDebandThresholdLsb(rs),
+                presentedFormat, /*hostRefusal=*/false);
+        const auto& finalDesc =
+            frame.Graph().ResourceDesc(finalized.Image.Id);
+        controller->UpdatePresentedSnapshotRG(frame, finalized.Image,
+                                              finalized.Space);
+        // The UI pass lives in the SAME graph — register the
+        // name and publish THIS frame's id; RenderRG declares
+        // the sampled read (the barrier the hybrid era got
+        // from executing RenderGraph first).
+        ctx->ui->SetExternalTextureRG(
+            name, finalDesc.Width, finalDesc.Height, finalized.Space,
+            static_cast<Rendering::TextureFormat>(finalDesc.Format));
+        ctx->ui->PublishExternalTextureRG(name, frame, finalized.Image);
+    }
+    else
+    {
+        // RECORDED REGRESSION, landing 4 (2026-08-05): this
+        // arm reaches the screen with NO dither owner on a
+        // hardware-sRGB swapchain. The finalize above cannot
+        // run here (it writes a frame transient with no
+        // physical handle until Execute, while this arm binds
+        // out.Physical through the non-RG SetExternalTexture),
+        // and the terminal answers None because the bytes
+        // already sit on the presented step. No other pass
+        // dithers: the step's owner is the only filter site.
+        //
+        // Shipped because routing.pure is assigned true
+        // unconditionally, so no editor frame reaches this
+        // branch. Re-enabling the hybrid arm means landing R7
+        // first — a persistent-handle finalize target — or
+        // knowingly shipping an un-dithered viewport on an
+        // 8-bit sRGB display. This log is the trip-wire: if
+        // it ever appears, that decision is live again.
+        static bool s_WarnedHybridUnfiltered = false;
+        if (!s_WarnedHybridUnfiltered)
+        {
+            s_WarnedHybridUnfiltered = true;
+            Logger::Log::Warning(
+                "Scene view '{}': hybrid (non-pure) frame — the view "
+                "cannot finalize, so it presents with no dither and no "
+                "deband. Land R7 (persistent-handle finalize target) "
+                "before relying on this arm",
+                name);
+        }
+        controller->UpdatePresentedSnapshotRG(
+            frame, out.Out, rs->GetPipelineOutputSpaceRG());
+        ctx->ui->SetExternalTexture(name, out.Physical, desc.Width,
+                                    desc.Height,
+                                    rs->GetPipelineOutputSpaceRG());
+    }
+}
+} // namespace
+
 static bool CollectQuadRG(SceneViewRenderCoordinator::EditorWindowContext* ctx,
                            Rendering::RenderGraph::RGFrame& frame,
                            SceneViewPanel* svPanel,
@@ -258,7 +508,7 @@ static bool CollectQuadRG(SceneViewRenderCoordinator::EditorWindowContext* ctx,
         std::uint32_t svW = 1;
         std::uint32_t svH = 1;
         if (!controller || !viewport ||
-            !SceneViewRenderCoordinator::TryResolveRenderableViewportSize(ctx, viewport, svW, svH))
+            !SceneViewRenderCoordinator::TryResolveRenderableViewportSize(ctx->ui.get(), viewport, svW, svH))
             continue;
         panes[paneCount++] = PaneDeclare{controller, viewport, svW, svH};
         fullQuadTop = std::min(fullQuadTop, viewport->GetLayoutY());
@@ -314,24 +564,16 @@ static bool CollectQuadRG(SceneViewRenderCoordinator::EditorWindowContext* ctx,
     return anyDeclared;
 }
 
-bool SceneViewRenderCoordinator::CollectRG(
-    EditorWindowContext* ctx, Rendering::RenderGraph::RGFrame& frame,
+// The Scene View panel's panes: the active pane, or the four panes in quad view, and the bookmark preview.
+static bool CollectPanelRG(
+    SceneViewRenderCoordinator::EditorWindowContext* ctx, Rendering::RenderGraph::RGFrame& frame,
     std::vector<Engine::Renderer::Pipeline::ViewTargetsRG>& outTargets)
 {
-    if (!ctx || !ctx->ui || !ctx->capabilities.worldRender || !ctx->scene)
-        return false;
-
-    SceneViewPanel* svPanel = SyncMountedPanelControllers(ctx);
+    SceneViewPanel* svPanel = SceneViewRenderCoordinator::SyncMountedPanelControllers(ctx);
     if (!svPanel)
     {
-        // No mounted scene panel: nothing declares. The scene view stops being
-        // re-armed (RequestViewFrame runs only from DeclareTargetsRG), so its
-        // OnDemand participation lapses to zero within two frames — extraction,
-        // batch-key build, culling, and shadow dispatches gate off at no
-        // per-frame cost — while the viewId + HZB visibility history survive for
-        // an instant warm reopen (D9/A1.6). The view is released only when the
-        // controller is destroyed. Retain the last complete registration so a
-        // reactivated tab can present it while extraction catches up.
+        // No mounted scene panel: nothing declares and nothing requests the view, so it goes
+        // dormant within two frames. The view and its HZB history stay until the controller is destroyed.
         return false;
     }
 
@@ -339,7 +581,7 @@ bool SceneViewRenderCoordinator::CollectRG(
         svPanel->GetSceneControllerForSlot(svPanel->GetActiveViewportSlot());
     if (!activeController)
         activeController = ctx->scene.get();
-    SyncViewportStateAcrossControllers(ctx, activeController);
+    SceneViewRenderCoordinator::SyncViewportStateAcrossControllers(ctx, activeController);
     // Camera input drives only the ACTIVE pane's controller (old-arm parity).
     activeController->SetCameraAnglesDeg(svPanel->GetYawDeg(), svPanel->GetPitchDeg());
     activeController->UpdateOrbit(svPanel->IsOrbiting());
@@ -359,7 +601,7 @@ bool SceneViewRenderCoordinator::CollectRG(
     UIElement* viewport = svPanel->GetViewportElementForSlot(svPanel->GetActiveViewportSlot());
     std::uint32_t svW = 1;
     std::uint32_t svH = 1;
-    if (!TryResolveRenderableViewportSize(ctx, viewport, svW, svH))
+    if (!SceneViewRenderCoordinator::TryResolveRenderableViewportSize(ctx->ui.get(), viewport, svW, svH))
         return false;
 
     Engine::Renderer::Pipeline::ViewTargetsRG vt{};
@@ -382,6 +624,26 @@ bool SceneViewRenderCoordinator::CollectRG(
     return true;
 }
 
+bool SceneViewRenderCoordinator::CollectRG(
+    EditorWindowContext* ctx, Rendering::RenderGraph::RGFrame& frame,
+    std::vector<Engine::Renderer::Pipeline::ViewTargetsRG>& outTargets)
+{
+    if (!ctx || !ctx->ui || !ctx->capabilities.worldRender || !ctx->scene)
+        return false;
+
+    // The panel's panes declare first, so ctx->scene's entry stays targets[0].
+    bool declared = CollectPanelRG(ctx, frame, outTargets);
+    ForEachIndependentViewport(
+        ctx, [&](SceneViewport&, SceneViewController& controller, std::uint32_t width, std::uint32_t height) {
+            Engine::Renderer::Pipeline::ViewTargetsRG targets{};
+            if (!controller.DeclareTargetsRG(frame, width, height, ctx->windowId, targets) || targets.View == 0)
+                return;
+            outTargets.push_back(targets);
+            declared = true;
+        });
+    return declared;
+}
+
 void SceneViewRenderCoordinator::DeclareOverlaysRG(
     EditorWindowContext* ctx, Rendering::RenderGraph::RGFrame& frame,
     std::span<const Engine::Renderer::Pipeline::ViewTargetsRG> targets)
@@ -393,6 +655,10 @@ void SceneViewRenderCoordinator::DeclareOverlaysRG(
     auto* rs = EngineCore::GetInstance().GetRenderServices();
     if (!rs)
         return;
+
+    ForEachIndependentViewport(ctx, [&](SceneViewport&, SceneViewController& controller, std::uint32_t, std::uint32_t) {
+        DeclareControllerOverlaysRG(frame, rs, targets, &controller);
+    });
 
     SceneViewPanel* svPanel = ctx->mountedViewPanels.SceneView(ctx->ui.get());
     if (!svPanel)
@@ -412,39 +678,50 @@ void SceneViewRenderCoordinator::DeclareOverlaysRG(
     // Depth from the entry. out.Out is the pipeline's ACTUAL FinalColor —
     // never the caller-imported Color/Resolve. The bookmark-preview entry
     // matches no controller's view id and is skipped naturally.
-    ForEachController(ctx, [&](SceneViewController* controller)
-                      {
-                          for (const auto& vt : targets)
-                          {
-                              if (vt.View != controller->GetViewId())
-                                  continue;
-                              const auto out = rs->GetPipelineOutputRG(frame, controller->GetViewId());
-                              if (!out.IsValid())
-                                  return; // BindRG owns the warn-once for this state
-                              if (frame.Graph().ResourceDesc(out.Out.Id).SampleCount > 1)
-                                  return; // multisampled output: BindRG skips the bind too
-                              controller->DeclareOverlaysRG(frame, out.Out, vt.Depth, rs);
-                              return;
-                          }
-                      });
+    ForEachController(ctx, [&](SceneViewController* controller) {
+        DeclareControllerOverlaysRG(frame, rs, targets, controller);
+    });
 }
 
-void SceneViewRenderCoordinator::BindRG(EditorWindowContext* ctx, Rendering::RenderGraph::RGFrame& frame,
-                                         bool pureRGFrame)
+void SceneViewRenderCoordinator::RequestFramesBeforeExtraction(EditorWindowContext* ctx)
 {
-    if (!ctx || !ctx->ui || !ctx->scene)
+    if (!ctx || !ctx->ui || !ctx->capabilities.worldRender || !ctx->scene)
         return;
-    // MAIN RS (8e) — see DeclareOverlaysRG.
-    auto* rs = EngineCore::GetInstance().GetRenderServices();
-    if (!rs)
-        return;
-    auto* device = rs->GetDevice();
-    if (!device)
-        return;
-
+    ForEachIndependentViewport(ctx, [](SceneViewport&, SceneViewController& controller, std::uint32_t, std::uint32_t) {
+        controller.RequestFrame();
+    });
     SceneViewPanel* svPanel = ctx->mountedViewPanels.SceneView(ctx->ui.get());
     if (!svPanel)
         return;
+    const SceneViewPanel::ViewportSlot activeSlot = svPanel->GetActiveViewportSlot();
+    const bool quad = svPanel->IsQuadViewEnabled();
+    for (SceneViewPanel::ViewportSlot slot : kSceneViewSlots)
+    {
+        if (!quad && slot != activeSlot)
+            continue;
+        SceneViewController* controller = svPanel->GetSceneControllerForSlot(slot);
+        if (!controller && slot == activeSlot)
+            controller = ctx->scene.get();
+        std::uint32_t width = 1;
+        std::uint32_t height = 1;
+        if (controller && TryResolveRenderableViewportSize(ctx->ui.get(), svPanel->GetViewportElementForSlot(slot),
+                                                           width, height))
+            controller->RequestFrame();
+    }
+}
+
+bool SceneViewRenderCoordinator::BindRG(EditorWindowContext* ctx, Rendering::RenderGraph::RGFrame& frame,
+                                         bool pureRGFrame)
+{
+    if (!ctx || !ctx->ui || !ctx->scene)
+        return false;
+    // MAIN RS (8e) — see DeclareOverlaysRG.
+    auto* rs = EngineCore::GetInstance().GetRenderServices();
+    if (!rs)
+        return false;
+    auto* device = rs->GetDevice();
+    if (!device)
+        return false;
 
     // The presented format every pane's finalize sizes to, resolved from THIS
     // window's own target handle once per frame — never from the device's
@@ -455,139 +732,30 @@ void SceneViewRenderCoordinator::BindRG(EditorWindowContext* ctx, Rendering::Ren
         dev ? dev->GetWindowTargetSwapchainFormat(ctx->renderCtx->GetWindowTarget())
             : Rendering::TextureFormat::Unknown;
 
+    bool boundAnyViewport = false;
+    ForEachIndependentViewport(ctx, [&](SceneViewport& viewport, SceneViewController& controller, std::uint32_t,
+                                        std::uint32_t) {
+        PublishControllerImageRG(ctx, frame, rs, device, pureRGFrame, presentedFormat, &controller);
+        if (BindPaneImageRG(ctx, frame, *rs, *device, viewport, &controller))
+            boundAnyViewport = true;
+    });
+
+    SceneViewPanel* svPanel = ctx->mountedViewPanels.SceneView(ctx->ui.get());
+    if (!svPanel)
+        return boundAnyViewport;
+
     // Pass 1 — registry state, per CONTROLLER name. Re-point EVERY frame:
     // under FinalCopy elision the physical varies with PP toggles; caching it
     // across frames is the stale-image bug class. Controllers whose pane did
     // not declare this frame (quad off, hidden/collapsed pane) drop their
     // registry entry so nothing samples a stale physical.
-    ForEachController(ctx, [&](SceneViewController* controller)
-                      {
-                          const char* name = ExternalSceneNameForController(ctx, controller);
-                          if (!name)
-                              return;
-                          const bool isMainScene = controller == ctx->scene.get();
-                          if (controller->IsWaitingForExtraction())
-                          {
-                              // Invalid across a device rebuild: this arm never
-                              // reaches the snapshot's Update, so the accessor's
-                              // generation compare is the only thing between a
-                              // freed id and ImportExternalTexture.
-                              const Rendering::TextureHandle cached =
-                                  controller->GetLastPresentedTexture(*device);
-                              if (!cached.IsValid())
-                                  return;
-                              const std::string importName = std::string(name) + ".LastPresented";
-                              const Rendering::TextureFormat cachedFormat =
-                                  device->GetTextureFormat(cached);
-                              const Rendering::RenderGraph::RGTexture cachedRG =
-                                  frame.ImportExternalTexture(
-                                      importName.c_str(), cached,
-                                      Rendering::ResourceState::ShaderResource, cachedFormat);
-                              if (!cachedRG.IsValid())
-                                  return;
-                              // The cached copy keeps the space of the frame
-                              // that rendered it — never the current mode.
-                              ctx->ui->SetExternalTextureRG(
-                                  name, controller->GetLastPresentedWidth(),
-                                  controller->GetLastPresentedHeight(),
-                                  controller->GetLastPresentedSpace(), cachedFormat);
-                              ctx->ui->PublishExternalTextureRG(name, frame, cachedRG);
-                              return;
-                          }
-                          const auto out = rs->GetPipelineOutputRG(frame, controller->GetViewId());
-                          if (!out.IsValid())
-                          {
-                              ctx->ui->RemoveExternalTexture(name);
-                              return;
-                          }
-                          // UI samples single-sample only (the MSAA guard the
-                          // old arm ran through ValidateUiSampleTextureRef).
-                          const auto& desc = frame.Graph().ResourceDesc(out.Out.Id);
-                          if (desc.SampleCount > 1)
-                          {
-                              static bool sWarnedMsaaOutput = false;
-                              if (!sWarnedMsaaOutput && isMainScene)
-                              {
-                                  Logger::Log::Warning(
-                                      "Editor RenderGraph: pipeline output for the scene view is multisampled — "
-                                      "'scene_main' skipped (no resolve in the chain?)");
-                                  sWarnedMsaaOutput = true;
-                              }
-                              ctx->ui->RemoveExternalTexture(name);
-                              return;
-                          }
-                          if (pureRGFrame)
-                          {
-                              // The view's own resolve: everything that composes
-                              // this pane — the world, the post chain, and the
-                              // overlay and gizmo passes DeclareOverlaysRG just
-                              // wrote into the same image — is behind us, so the
-                              // finalize's filters see world pixels and nothing
-                              // else. Pure frames only: the finalize writes a
-                              // TRANSIENT, which has no physical handle until
-                              // Execute realizes it (RGFrame::PhysicalOf), and the
-                              // hybrid arm below needs one that outlives
-                              // declaration.
-                              const Engine::Renderer::ViewFinalizeResult finalized =
-                                  Engine::Renderer::DeclareViewFinalize(
-                                      frame, out.Out, rs->GetPipelineOutputSpaceRG(), name,
-                                      Engine::Renderer::ResolveViewDebandThresholdLsb(rs),
-                                      presentedFormat, /*hostRefusal=*/false);
-                              const auto& finalDesc =
-                                  frame.Graph().ResourceDesc(finalized.Image.Id);
-                              controller->UpdatePresentedSnapshotRG(frame, finalized.Image,
-                                                                    finalized.Space);
-                              // The UI pass lives in the SAME graph — register the
-                              // name and publish THIS frame's id; RenderRG declares
-                              // the sampled read (the barrier the hybrid era got
-                              // from executing RenderGraph first).
-                              ctx->ui->SetExternalTextureRG(
-                                  name, finalDesc.Width, finalDesc.Height, finalized.Space,
-                                  static_cast<Rendering::TextureFormat>(finalDesc.Format));
-                              ctx->ui->PublishExternalTextureRG(name, frame, finalized.Image);
-                          }
-                          else
-                          {
-                              // RECORDED REGRESSION, landing 4 (2026-08-05): this
-                              // arm reaches the screen with NO dither owner on a
-                              // hardware-sRGB swapchain. The finalize above cannot
-                              // run here (it writes a frame transient with no
-                              // physical handle until Execute, while this arm binds
-                              // out.Physical through the non-RG SetExternalTexture),
-                              // and the terminal answers None because the bytes
-                              // already sit on the presented step. No other pass
-                              // dithers: the step's owner is the only filter site.
-                              //
-                              // Shipped because routing.pure is assigned true
-                              // unconditionally, so no editor frame reaches this
-                              // branch. Re-enabling the hybrid arm means landing R7
-                              // first — a persistent-handle finalize target — or
-                              // knowingly shipping an un-dithered viewport on an
-                              // 8-bit sRGB display. This log is the trip-wire: if
-                              // it ever appears, that decision is live again.
-                              static bool s_WarnedHybridUnfiltered = false;
-                              if (!s_WarnedHybridUnfiltered)
-                              {
-                                  s_WarnedHybridUnfiltered = true;
-                                  Logger::Log::Warning(
-                                      "Scene view '{}': hybrid (non-pure) frame — the view "
-                                      "cannot finalize, so it presents with no dither and no "
-                                      "deband. Land R7 (persistent-handle finalize target) "
-                                      "before relying on this arm",
-                                      name);
-                              }
-                              controller->UpdatePresentedSnapshotRG(
-                                  frame, out.Out, rs->GetPipelineOutputSpaceRG());
-                              ctx->ui->SetExternalTexture(name, out.Physical, desc.Width,
-                                                          desc.Height,
-                                                          rs->GetPipelineOutputSpaceRG());
-                          }
-                      });
+    ForEachController(ctx, [&](SceneViewController* controller) {
+        PublishControllerImageRG(ctx, frame, rs, device, pureRGFrame, presentedFormat, controller);
+    });
 
     // Pass 2 — viewport elements, per SLOT: bind each slot's CURRENT
     // controller's name every frame so slot kind reassignment re-points the
     // element with it.
-    bool boundAnyViewport = false;
     for (SceneViewPanel::ViewportSlot slot : kSceneViewSlots)
     {
         UIElement* viewport = svPanel->GetViewportElementForSlot(slot);
@@ -596,29 +764,8 @@ void SceneViewRenderCoordinator::BindRG(EditorWindowContext* ctx, Rendering::Ren
         SceneViewController* controller = svPanel->GetSceneControllerForSlot(slot);
         if (!controller && slot == svPanel->GetActiveViewportSlot())
             controller = ctx->scene.get();
-        const char* name = controller ? ExternalSceneNameForController(ctx, controller) : nullptr;
-        bool bound = false;
-        if (controller && name)
-        {
-            if (controller->IsWaitingForExtraction())
-            {
-                bound = controller->GetLastPresentedTexture(*device).IsValid();
-            }
-            else
-            {
-                const auto out = rs->GetPipelineOutputRG(frame, controller->GetViewId());
-                bound = out.IsValid() && frame.Graph().ResourceDesc(out.Out.Id).SampleCount <= 1;
-            }
-        }
-        if (!bound)
-        {
-            viewport->Style().Reset(Style::BackgroundImage);
-            continue;
-        }
-        HideHdrTestPatternOverlay(viewport);
-        // A slot kind reassignment re-points the element on the frame the name changes.
-        UI::Layout::BindViewportTexture(*viewport, name);
-        boundAnyViewport = true;
+        if (BindPaneImageRG(ctx, frame, *rs, *device, *viewport, controller))
+            boundAnyViewport = true;
     }
 
     if (!boundAnyViewport)
@@ -632,6 +779,7 @@ void SceneViewRenderCoordinator::BindRG(EditorWindowContext* ctx, Rendering::Ren
             sWarnedNoOutput = true;
         }
     }
+    return boundAnyViewport;
 }
 
 } // namespace GameEngine::Editor

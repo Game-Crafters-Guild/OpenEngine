@@ -33,6 +33,7 @@
 #include "Rendering/Core/Handle.h"
 #include "Types/Types.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <vector>
@@ -63,13 +64,16 @@ class SkinPaletteAtlas
   public:
     SkinPaletteAtlas() = default;
 
-    // Begin a new frame. Resets all allocations (palettes are re-uploaded each frame).
-    // Uploads a block of identity mat4s at offset 0 so that any entity whose
-    // skinPaletteOffset defaults to 0 (no active animation) gets bind-pose
-    // rendering instead of garbage bone data.
-    void BeginFrame(PerFrameWritePool& pool)
+    // Begin a new frame; palettes are re-uploaded each frame. The ring grows to hold
+    // `frameBoneCount` bones (the live runtimes' palettes) and the identity block before
+    // the first upload, where growth copies nothing; later palettes grow it in the frame.
+    void BeginFrame(PerFrameWritePool& pool, size_t frameBoneCount)
     {
         m_Pool = &pool;
+
+        const size_t frameBytes = (frameBoneCount + kIdentityBoneCount) * kBytesPerBone;
+        pool.Reserve(FrameWriteUsage::BonePalette,
+                     std::min(frameBytes, pool.GetMaxCapacity(FrameWriteUsage::BonePalette)));
 
         // Reserve atlas slot 0 with identity matrices. 256 covers the largest
         // bone-count bucket used by SkinningUploadSystem.
@@ -83,6 +87,9 @@ class SkinPaletteAtlas
     }
 
     static constexpr uint32_t kIdentityBoneCount = 256;
+
+    // Atlas bytes per bone slot (3 vec4 rows).
+    static constexpr size_t kBytesPerBone = BonePaletteLayout::kFloatsPerBone * sizeof(float);
 
     // Bone-slot offset of the identity block BeginFrame reserves above.
     // A producer whose Upload/Reserve is REFUSED publishes this offset rather
@@ -104,9 +111,7 @@ class SkinPaletteAtlas
         if (!m_Pool || !paletteData || boneCount == 0)
             return result;
 
-        const size_t bytesNeeded = static_cast<size_t>(boneCount)
-                                 * BonePaletteLayout::kFloatsPerBone * sizeof(float);
-        auto alloc = m_Pool->Allocate(FrameWriteUsage::BonePalette, bytesNeeded, 16);
+        auto alloc = AllocatePalette(boneCount);
         if (!alloc.IsValid())
             return result;
 
@@ -139,9 +144,7 @@ class SkinPaletteAtlas
         if (!m_Pool || boneCount == 0)
             return UINT32_MAX;
 
-        const size_t bytesNeeded = static_cast<size_t>(boneCount)
-                                 * BonePaletteLayout::kFloatsPerBone * sizeof(float);
-        auto alloc = m_Pool->Allocate(FrameWriteUsage::BonePalette, bytesNeeded, 16);
+        auto alloc = AllocatePalette(boneCount);
         if (!alloc.IsValid())
             return UINT32_MAX;
 
@@ -199,6 +202,19 @@ class SkinPaletteAtlas
     uint32_t GetCurrentFrameTotalBones() const { return m_CurrentFrameTotalBones; }
 
   private:
+    static constexpr size_t kPaletteAlignment = 16;
+
+    // Runtimes created after BeginFrame (a scene that finishes loading) are past its
+    // reserve, so the ring grows in the frame. Safe because every reader binds the
+    // buffer at render time and producers keep only offsets.
+    PerFrameWritePool::Allocation AllocatePalette(uint32_t boneCount)
+    {
+        const size_t bytesNeeded = static_cast<size_t>(boneCount) * kBytesPerBone;
+        if (!m_Pool->MakeRoomInFrame(FrameWriteUsage::BonePalette, bytesNeeded, kPaletteAlignment))
+            return {};
+        return m_Pool->Allocate(FrameWriteUsage::BonePalette, bytesNeeded, kPaletteAlignment);
+    }
+
     void UploadIdentityPalette(uint32_t boneCount)
     {
         if (!m_Pool || boneCount == 0)

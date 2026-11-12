@@ -6,6 +6,10 @@ set(FILEWATCHER_SOURCES
     Source/FileIdentity.cpp
     Source/FileWatcher.cpp
 )
+if(NOT WIN32)
+    # The polling backend's tree walk. On Windows a rescan after lost events walks with std::filesystem.
+    list(APPEND FILEWATCHER_SOURCES Source/DirectoryTreeWalk.cpp)
+endif()
 
 add_library(FileWatcher OBJECT ${FILEWATCHER_SOURCES})
 

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
 #include <cstdint>
 #include <memory>
@@ -32,6 +33,7 @@ class IQueryPool;
 class PipelineCache;
 class PipelineBuildTable;
 class DescriptorSetCache;
+class ShaderStageRecorder;
 enum class TextureFormat : uint32_t;
 // New pipeline desc types — defined in PipelineTypes.h. Forward-declared
 // here so IDevice can take them by const-ref without pulling in the
@@ -916,12 +918,14 @@ struct RenderingDeviceCapabilities
     // transmissive pass's glass writes one of the screen-space reflection
     // slices and masks the other two, which needs it.
     bool supportsIndependentBlend = false;
-    // True when sampleRateShading is enabled on the logical device (same
-    // support == enabled contract as shaderInt64). It is what makes the SPIR-V
-    // InterpolationFunction capability (interpolateAtOffset) legal; enabling it
-    // turns no pipeline to per-sample shading. RendererProfile maps it to
-    // UseInterpolationFunctions, which the shader defines follow.
-    bool supportsSampleRateShading = false;
+    // True when shaders can use the interpolation functions (interpolateAtOffset, the SPIR-V
+    // InterpolationFunction capability): Vulkan with sampleRateShading enabled (support == enabled),
+    // Metal with pull-model interpolation. RendererProfile maps it to UseInterpolationFunctions.
+    bool supportsInterpolationFunctions = false;
+    // True when vertex shaders can write gl_ClipDistance (the SPIR-V ClipDistance capability):
+    // Vulkan with shaderClipDistance enabled (support == enabled), Metal always ([[clip_distance]]).
+    // RendererProfile maps it to UseClipDistance.
+    bool supportsShaderClipDistance = false;
 
     uint32_t maxBindlessTextures = 0;
     uint32_t maxBindlessBuffers = 0;
@@ -1299,7 +1303,8 @@ static constexpr uint32_t kDescriptorBindingUpdateAfterBind = 0x00000001u;
 static constexpr uint32_t kDescriptorBindingPartiallyBound  = 0x00000004u;
 // Engine-internal (not a backend binding-flag value): the shader
 // declares this storage buffer read-only (SPIR-V NonWritable). WebGPU layouts
-// must state ReadOnlyStorage to match; Vulkan ignores it.
+// must state ReadOnlyStorage to match; Metal declares the buffer with Read
+// usage only; Vulkan ignores it.
 static constexpr uint32_t kDescriptorBindingReadOnlyStorage = 0x80000000u;
 
 // Descriptor binding description
@@ -1330,8 +1335,8 @@ struct DescriptorBinding
     uint32_t storageTexelFormat = 0;
     // StorageImage access as the shader declares it. WebGPU bakes access into
     // the bind group layout and rejects a WriteOnly layout against a shader
-    // whose image is readonly; Vulkan/Metal carry access on the image and
-    // ignore this.
+    // whose image is readonly. Metal declares a read-only image with Read
+    // usage only. Vulkan ignores this.
     bool storageReadOnly = false;
     // Sampled-in-compute with a real (filtering) sampler over a filterable
     // format. The compute default below is UnfilterableFloat because most
@@ -2303,7 +2308,7 @@ class IDevice
     struct FrameSyncTimings
     {
         uint32_t frameIndex = 0;
-        // Time spent waiting for per-frame fences in BeginFrame().
+        // Wait for a frame slot: in BeginFrame() on Vulkan; on Metal in a frame's end (Present), for the next frame.
         double beginFrameWaitMs = 0.0;
         bool waitedGraphicsFence = false;
         bool waitedComputeFence = false;
@@ -2354,6 +2359,39 @@ class IDevice
 
     // Window presentation abstraction for backend-agnostic rendering.
     virtual WindowTargetHandle CreateWindowTarget(void* windowHandle, uint32_t width, uint32_t height) = 0;
+    // Runs `job` exactly once, on a worker thread or inline. It must never drop the job: the device waits for it
+    // with no limit at every window-target change and at shutdown. The Rendering layer has no job system.
+    using WindowTargetJobDispatch = std::function<void(std::function<void()> job)>;
+    /// @brief Creates a window target and makes it active. With a `dispatch`, a backend may run the swapchain
+    /// creation on it: format, extent and HDR state are valid on return, and the device waits for the job before the
+    /// first acquire and every target change. A failed job makes BeginFrame return false and
+    /// HasWindowTargetCreationFailed true: the caller stops. An override repeats these default arguments.
+    virtual bool CreateAndActivateWindowTarget(void* windowHandle, uint32_t width, uint32_t height,
+                                               WindowTargetHandle* outTarget = nullptr,
+                                               const WindowTargetJobDispatch& dispatch = {})
+    {
+        (void)dispatch;
+        WindowTargetHandle target = CreateWindowTarget(windowHandle, width, height);
+        if (!target.IsValid())
+            return false;
+        if (!SetActiveWindowTarget(target))
+        {
+            DestroyWindowTarget(target);
+            return false;
+        }
+        if (outTarget)
+        {
+            *outTarget = target;
+        }
+        return true;
+    }
+    // True after the swapchain job of a dispatched CreateAndActivateWindowTarget failed for `target`. The error is
+    // in the log.
+    virtual bool HasWindowTargetCreationFailed(WindowTargetHandle target) const
+    {
+        (void)target;
+        return false;
+    }
     virtual bool DestroyWindowTarget(WindowTargetHandle target) = 0;
     // Explicitly drain GPU work associated with a window target before teardown.
     // Backends may implement a lightweight, target-scoped drain; default is a no-op.
@@ -2373,22 +2411,6 @@ class IDevice
     // override + runtime SetVsync), so UI can show what the device is doing
     // rather than a possibly-stale saved preference.
     virtual bool IsVsyncEnabled() const { return false; }
-    bool CreateAndActivateWindowTarget(void* windowHandle, uint32_t width, uint32_t height, WindowTargetHandle* outTarget = nullptr)
-    {
-        WindowTargetHandle target = CreateWindowTarget(windowHandle, width, height);
-        if (!target.IsValid())
-            return false;
-        if (!SetActiveWindowTarget(target))
-        {
-            DestroyWindowTarget(target);
-            return false;
-        }
-        if (outTarget)
-        {
-            *outTarget = target;
-        }
-        return true;
-    }
     bool RecreateActiveWindowTargetSwapchain(uint32_t width, uint32_t height)
     {
         WindowTargetHandle target = GetActiveWindowTarget();
@@ -2700,11 +2722,9 @@ class IDevice
     bool CopyDescriptorSetLayout(DescriptorSetLayoutId id, DescriptorSetLayoutDesc& outDesc) const;
     bool CopyGraphicsPipeline(GraphicsPipelineId id, GraphicsPipelineDesc& outDesc) const;
 
-    // Lookup-or-create against the cache, on the calling thread. On a miss the
-    // base class calls the backend's CreateConcrete* virtual. Each key builds
-    // once: a miss on a key whose asynchronous build is queued takes that build
-    // over and runs it here, and a miss on a key another thread is building waits
-    // for that build instead of creating a second pipeline.
+    // Lookup-or-create against the cache; each key builds once. Where CallerMayWait
+    // is true, a worker builds a miss at Blocking priority and this thread waits.
+    // On any other thread the miss builds here, or waits for the build in progress.
     PipelineHandle GetOrCreateGraphicsPipeline(GraphicsPipelineId id, const PipelineFormatKey& fk);
     PipelineHandle GetOrCreateComputePipeline(ComputePipelineId id);
 
@@ -2727,16 +2747,25 @@ class IDevice
     PipelineBuildState RequestGraphicsPipeline(GraphicsPipelineId id, const PipelineFormatKey& fk);
     PipelineBuildState RequestComputePipeline(ComputePipelineId id);
 
-    // Runs the builds Request*Pipeline queues: called once per build with a job
-    // that builds and publishes the pipeline. The Rendering layer has no job
-    // system, so the engine installs one (MaterialSystem, onto its compile-gated
-    // prewarm workers). The dispatcher may run the job inline, later on any
-    // thread, or destroy it without running it (shutdown); a destroyed job
-    // releases its request, so the pipeline reads as never requested. An empty
-    // function removes the dispatcher; the owner removes it before it stops
-    // accepting jobs. A job still held when the device shuts down builds nothing
-    // when it runs, and may be run or destroyed after the device is destroyed.
-    using PipelineBuildDispatcher = std::function<void(std::function<void()>)>;
+    // Counts the lookups that found their pipeline still building: Request*Pipeline answers of Pending, and
+    // TryGetWarm* misses while the build is queued or running. A caller that draws skips the draw or binds an
+    // older pipeline (the variant cache). A prewarm request or a state query skips nothing. It only grows. Thread-safe.
+    uint64_t GetBuildingPipelineLookupCount() const;
+
+    // The Rendering layer has no job system, so the engine installs this dispatcher
+    // (MaterialSystem, onto its prewarm workers). An empty Dispatch removes it; the
+    // owner removes it before it stops accepting jobs.
+    struct PipelineBuildDispatcher
+    {
+        // Called once per build. The job may run inline or on any thread, or be
+        // destroyed unrun; a destroyed job releases its request. A job held past
+        // device shutdown builds nothing.
+        std::function<void(std::function<void()> job, PipelineBuildPriority priority)> Dispatch;
+        // True on a thread that may wait for a Blocking job. It must be false on
+        // a thread that runs the dispatched jobs, so a wait never holds the
+        // worker its build needs. Empty: every thread builds its misses itself.
+        std::function<bool()> CallerMayWait;
+    };
     void SetPipelineBuildDispatcher(PipelineBuildDispatcher dispatcher);
 
     // Returns the count of pipelines actually created (cache hits not counted).
@@ -3061,6 +3090,10 @@ class IDevice
     }
 
   protected:
+    // The layouts of @p ids by value, copied under the cache mutex: a build on a job thread can run
+    // while interning reallocates the storage that a Lookup pointer aliases.
+    std::vector<DescriptorSetLayoutDesc> CopyDescriptorSetLayouts(std::span<const DescriptorSetLayoutId> ids) const;
+
     // Intern tables + (id, formatKey) → handle map + tag-based selective
     // invalidation. Owned via unique_ptr so PipelineCache stays
     // forward-declared in this header (avoids include cycle).
@@ -3075,8 +3108,8 @@ class IDevice
     // inside a backend create call while the objects it uses are destroyed.
     void InvokePerDeviceCacheCleanups();
     // Advance the descriptor-set cache one frame and destroy the sets not used for more than
-    // kFramesKeptAfterLastUse frames. Backends call this in BeginFrame when the slot's previous frame is
-    // done: Metal and WebGPU after the transient-set recycle, Vulkan after the slot fence, D3D12 (no fences) first.
+    // kFramesKeptAfterLastUse frames. Backends call this once a frame, when the slot's previous frame is done: Metal
+    // at a frame's end and WebGPU in BeginFrame, after the transient-set recycle; Vulkan after the slot fence; D3D12 (no fences) first.
     void AgeCachedDescriptorSets();
     // Stop returning the cached sets that bind this resource. Backends call these first in
     // each Destroy* of a resource that a set can bind.
@@ -3105,8 +3138,20 @@ class IDevice
         PipelineFormatKey FormatKey{};
     };
     PipelineBuildState RequestPipelineBuild(const PipelineBuildRequest& request);
-    PipelineHandle TryGetWarmPipeline(const PipelineBuildRequest& request) const;
-    // The single-flight join every synchronous miss goes through.
+    // The cache probe of the device's own lookups, by cache key. It does not count a miss, because
+    // these lookups start or wait for the build themselves.
+    PipelineHandle ProbeWarmPipeline(uint64_t key) const;
+    // Counts a lookup of `key` in m_BuildingPipelineLookups when its build is queued or running.
+    void CountLookupIfBuilding(uint64_t key) const;
+    // Every synchronous miss: a worker build this thread waits for when the
+    // dispatcher allows it, else BuildPipelineOnCallingThread.
+    PipelineHandle GetOrBuildPipeline(const PipelineBuildRequest& request);
+    // The dispatcher when the calling thread may wait for a Blocking build.
+    std::shared_ptr<const PipelineBuildDispatcher> DispatcherForWaitingCaller() const;
+    // Hands the build of the request queued under `ticket` to the dispatcher.
+    void DispatchQueuedPipelineBuild(const PipelineBuildDispatcher& dispatcher, const PipelineBuildRequest& request,
+                                     uint64_t ticket, uint64_t invalidationEpoch, PipelineBuildPriority priority);
+    // The single-flight join of a synchronous miss built on the calling thread.
     PipelineHandle BuildPipelineOnCallingThread(const PipelineBuildRequest& request);
     // The build of a queued request whose job claimed its ticket in the table.
     void RunClaimedPipelineBuild(const PipelineBuildRequest& request);
@@ -3117,12 +3162,18 @@ class IDevice
                                                     uint64_t invalidationEpoch, bool& published);
     PipelineHandle CreateAndPublishComputePipeline(ComputePipelineId id, uint64_t invalidationEpoch,
                                                    bool& published);
+    // Each backend records the SPIR-V stage inputs of a pipeline build when the host set a stage
+    // record file (SetPrecompiledShaderFiles), so the next Mac export compiles them offline.
+    void RecordPipelineStages(const GraphicsPipelineDesc& gd);
+    void RecordPipelineStages(const ComputePipelineDesc& cd);
 
     // Queued, running and failed builds by cache key (Source/Core/Pipeline/PipelineBuildTable.h).
     // Shared with every dispatched job, which reaches the device only after
     // claiming its row: Shutdown cancels the queued rows, so a job that outlives
     // the device touches the table alone.
     std::shared_ptr<PipelineBuildTable> m_PipelineBuilds;
+    // GetBuildingPipelineLookupCount. Mutable: the const TryGetWarm* probes count.
+    mutable std::atomic<uint64_t> m_BuildingPipelineLookups{0};
     mutable std::mutex m_PipelineBuildDispatcherMutex;
     std::shared_ptr<const PipelineBuildDispatcher> m_PipelineBuildDispatcher;
 
@@ -3137,6 +3188,7 @@ class IDevice
     mutable std::string m_LastGraphicsPipelineFailure;
     // The sets GetOrCreateDescriptorSet built, by content (Source/Core/DescriptorSetCache.h).
     std::unique_ptr<DescriptorSetCache> m_DescriptorSetCache;
+    std::unique_ptr<ShaderStageRecorder> m_StageRecorder;
 };
 
 /**

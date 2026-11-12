@@ -13,6 +13,7 @@
 #include <cctype>
 #include <chrono>
 #include <fstream>
+#include <string_view>
 #include <thread>
 
 namespace
@@ -25,15 +26,10 @@ const char* kApiFiles      = "https://api.polyhaven.com/files/";
 constexpr int kMaxRetries    = 5;
 constexpr int kRetryDelaySec = 2;
 
-bool DownloadFile(const std::string& url, const std::filesystem::path& dest)
+// Writes bytes beside dest, then publishes them at dest. File-existence checks run on the UI thread
+// and in other editors while a worker writes, so a reader sees no file or the complete file.
+bool WriteAndPublishFile(const std::filesystem::path& dest, std::string_view bytes)
 {
-    auto resp = GameEngine::HttpClient::Get(url);
-    if (!resp.success || resp.body.empty())
-    {
-        Logger::Log::Warning("Polyhaven: GET failed for '{}': {}", url,
-                                         resp.error.empty() ? "empty body" : resp.error);
-        return false;
-    }
     std::error_code ec;
     std::filesystem::create_directories(dest.parent_path(), ec);
     if (ec)
@@ -43,21 +39,14 @@ bool DownloadFile(const std::string& url, const std::filesystem::path& dest)
         return false;
     }
 
-    // Publish downloads atomically. File-existence checks run on the UI thread
-    // while this worker is downloading, so writing directly to the final path
-    // can expose a truncated buffer or texture as a completed dependency.
-    std::filesystem::path temp = dest;
-    temp += ".part";
-    std::filesystem::remove(temp, ec);
-    ec.clear();
-
+    const std::filesystem::path temp = GameEngine::FileSystem::MakeTemporarySiblingPath(dest);
     std::ofstream of(temp, std::ios::binary | std::ios::trunc);
     if (!of)
     {
         Logger::Log::Warning("Polyhaven: cannot open '{}' for writing", temp.string());
         return false;
     }
-    of.write(resp.body.data(), static_cast<std::streamsize>(resp.body.size()));
+    of.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
     of.close();
     if (!of)
     {
@@ -67,6 +56,18 @@ bool DownloadFile(const std::string& url, const std::filesystem::path& dest)
     }
 
     return GameEngine::FileSystem::PublishFile(temp, dest);
+}
+
+bool DownloadFile(const std::string& url, const std::filesystem::path& dest)
+{
+    auto resp = GameEngine::HttpClient::Get(url, {}, {});
+    if (!resp.success || resp.body.empty())
+    {
+        Logger::Log::Warning("Polyhaven: GET failed for '{}': {}", url,
+                                         resp.error.empty() ? "empty body" : resp.error);
+        return false;
+    }
+    return WriteAndPublishFile(dest, resp.body);
 }
 
 bool IsCompleteDownloadedFile(const std::filesystem::path& mainFile)
@@ -171,6 +172,53 @@ std::string PolyhavenService::TypeKeyForType(const std::string& type)
 namespace
 {
 
+constexpr std::string_view kPngFormatParameter = "format=png";
+constexpr std::string_view kPngSignature = "\x89PNG\r\n\x1a\n";
+constexpr int kThumbnailAttempts = 2;
+constexpr std::chrono::milliseconds kThumbnailRetryDelay{500};
+
+// The CDN encodes a thumbnail in the format its query names. The API names WebP, which the editor
+// cannot decode, so the request names PNG: a "format" parameter of any case is replaced, else added
+// before the fragment.
+std::string ThumbnailUrlRequestingPng(const std::string& url)
+{
+    const std::vector<std::string_view> targetAndFragment = Split(url, '#');
+    const std::string_view target = targetAndFragment.empty() ? std::string_view() : targetAndFragment.front();
+    const std::string_view fragment = std::string_view(url).substr(target.size());
+    const size_t queryStart = target.find('?');
+    if (queryStart == std::string_view::npos)
+        return std::string(target) + "?" + std::string(kPngFormatParameter) + std::string(fragment);
+
+    std::vector<std::string_view> parameters;
+    bool hasFormat = false;
+    for (std::string_view parameter : Split(target.substr(queryStart + 1), '&'))
+    {
+        const std::vector<std::string_view> nameAndValue = Split(parameter, '=');
+        const bool isFormat = !nameAndValue.empty() && EqualsIgnoreCase(nameAndValue.front(), "format");
+        hasFormat = hasFormat || isFormat;
+        parameters.push_back(isFormat ? kPngFormatParameter : parameter);
+    }
+    if (!hasFormat)
+        parameters.push_back(kPngFormatParameter);
+    return std::string(target.substr(0, queryStart + 1)) + Join(parameters, "&") + std::string(fragment);
+}
+
+// True for the API's slugs: lowercase letters, digits, '_' and '-'. Other text can name a path
+// outside the cache folder.
+bool IsPlainSlug(std::string_view slug)
+{
+    return !slug.empty() && std::all_of(slug.begin(), slug.end(), [](char c)
+                                        { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-'; });
+}
+
+std::string ContentTypeOf(const HttpClient::HttpResponse& response)
+{
+    for (const auto& [name, value] : response.headers)
+        if (EqualsIgnoreCase(name, "Content-Type"))
+            return value;
+    return {};
+}
+
 // False when this build cannot make HTTP requests at all. The retry loops below
 // exist for transient network failures; against a platform with no HTTP backend
 // they would spin their full count on every call, and the browser's asset panel
@@ -204,7 +252,7 @@ PolyhavenService::CategoriesResult PolyhavenService::FetchCategories(const std::
         if (attempt > 0)
             std::this_thread::sleep_for(std::chrono::seconds(kRetryDelaySec));
 
-        auto resp = HttpClient::Get(url);
+        auto resp = HttpClient::Get(url, {}, {});
         if (!resp.success || resp.statusCode != 200 || resp.body.empty())
         {
             Logger::Log::Warning("Polyhaven: categories API failed {} (status {}), attempt {}/{}",
@@ -264,7 +312,7 @@ PolyhavenService::ManifestResult PolyhavenService::FetchManifest(const std::stri
         if (attempt > 0)
             std::this_thread::sleep_for(std::chrono::seconds(kRetryDelaySec));
 
-        auto resp = HttpClient::Get(url);
+        auto resp = HttpClient::Get(url, {}, {});
         if (!resp.success || resp.statusCode != 200 || resp.body.empty())
         {
             Logger::Log::Warning("Polyhaven: assets API failed {} (status {}), attempt {}/{}",
@@ -307,44 +355,86 @@ PolyhavenService::ManifestResult PolyhavenService::FetchManifest(const std::stri
 PolyhavenLoadResult PolyhavenService::MaterializeBatch(
     const std::vector<PolyhavenManifestEntry>& manifest,
     size_t startIndex, size_t endIndex,
-    const std::string& typeKey)
+    const std::string& typeKey,
+    const ThumbnailFetch& fetch)
 {
     PolyhavenLoadResult out;
     out.typeKey = typeKey;
     if (startIndex >= manifest.size() || startIndex >= endIndex)
         return out;
 
-    std::filesystem::path cacheDir = GetCacheDir();
-    if (cacheDir.empty())
+    if (GetCacheDir().empty())
         return out;
 
+    size_t refusedCount = 0;
+    std::string firstRefusedSlug;
+    std::string firstRefusedContentType;
+    size_t skippedCount = 0;
+    std::string firstSkippedSlug;
     size_t end = std::min(endIndex, manifest.size());
     for (size_t i = startIndex; i < end; ++i)
     {
         const auto& e = manifest[i];
-        std::filesystem::path cachePath = cacheDir / (e.slug + ".png");
+        std::filesystem::path cachePath = GetThumbnailPath(e.slug);
+        if (cachePath.empty())
+        {
+            if (skippedCount++ == 0)
+                firstSkippedSlug = e.slug;
+            continue;
+        }
         if (!std::filesystem::exists(cachePath))
         {
-            for (int thumbAttempt = 0; thumbAttempt < 2; ++thumbAttempt)
+            const std::optional<PolyhavenThumbnailResponse> response = fetch(ThumbnailUrlRequestingPng(e.thumbUrl));
+            if (response && !response->body.starts_with(kPngSignature))
             {
-                if (thumbAttempt > 0)
-                    std::this_thread::sleep_for(std::chrono::milliseconds(500));
-                auto resp = HttpClient::Get(e.thumbUrl);
-                if (resp.success && resp.statusCode == 200 && !resp.body.empty())
+                if (refusedCount++ == 0)
                 {
-                    std::ofstream of(cachePath, std::ios::binary);
-                    if (of)
-                    {
-                        of.write(resp.body.data(), static_cast<std::streamsize>(resp.body.size()));
-                        break;
-                    }
+                    firstRefusedSlug = e.slug;
+                    firstRefusedContentType = response->contentType;
                 }
             }
+            else if (response)
+            {
+                WriteAndPublishFile(cachePath, response->body);
+            }
         }
-        if (std::filesystem::exists(cachePath))
-            out.pathAndLabels.emplace_back(cachePath, e.name);
+        out.pathAndLabels.emplace_back(cachePath, e.name);
     }
+    if (refusedCount > 0)
+        Logger::Log::Warning("Polyhaven: thumbnails from Poly Haven's server are not PNG data: {} of the assets "
+                             "just listed, for example '{}' (content type '{}'). The Assets panel lists these assets "
+                             "without a picture. The editor asks for '{}'. Update the editor; if the newest editor "
+                             "still shows this, report it.",
+                             refusedCount, firstRefusedSlug, firstRefusedContentType, kPngFormatParameter);
+    if (skippedCount > 0)
+        Logger::Log::Warning("Polyhaven: asset names from Poly Haven's server are not plain file names: {} of the "
+                             "assets just listed, for example '{}'. The Assets panel does not list these assets. "
+                             "Update the editor; if the newest editor still shows this, report it.",
+                             skippedCount, firstSkippedSlug);
     return out;
+}
+
+std::optional<PolyhavenThumbnailResponse> PolyhavenService::FetchThumbnail(const std::string& url)
+{
+    for (int attempt = 0; attempt < kThumbnailAttempts; ++attempt)
+    {
+        if (attempt > 0)
+            std::this_thread::sleep_for(kThumbnailRetryDelay);
+        HttpClient::HttpResponse response = HttpClient::Get(url, {}, {});
+        if (response.success && response.statusCode == 200 && !response.body.empty())
+            return PolyhavenThumbnailResponse{ContentTypeOf(response), std::move(response.body)};
+    }
+    return std::nullopt;
+}
+
+std::filesystem::path PolyhavenService::GetThumbnailPath(const std::string& slug)
+{
+    if (!IsPlainSlug(slug))
+        return {};
+    const std::filesystem::path cacheDir = GetCacheDir();
+    if (cacheDir.empty())
+        return {};
+    return cacheDir / "Thumbnails" / (slug + ".png");
 }
 
 std::filesystem::path PolyhavenService::GetCacheDir()
@@ -495,7 +585,7 @@ std::filesystem::path PolyhavenService::DownloadAsset(const std::string& slug,
                                                        const std::function<void(size_t, size_t)>& onProgress)
 {
     std::string filesUrl = std::string(kApiFiles) + slug;
-    auto resp = HttpClient::Get(filesUrl);
+    auto resp = HttpClient::Get(filesUrl, {}, {});
     if (!resp.success || resp.statusCode != 200 || resp.body.empty())
     {
         Logger::Log::Warning("Polyhaven download: API failed for '{}'", slug);
@@ -607,7 +697,7 @@ std::filesystem::path PolyhavenService::DownloadHDRI(const std::string& slug,
                                                       const std::string& resolution)
 {
     std::string filesUrl = std::string(kApiFiles) + slug;
-    auto resp = HttpClient::Get(filesUrl);
+    auto resp = HttpClient::Get(filesUrl, {}, {});
     if (!resp.success || resp.statusCode != 200 || resp.body.empty())
     {
         Logger::Log::Warning("Polyhaven HDRI download: API failed for '{}'", slug);
@@ -665,7 +755,7 @@ bool PolyhavenService::DownloadTextureMaps(const std::string& slug,
 {
     // Fetch file list from API
     std::string url = std::string(kApiFiles) + slug;
-    auto resp = HttpClient::Get(url);
+    auto resp = HttpClient::Get(url, {}, {});
     if (!resp.success || resp.body.empty())
     {
         Logger::Log::Warning("Polyhaven: failed to fetch file list for '{}'", slug);

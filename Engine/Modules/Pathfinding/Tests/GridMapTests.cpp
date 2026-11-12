@@ -147,6 +147,16 @@ TEST_F(GridMapTest, IsSegmentClearCountsTheOpenCellsAsOpen)
     EXPECT_FALSE(m_Map->IsSegmentClear(2.5f, 4.8f, 9.5f, 4.8f, 0.45f, &elsewhere));
 }
 
+// Cells off the grid inside `openCells` count as open: a segment that ends 0.16 m from the grid's
+// edge is clear for a radius of 0.45 m only when the range holds the column off the grid.
+TEST_F(GridMapTest, IsSegmentClearCountsTheOpenCellsOffTheGridAsOpen)
+{
+    const GridMap::CellRange pastTheEdge{-1, 4, 1, 6};
+
+    EXPECT_TRUE(m_Map->IsSegmentClear(3.5f, 5.5f, 0.16f, 5.5f, 0.45f, &pastTheEdge));
+    EXPECT_FALSE(m_Map->IsSegmentClear(3.5f, 5.5f, 0.16f, 5.5f, 0.45f));
+}
+
 // #4044: off the grid counts as blocked, so a body near the grid's edge does not fit.
 TEST_F(GridMapTest, IsPointNavigableKeepsTheRadiusFromTheGridEdge)
 {

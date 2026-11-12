@@ -102,7 +102,7 @@ TEST(ModelEntityFactoryHelperNodes, ChildListedBeforeParentAttachesToParentWithL
 
     const auto* xf = world.GetComponent<GameEngine::Components::Transform>(byName.at("Child"));
     ASSERT_NE(xf, nullptr);
-    EXPECT_FLOAT_EQ(xf->matrix[12], kChildLocalX)
+    EXPECT_FLOAT_EQ((xf->GetPosition() - GameEngine::Mathematics::WorldPosition{}).x, kChildLocalX)
         << "a helper-node-parented child must carry its local transform, not its world transform";
 
     const auto* parentParentRef = world.GetComponent<GameEngine::Components::Parent>(byName.at("ParentNode"));
@@ -139,7 +139,7 @@ TEST(ModelEntityFactoryHelperNodes, BoneParentedNodeRootsWithWorldTransform)
 
     const auto* xf = world.GetComponent<GameEngine::Components::Transform>(socket);
     ASSERT_NE(xf, nullptr);
-    EXPECT_FLOAT_EQ(xf->matrix[12], kChildWorldX)
+    EXPECT_FLOAT_EQ((xf->GetPosition() - GameEngine::Mathematics::WorldPosition{}).x, kChildWorldX)
         << "a bone-parented node must carry its world transform";
 
     const auto* skeletonRef = world.GetComponent<GameEngine::Components::SkeletonRef>(socket);
@@ -188,17 +188,21 @@ TEST(ModelEntityFactoryRoot, ASoleMeshTurnedByItsNodeSitsBelowAnIdentityRoot)
 
     const auto* rootTransform = world.GetComponent<GameEngine::Components::Transform>(result.rootEntity);
     ASSERT_NE(rootTransform, nullptr);
-    const GameEngine::Components::Transform identity{};
+    const GameEngine::Mathematics::Matrix4x4 rootMatrix =
+        rootTransform->ToMatrix4x4(rootTransform->GetPosition() - GameEngine::Mathematics::WorldPosition{});
+    const GameEngine::Mathematics::Matrix4x4 identity = GameEngine::Mathematics::Matrix4x4::Identity();
     for (int i = 0; i < 16; ++i)
-        EXPECT_FLOAT_EQ(rootTransform->matrix[i], identity.matrix[i]) << "root matrix element " << i;
+        EXPECT_FLOAT_EQ(rootMatrix.Data()[i], identity.Data()[i]) << "root matrix element " << i;
 
     const auto* parent = world.GetComponent<GameEngine::Components::Parent>(mesh);
     ASSERT_NE(parent, nullptr);
     EXPECT_EQ(parent->Entity, result.rootEntity);
     const auto* meshTransform = world.GetComponent<GameEngine::Components::Transform>(mesh);
     ASSERT_NE(meshTransform, nullptr);
+    const GameEngine::Mathematics::Matrix4x4 meshMatrix =
+        meshTransform->ToMatrix4x4(meshTransform->GetPosition() - GameEngine::Mathematics::WorldPosition{});
     for (int i = 0; i < 16; ++i)
-        EXPECT_FLOAT_EQ(meshTransform->matrix[i], turnedAboutX[i]) << "mesh matrix element " << i;
+        EXPECT_FLOAT_EQ(meshMatrix.Data()[i], turnedAboutX[i]) << "mesh matrix element " << i;
 
     device->Shutdown();
 }

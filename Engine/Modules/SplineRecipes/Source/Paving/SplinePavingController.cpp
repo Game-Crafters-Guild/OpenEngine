@@ -1,16 +1,21 @@
 #include "SplineRecipes/Paving/SplinePavingController.h"
 
+#include "Assets/AssetManager.h"
+#include "Assets/MaterialAsset.h"
 #include "Assets/ModelAsset.h"
 #include "Components/Name.h"
 #include "Components/Rendering/MeshRenderer.h"
+#include "Core/CpuProfiler.h"
 #include "Core/Engine.h"
 #include "ECS/Systems.h"
 #include "ECS/World.h"
 #include "ECSModules/Rendering/RenderingLoop.h"
 #include "Engine/Rendering/RenderServices.h"
 #include "Mathematics/Geometry.h"
+#include "../SplineSurfaceConformInternal.h"
 #include "PavingMesh.h"
 #include "PavingRoadUV.h"
+#include "PavingSeam.h"
 #include "Rendering/Materials/MaterialDocument.h"
 #include "SplineGeometry/AreaGround.h"
 #include "SplineGeometry/PavedBorder.h"
@@ -24,6 +29,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 #include <string>
 
 namespace GameEngine::SplineRecipes
@@ -32,6 +38,22 @@ namespace
 {
 
 namespace SG = GameEngine::SplineGeometry;
+
+// How far from its splines' centerlines a paving reads the ground: the widest member strip
+// (ExtrudeGroundReach) and the widest curb.
+float32 PavingGroundReach(const PavingWorld& pavings)
+{
+    float32 strip = kGroundReadSlackMetres;
+    for (const auto& spline : pavings.Splines)
+    {
+        if (spline.Strip)
+            strip = std::max(strip, ExtrudeGroundReach(*spline.Strip));
+    }
+    float32 curb = 0.0f;
+    for (const PavingCandidate& candidate : pavings.Candidates)
+        curb = std::max(curb, candidate.Recipe.BorderWidth);
+    return strip + curb;
+}
 using Mathematics::Vector2;
 using Mathematics::Vector3;
 
@@ -53,6 +75,190 @@ GUID LidKeySpace(uint32 ownerId)
 GUID BorderKeySpace(uint32 ownerId)
 {
     return GUID::Derive(GUID::Null(), "engine/mesh/spline-paving-border/" + std::to_string(ownerId));
+}
+
+GUID BandKeySpace(uint32 ownerId)
+{
+    return GUID::Derive(GUID::Null(), "engine/mesh/spline-paving-band/" + std::to_string(ownerId));
+}
+
+GUID CourseKeySpace(uint32 ownerId, const Components::MaterialRef& material)
+{
+    const GUID owner = GUID::Derive(GUID::Null(), "engine/mesh/spline-paving-course/" + std::to_string(ownerId));
+    return GUID::Derive(owner, std::string(material.ToGuid().ToString()));
+}
+
+// The built-in paving material: a mid gray.
+MaterialDocument DefaultPavingDocument()
+{
+    MaterialDocument document = MaterialDocument::CreateDefaultPBR("Spline Paving");
+    document.properties["baseColor"] = std::vector<float>{kDefaultPavingGray, kDefaultPavingGray, kDefaultPavingGray, 1.0f};
+    return document;
+}
+
+// `material`'s loaded asset. Null when the material is not loaded.
+SharedPtr<const MaterialAsset> MaterialAssetOf(const Components::MaterialRef& material)
+{
+    AssetManager* assets = EngineCore::GetInstance().TryGetAssetManager();
+    if (!assets || material.IsNull())
+        return nullptr;
+    return std::dynamic_pointer_cast<const MaterialAsset>(assets->GetAsset(material.ToGuid()));
+}
+
+// A copy of the document of `material`'s loaded asset. None when the material is not loaded.
+std::optional<MaterialDocument> MaterialDocumentOf(const Components::MaterialRef& material)
+{
+    const SharedPtr<const MaterialAsset> asset = MaterialAssetOf(material);
+    if (!asset)
+        return std::nullopt;
+    return asset->GetDocument();
+}
+
+// What the seams read of a paving material: its pattern's symmetry tag and its albedo tiling. A turned
+// tiling has no symmetry the seams can use; a material that is not loaded reads as untagged.
+PavingSeamMaterial SeamMaterialOf(const Components::MaterialRef& material)
+{
+    PavingSeamMaterial seamMaterial;
+    const SharedPtr<const MaterialAsset> asset = MaterialAssetOf(material);
+    if (!asset)
+        return seamMaterial;
+    const MaterialDocument& document = asset->GetDocument();
+    seamMaterial.Symmetry = document.patternSymmetry;
+    const auto transform = document.textureTransforms.find("albedoMap");
+    if (transform == document.textureTransforms.end())
+        return seamMaterial;
+    // {m00, m01, offsetX, unused, m10, m11, offsetY, unused}
+    const std::array<float, 8>& rows = transform->second;
+    if (rows[1] != 0.0f || rows[4] != 0.0f || rows[0] == 0.0f || rows[5] == 0.0f)
+    {
+        seamMaterial.Symmetry = MaterialPatternSymmetry::None;
+        return seamMaterial;
+    }
+    seamMaterial.TilesPerUV = Vector2(std::abs(rows[0]), std::abs(rows[5]));
+    return seamMaterial;
+}
+
+// The recipe whose seam look a road takes: its own paving, else the paving that paves the junction.
+const Components::SplinePaving& SeamRecipeOf(const PavingRoadUV& road, std::span<const PavingCandidate> candidates,
+                                             const Components::SplinePaving& owner)
+{
+    for (const PavingCandidate& candidate : candidates)
+    {
+        if (candidate.Entity.id == road.Entity)
+            return candidate.Recipe;
+    }
+    return owner;
+}
+
+// The pattern symmetry a paving's Seam reads over the regions it reaches, and the paving whose lid draws
+// them. Mixed when two regions read different symmetries; MixedOwners when two pavings own them.
+struct SeamSymmetryRead
+{
+    MaterialPatternSymmetry Symmetry{};
+    bool Mixed = false;
+    ECS::EntityHandle Owner{};
+    bool MixedOwners = false;
+};
+
+// Records `symmetry`, the symmetry of the material of the lid that `owner` owns, for the paving whose
+// Seam each of `roads` takes: the road's own paving, else the owner.
+void RecordSeamSymmetry(std::span<const PavingRoadUV> roads, std::span<const PavingCandidate> candidates,
+                        ECS::EntityHandle owner, MaterialPatternSymmetry symmetry,
+                        FlatMap<uint32, SeamSymmetryRead>& reads)
+{
+    for (const PavingRoadUV& road : roads)
+    {
+        const bool ownPaving = std::any_of(candidates.begin(), candidates.end(), [&road](const PavingCandidate& candidate)
+                                           { return candidate.Entity.id == road.Entity; });
+        const uint32 pavingId = ownPaving ? road.Entity : owner.id;
+        if (SeamSymmetryRead* read = reads.Find(pavingId))
+        {
+            read->Mixed |= read->Symmetry != symmetry;
+            read->MixedOwners |= read->Owner != owner;
+            continue;
+        }
+        reads.GetOrInsert(pavingId) = SeamSymmetryRead{symmetry, false, owner, false};
+    }
+}
+
+std::vector<PavingRoadSeam> RoadSeamsOf(std::span<const PavingRoadUV> roads, std::span<const PavingCandidate> candidates,
+                                        const Components::SplinePaving& owner)
+{
+    std::vector<PavingRoadSeam> seams;
+    seams.reserve(roads.size());
+    for (const PavingRoadUV& road : roads)
+    {
+        const Components::SplinePaving& recipe = SeamRecipeOf(road, candidates, owner);
+        seams.push_back({recipe.Seam, recipe.SeamBandTiles, recipe.SeamCourseWidth, !recipe.SeamCourseMaterial.IsNull()});
+    }
+    return seams;
+}
+
+// Appends `from` to `into`, both in the owner's space.
+void AppendLidMesh(const PavingLidMesh& from, PavingLidMesh& into)
+{
+    if (from.Vertices.empty())
+        return;
+    if (into.Vertices.empty())
+    {
+        into.MinBounds = from.MinBounds;
+        into.MaxBounds = from.MaxBounds;
+    }
+    const uint32 base = static_cast<uint32>(into.Vertices.size());
+    into.Vertices.insert(into.Vertices.end(), from.Vertices.begin(), from.Vertices.end());
+    for (const uint32 index : from.Indices)
+        into.Indices.push_back(base + index);
+    into.SecondUV.insert(into.SecondUV.end(), from.SecondUV.begin(), from.SecondUV.end());
+    into.Colors.insert(into.Colors.end(), from.Colors.begin(), from.Colors.end());
+    into.MinBounds = Vector3(std::min(into.MinBounds.x, from.MinBounds.x), std::min(into.MinBounds.y, from.MinBounds.y),
+                             std::min(into.MinBounds.z, from.MinBounds.z));
+    into.MaxBounds = Vector3(std::max(into.MaxBounds.x, from.MaxBounds.x), std::max(into.MaxBounds.y, from.MaxBounds.y),
+                             std::max(into.MaxBounds.z, from.MaxBounds.z));
+}
+
+// A lid part as an engine mesh, with its second UV and its tints when it has them.
+Mesh ToEngineLidMesh(const PavingLidMesh& part, const std::string& name)
+{
+    Mesh mesh = ToEngineMesh(part, name);
+    for (const Vector2& uv : part.SecondUV)
+        mesh.TexCoords1.insert(mesh.TexCoords1.end(), {uv.x, uv.y});
+    for (const Mathematics::Vector4& color : part.Colors)
+        mesh.Color0.insert(mesh.Color0.end(), {color.x, color.y, color.z, color.w});
+    return mesh;
+}
+
+template <typename Entries>
+auto FindCourse(Entries& courses, const Components::MaterialRef& material)
+{
+    return std::find_if(courses.begin(), courses.end(), [&material](const auto& entry) { return entry.first == material; });
+}
+
+// Adds a region's courses to `slotsByMaterial` in slot `slot`: the courses of one material share a mesh, and
+// an empty course material draws the paving's own.
+void AddCourses(const PavingLidParts& lid, std::span<const PavingRoadUV> roads, std::span<const PavingCandidate> candidates,
+                const Components::SplinePaving& owner, const std::string& name, size_t slot,
+                std::vector<std::pair<Components::MaterialRef, std::vector<Mesh>>>& slotsByMaterial)
+{
+    std::vector<std::pair<Components::MaterialRef, PavingLidMesh>> courses;
+    for (size_t road = 0; road < roads.size(); ++road)
+    {
+        if (lid.Courses[road].Indices.empty())
+            continue;
+        const Components::MaterialRef& chosen = SeamRecipeOf(roads[road], candidates, owner).SeamCourseMaterial;
+        const Components::MaterialRef material = chosen.IsNull() ? owner.Material : chosen;
+        auto course = FindCourse(courses, material);
+        if (course == courses.end())
+            course = courses.insert(courses.end(), {material, PavingLidMesh{}});
+        AppendLidMesh(lid.Courses[road], course->second);
+    }
+    for (const auto& [material, course] : courses)
+    {
+        auto slots = FindCourse(slotsByMaterial, material);
+        if (slots == slotsByMaterial.end())
+            slots = slotsByMaterial.insert(slotsByMaterial.end(), {material, {}});
+        slots->second.resize(slot + 1u);
+        slots->second[slot] = ToEngineLidMesh(course, name + "_Course");
+    }
 }
 
 // Appends a swept border run's mesh to `out`, from world space into the owner's space.
@@ -167,9 +373,22 @@ void HoldRoads(const PavingRoadTrims& previous, const PavingRoadTrims& next, std
     out.erase(std::unique(out.begin(), out.end()), out.end());
 }
 
+// A seam whose Blend draws as a hard cut: the yielding road's entity id and the entity id of what it
+// yields to, a road or, across an Area outline, the region's owner.
+struct HardCutSeam
+{
+    uint32 Road = 0;
+    uint32 Partner = 0;
+
+    // Whether the seam lies between the entities `a` and `b`, in either order.
+    bool Joins(uint32 a, uint32 b) const { return (Road == a && Partner == b) || (Road == b && Partner == a); }
+};
+
 // Who paves each junction of source `s`: nobody when its road is left out, else the owner of the
-// region its first paved arm reached.
-std::vector<PavingJunctionStatus> ResolveJunctions(const PavingWorld& paved, const PavingPlan& plan, uint32 s)
+// region its first paved arm reached. A paved junction notes when the seam between its road and the
+// source is a hard cut (`hardCuts`).
+std::vector<PavingJunctionStatus> ResolveJunctions(const PavingWorld& paved, const PavingPlan& plan, uint32 s,
+                                                   std::span<const HardCutSeam> hardCuts)
 {
     const PavingSource& source = paved.Sources[s];
     std::vector<PavingJunctionStatus> junctions = paved.Candidates[s].Junctions;
@@ -199,6 +418,10 @@ std::vector<PavingJunctionStatus> ResolveJunctions(const PavingWorld& paved, con
             junction.State = owner == s ? PavingJunctionState::Paved : PavingJunctionState::PavedByOther;
             if (owner != s)
                 junction.PavedBy = paved.Candidates[owner].Entity;
+            const uint32 sourceEntity = paved.Candidates[s].Entity.id;
+            junction.SeamDrawsHardCut =
+                std::any_of(hardCuts.begin(), hardCuts.end(), [&junction, sourceEntity](const HardCutSeam& seam)
+                            { return seam.Joins(junction.Road.id, sourceEntity); });
             break;
         }
     }
@@ -260,6 +483,9 @@ void SplinePavingController::Update(ECS::World& world, Engine::Renderer::RenderS
         {
             owner.Lid.DropAfterWorldReset(&renderServices.GetMeshGPURegistry());
             owner.Border.DropAfterWorldReset(&renderServices.GetMeshGPURegistry());
+            owner.Band.DropAfterWorldReset(&renderServices.GetMeshGPURegistry());
+            for (CourseChunks& courses : owner.Courses)
+                courses.Chunks.DropAfterWorldReset(&renderServices.GetMeshGPURegistry());
         }
         m_Owners.Clear();
         m_RoadTrims.Clear();
@@ -286,15 +512,27 @@ void SplinePavingController::Update(ECS::World& world, Engine::Renderer::RenderS
 
     ObservedState current;
     for (const PavingCandidate& candidate : observed.Candidates)
-        current.Recipes.push_back({candidate.Entity.id, PavingGeometryKey(candidate.Recipe)});
+    {
+        const PavingSeamMaterial seamMaterial = SeamMaterialOf(candidate.Recipe.Material);
+        current.Recipes.push_back({candidate.Entity.id, PavingGeometryKey(candidate.Recipe),
+                                   seamMaterial.Symmetry, seamMaterial.TilesPerUV});
+    }
     current.Splines = observed.Splines;
     current.Junctions = observed.Junctions;
-    // Every paving reads the ground: the lid lies on it.
-    current.SurfaceRevision = ObservedSurfaceRevision(true, ConformSurfaceRevision(world, ResolveTerrainModifierSystem()));
+    // Every paving reads the ground under its runs: the lid lies on it.
+    const TerrainECS::TerrainModifierSystem* modifierSystem = ResolveTerrainModifierSystem();
+    const Mathematics::AABB groundReach = GroundReach(observed.Bounds, PavingGroundReach(observed));
+    current.SurfaceRevision = ObservedSurfaceRevision(
+        true, m_Ground.Revision(world, modifierSystem, groundReach,
+                                ConformSurfaceRevision(world, modifierSystem, UnboundedConformRun())));
 
     bool outputsAlive = true;
     for (const auto& [ownerId, owner] : m_Owners)
-        outputsAlive &= owner.Lid.ChunksAlive(world) && owner.Border.ChunksAlive(world);
+    {
+        outputsAlive &= owner.Lid.ChunksAlive(world) && owner.Border.ChunksAlive(world) && owner.Band.ChunksAlive(world);
+        for (const CourseChunks& courses : owner.Courses)
+            outputsAlive &= courses.Chunks.ChunksAlive(world);
+    }
     const ConformSurfaceReadiness readiness = ConformSurfaceState(world, observed.Bounds);
     const uint32 firstEntity = observed.Candidates.front().Entity.id;
     if (!m_Gate.ShouldRebuild(current, outputsAlive, readiness, true, deltaSeconds, firstEntity))
@@ -315,7 +553,13 @@ void SplinePavingController::Update(ECS::World& world, Engine::Renderer::RenderS
     m_Hold.Held = false;
     const bool worldDirty = Rebuild(world, renderServices, GatherPavings(world, PavingGatherDepth::Full), states);
     if (!m_Hold.Held)
+    {
+        // The build fetched pages and recorded what it read: the built revision is the ground after the build.
+        current.SurfaceRevision = ObservedSurfaceRevision(
+            true, m_Ground.Revision(world, modifierSystem, groundReach,
+                                    ConformSurfaceRevision(world, modifierSystem, UnboundedConformRun())));
         m_Gate.MarkBuilt(current);
+    }
     if (worldDirty)
         world.ProcessCommands();
 }
@@ -336,8 +580,10 @@ bool SplinePavingController::Rebuild(ECS::World& world, Engine::Renderer::Render
     }
 
     const std::vector<SG::PavedVerge> armVerges = ArmVerges(plan, paved.Splines);
-    // Per owner, its regions' lids and borders in region order.
-    FlatMap<uint32, std::pair<std::vector<Mesh>, std::vector<Mesh>>> built;
+    // Per owner, its regions' meshes in region order.
+    FlatMap<uint32, OwnerMeshes> built;
+    FlatMap<uint32, SeamSymmetryRead> seamSymmetries;
+    std::vector<HardCutSeam> hardCuts;
     for (uint32 r = 0; r < plan.Footprint.Regions.size(); ++r)
     {
         const SG::PavedRegion& region = plan.Footprint.Regions[r];
@@ -346,13 +592,24 @@ bool SplinePavingController::Rebuild(ECS::World& world, Engine::Renderer::Render
         const SG::GroundSampler& groundAt = groundUnder[plan.RegionOwners[r]];
 
         const std::string name = "SplinePaving_" + std::to_string(owner.Entity.id) + "_" + std::to_string(r);
-        const SG::AreaGround ground = SG::BuildAreaGround(region.Pieces, SG::AreaGroundSettings{}, groundAt);
+        SG::AreaGround ground;
+        {
+            GE_CPU_PROFILE_SCOPE("SplinePaving.Rebuild.AreaGround");
+            ground = SG::BuildAreaGround(region.Pieces, SG::AreaGroundSettings{}, groundAt);
+        }
         const std::vector<PavingRoadUV> roads = RegionRoadUVs(plan, r, paved.Splines, paved.RoadRanks);
         std::vector<SG::AreaRing> outlines;
         for (const uint32 outline : region.Outlines)
             outlines.push_back(plan.Outlines[outline]);
-        const PavingLidMesh lid =
-            BuildPavingLidMesh(ground, roads, outlines, owner.WorldMatrix, PavingPatternPhase(recipe.Seed));
+        const std::vector<PavingRoadSeam> seams = RoadSeamsOf(roads, paved.Candidates, recipe);
+        const PavingSeamMaterial seamMaterial = SeamMaterialOf(recipe.Material);
+        RecordSeamSymmetry(roads, paved.Candidates, owner.Entity, seamMaterial.Symmetry, seamSymmetries);
+        PavingLidParts lid;
+        {
+            GE_CPU_PROFILE_SCOPE("SplinePaving.Rebuild.LidMesh");
+            lid = BuildPavingLidMesh(ground, roads, seams, outlines, owner.WorldMatrix, PavingPatternPhase(recipe.Seed),
+                                     seamMaterial);
+        }
 
         PavingLidMesh border;
         if (recipe.BorderWidth > 0.0f)
@@ -368,9 +625,14 @@ bool SplinePavingController::Rebuild(ECS::World& world, Engine::Renderer::Render
                 AppendInOwnerSpace(SG::BuildSplineStrip(profile, run.Stations, run.Strip), toLocal, border);
         }
 
-        auto& [lids, borders] = built.GetOrInsert(owner.Entity.id);
-        lids.push_back(ToEngineMesh(lid, name + "_Lid"));
-        borders.push_back(ToEngineMesh(border, name + "_Border"));
+        for (const PavingHardCutSeam& seam : lid.HardCutSeams)
+            hardCuts.push_back({seam.Road, seam.PartnerRoad.value_or(owner.Entity.id)});
+
+        OwnerMeshes& meshes = built.GetOrInsert(owner.Entity.id);
+        meshes.Lids.push_back(ToEngineLidMesh(lid.Lid, name + "_Lid"));
+        meshes.Borders.push_back(ToEngineMesh(border, name + "_Border"));
+        meshes.Bands.push_back(ToEngineLidMesh(lid.Band, name + "_Band"));
+        AddCourses(lid, roads, paved.Candidates, recipe, name, meshes.Lids.size() - 1u, meshes.Courses);
     }
     PavingRoadTrims trims = RoadTrimsOf(plan, groundUnder, paved.Candidates);
     if (HoldForPendingBvh(misses, paved.Candidates.front().Entity.id, m_Hold))
@@ -382,6 +644,7 @@ bool SplinePavingController::Rebuild(ECS::World& world, Engine::Renderer::Render
     m_Approaches = ApproachesOf(plan, groundUnder, paved.Candidates, paved.Sources);
     ++m_ApproachesVersion;
     ReportConformMisses(misses, paved.Candidates.front().Entity.id, m_LoggedConformMisses);
+    m_Ground.RecordBuild(misses);
 
     bool worldDirty = false;
     for (auto& [ownerId, owner] : m_Owners)
@@ -404,18 +667,27 @@ bool SplinePavingController::Rebuild(ECS::World& world, Engine::Renderer::Render
         status.Role = plan.Roles[s];
         status.PavedBy = plan.Roles[s] == PavingRole::PavedBy ? paved.Candidates[plan.PavedBy[s]].Entity
                                                                  : ECS::EntityHandle{};
-        status.Junctions = ResolveJunctions(paved, plan, s);
+        status.Junctions = ResolveJunctions(paved, plan, s, hardCuts);
         status.Notices = std::move(notices);
+        if (const SeamSymmetryRead* read = seamSymmetries.Find(candidate.Entity.id))
+        {
+            status.SeamPatternMixed = read->Mixed;
+            if (!read->Mixed)
+                status.SeamPatternSymmetry = read->Symmetry;
+            if (!read->MixedOwners)
+                status.SeamMaterialPaving = read->Owner;
+        }
 
         std::pair<BuildState, std::string_view>& last = m_LastStates.GetOrInsert(candidate.Entity.id);
         last = {plan.Roles[s] == PavingRole::NothingToPave ? BuildState::Failed : BuildState::Built,
                 ReasonFor(plan.Roles[s])};
         states.Set(candidate.Entity, last.first, last.second);
-        if (const auto* meshes = built.Find(candidate.Entity.id))
+        if (auto* meshes = built.Find(candidate.Entity.id))
         {
+            GE_CPU_PROFILE_SCOPE("SplinePaving.Rebuild.Upload");
             OwnerState& owner = m_Owners.GetOrInsert(candidate.Entity.id);
             owner.Built = true;
-            worldDirty |= CommitOwner(world, renderServices, candidate, owner, meshes->first, meshes->second);
+            worldDirty |= CommitOwner(world, renderServices, candidate, owner, *meshes);
         }
     }
 
@@ -424,25 +696,53 @@ bool SplinePavingController::Rebuild(ECS::World& world, Engine::Renderer::Render
     {
         if (owner.Built)
             return false;
-        worldDirty |= owner.Lid.Retire(world, &renderServices.GetMeshGPURegistry());
-        worldDirty |= owner.Border.Retire(world, &renderServices.GetMeshGPURegistry());
+        worldDirty |= RetireOwner(world, owner, &renderServices.GetMeshGPURegistry());
         return true;
     });
     return worldDirty;
 }
 
 bool SplinePavingController::CommitOwner(ECS::World& world, Engine::Renderer::RenderServices& renderServices,
-                                            const PavingCandidate& owner, OwnerState& state,
-                                            std::span<const Mesh> lids, std::span<const Mesh> borders)
+                                            const PavingCandidate& owner, OwnerState& state, OwnerMeshes& meshes)
 {
     const Components::SplinePaving& recipe = owner.Recipe;
     state.Look = {recipe.Material, recipe.BorderMaterial, recipe.CastShadows, recipe.ReceiveShadows};
     const Components::MaterialRef borderMaterial = recipe.BorderMaterial.IsNull() ? recipe.Material : recipe.BorderMaterial;
     Rendering::MeshGPURegistry& registry = renderServices.GetMeshGPURegistry();
-    bool worldDirty = state.Lid.CommitSlots(world, registry, owner.Entity, LidKeySpace(owner.Entity.id), lids,
-                                            RendererFor(renderServices, recipe.Material, state.Look), recipe.CastShadows);
-    worldDirty |= state.Border.CommitSlots(world, registry, owner.Entity, BorderKeySpace(owner.Entity.id), borders,
+    bool worldDirty = state.Lid.CommitSlots(world, registry, owner.Entity, LidKeySpace(owner.Entity.id), meshes.Lids,
+                                            RendererFor(renderServices, recipe.Material, state.Look),
+                                            recipe.CastShadows);
+    worldDirty |= state.Border.CommitSlots(world, registry, owner.Entity, BorderKeySpace(owner.Entity.id), meshes.Borders,
                                            RendererFor(renderServices, borderMaterial, state.Look), recipe.CastShadows);
+    // The crossfade material is registered only for an owner that draws a band.
+    const bool drawsBand = std::any_of(meshes.Bands.begin(), meshes.Bands.end(),
+                                       [](const Mesh& band) { return !band.Vertices.empty(); });
+    worldDirty |= state.Band.CommitSlots(world, registry, owner.Entity, BandKeySpace(owner.Entity.id), meshes.Bands,
+                                         drawsBand ? BandRendererFor(renderServices, recipe.Material, state.Look)
+                                                   : Components::MeshRenderer{},
+                                         recipe.CastShadows);
+    // A course material no seam draws any more gives its chunks up.
+    for (auto chunks = state.Courses.begin(); chunks != state.Courses.end();)
+    {
+        if (FindCourse(meshes.Courses, chunks->Material) != meshes.Courses.end())
+        {
+            ++chunks;
+            continue;
+        }
+        worldDirty |= chunks->Chunks.Retire(world, &registry);
+        chunks = state.Courses.erase(chunks);
+    }
+    for (auto& [material, courseMeshes] : meshes.Courses)
+    {
+        courseMeshes.resize(meshes.Lids.size());
+        auto chunks = std::find_if(state.Courses.begin(), state.Courses.end(),
+                                   [&material](const CourseChunks& course) { return course.Material == material; });
+        if (chunks == state.Courses.end())
+            chunks = state.Courses.insert(state.Courses.end(), CourseChunks{material, {}});
+        worldDirty |= chunks->Chunks.CommitSlots(world, registry, owner.Entity, CourseKeySpace(owner.Entity.id, material),
+                                                 courseMeshes, RendererFor(renderServices, material, state.Look),
+                                                 recipe.CastShadows);
+    }
     return worldDirty;
 }
 
@@ -460,6 +760,10 @@ void SplinePavingController::Rebind(ECS::World& world, Engine::Renderer::RenderS
         const Components::MaterialRef borderMaterial = recipe.BorderMaterial.IsNull() ? recipe.Material : recipe.BorderMaterial;
         owner->Lid.Rebind(world, RendererFor(renderServices, recipe.Material, look), recipe.CastShadows);
         owner->Border.Rebind(world, RendererFor(renderServices, borderMaterial, look), recipe.CastShadows);
+        if (owner->Band.HasChunks())
+            owner->Band.Rebind(world, BandRendererFor(renderServices, recipe.Material, look), recipe.CastShadows);
+        for (CourseChunks& courses : owner->Courses)
+            courses.Chunks.Rebind(world, RendererFor(renderServices, courses.Material, look), recipe.CastShadows);
     }
 }
 
@@ -468,11 +772,7 @@ Components::MeshRenderer SplinePavingController::RendererFor(Engine::Renderer::R
                                                                 const OwnerLook& look)
 {
     if (!m_DefaultMaterialRegistered && !renderServices.Materials().Registry().Find(DefaultPavingMaterialGuid()))
-    {
-        MaterialDocument doc = MaterialDocument::CreateDefaultPBR("Spline Paving");
-        doc.properties["baseColor"] = std::vector<float>{kDefaultPavingGray, kDefaultPavingGray, kDefaultPavingGray, 1.0f};
-        renderServices.RegisterAndPrewarmMaterial(DefaultPavingMaterialGuid(), doc);
-    }
+        renderServices.RegisterAndPrewarmMaterial(DefaultPavingMaterialGuid(), DefaultPavingDocument());
     m_DefaultMaterialRegistered = true;
 
     // Null and unrenderable materials both take the built-in one (SplinePieceMaterial.h).
@@ -486,6 +786,24 @@ Components::MeshRenderer SplinePavingController::RendererFor(Engine::Renderer::R
     renderer.receiveShadows = look.ReceiveShadows;
     // Vertices replaced under a stable handle have no previous-frame match.
     renderer.motionVectors = false;
+    return renderer;
+}
+
+Components::MeshRenderer SplinePavingController::BandRendererFor(Engine::Renderer::RenderServices& renderServices,
+                                                                    const Components::MaterialRef& material,
+                                                                    const OwnerLook& look)
+{
+    Components::MeshRenderer renderer = RendererFor(renderServices, material, look);
+    const GUID bound = renderer.materialAssetGuid.ToGuid();
+    std::optional<MaterialDocument> document =
+        bound == DefaultPavingMaterialGuid() ? std::optional(DefaultPavingDocument()) : MaterialDocumentOf(material);
+    // A material with no document to copy draws the band with uv0 only.
+    if (!document)
+        return renderer;
+    document->properties["enableUV1Crossfade"] = true;
+    const GUID crossfade = GUID::Derive(bound, "spline-paving/seam-crossfade");
+    renderServices.RegisterAndPrewarmMaterial(crossfade, *document);
+    renderer.materialAssetGuid.Set(crossfade);
     return renderer;
 }
 
@@ -522,14 +840,22 @@ void SplinePavingController::PrefillVergeMaterial(const ECS::World& world, ECS::
         recipe.VergeMaterial = first->BorderMaterial.IsNull() ? first->Material : first->BorderMaterial;
 }
 
+bool SplinePavingController::RetireOwner(ECS::World& world, OwnerState& owner, Rendering::MeshGPURegistry* registry)
+{
+    bool worldDirty = owner.Lid.Retire(world, registry);
+    worldDirty |= owner.Border.Retire(world, registry);
+    worldDirty |= owner.Band.Retire(world, registry);
+    for (CourseChunks& courses : owner.Courses)
+        worldDirty |= courses.Chunks.Retire(world, registry);
+    owner.Courses.clear();
+    return worldDirty;
+}
+
 bool SplinePavingController::RetireAll(ECS::World& world, Rendering::MeshGPURegistry* registry)
 {
     bool worldDirty = false;
     for (auto& [ownerId, owner] : m_Owners)
-    {
-        worldDirty |= owner.Lid.Retire(world, registry);
-        worldDirty |= owner.Border.Retire(world, registry);
-    }
+        worldDirty |= RetireOwner(world, owner, registry);
     m_Owners.Clear();
     return worldDirty;
 }

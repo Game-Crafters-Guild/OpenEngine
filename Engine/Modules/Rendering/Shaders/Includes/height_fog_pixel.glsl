@@ -25,7 +25,7 @@ void GE_HeightFogAtPixel(vec2 uv, float rawDepth, out vec3 scattering, out float
     vec3 viewDirWS = normalize(transpose(mat3(ViewParams.ge_view)) * normalize(pV.xyz));
     vec3 originWS = ViewParams.ge_cameraPosWS.xyz;
     if (sky)
-        GE_HeightFogSky(originWS, viewDirWS, ViewParams.ge_nearFar.y, uv, scattering, transmittance);
+        GE_HeightFogSky(originWS, viewDirWS, ViewParams.ge_viewRanges.y, uv, scattering, transmittance);
     else
         GE_HeightFogSurface(originWS, viewDirWS, length(pV.xyz), uv, scattering, transmittance);
 }

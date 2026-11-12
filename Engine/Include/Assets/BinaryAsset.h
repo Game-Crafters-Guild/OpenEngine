@@ -26,7 +26,7 @@ public:
     /**
      * @brief Load binary data from memory (for async loading)
      */
-    bool LoadFromData(const Vector<uint8>& data) override;
+    bool LoadFromData(std::span<const uint8> data) override;
 
     /**
      * @brief Unload binary data from memory

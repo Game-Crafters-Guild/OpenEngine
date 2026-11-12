@@ -80,17 +80,19 @@ class HeldPool
     }
 
   private:
-    WorkStealingThreadPool m_Pool{1};
+    // Declared before the pool: the held job can still call m_Release.get_future() after the constructor returns.
     std::atomic<bool> m_Held{false};
     std::promise<void> m_Release;
+    WorkStealingThreadPool m_Pool{1};
     bool m_Released = false;
 };
 
 // Runs `body` as a job on a pool worker and waits for it.
 void RunOnAWorker(const std::function<void()>& body)
 {
-    WorkStealingThreadPool pool(1);
+    // Declared before the pool: the job can still be inside set_value() after the wait returns.
     std::promise<void> done;
+    WorkStealingThreadPool pool(1);
     pool.EnqueueWork([&] {
         body();
         done.set_value();

@@ -1,0 +1,41 @@
+/* The field fills the row; the dice button keeps its square at the row's right end, the way an asset
+   field keeps its buttons at its right end. */
+.seed-field-group {
+	flex-direction: row;
+	align-items: center;
+	gap: 4px;
+}
+
+.seed-field-input {
+	flex: 1 1 0%;
+	min-width: 0;
+}
+
+/* The dice button: a 16 px icon on a 22 px square that shows a plate on hover and press. The pseudo-class
+   rules match the Button sheet's :hover and .pressed specificity, so this sheet wins the tie. */
+.seed-field-new {
+	width: 22px;
+	height: 22px;
+	min-width: 22px;
+	min-height: 22px;
+	padding: 0px;
+	flex-shrink: 0;
+	cursor: pointer;
+	border-width: 0px;
+	border-radius: 3px;
+	background-color: transparent;
+	background-image: url("editor:Icons/Dice.svg");
+	background-size: 16px 16px;
+	background-repeat: no-repeat;
+	background-position: center;
+	background-image-tint: var(--ui_color_icon);
+}
+
+.seed-field-new:hover {
+	background-color: var(--ui_color_bg_hover);
+	background-image-tint: var(--ui_color_text_bright);
+}
+
+.seed-field-new.pressed {
+	background-color: var(--ui_color_bg_selected);
+}

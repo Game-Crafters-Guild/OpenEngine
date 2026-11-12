@@ -23,7 +23,9 @@
 #include <type_traits>
 #include <typeinfo>
 
+#include "Types/Fnv1a.h"
 #include "Types/StringId.h"
+#include "Types/StringUtils.h"
 #include "UI/UIEvents.h"
 #include "UI/UIStyle.h"
 #include "UI/StyleDeclaration.h"
@@ -526,11 +528,18 @@ public:
     void SetTooltip(std::string text);
     const std::string& GetTooltip() const;
 
-    // Preferred tooltip placement direction relative to the source element.
-    // Auto picks above/below the cursor (existing behaviour).
+    // The side of its anchor the tooltip sits on. Auto: below, else above. A side with no room
+    // flips to the opposite side when that one has room.
     enum class TooltipPlacement : uint8_t { Auto = 0, Right, Left, Above, Below };
     void SetTooltipPlacement(TooltipPlacement p) { m_TooltipPlacement = p; }
     TooltipPlacement GetTooltipPlacement() const { return m_TooltipPlacement; }
+
+    // The element the tooltip sits against, such as the panel that holds a grid of tiles. The
+    // bubble stays clear of `anchor` and inside its span; its arrow lines up with this element's
+    // center along the anchor's edge. A null, destroyed or hidden anchor places the tooltip against this element.
+    void SetTooltipAnchor(UIElement* anchor);
+    // Null when the tooltip sits against this element.
+    UIElement* GetTooltipAnchor() const;
 
     // Fills a mounted tooltip template: sets the text of its labels and shows or hides its
     // parts. `tooltip` holds the layout's children.
@@ -1523,16 +1532,16 @@ protected:
 
         size_t operator()(std::string_view value) const noexcept
         {
-            // Case-insensitive ASCII hash (matches attribute name normalization).
-            size_t h = 1469598103934665603ull;
-            for (char c : value)
+            // Case-insensitive ASCII FNV-1a (matches attribute name normalization).
+            uint64_t hash = Hashing::kFnv1a64OffsetBasis;
+            for (char character : value)
             {
-                if (c >= 'A' && c <= 'Z')
-                    c = static_cast<char>(c - 'A' + 'a');
-                h ^= static_cast<unsigned char>(c);
-                h *= 1099511628211ull;
+                if (character >= 'A' && character <= 'Z')
+                    character = static_cast<char>(character - 'A' + 'a');
+                hash ^= static_cast<unsigned char>(character);
+                hash *= Hashing::kFnv1a64Prime;
             }
-            return h;
+            return static_cast<size_t>(hash);
         }
 
         size_t operator()(const std::string& value) const noexcept { return operator()(std::string_view(value)); }
@@ -1542,23 +1551,7 @@ protected:
     {
         using is_transparent = void;
 
-        bool operator()(std::string_view a, std::string_view b) const noexcept
-        {
-            if (a.size() != b.size())
-                return false;
-            for (size_t i = 0; i < a.size(); ++i)
-            {
-                char ca = a[i];
-                char cb = b[i];
-                if (ca >= 'A' && ca <= 'Z')
-                    ca = static_cast<char>(ca - 'A' + 'a');
-                if (cb >= 'A' && cb <= 'Z')
-                    cb = static_cast<char>(cb - 'A' + 'a');
-                if (ca != cb)
-                    return false;
-            }
-            return true;
-        }
+        bool operator()(std::string_view a, std::string_view b) const noexcept { return EqualsIgnoreCase(a, b); }
 
         bool operator()(const std::string& a, const std::string& b) const noexcept
         {
@@ -1568,7 +1561,7 @@ protected:
 
     using AttributeMap = std::unordered_map<std::string, std::string, AttributeKeyHash, AttributeKeyEqual>;
 
-	    // Last layout rect storage
+	    // The rectangle of the last layout.
 	    float m_LastX = 0.0f;
 	    float m_LastY = 0.0f;
 	    float m_LastW = 0.0f;
@@ -1644,12 +1637,15 @@ protected:
     // of them). Both stamp it at creation. Empty means "ask the registry", which is right for
     // every ordinary control, where the C++ type does identify the tag.
     std::string m_TagName;
-    // The tooltip's text and template, allocated only for an element that has a tooltip.
+    // The tooltip's text, template and anchor, allocated only for an element that has one of them.
     struct TooltipData
     {
         std::string Text;
         TooltipTemplate Template;
+        WeakRef<> Anchor;
     };
+    // Frees m_TooltipData when it holds no text, no template and no anchor.
+    void ReleaseEmptyTooltipData();
     std::unique_ptr<TooltipData> m_TooltipData;
     TooltipPlacement m_TooltipPlacement = TooltipPlacement::Auto;
     std::vector<std::string> m_ClassNames;

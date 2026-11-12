@@ -63,10 +63,11 @@ class WebGpuQueryPool final : public IQueryPool
     // either, so they refuse rather than pretend.
     uint32_t BeginOcclusionQuery(CommandList*, const std::string& = "") override { return kInvalidQuery; }
     void EndOcclusionQuery(CommandList*, uint32_t) override {}
+    bool SupportsPipelineStatistics() const override { return false; }
     uint32_t BeginPipelineStats(CommandList*, const std::string& = "") override { return kInvalidQuery; }
     void EndPipelineStats(CommandList*, uint32_t) override {}
     bool GetOcclusionResult(uint32_t, QueryResult&) override { return false; }
-    bool GetPipelineStatsResult(uint32_t, QueryResult&) override { return false; }
+    bool GetPipelineStatsResult(uint32_t, PipelineStatistics&) const override { return false; }
 
     bool GetTimestampResult(uint32_t queryIndex, QueryResult& outResult) override;
 

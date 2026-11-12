@@ -2,6 +2,8 @@
 
 #include "Types/ScopedSubscription.h"
 #include "Engine/Rendering/IRenderFeature.h"
+#include "Mathematics/Vector2.h"
+#include "Mathematics/Vector4.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/Handle.h"
 #include "Rendering/Camera/CameraTypes.h"
@@ -57,6 +59,9 @@ public:
                                   TerrainECS::TerrainRenderFeature& terrainFeature,
                                   Rendering::ViewId viewId,
                                   uint32 frameIndex);
+    // Asks the device (IDevice::RequestComputePipeline) for the classify, plan and place pipelines that
+    // each placement dispatch uses. The backend builds run off the calling thread. Main thread.
+    void RequestPlacementPipelines(Engine::Renderer::RenderServices& rs);
 
     // One sub-mesh of the shared blade VB/IB, one per LOD. The placement compute picks a LOD per
     // cell; each LOD is drawn by its own indirect record over the range that record selects in the
@@ -133,16 +138,23 @@ public:
         float ViewRotCol0[4] = {}; // [3] = viewport height in pixels, 0 = no world pass yet
         float ViewRotCol1[4] = {}; // [3] = viewport height for the ground footprint, negated when orthographic
         float ViewRotCol2[4] = {}; // [3] = projection Y scale (CameraData::proj[5], = uP[1][1])
-        // Worst case across every active grass terrain: [0] = densest blades/m² at the camera,
-        // [1] = flattest falloff. The plan kernel's budget fit needs terms that DOMINATE every
-        // per-terrain value, which is what makes its per-ring total a bound the per-cell scan
-        // cannot exceed — and so removes any need for a runtime clamp when slots are handed out.
+        // Worst case across every active grass terrain: [0] = densest blades/m² at the camera, [1] = flattest
+        // falloff, [2] = thinnest blade (0 when a terrain draws cards), [3] = shortest blade. Terms that
+        // dominate every terrain make the budget fit's per-ring total a bound on the per-cell scan.
         float Summary[4] = {};
         // This view's render origin: xyz = sector, [3] = sector size in metres. The placement
         // compute anchors the root colour's projection UVs to it, as the draw's stages do.
         int32 RenderOriginSector[4] = {};
+        // x = widest blade over every active grass terrain, for the same bound; y = the lowest far-thinning dial.
+        Mathematics::Vector2 FloorThinning{};
+        // Meters: the farthest any blade vertex lies from its root over every active grass terrain. The
+        // classify kernel grows each cell's own box by it on every side.
+        float BladeReach = 0.0f;
+        // Meters: the tallest authored blade over every active grass terrain. The range fit's band box
+        // takes it above the highest ground.
+        float MaxBladeHeight = 0.0f;
     };
-    static_assert(sizeof(GrassPlaceParamsGPU) == 224);
+    static_assert(sizeof(GrassPlaceParamsGPU) == 240);
 
     // std140 mirror of GrassDrawParamsBuffer in terrain_grass_vertex_modifier.glsl.
     //
@@ -175,6 +187,8 @@ private:
     void EnsureBladeSegments(uint32 bladeSegments);
     void CreateBladeMesh(uint32 bladeSegments);
     bool EnsureComputePipeline(Engine::Renderer::RenderServices& rs);
+    // Compiles the three placement programs and interns their pipelines, once.
+    bool InternComputePipelines(Engine::Renderer::RenderServices& rs);
     PlacementBuffers* EnsurePlacementBuffers(Rendering::ViewId viewId, uint32 frameIndex);
     // Bring a slot's CPU-owned indirect fields up to date: each LOD's sub-mesh record, the shared
     // pool size and the draw count. They describe the blade mesh and the budget rather than the
@@ -259,6 +273,7 @@ private:
     // has to close the pool afterwards.
     Rendering::ComputePipelineId m_PlanPipelineId{};
     Rendering::PipelineHandle m_PlanPipeline{};
+    bool m_ComputePipelinesInternAttempted = false;
     bool m_ComputePipelineAttempted = false;
 
     // What EnsureIndirectConstants writes into the args block: index count, first index and vertex

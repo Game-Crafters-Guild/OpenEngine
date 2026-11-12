@@ -220,6 +220,16 @@
 	border-top: 1px solid var(--ui_color_border_subtle);
 }
 
+/* A reply the setup check refused: the editor's error notice (InspectorNotice) with the
+   failed step's finding and fix, inset like the calls. */
+.agent-row-setup-refusal {
+	display: flex;
+	flex-direction: column;
+	flex-shrink: 0;
+	min-width: 0;
+	margin: 4px 12px 4px 12px;
+}
+
 .agent-call {
 	display: flex;
 	flex-direction: column;

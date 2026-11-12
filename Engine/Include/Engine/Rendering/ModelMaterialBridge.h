@@ -22,6 +22,7 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace GameEngine
@@ -59,6 +60,9 @@ class ModelMaterialBridge
     // Convert all materials from a model asset at once.
     static std::vector<ConvertedModelMaterial> ConvertAll(const GUID& modelGuid,
                                                           const std::vector<ImportedMaterialData>& materials);
+
+    // The surface shader reference Convert gives the document of `material`.
+    static std::string_view SurfaceShaderOf(const ImportedMaterialData& material);
 
     // Derive a stable GUID for an embedded material.
     static GUID DeriveMaterialGuid(const GUID& modelGuid, uint32_t materialIndex);

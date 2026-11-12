@@ -51,7 +51,6 @@
 	--pp_color_divider: #2c2f36;
 	--pp_color_text_label: #858b96;
 	--pp_color_text_field: #d5d8de;
-	--pp_color_text_placeholder: #777e8a;
 	--pp_color_text_error: #ff9b91;
 	--pp_color_offline_text: #e8c06a;
 	--pp_color_offline_surface: #e0a84521;
@@ -464,10 +463,6 @@
 	white-space: nowrap;
 }
 
-.project-picker-modal .project-picker-small-text {
-	font-size: var(--ui_font_size_small);
-}
-
 /* ---------------------------------------------------------------------------
    Library window chrome.
 
@@ -666,22 +661,6 @@
 	z-index: 10002;
 	pointer-events: auto;
 	color: var(--pp_color_text_field);
-}
-
-.project-picker-modal .project-picker-search-placeholder {
-	position: absolute;
-	/* Offsets are measured from the field's content box, i.e. inside
-	   #project-search's 1px border, so that the hint sits exactly on the text
-	   the field itself will draw. */
-	left: 23px;
-	top: 0px;
-	width: 145px;
-	height: 29px;
-	display: flex;
-	align-items: center;
-	color: var(--pp_color_text_placeholder);
-	pointer-events: none;
-	z-index: 1;
 }
 
 .project-picker-modal #recent-projects-scroll,

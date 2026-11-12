@@ -36,11 +36,32 @@ struct RouteStation
     float32 HalfWidth = 0.0f; // swept half-width in metres
 };
 
-// The resampled route. Built once per gather and read per texel, so it owns no
-// behaviour of its own beyond being the geometry.
+// A uniform XZ grid of a polyline's segments (segment i joins stations i and i + 1).
+// Cell c lists, ascending, the segments whose padded box meets it:
+// Segments[CellStart[c], CellStart[c + 1]). Degenerate segments are left out.
+struct RouteSegmentGrid
+{
+    float32 OriginX = 0.0f;
+    float32 OriginZ = 0.0f;
+    float32 CellSize = 1.0f;
+    // Rounding slack in metres: a segment's box is padded by it, and a query
+    // stops only when its best distance is nearer than the unvisited cells by it.
+    float32 Slack = 0.0f;
+    uint32 CellsX = 0;
+    uint32 CellsZ = 0;
+    uint32 SegmentCount = 0; // the polyline's Stations.size() - 1 when built
+    std::vector<uint32> CellStart;
+    std::vector<uint32> Segments;
+};
+
+// The resampled route and the grid of its segments. Built once per gather and
+// read per texel.
 struct RoutePolyline
 {
     std::vector<RouteStation> Stations;
+    // Built from Stations by BuildRoutePolyline. With no grid for these stations,
+    // ClosestStationXZ scans every segment.
+    RouteSegmentGrid SegmentGrid;
 
     // Fewer than two stations is not a route: there is no segment to project
     // onto, and every consumer reads that as "contributes nothing".
@@ -84,15 +105,22 @@ inline constexpr uint32 kMaxRouteStations = 65536u;
 // twin to reproduce, at the end of the route where the grade matters most.
 //
 // `out` is cleared first; an unevaluable spline leaves it empty (IsValid false).
-void BuildRoutePolyline(const Spline::SplineData& spline, float32 stationSpacing,
+// The segment grid's cells scale with the query reach, the widest half-width plus
+// `falloff`, so a query in the swept band visits a few rings of cells.
+void BuildRoutePolyline(const Spline::SplineData& spline, float32 stationSpacing, float32 falloff,
                         RoutePolyline& out);
+
+// The polyline through `stations` as given, with its segment grid for `falloff`.
+void BuildRoutePolyline(std::vector<RouteStation> stations, float32 falloff, RoutePolyline& out);
 
 // Nearest point on the polyline in XZ, with the route's grade and half-width
 // interpolated linearly along the winning segment.
 //
 // Segment-nearest, not curve-nearest: the projection is clamped to each segment
 // and the segments are the geometry. Degenerate segments (both endpoints at the
-// same XZ) are skipped rather than dividing by zero.
+// same XZ) are skipped rather than dividing by zero. The query visits the grid's
+// cells around the sample; the answer has the bits of a scan of every segment,
+// and of equally near segments the lowest index wins.
 [[nodiscard]] RouteSample ClosestStationXZ(const RoutePolyline& polyline,
                                            float32 worldX, float32 worldZ);
 

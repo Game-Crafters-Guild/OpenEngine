@@ -118,12 +118,13 @@ void SaveSceneAsModal::Show(const std::filesystem::path& initialDirectory)
         // Defer focus until after the next UI tick: Show() flips display from None to Block,
         // but the element isn't fully mounted/laid out until the dispatcher drains, so an
         // immediate FocusElement can no-op on a freshly visible subtree.
-        if (auto* mgr = GetOwnerManager())
+        if (GetOwnerManager())
         {
             TextField* field = m_NameField;
-            mgr->PostToUI([mgr, field]()
+            field->PostSafeAction([field]()
             {
-                mgr->FocusElement(field);
+                if (UIManager* manager = field->GetOwnerManager())
+                    manager->FocusElement(field);
                 field->SelectAll();
             });
         }

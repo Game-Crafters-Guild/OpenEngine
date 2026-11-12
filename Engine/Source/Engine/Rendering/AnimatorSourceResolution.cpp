@@ -215,6 +215,11 @@ bool ResolveMotionPlayback(AssetManager& am,
 
 } // namespace
 
+float32 AnimatorPlaybackSpeed(const Components::Animator& animator)
+{
+    return std::max(0.0f, animator.speedScale);
+}
+
 ResolvedAnimatorPlayback ResolveAnimatorPlayback(const Components::Animator& animator, const GUID& targetModel,
                                                  AssetManager& am)
 {
@@ -224,7 +229,7 @@ ResolvedAnimatorPlayback ResolveAnimatorPlayback(const Components::Animator& ani
         : std::max(0.0f, animator.seekTimeSeconds);
 
     ResolvedAnimatorPlayback resolved;
-    resolved.SpeedScale = std::max(0.0f, animator.speedScale);
+    resolved.SpeedScale = AnimatorPlaybackSpeed(animator);
     resolved.Loop = animator.loop;
 
     switch (animator.source)

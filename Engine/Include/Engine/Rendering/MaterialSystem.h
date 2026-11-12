@@ -57,9 +57,15 @@
 #include <utility>
 #include <vector>
 
+namespace JobSystem
+{
+class TaskHandle;
+}
+
 namespace GameEngine::Rendering
 {
 struct ShaderPropertyTable;
+struct ShaderPropertyTableInputs;
 }
 
 namespace GameEngine
@@ -254,7 +260,8 @@ class MaterialSystem
 
     /// Report each compile task as a ticket: base compiles and variant-set prewarms in
     /// shader.base-compile (the project warm-up as Background work), the device's pipeline
-    /// builds in gpu.pipeline, and the variant cache's draw compiles in shader.variant.
+    /// builds in gpu.pipeline, and the variant cache's draw compiles in shader.variant. A
+    /// shader.base-compile gate waits while a compiled base pipeline waits for its publish.
     /// Owner thread, before the first submit.
     void ReportLoadingWork(SceneLoadTracker& tracker);
 
@@ -362,6 +369,12 @@ class MaterialSystem
     SurfaceTextureUse ResolveSurfaceTextureUse(const MaterialDocument& doc,
                                                const std::filesystem::path& materialAssetPath);
 
+    // This thread reconciles the shader references of each of `documents` (from `materialAssetPath`) and resolves
+    // them. Then a job parses the surfaces they compose with into the caches registration reads. Returns the job's
+    // handle: invalid when all are held, the context is cold or no engine runs.
+    JobSystem::TaskHandle ParseSurfacesOffThread(std::span<const MaterialDocument> documents,
+                                                 const std::filesystem::path& materialAssetPath);
+
     // True when the document's surface resolves outside the engine shader tree
     // and the package shader dirs — a project-authored surface. Such a surface
     // exposes parameters only by declaring them; the hand-typed lane table (and
@@ -400,6 +413,10 @@ class MaterialSystem
     MaterialShaderIdentity DeriveShaderIdentity(const MaterialDocument& doc,
                                                 const std::filesystem::path& materialAssetPath);
 
+    // The files the declared-property table of `doc` parses: the forward adapter, the resolved
+    // surface and the resolved vertex modifier. Needs a ready build context.
+    Rendering::ShaderPropertyTableInputs DeclaredPropertyInputs(const MaterialDocument& doc,
+                                                                const std::filesystem::path& materialAssetPath) const;
     // The document's surface (the engine default when it authors none) resolved
     // through the shader-root chain, from the material's own directory first
     // when its asset path is known.
@@ -500,10 +517,9 @@ class MaterialSystem
         OnDemand,
         ProjectWarmUp,
     };
-    // priority routes the worker task's lane. Base-shader / variant-set prewarm use
-    // Normal; the publish-gate variant warm-up and the device's pipeline builds
-    // pass Background so a cold burst can't starve extraction/streaming on the
-    // Normal lane, and so the compile gate admits them ahead of the Normal backlog.
+    // priority routes the worker task's lane. Work a load or a frame waits on uses Normal; the
+    // project warm-up uses Background. The compile gate's cap keeps two workers free of compiles.
+    // A thread waits for Awaited work: the gate admits it at once.
     void SubmitTrackedPrewarm(std::function<void()> work,
                               JobSystem::JobPriority priority = JobSystem::JobPriority::Normal,
                               PrewarmOrigin origin = PrewarmOrigin::OnDemand);
@@ -519,7 +535,9 @@ class MaterialSystem
                                         std::function<void()> work);
     void DrainPrewarmJobs();
     // The device's pipeline build dispatcher (IDevice::SetPipelineBuildDispatcher).
-    void DispatchPipelineBuild(std::function<void()> build);
+    void DispatchPipelineBuild(std::function<void()> build, Rendering::PipelineBuildPriority priority);
+    // True on a thread that may wait for a Blocking pipeline build: not a job worker.
+    static bool CallerMayWaitForPipelineBuild();
     void PrewarmMaterialVariantSet(const Rendering::ShaderVariantKey& key,
                                   const MaterialCompileSpec& spec,
                                   MaterialAlphaMode alphaMode,
@@ -655,9 +673,9 @@ class MaterialSystem
     };
     PrewarmCounters m_OnDemandPrewarm;
     PrewarmCounters m_ProjectWarmUp;
-    // The load categories of the compile tasks, guarded by m_PrewarmDrainMutex. ReportLoadingWork
-    // sets them once; ShutdownPhaseA revokes them before it cancels the queued tasks. While
-    // null, a submitted task carries no ticket.
+    // The load categories of the compile tasks and the publish gate, guarded by m_PrewarmDrainMutex.
+    // ReportLoadingWork sets them once; ShutdownPhaseA revokes them before it cancels the queued
+    // tasks. While null, a submitted task carries no ticket.
     struct LoadReport;
     std::shared_ptr<LoadReport> m_LoadReport;
 

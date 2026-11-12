@@ -198,11 +198,13 @@ public:
     // True while an HDRI resolution fetch is queued for this skybox entity (inspector UI).
     bool TryGetPendingHdriSkyboxResolution(ECS::EntityHandle entity, std::string& outResolution) const;
 
-    // Download all PBR texture maps for a Polyhaven texture and assign them to material slots.
+    // Download all PBR texture maps for a Polyhaven texture and assign them to the material slots of
+    // `entity` in `world`. The world must outlive the download.
     // Maps are downloaded to destDir (typically Assets/Polyhaven/<slug>/).
     // Returns true if download was started successfully.
     bool DownloadAllTextureMaps(const std::string& slug,
                                   const std::filesystem::path& destDir,
+                                  ECS::World& world,
                                   ECS::EntityHandle entity,
                                   Editor::UndoRedoService* undoRedo,
                                   Editor::EditorChangeNotifications* notifications);
@@ -231,6 +233,7 @@ private:
     // Multi-map texture assignment for PBR textures (albedo, normal, roughness, metallic, AO, etc.)
     struct MultiTextureAssignment
     {
+        ECS::World* World = nullptr; // not owned; the world of Target
         ScopedEntity Target{};
         Editor::UndoRedoService* undoRedo = nullptr;
         Editor::EditorChangeNotifications* notifications = nullptr;

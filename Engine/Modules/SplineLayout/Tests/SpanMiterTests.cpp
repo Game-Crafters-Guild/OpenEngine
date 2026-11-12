@@ -149,10 +149,7 @@ V3 ToWorld(const FenceSpan& span, const FencePieceBounds& piece, const V3& local
     Components::Transform t{};
     WriteParentLocalPose(t, SplineLayout::InvertPlacerWorld(kIdentity), span.Pose, piece.Axis(),
                          span.LengthScale);
-    const float32* m = t.matrix;
-    return V3(m[0] * local.x + m[4] * local.y + m[8] * local.z + m[12],
-              m[1] * local.x + m[5] * local.y + m[9] * local.z + m[13],
-              m[2] * local.x + m[6] * local.y + m[10] * local.z + m[14]);
+    return t.ToMatrix4x4(t.GetPosition() - Mathematics::WorldPosition{}).TransformPoint(local);
 }
 
 float32 SignedDistance(const CutPlane& plane, const V3& p)

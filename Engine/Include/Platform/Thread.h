@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <string>
 #include <thread>
+#include <vector>
 
 #if defined(__EMSCRIPTEN__)
 #  include <emscripten/threading.h>
@@ -13,6 +14,7 @@
 #  include <pthread.h>
 #elif defined(__linux__)
 #  include <pthread.h>
+#  include <sched.h>
 #  include <cstring>
 #endif
 
@@ -97,6 +99,38 @@ inline void SleepPrecise(std::chrono::duration<double> duration)
     }
 #endif
     std::this_thread::sleep_for(duration);
+}
+
+// The processors this process may run on, as mask words: processor 0 is bit 0 of word 0.
+// Empty when the read fails, when the process may use its whole processor group (Windows),
+// or when the platform has no affinity API (macOS, the browser).
+inline std::vector<std::uint64_t> GetAllowedProcessorMask()
+{
+#if defined(_WIN32)
+    // The masks cover one processor group. They are equal when the process may use the whole
+    // group, and both are 0 when the process has threads in more than one group.
+    DWORD_PTR processMask = 0;
+    DWORD_PTR systemMask = 0;
+    if (GetProcessAffinityMask(GetCurrentProcess(), &processMask, &systemMask) == 0 || processMask == systemMask)
+        return {};
+    return {static_cast<std::uint64_t>(processMask)};
+#elif defined(__linux__) && !defined(__EMSCRIPTEN__)
+    // Process id 0 reads the mask of the calling thread, which the threads it starts inherit.
+    // The read fails on a machine with more than CPU_SETSIZE processors.
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    if (sched_getaffinity(0, sizeof(set), &set) != 0)
+        return {};
+    std::vector<std::uint64_t> mask(CPU_SETSIZE / 64, 0);
+    for (int processor = 0; processor < CPU_SETSIZE; ++processor)
+    {
+        if (CPU_ISSET(processor, &set))
+            mask[processor / 64] |= std::uint64_t{1} << (processor % 64);
+    }
+    return mask;
+#else
+    return {};
+#endif
 }
 
 } // namespace GameEngine::Platform

@@ -66,7 +66,7 @@ By default the camera draws with 4x MSAA at the drawing buffer's full resolution
 - `antiAliasing`: `0` is the engine default (MSAA). Other values are the mode plus one: `1` is off, `2` is MSAA (the sample count comes from `msaaSamples`), and `3` is TAA. The web pipeline has no pass for `4` (FXAA), `5` (SMAA) or `6` (two-frame FXAA), so these give no anti-aliasing on a page.
 - `renderScale`: `0` uses the engine's scale, which is 1. A value below 1 draws the scene at that fraction of the width and height, then scales the result up to the canvas. TAA does the upscale when it runs. The user interface is not scaled.
 
-A render scale applies only to a camera that draws one sample per pixel: TAA, anti-aliasing off, or `msaaSamples: 1`. With MSAA the scale does nothing, and the engine logs one warning that tells you this.
+A render scale works with every anti-aliasing mode. With MSAA the camera draws and resolves its samples at the lower resolution, then scales the resolved image up to the canvas.
 
 ```js
 import { Camera, Engine } from '@game-crafters-guild/openengine-web';
@@ -74,7 +74,7 @@ import { Camera, Engine } from '@game-crafters-guild/openengine-web';
 const canvas = document.querySelector('canvas');
 if (!canvas) throw new Error('The page needs a <canvas> element.');
 const engine = await Engine.create({ canvas });
-engine.scene.camera.set(Camera, { antiAliasing: 3, renderScale: 0.5 });   // TAA at half width and height
+engine.scene.camera.set(Camera, { renderScale: 0.5 });   // the default MSAA at half width and height
 engine.run();
 // engine.scene.camera.set(Camera, { antiAliasing: 0, renderScale: 0 }) restores the defaults.
 ```

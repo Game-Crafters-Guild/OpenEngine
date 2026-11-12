@@ -2,6 +2,8 @@
 
 #include "AssetCore/Asset.h"
 #include "AssetCore/GUID.h"
+#include "Engine/Build/ShipRules.h"
+#include "Types/FlatMap.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -57,7 +59,8 @@ struct AssetManifest
 ///   walks recursively with cycle detection to build the transitive closure.
 /// - C# scripts and native code are NOT scanned for asset references (blind
 ///   spot): a package lists what its code loads under runtimeAssets
-///   (CollectPackageRuntimeAssets); a project references it from a built scene.
+///   (CollectPackageRuntimeAssets); a project references it from a built scene or
+///   sets its folder to Always ship (ShipRules).
 /// - Engine shaders are not GUID-tracked and must be copied separately
 ///   by the BuildPipeline (not via AssetCollector).
 /// - The manifest includes content hashes for future incremental build support.
@@ -68,15 +71,23 @@ public:
     explicit AssetCollector(AssetManager& assetManager);
 
     /// Everything a game export ships from the mounted sources, on every target (the
-    /// desktop BuildPipeline and the Web export): the walk from `scenePaths` (the project's
-    /// shippable content when the walk finds nothing, and the shippable files under
-    /// `projectAssetRoot` when the registry holds none), the render pipeline
-    /// `renderPipelinePath` names, the runtime humanoid profile and the default game UI font.
-    /// Every entry passed IsShippableContent. False with `outError` set when the humanoid
-    /// profile or the font cannot ship; `outWarnings` receives what ships incomplete.
+    /// desktop BuildPipeline and the Web export): the walk from `scenePaths` and from each
+    /// project asset whose ship rule (ShipRules: its own kv rule, else the folder files under
+    /// `projectAssetRoot`) is Always (the project's shippable content when the walks find nothing,
+    /// and the shippable files under `projectAssetRoot` when the registry holds none), the render
+    /// pipeline `renderPipelinePath` names, the runtime humanoid profile, the default game UI font
+    /// and the UI module's control assets.
+    /// Every entry passed IsShippableContent, and no project entry is Never. False with
+    /// `outError` set (one sentence per line) when a folder file or a stored rule is not valid, a
+    /// scene in the list or an engine default is Never, a walk reaches a Never asset (the sentence
+    /// names the chain), or the humanoid profile or the font cannot ship; `outWarnings` receives
+    /// what ships incomplete, and each asset whose own Never rule keeps it out of an Always folder.
     bool CollectGameContent(const std::vector<std::string>& scenePaths, const std::string& renderPipelinePath,
                             const std::filesystem::path& projectAssetRoot, AssetManifest& outManifest,
                             std::vector<std::string>& outWarnings, std::string& outError);
+
+    /// The ship rules the last CollectGameContent read, so later export steps check against the same rules.
+    const ShipRules& GetShipRules() const { return m_ShipRules; }
 
     /// Build a manifest by walking transitive dependencies from scene roots.
     AssetManifest CollectFromScenes(const std::vector<std::string>& scenePaths);
@@ -96,6 +107,13 @@ public:
     /// is resolved across the mounts like the render pipeline. Already collected is true; a
     /// path no mount supplies, or one that is not shippable content, is false.
     bool CollectDefaultUIFont(AssetManifest& manifest);
+
+    /// Append the UI module's control assets (UI::kControlAssetPaths): the stylesheets and
+    /// layouts a control requests by path in its constructor, so no scene references them, and
+    /// the icons they reference.
+    /// Each path resolves in the staged engine mount when it is mounted, as the control's
+    /// request does. Returns the paths no mount supplies, for the build to warn about.
+    std::vector<std::string> CollectUIControlAssets(AssetManifest& manifest);
 
     /// Append the render pipeline game.config names, with the assets it references by
     /// GUID or by path, whichever way the rest of the manifest was collected. The Player
@@ -146,7 +164,24 @@ private:
         std::filesystem::path Root;
     };
 
-    void WalkDependencies(const GUID& root, AssetManifest& manifest);
+    // Which nodes of a walk read their edges from the file again instead of from the registry.
+    enum class EdgeRefresh : uint8_t
+    {
+        Root,
+        EveryNode,
+    };
+
+    // Adds `root` and what it uses. With ship rules loaded, the walk does not add a Never asset
+    // or follow its edges; it adds a sentence that names the chain to m_ShipErrors.
+    void WalkDependencies(const GUID& root, AssetManifest& manifest, EdgeRefresh refresh = EdgeRefresh::Root);
+    // Walks from every shippable project asset whose ship rule is Always. Adds a line to `outWarnings`
+    // for each asset whose own Never rule keeps it out of an Always folder.
+    void CollectAlwaysShipped(AssetManifest& manifest, std::vector<std::string>& outWarnings);
+    // The canonical path of a project asset relative to the project root; empty for other mounts.
+    std::string ProjectRelativePath(const GUID& guid);
+    // The path a ship error shows for `guid`: project-relative, else the mount path.
+    std::string DisplayPath(const GUID& guid);
+    bool IsNeverShipped(const GUID& guid);
     bool TryAddAsset(const GUID& guid, AssetManifest& manifest);
     static uint64_t ComputeContentHash(const AssetMetadata& meta);
 
@@ -157,6 +192,11 @@ private:
     // packages, editor) relativize against their own root — the deepest
     // matching root wins — and the entry records its owning alias.
     std::vector<SourceRootEntry> m_SourceRoots;
+    // The project's ship rules while CollectGameContent runs, and the errors they raise.
+    ShipRules m_ShipRules;
+    std::vector<std::string> m_ShipErrors;
+    // Edges read from the file in this collection (EdgeRefresh::EveryNode), so each file is read once.
+    FlatMap<GUID, Vector<GUID>> m_FreshEdges;
 };
 
 } // namespace GameEngine

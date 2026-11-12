@@ -4,6 +4,7 @@
 #include "RecordingTurnEvents.h"
 #include "ScopedEnvironmentVariable.h"
 
+#include "LogCapture.h"
 #include "Platform/Shell.h"
 
 #include <gtest/gtest.h>
@@ -50,6 +51,19 @@ AgentTurnRequest Request(std::string userText)
 }
 
 constexpr const char* kFixtureSession = "00000000-0000-4000-8000-000000000001";
+
+// The program each fix names, by its file name on this platform.
+#if defined(_WIN32)
+const std::string kClaudeToPick = "Claude Code's claude.exe";
+const std::string kCodexToPick = "codex.exe (the native Codex program, not npm's codex.cmd)";
+#else
+const std::string kClaudeToPick = "Claude Code's claude program";
+const std::string kCodexToPick = "the codex program";
+#endif
+
+// The panel's fix for a wrong or missing Claude Code: the place of the field first.
+const std::string kClaudePanelFix = "The Claude Code executable field is in Settings > AI Assistant: pick " +
+                                    kClaudeToPick + " there, or install it from claude.com/claude-code.";
 } // namespace
 
 TEST(CliSessionProviderTests, ClaudeTurnArgumentsAreTheDesignCommandLine)
@@ -283,8 +297,11 @@ TEST(CliSessionProviderTests, AVersionCheckThatDoesNotAnswerFailsTheTurnWithTheF
 
     EXPECT_LT(std::chrono::steady_clock::now() - start, 40s);
     EXPECT_EQ(events.Result.Outcome, TurnOutcome::Failed);
-    EXPECT_EQ(events.Result.Error,
-              "Claude Code did not answer `--version` within 20 s: check its executable in Settings > AI Assistant.");
+    EXPECT_TRUE(events.Result.NotReady);
+    EXPECT_EQ(events.Result.Error, "The program at " + FakeCli() +
+                                       " did not answer \"claude --version\" within 20 s. If this is Claude Code, "
+                                       "run \"claude --version\" in a terminal to see what it waits for. " +
+                                       kClaudePanelFix);
 }
 
 TEST(CliSessionProviderTests, ACliThatExitsBeforeItsResultFailsTheTurnWithItsMessageAndKeepsTheText)
@@ -316,7 +333,7 @@ TEST(CliSessionProviderTests, AnOverlongLineFailsTheTurnWithItsMessage)
 
 TEST(CliSessionProviderTests, AClaudeOlderThanTheFloorIsRefusedWithTheFix)
 {
-    ScopedEnvironmentVariable mode("FAKE_AGENT_CLI_MODE", "old-version");
+    ScopedEnvironmentVariable mode("FAKE_AGENT_CLI_MODE", "version 2.1.200");
     ClaudeSessionProvider provider(FakeCli(), {});
     RecordingTurnEvents events;
     CancelToken cancel;
@@ -326,8 +343,29 @@ TEST(CliSessionProviderTests, AClaudeOlderThanTheFloorIsRefusedWithTheFix)
     const std::vector<std::string> expected = {"finished:"};
     EXPECT_EQ(events.Log, expected);
     EXPECT_EQ(events.Result.Outcome, TurnOutcome::Failed);
-    EXPECT_EQ(events.Result.Error,
-              "Claude Code 2.1.259 or later is required (found 2.1.200): run `claude update`.");
+    EXPECT_TRUE(events.Result.NotReady);
+    EXPECT_EQ(events.Result.Error, "Claude Code 2.1.200 at " + FakeCli() +
+                                       ". Claude Code 2.1.259 or later is required: run \"claude update\".");
+}
+
+// Issue #6287: a program that prints nothing and exits 0 (the desktop app picked by
+// mistake) is named as not Claude Code, with what it printed and the fix.
+TEST(CliSessionProviderTests, AProgramThatPrintsNothingIsRefusedAsNotClaudeCode)
+{
+    ScopedEnvironmentVariable mode("FAKE_AGENT_CLI_MODE", "silent");
+    ClaudeSessionProvider provider(FakeCli(), {});
+    RecordingTurnEvents events;
+    CancelToken cancel;
+
+    provider.RunTurn(Request("hello"), events, cancel);
+
+    EXPECT_EQ(events.Result.Outcome, TurnOutcome::Failed);
+    EXPECT_TRUE(events.Result.NotReady);
+    const std::string verdict = "This program is not Claude Code: " + FakeCli() + " answered nothing when asked for its version.";
+    EXPECT_EQ(events.Result.Error.rfind(verdict, 0), 0u) << events.Result.Error;
+    EXPECT_NE(events.Result.Error.find(kClaudePanelFix), std::string::npos) << events.Result.Error;
+    // The panel has no Browse button.
+    EXPECT_EQ(events.Result.Error.find("Browse"), std::string::npos) << events.Result.Error;
 }
 
 TEST(CliSessionProviderTests, AMissingExecutableIsRefusedWithTheFix)
@@ -339,11 +377,12 @@ TEST(CliSessionProviderTests, AMissingExecutableIsRefusedWithTheFix)
     provider.RunTurn(Request("hello"), events, cancel);
 
     EXPECT_EQ(events.Result.Outcome, TurnOutcome::Failed);
-    EXPECT_NE(events.Result.Error.find("set its path in Settings > AI Assistant"), std::string::npos)
-        << events.Result.Error;
+    EXPECT_NE(events.Result.Error.find("claude.com/claude-code"), std::string::npos) << events.Result.Error;
+    EXPECT_EQ(events.Result.Error.find("set its path"), std::string::npos) << events.Result.Error;
 }
 
-TEST(CliSessionProviderTests, ACommandScriptIsRefusedWithTheFix)
+// Only Windows runs .cmd and .bat files through cmd.exe; elsewhere the name is an ordinary file's.
+TEST(CliSessionProviderTests, ACommandScriptIsRefusedWithTheFixOnlyOnWindows)
 {
     const std::string script = (TestDirectory() / "claude.CMD").string();
     ClaudeSessionProvider provider(script, {});
@@ -353,33 +392,53 @@ TEST(CliSessionProviderTests, ACommandScriptIsRefusedWithTheFix)
     provider.RunTurn(Request("hello"), events, cancel);
 
     EXPECT_EQ(events.Result.Outcome, TurnOutcome::Failed);
-    EXPECT_EQ(events.Result.Error, "Claude Code executable " + script +
-                                       " is a command script, which is not supported: set it to the native "
-                                       "program in Settings > AI Assistant.");
+#if defined(_WIN32)
+    EXPECT_EQ(events.Result.Error, script + " is a command script, which the editor does not run. " + kClaudePanelFix);
+#else
+    EXPECT_EQ(events.Result.Error.find("command script"), std::string::npos) << events.Result.Error;
+#endif
 }
 
-TEST(CliSessionProviderTests, LoginRowsShowTheMethodAndNeverTheAccountOrAKey)
+TEST(CliSessionProviderTests, TheCodexFixNamesTheProgramToPickAndWhereToGetIt)
+{
+    const std::string missing = (TestDirectory() / "NoSuchAgentCli.exe").string();
+    const CancelToken cancel;
+
+    const SetupStatus page = CodexSessionProvider(missing, {}).CheckSetup(cancel, SetupSurface::SettingsPage, {});
+    const SetupStatus panel = CodexSessionProvider(missing, {}).CheckSetup(cancel, SetupSurface::Panel, {});
+
+    ASSERT_FALSE(page.Steps.empty());
+    ASSERT_FALSE(panel.Steps.empty());
+    EXPECT_EQ(page.Steps[0].Fix,
+              "Click Browse to pick " + kCodexToPick + ", or install the Codex CLI from github.com/openai/codex.");
+    EXPECT_EQ(panel.Steps[0].Fix, "The Codex executable field is in Settings > AI Assistant: pick " + kCodexToPick +
+                                      " there, or install the Codex CLI from github.com/openai/codex.");
+}
+
+TEST(CliSessionProviderTests, LoginStepsShowTheMethodAndNeverTheAccountOrAKey)
 {
     const CancelToken cancel;
     {
         ScopedEnvironmentVariable mode("FAKE_AGENT_CLI_MODE", "");
-        const CliSessionProvider::LoginStatus claude = ClaudeSessionProvider(FakeCli(), {}).CheckLogin(cancel);
-        EXPECT_TRUE(claude.LoggedIn);
-        EXPECT_EQ(claude.Text, "Logged in (claude.ai)");
+        const SetupStatus claude = ClaudeSessionProvider(FakeCli(), {}).CheckSetup(cancel, SetupSurface::SettingsPage, {});
+        ASSERT_EQ(claude.Steps.size(), 2u);
+        EXPECT_EQ(claude.Steps[1].State, SetupStepState::Passed);
+        EXPECT_EQ(claude.Steps[1].Found, "Logged in (claude.ai).");
+        EXPECT_TRUE(claude.Steps[1].FirstOutput.empty());
 
-        const CliSessionProvider::LoginStatus codex = CodexSessionProvider(FakeCli(), {}).CheckLogin(cancel);
-        EXPECT_TRUE(codex.LoggedIn);
-        EXPECT_EQ(codex.Text, "Logged in using an API key");
+        const SetupStatus codex = CodexSessionProvider(FakeCli(), {}).CheckSetup(cancel, SetupSurface::SettingsPage, {});
+        ASSERT_EQ(codex.Steps.size(), 2u);
+        EXPECT_EQ(codex.Steps[1].State, SetupStepState::Passed);
+        EXPECT_EQ(codex.Steps[1].Found, "Logged in using an API key");
+        EXPECT_TRUE(codex.Steps[1].FirstOutput.empty());
     }
     {
         ScopedEnvironmentVariable mode("FAKE_AGENT_CLI_MODE", "logged-out");
-        const CliSessionProvider::LoginStatus claude = ClaudeSessionProvider(FakeCli(), {}).CheckLogin(cancel);
-        EXPECT_FALSE(claude.LoggedIn);
-        EXPECT_EQ(claude.Text, "Not logged in: run `claude auth login`.");
-
-        const CliSessionProvider::LoginStatus codex = CodexSessionProvider(FakeCli(), {}).CheckLogin(cancel);
-        EXPECT_FALSE(codex.LoggedIn);
-        EXPECT_EQ(codex.Text, "Not logged in: run `codex login`.");
+        const SetupStatus codex = CodexSessionProvider(FakeCli(), {}).CheckSetup(cancel, SetupSurface::SettingsPage, {});
+        ASSERT_EQ(codex.Steps.size(), 2u);
+        EXPECT_EQ(codex.Steps[1].State, SetupStepState::Failed);
+        EXPECT_EQ(codex.Steps[1].Found, "Not logged in.");
+        EXPECT_EQ(codex.Steps[1].Fix, "Run \"codex login\" in a terminal, then click Check again.");
     }
 }
 
@@ -389,11 +448,177 @@ TEST(CliSessionProviderTests, TheLoginCheckRunsWithoutTheKeySoItReportsTheLogin)
     ScopedEnvironmentVariable key("ANTHROPIC_API_KEY", "fixture-anthropic-key");
     const CancelToken cancel;
 
-    const CliSessionProvider::LoginStatus claude = ClaudeSessionProvider(FakeCli(), {}).CheckLogin(cancel);
+    const SetupStatus claude = ClaudeSessionProvider(FakeCli(), {}).CheckSetup(cancel, SetupSurface::SettingsPage, {});
 
-    EXPECT_TRUE(claude.LoggedIn);
-    EXPECT_EQ(claude.Text, "Logged in (claude.ai)");
+    ASSERT_EQ(claude.Steps.size(), 2u);
+    EXPECT_EQ(claude.Steps[1].State, SetupStepState::Passed);
+    EXPECT_EQ(claude.Steps[1].Found, "Logged in (claude.ai).");
 }
+
+TEST(CliSessionProviderTests, CheckSetupFailsAProgramThatPrintsNothingAndLeavesTheLoginWaiting)
+{
+    ScopedEnvironmentVariable mode("FAKE_AGENT_CLI_MODE", "silent");
+    const CancelToken cancel;
+
+    const SetupStatus status = ClaudeSessionProvider(FakeCli(), {}).CheckSetup(cancel, SetupSurface::SettingsPage, {});
+
+    ASSERT_EQ(status.Steps.size(), 2u);
+    const SetupStep& program = status.Steps[0];
+    EXPECT_EQ(program.Name, "Claude Code");
+    EXPECT_EQ(program.State, SetupStepState::Failed);
+    EXPECT_EQ(program.Program, FakeCli());
+    EXPECT_TRUE(program.FirstOutput.empty());
+    EXPECT_EQ(program.Found,
+              "This program is not Claude Code: " + FakeCli() + " answered nothing when asked for its version.");
+    EXPECT_EQ(program.ExitCode, 0);
+    EXPECT_EQ(program.Fix.rfind("Click Browse", 0), 0u) << program.Fix;
+    EXPECT_NE(program.Fix.find("The Claude desktop app is a different program"), std::string::npos) << program.Fix;
+    EXPECT_EQ(status.Steps[1].State, SetupStepState::Waiting);
+    EXPECT_FALSE(status.Ready());
+}
+
+// Support reads a failed check from the editor log: one line per step, with the program,
+// its exit code and what it printed, and never the account a login step read.
+TEST(CliSessionProviderTests, CheckSetupLogsEachStepWithoutTheAccountOrAKey)
+{
+    const CancelToken cancel;
+    std::vector<std::string> lines;
+    {
+        const TestLog::ScopedLogCapture capture(&lines);
+        Logger::Log::Info("capture is live");
+        {
+            ScopedEnvironmentVariable mode("FAKE_AGENT_CLI_MODE", "silent");
+            ClaudeSessionProvider(FakeCli(), {}).CheckSetup(cancel, SetupSurface::SettingsPage, {});
+        }
+        {
+            ScopedEnvironmentVariable mode("FAKE_AGENT_CLI_MODE", "");
+            ClaudeSessionProvider(FakeCli(), {}).CheckSetup(cancel, SetupSurface::SettingsPage, {});
+            CodexSessionProvider(FakeCli(), {}).CheckSetup(cancel, SetupSurface::SettingsPage, {});
+        }
+    }
+
+    ASSERT_EQ(TestLog::CountLinesContaining(lines, "capture is live"), 1u);
+    EXPECT_EQ(TestLog::FirstLineContaining(lines, "AI Assistant setup: Claude Code: failed"),
+              "AI Assistant setup: Claude Code: failed (program '" + FakeCli() +
+                  "', exit code 0, first output ''). This program is not Claude Code: " + FakeCli() +
+                  " answered nothing when asked for its version.");
+    EXPECT_EQ(TestLog::CountLinesContaining(lines, "AI Assistant setup: Logged in: waiting"), 1u);
+    EXPECT_EQ(TestLog::CountLinesContaining(lines, "exit code -1"), 0u);
+    EXPECT_EQ(TestLog::FirstLineContaining(lines, "AI Assistant setup: Logged in: passed"),
+              "AI Assistant setup: Logged in: passed (program '" + FakeCli() +
+                  "', exit code 0, first output ''). Logged in (claude.ai).");
+    for (const char* secret : {"user@example.com", "Example Org", "org-fixture", "sk-proj"})
+        EXPECT_EQ(TestLog::CountLinesContaining(lines, secret), 0u) << secret;
+}
+
+TEST(CliSessionProviderTests, CheckSetupFailsAClaudeBelowTheMinimumAndPassesOneAtIt)
+{
+    const CancelToken cancel;
+    {
+        ScopedEnvironmentVariable mode("FAKE_AGENT_CLI_MODE", "version 2.1.258");
+        const SetupStatus status = ClaudeSessionProvider(FakeCli(), {}).CheckSetup(cancel, SetupSurface::SettingsPage, {});
+        ASSERT_EQ(status.Steps.size(), 2u);
+        EXPECT_EQ(status.Steps[0].State, SetupStepState::Failed);
+        EXPECT_EQ(status.Steps[0].FirstOutput, "2.1.258 (Claude Code)");
+        EXPECT_NE(status.Steps[0].Fix.find("run \"claude update\""), std::string::npos) << status.Steps[0].Fix;
+        EXPECT_EQ(status.Steps[1].State, SetupStepState::Waiting);
+    }
+    {
+        ScopedEnvironmentVariable mode("FAKE_AGENT_CLI_MODE", "version 2.1.259");
+        const SetupStatus status = ClaudeSessionProvider(FakeCli(), {}).CheckSetup(cancel, SetupSurface::SettingsPage, {});
+        ASSERT_EQ(status.Steps.size(), 2u);
+        EXPECT_EQ(status.Steps[0].State, SetupStepState::Passed);
+        EXPECT_EQ(status.Steps[0].Found, "Claude Code 2.1.259 at " + FakeCli() + ".");
+        EXPECT_TRUE(status.Steps[0].Fix.empty());
+        EXPECT_TRUE(status.Ready());
+    }
+}
+
+TEST(CliSessionProviderTests, CheckSetupFailsALoggedOutClaudeWithTheLoginCommand)
+{
+    ScopedEnvironmentVariable mode("FAKE_AGENT_CLI_MODE", "logged-out");
+    const CancelToken cancel;
+
+    const SetupStatus status = ClaudeSessionProvider(FakeCli(), {}).CheckSetup(cancel, SetupSurface::SettingsPage, {});
+
+    ASSERT_EQ(status.Steps.size(), 2u);
+    EXPECT_EQ(status.Steps[0].State, SetupStepState::Passed);
+    EXPECT_EQ(status.Steps[1].Name, "Logged in");
+    EXPECT_EQ(status.Steps[1].State, SetupStepState::Failed);
+    EXPECT_EQ(status.Steps[1].Found, "Not logged in.");
+    EXPECT_EQ(status.Steps[1].Fix, "Run \"claude auth login\" in a terminal, then click Check again.");
+    EXPECT_EQ(status.FirstProblem(), &status.Steps[1]);
+}
+
+TEST(CliSessionProviderTests, CheckSetupNamesTheInstallForAMissingExecutableAndNotThePageItIsOn)
+{
+    const std::string missing = (TestDirectory() / "NoSuchAgentCli.exe").string();
+    const CancelToken cancel;
+
+    const SetupStatus status = ClaudeSessionProvider(missing, {}).CheckSetup(cancel, SetupSurface::SettingsPage, {});
+
+    ASSERT_EQ(status.Steps.size(), 2u);
+    const SetupStep& program = status.Steps[0];
+    EXPECT_EQ(program.State, SetupStepState::Failed);
+    EXPECT_EQ(program.Found, "Could not start Claude Code at " + missing + ".");
+    EXPECT_EQ(program.Fix, "Click Browse to pick " + kClaudeToPick + ", or install it from claude.com/claude-code.");
+    EXPECT_EQ(program.Found.find("Settings"), std::string::npos);
+    EXPECT_EQ(status.Steps[1].State, SetupStepState::Waiting);
+}
+
+// The settings page shows each step as it ends: the check hands every step to the sink in
+// check order, a step that waits on a failed one included, and returns the same steps.
+TEST(CliSessionProviderTests, CheckSetupHandsEachStepToTheSinkAsItEnds)
+{
+    const CancelToken cancel;
+    for (const std::string& program : {FakeCli(), (TestDirectory() / "NoSuchAgentCli.exe").string()})
+    {
+        ScopedEnvironmentVariable mode("FAKE_AGENT_CLI_MODE", "");
+        std::vector<std::string> published;
+        const SetupStatus status =
+            ClaudeSessionProvider(program, {})
+                .CheckSetup(cancel, SetupSurface::SettingsPage,
+                            [&published](const SetupStep& step) { published.push_back(step.Name); });
+
+        EXPECT_EQ(published, (std::vector<std::string>{"Claude Code", "Logged in"})) << program;
+        ASSERT_EQ(status.Steps.size(), published.size()) << program;
+    }
+}
+
+// Issue #6287: the reported program sat in the desktop app's Store folder. A program
+// there gets the desktop-app hint once, whichever way its step failed.
+TEST(CliSessionProviderTests, AMissingProgramUnderTheDesktopAppFolderGetsTheDesktopAppHint)
+{
+    const std::string missing = (TestDirectory() / "WindowsApps" / "Claude_x" / "app" / "claude.exe").string();
+    const CancelToken cancel;
+
+    const SetupStatus status = ClaudeSessionProvider(missing, {}).CheckSetup(cancel, SetupSurface::SettingsPage, {});
+
+    ASSERT_EQ(status.Steps.size(), 2u);
+    const SetupStep& program = status.Steps[0];
+    EXPECT_EQ(program.State, SetupStepState::Failed);
+    EXPECT_EQ(program.Found, "Could not start Claude Code at " + missing + ".");
+    EXPECT_EQ(program.Fix, "Click Browse to pick " + kClaudeToPick +
+                               ", or install it from claude.com/claude-code. The Claude desktop app is a different "
+                               "program: it cannot run the editor's AI Assistant.");
+}
+
+#if defined(_WIN32)
+TEST(CliSessionProviderTests, CheckSetupRefusesACommandScriptWithoutRunningIt)
+{
+    const std::string script = (TestDirectory() / "claude.cmd").string();
+    const CancelToken cancel;
+
+    const SetupStatus status = ClaudeSessionProvider(script, {}).CheckSetup(cancel, SetupSurface::SettingsPage, {});
+
+    ASSERT_EQ(status.Steps.size(), 2u);
+    const SetupStep& program = status.Steps[0];
+    EXPECT_EQ(program.State, SetupStepState::Failed);
+    EXPECT_EQ(program.Found, script + " is a command script, which the editor does not run.");
+    EXPECT_TRUE(program.FirstOutput.empty());
+    EXPECT_EQ(status.Steps[1].State, SetupStepState::Waiting);
+}
+#endif
 
 TEST(CliSessionProviderTests, ALoggedOutSessionRefusesTheTurnWithTheFix)
 {
@@ -405,7 +630,8 @@ TEST(CliSessionProviderTests, ALoggedOutSessionRefusesTheTurnWithTheFix)
     provider.RunTurn(Request("hello"), events, cancel);
 
     EXPECT_EQ(events.Result.Outcome, TurnOutcome::Failed);
-    EXPECT_EQ(events.Result.Error, "Not logged in: run `codex login`.");
+    EXPECT_TRUE(events.Result.NotReady);
+    EXPECT_EQ(events.Result.Error, "Not logged in. Run \"codex login\" in a terminal, then send the prompt again.");
 }
 
 // A reply whose text comes in two blocks around a tool call (issue #3435): the second block

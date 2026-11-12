@@ -245,17 +245,16 @@ std::optional<std::string> ReadExclusions(const json& value, std::vector<std::ve
     return std::nullopt;
 }
 
-RegionPlacement NewRegionPlacement(std::span<const Vector2> knots, const float32 (&parentWorld)[16],
+RegionPlacement NewRegionPlacement(std::span<const Vector2> knots, const Mathematics::Matrix4x4& parentWorld,
                                    float32 groundY)
 {
     const Vector2 label = MarkupECS::RegionLabelPoint(knots);
-    const Components::Transform world = Components::Transform::FromTRS(
-        Vector3(label.x, groundY, label.y), Mathematics::Quaternion::Identity(), Vector3(1.0f, 1.0f, 1.0f));
-    const Mathematics::Matrix4x4 local = Mathematics::Inverse(Mathematics::Matrix4x4::FromColumnMajor(parentWorld)) *
-                                         Mathematics::Matrix4x4::FromColumnMajor(world.matrix);
+    const Vector3 labelPoint(label.x, groundY, label.y);
+    const Mathematics::Matrix4x4 local =
+        Mathematics::Inverse(parentWorld) * Mathematics::Matrix4x4::Translation(labelPoint);
     RegionPlacement placement;
-    std::copy_n(local.Data(), 16, placement.Local.matrix);
-    std::copy(std::begin(world.matrix), std::end(world.matrix), std::begin(placement.World.matrix));
+    placement.Local = Components::Transform::FromMatrix4x4(local);
+    placement.World.Position = Mathematics::WorldPosition::FromVector3(labelPoint);
     return placement;
 }
 
@@ -275,25 +274,26 @@ std::optional<BoxRegionShape> BoxAsRegion(const ECS::World& world, ECS::EntityHa
 Mathematics::Matrix4x4 MarkupPlacement(const ECS::World& world, ECS::EntityHandle entity)
 {
     if (const auto* placed = world.GetComponent<Components::WorldTransform>(entity))
-        return Mathematics::Matrix4x4::FromColumnMajor(placed->matrix);
+        return placed->ToMatrix4x4(placed->GetPosition() - Mathematics::WorldPosition{});
     if (const auto* local = world.GetComponent<Components::Transform>(entity))
-        return Mathematics::Matrix4x4::FromColumnMajor(local->matrix);
+        return local->ToMatrix4x4(local->GetPosition() - Mathematics::WorldPosition{});
     return Mathematics::Matrix4x4::Identity();
 }
 
-void AddRegionParts(ECS::World& world, ECS::EntityHandle entity, const float32 (&worldMatrix)[16],
+void AddRegionParts(ECS::World& world, ECS::EntityHandle entity, const Mathematics::Matrix4x4& worldMatrix,
                     std::span<const Vector2> knots, Spline::SplineType type, float32 extrudeHeight)
 {
     SplineECS::SplineService& splines = SplineECS::SplineService::Get();
     const SplineECS::SplineHandle handle = splines.CreateSpline(type, true);
-    WriteKnots(*splines.GetSplineData(handle),
-               Mathematics::Inverse(Mathematics::Matrix4x4::FromColumnMajor(worldMatrix)), knots);
+    WriteKnots(*splines.GetSplineData(handle), Mathematics::Inverse(worldMatrix), knots);
     Components::SplineComponent spline{};
     spline.SplineDataIndex = handle.Index();
     spline.SplineDataGeneration = handle.Generation();
     spline.DefaultRadius = 0.0f; // a region has no swept band
+    const Components::Transform pose = Components::Transform::FromMatrix4x4(worldMatrix);
     Components::WorldTransform placed{};
-    std::copy(std::begin(worldMatrix), std::end(worldMatrix), std::begin(placed.matrix));
+    placed.Position = pose.Position;
+    placed.Basis = pose.Basis;
     MarkupRegion region{};
     region.ExtrudeHeight = extrudeHeight;
     world.AddComponentImmediate(entity, placed);

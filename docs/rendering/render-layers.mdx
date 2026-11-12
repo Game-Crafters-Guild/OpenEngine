@@ -46,6 +46,8 @@ With **Show Render Layer** on, each row of the Hierarchy shows the same summary 
 
 The Camera's **Visible Layers** row chooses the layers the camera draws. The default is **Everything**. The Game View and a built game draw what the active camera's Visible Layers allow.
 
+The **World Drawing Paused** row below it stops all world drawing for the camera's view: the view shows its clear color, with the game's UI over it. A game sets it from code (`Camera::WorldDrawingPaused`) while a cover hides the screen, and a scene load sets it when its request has `PauseWorldDrawing`. See [Pause the world behind a loading cover](../scripting/scene-loader.mdx#pause-the-world-behind-a-loading-cover).
+
 A layer that a camera does not draw casts no shadow in that camera's view, because the camera's shadows draw the same layers. The ocean's planar reflection and its raster depth capture also draw the camera's layers.
 
 The Camera's **Volume Layers** and the Post-Process Volume's **Volume Layers** are a different choice: a post-process volume affects a camera when their Volume Layers share a layer.

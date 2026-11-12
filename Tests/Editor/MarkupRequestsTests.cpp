@@ -35,6 +35,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <iterator>
 #include <filesystem>
 #include <optional>
@@ -118,10 +119,8 @@ class MarkupRequestsTest : public ::testing::Test
         if (!local)
             return;
         Components::WorldTransform world;
-        std::copy(std::begin(local->matrix), std::end(local->matrix), std::begin(world.matrix));
-        world.matrix[12] += parentOffset.x;
-        world.matrix[13] += parentOffset.y;
-        world.matrix[14] += parentOffset.z;
+        world.Position = local->Position + parentOffset;
+        world.Basis = local->Basis;
         if (World.GetComponent<Components::WorldTransform>(entity))
             *World.GetComponentForWrite<Components::WorldTransform>(entity) = world;
         else
@@ -271,7 +270,7 @@ TEST_F(MarkupRequestsTest, UpdateIsOneUndoStep)
     Undo.Undo();
     const MarkupECS::MarkupNotes* notes = MarkupService::Get().FindNotes(World, lake);
     EXPECT_EQ(World.GetComponent<Components::Name>(lake)->View(), "Lake");
-    EXPECT_EQ(World.GetComponent<Components::Transform>(lake)->GetPosition().x, 10.0f);
+    EXPECT_EQ(World.GetComponent<Components::Transform>(lake)->GetPosition().X, 10.0);
     EXPECT_EQ(MarkupOf(id).Color[0], before.Color[0]);
     EXPECT_EQ(MarkupOf(id).Status, Components::kMarkupStatusProposed);
     EXPECT_EQ(notes->Description, "");
@@ -281,7 +280,7 @@ TEST_F(MarkupRequestsTest, UpdateIsOneUndoStep)
     Undo.Redo();
     notes = MarkupService::Get().FindNotes(World, lake);
     EXPECT_EQ(World.GetComponent<Components::Name>(lake)->View(), "Pond");
-    EXPECT_EQ(World.GetComponent<Components::Transform>(lake)->GetPosition().x, 1.0f);
+    EXPECT_EQ(World.GetComponent<Components::Transform>(lake)->GetPosition().X, 1.0);
     EXPECT_EQ(MarkupOf(id).Color[0], 0.1f);
     EXPECT_EQ(MarkupOf(id).Status, Components::kMarkupStatusRequested);
     EXPECT_EQ(notes->Description, "Shallow");
@@ -885,8 +884,9 @@ TEST_F(MarkupRequestsTest, ABoxConvertsToARegionAsOneUndoStepKeepingItsNotes)
     Undo.Undo();
     EXPECT_EQ(World.GetComponent<Components::MarkupRegion>(entity), nullptr);
     ASSERT_NE(World.GetComponent<Components::MarkupVolume>(entity), nullptr);
-    EXPECT_TRUE(std::equal(std::begin(boxTransform.matrix), std::end(boxTransform.matrix),
-                           std::begin(World.GetComponent<Components::Transform>(entity)->matrix)));
+    EXPECT_EQ(std::memcmp(&boxTransform, World.GetComponent<Components::Transform>(entity),
+                          Components::kTransformPoseBytes),
+              0);
     Undo.Redo();
     EXPECT_NE(World.GetComponent<Components::MarkupRegion>(entity), nullptr);
 }

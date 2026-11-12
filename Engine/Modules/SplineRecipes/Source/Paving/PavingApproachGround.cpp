@@ -1,7 +1,7 @@
 #include "PavingApproachGround.h"
 
+#include "Components/GeneratedEntity.h"
 #include "Components/Hierarchy.h"
-#include "Components/RuntimeOnlyEntity.h"
 #include "Components/Spline/SplineExtrude.h"
 #include "Components/Spline/SplineNetworkMember.h"
 #include "Components/Spline/SplinePaving.h"
@@ -148,7 +148,8 @@ void PavingApproachGround::Lay(ECS::World& world, Piece& piece, uint32 index) co
     const Components::WorldTransform pose = *ownerWorld;
 
     // The spline lies in the paving's space: the piece is its child at the identity pose.
-    const Mathematics::Matrix4x4 toLocal = SplineLayout::InvertPlacerWorld(pose.matrix);
+    const Mathematics::Matrix4x4 toLocal = SplineLayout::InvertPlacerWorld(
+        pose.ToMatrix4x4(pose.GetPosition() - Mathematics::WorldPosition{}).Data());
     const SplineECS::SplineHandle handle = splines->CreateSpline(Spline::SplineType::Linear, false);
     auto* data = splines->GetSplineData(handle);
     for (std::size_t i = 0; i < piece.Approach.Points.size(); ++i)
@@ -167,7 +168,7 @@ void PavingApproachGround::Lay(ECS::World& world, Piece& piece, uint32 index) co
     ECS::Entity entity = world.Create();
     entity.Set(Components::Transform{});
     entity.Set(pose);
-    entity.Set(Components::RuntimeOnlyEntity{});
+    entity.Set(Components::GeneratedEntity{});
     entity.Set(Components::Parent{piece.Approach.Owner});
     entity.Set(SplineLayout::MakePieceLabel("Approach", index));
     entity.Set(spline);

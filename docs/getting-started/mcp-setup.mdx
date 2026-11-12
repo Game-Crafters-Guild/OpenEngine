@@ -243,7 +243,9 @@ The summary is the record of the run. Read it, and do not read the log to find a
 - Every answer carries `nextSince` and ends with `next`: the next call, with `since` and
   the same level and pattern filled in. Make that call, and its answer holds only the lines
   logged after this one. A `since` from an earlier editor session answers
-  from the start of the log and says `restarted`.
+  from the start of the log and says `restarted`. The `ge` CLI prints the `next:` line on
+  stderr, so its stdout holds only the answer: `ge get_log --pattern VUID | grep -c VUID`
+  counts only the matches.
 - Do not poll the tail. Through the MCP server, a repeated call without `since` that finds
   nothing new answers with one `unchanged` line. The `ge` CLI opens a new connection for
   every call, so it always answers in full: pass `since` there.
@@ -286,7 +288,8 @@ works too.
 **Other subcommands.** `ge raw <method> '{…}'` forwards any debug-server method
 unvalidated, which is how the handlers with no typed tool stay reachable
 (`node Tests/Mcp/ipc-method-drift.mjs --list` shows which, and why). `ge batch` reads
-ndjson `{"method","params"}` from stdin over one connection. Pair responses by `id`, not
+ndjson `{"method","params"}` from stdin over one connection: `ge batch < requests.ndjson`
+for a file, or a pipe from a script. Pair responses by `id`, not
 by line order, because deferred captures answer frames later and interleave.
 
 **Global flags:** `--port` `--host` `--timeout` `--json` `--dry-run` `--quiet`.

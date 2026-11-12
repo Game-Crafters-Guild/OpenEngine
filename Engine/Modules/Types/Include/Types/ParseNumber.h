@@ -262,12 +262,13 @@ inline std::optional<int64_t> ParseInt(std::string_view text)
 }
 
 // ParseInt above for an unsigned integer: digits only, so "-1" is refused rather than wrapped as
-// std::stoull wraps it. Nullopt past uint64_t's range.
-inline std::optional<uint64_t> ParseUnsigned(std::string_view text)
+// std::stoull wraps it. Nullopt past uint64_t's range. Base 16 reads hex digits of either case,
+// with no "0x" prefix.
+inline std::optional<uint64_t> ParseUnsigned(std::string_view text, int base = 10)
 {
     uint64_t value = 0;
     const char* end = text.data() + text.size();
-    const auto [ptr, ec] = std::from_chars(text.data(), end, value);
+    const auto [ptr, ec] = std::from_chars(text.data(), end, value, base);
     if (ec != std::errc{} || ptr != end)
         return std::nullopt;
     return value;

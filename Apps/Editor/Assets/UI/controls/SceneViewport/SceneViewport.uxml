@@ -1,0 +1,14 @@
+<!-- SceneViewport (Apps/Editor/Include/SceneView/SceneViewport/SceneViewport.h): one Scene View pane. SceneViewport.cpp adds
+     the slot to each id and moves these children into the pane. -->
+<UIElement>
+  <Label id="SceneViewViewportLabel" class="scene-viewport-label" />
+  <UIElement class="scene-viewport-active-outline" />
+  <!-- 2D mode rulers and magnification readout: fill the pane, no input -->
+  <SceneViewRulerOverlay id="SceneViewRulerOverlay" class="scene-view-ruler-overlay" />
+  <SceneViewMeasureOverlay id="SceneViewMeasureOverlay" class="scene-view-measure-overlay" />
+  <!-- Axis orientation gizmo: top-right of the pane -->
+  <ViewportRotationGizmo id="ViewportRotationGizmo" class="viewport-rotation-gizmo" />
+  <!-- The name under the pointer, or the active tool's text, beside the pointer while it is in this pane -->
+  <SceneViewHoverPill id="SceneViewHoverPill" class="scene-view-hover-pill" />
+  <UIElement id="SceneViewHdrTestPatternOverlay" class="scene-view-hdr-test-pattern-overlay" />
+</UIElement>

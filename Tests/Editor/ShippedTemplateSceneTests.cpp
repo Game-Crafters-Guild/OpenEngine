@@ -8,6 +8,7 @@
 #include "Components/Rendering/PostProcessVolume.h"
 #include "Components/Rendering/SkyEnvironment.h"
 #include "Components/SceneEntityTag.h"
+#include "Components/TemplateGroundPlaceholder.h"
 #include "ECS/ECSTemplates.h"
 #include "Engine/Rendering/PrimitiveGenerator.h"
 #include "Projects/ProjectCatalog.h"
@@ -78,14 +79,14 @@ class ShippedTemplateScene : public testing::TestWithParam<const char*>, public 
         const auto scenePath = projectRoot / "Assets/Scenes/Main.scene";
         ASSERT_TRUE(std::filesystem::is_regular_file(scenePath)) << scenePath;
 
-        Scene::SceneDegradation degradation;
         Scene::SceneReadOptions options;
-        options.assetResolver = this;
-        options.assetRootOverride = projectRoot / "Assets";
-        options.projectRoot = projectRoot;
-        options.outDegradation = &degradation;
-        ASSERT_TRUE(Scene::ReadSceneInto(world, scenePath, options))
-            << Scene::GetLastSceneIOError().message;
+        options.AssetResolver = this;
+        options.AssetRootOverride = projectRoot / "Assets";
+        options.ProjectRoot = projectRoot;
+        const Scene::SceneInstantiateResult readResult = Scene::ReadSceneInto(world, scenePath, options);
+        const Scene::SceneDegradation& degradation = readResult.Degradation;
+        ASSERT_TRUE(readResult)
+            << readResult.Error->message;
         for (const auto& skip : degradation.skips)
             ADD_FAILURE() << skip.file << ':' << skip.line << ' ' << skip.entityId << '.'
                           << skip.component << '.' << skip.field << ": " << skip.message;
@@ -147,20 +148,22 @@ TEST_P(ShippedTemplateScene, LoadsTheAuthoredEntitySetWithoutDegradation)
     EXPECT_EQ(world.GetEntityCount(), expected.size());
     EXPECT_EQ(actual, expected);
 
-    // The Basic 3D ground is the engine's grid ground, the mesh and material a new scene's ground uses.
+    // The Basic 3D ground is the engine's grid ground, the mesh and material a new scene's ground uses,
+    // and the template ground placeholder.
     if (std::string_view(GetParam()) == "Basic3D")
     {
         const GUID gridGround =
             AssetRegistry::DeriveGuidForSourcePath(kAssetSourceAliasEditor, "Materials/GroundGrid.material");
         int grounds = 0;
         world.Query<ECS::Read<Components::SceneEntityTag>, ECS::Read<Components::MeshRenderer>>().Each(
-            [&](ECS::EntityHandle, const Components::SceneEntityTag& tag, const Components::MeshRenderer& renderer)
+            [&](ECS::EntityHandle entity, const Components::SceneEntityTag& tag, const Components::MeshRenderer& renderer)
             {
                 if (tag.View() != "plane")
                     return;
                 ++grounds;
                 EXPECT_EQ(renderer.materialAssetGuid.ToGuid(), gridGround);
                 EXPECT_EQ(renderer.modelAssetGuid.ToGuid(), Engine::Renderer::PrimitiveGenerator::GroundGuid());
+                EXPECT_TRUE(world.HasComponent<Components::TemplateGroundPlaceholder>(entity));
             });
         EXPECT_EQ(grounds, 1);
     }

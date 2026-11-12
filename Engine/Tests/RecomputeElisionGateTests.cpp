@@ -12,7 +12,11 @@
 #include "Engine/Rendering/RenderServices.h"
 #include "Rendering/Core/RecomputeElision.h"
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <new>
 #include <vector>
 
 using GameEngine::Engine::Renderer::ExtractedLight;
@@ -199,6 +203,17 @@ TEST(WorldLightListVersion, BumpsOnFirstListAndOnlyOnChange)
     // Steady empty — no bump.
     frame({});
     EXPECT_EQ(rs.WorldLightListVersion(0u), 4u);
+}
+
+// The light list compares whole records with memcmp, so a default light has no undefined byte.
+TEST(WorldLightListVersion, ADefaultLightHasNoUndefinedByte)
+{
+    alignas(ExtractedLight) std::array<std::byte, sizeof(ExtractedLight)> zeroed{};
+    alignas(ExtractedLight) std::array<std::byte, sizeof(ExtractedLight)> filled{};
+    filled.fill(std::byte{0xFF});
+    const ExtractedLight* a = new (zeroed.data()) ExtractedLight;
+    const ExtractedLight* b = new (filled.data()) ExtractedLight;
+    EXPECT_EQ(std::memcmp(a, b, sizeof(ExtractedLight)), 0);
 }
 
 // The cause window exists to name the blocker of a run that never engages. A

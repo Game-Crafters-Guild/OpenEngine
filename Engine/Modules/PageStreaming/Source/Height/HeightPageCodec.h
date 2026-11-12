@@ -13,9 +13,6 @@ namespace GameEngine::PageStreaming
 /// source's own quantum. Level 0 is then lossless, and the whole [0, 1] range fits 16 bits, so no
 /// page needs 32-bit integers.
 inline constexpr float32 kNormalizedHeightStep = 1.0f / 65535.0f;
-/// `value` on the lattice of `step`: step x k for the nearest integer k. A value already on the
-/// lattice is returned unchanged.
-float32 QuantizeHeight(float32 value, float32 step);
 
 /// Encodes the kPageSampleCount samples of a level-`level` page (row-major, apron included) in that
 /// level's step, with the footprint's lowest and highest level-0 values: 16-bit words above the

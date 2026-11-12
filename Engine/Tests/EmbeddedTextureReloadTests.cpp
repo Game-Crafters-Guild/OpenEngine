@@ -52,8 +52,8 @@ Vector<EmbeddedImage> OneImage(const uint8 (&png)[N])
 {
     Vector<EmbeddedImage> images(1);
     images[0].MimeType = "image/png";
-    images[0].Data.assign(std::begin(png), std::end(png));
-    images[0].ContentHash = Hashing::Fnv1a64(images[0].Data.data(), images[0].Data.size());
+    images[0].Data = ByteBuffer::CopyOf(png);
+    images[0].ContentHash = Hashing::Fnv1a64(images[0].Data.Data(), images[0].Data.Size());
     return images;
 }
 

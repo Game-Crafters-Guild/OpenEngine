@@ -3,7 +3,6 @@
 #include "AssetCore/AssetTypes.h"
 #include "Graph/GraphAsset.h"
 #include "UI/Assets/UILayoutAsset.h"
-#include "UI/Assets/UIStyleAsset.h"
 
 namespace GameEngine
 {
@@ -22,20 +21,6 @@ void RegisterEditorAssetTypes(AssetTypeRegistry& typeRegistry)
             "UI Layout (.uxml/.xml)",
             100);
         (void)typeRegistry.RegisterAssetType(uiLayoutReg);
-    }
-
-    if (!typeRegistry.IsAssetTypeRegistered(AssetType::UIStyle))
-    {
-        AssetTypeRegistration uiStyleReg(
-            AssetType::UIStyle,
-            GetDefaultExtensionsForAssetType(AssetType::UIStyle),
-            [](const AssetMetadata& md) -> SharedPtr<Asset>
-            {
-                return std::static_pointer_cast<Asset>(std::make_shared<UIStyleAsset>(md.Guid, md.Path));
-            },
-            "UI Stylesheet (.css/.uss)",
-            100);
-        (void)typeRegistry.RegisterAssetType(uiStyleReg);
     }
 
     if (!typeRegistry.IsAssetTypeRegistered(AssetType::Graph))

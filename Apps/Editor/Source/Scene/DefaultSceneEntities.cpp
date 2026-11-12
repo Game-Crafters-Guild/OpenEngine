@@ -10,6 +10,7 @@
 #include "Components/Rendering/PostProcessEffects/HeightFogEffect.h"
 #include "Components/Rendering/PostProcessVolume.h"
 #include "Components/Rendering/SkyEnvironment.h"
+#include "Components/TemplateGroundPlaceholder.h"
 #include "Components/Transform.h"
 
 #include "ECS/ECSTemplates.h"
@@ -57,7 +58,7 @@ void SpawnDynamicSphere(ECS::World& world,
                         const char* name)
 {
     ECS::Entity e = world.Create();
-    e.Set(Transform::FromTRS(position, Mathematics::Quaternion{}, Mathematics::Vector3{1.0f, 1.0f, 1.0f}));
+    e.Set(Transform::FromTRS(Mathematics::WorldPosition::FromVector3(position), Mathematics::Quaternion{}, Mathematics::Vector3{1.0f, 1.0f, 1.0f}));
     e.Set(MakeMeshRenderer(rs, sphereGuid, materialGuid));
     e.Set(Engine::Renderer::PrimitiveGenerator::MakePrimitiveLocalBounds(rs, sphereGuid));
 
@@ -97,7 +98,7 @@ void SeedDefaultSceneEntities(ECS::World& world, Engine::Renderer::RenderService
         auto rot = QuaternionFromEulerXYZDegrees(kDefaultDirectionalLightEulerXDeg,
                                                 kDefaultDirectionalLightEulerYDeg,
                                                 kDefaultDirectionalLightEulerZDeg);
-        e.Set(Transform::FromTRS(Mathematics::Vector3{0.0f, 3.0f, 0.0f}, rot, Mathematics::Vector3{1.0f, 1.0f, 1.0f}));
+        e.Set(Transform::FromTRS(Mathematics::WorldPosition{0.0, 3.0, 0.0}, rot, Mathematics::Vector3{1.0f, 1.0f, 1.0f}));
 
         e.Set(MakeDefaultDirectionalLight());
 
@@ -113,7 +114,7 @@ void SeedDefaultSceneEntities(ECS::World& world, Engine::Renderer::RenderService
     // --- Sky Environment ---
     {
         ECS::Entity e = world.Create();
-        e.Set(Transform::FromTRS(Mathematics::Vector3{}, Mathematics::Quaternion{}, Mathematics::Vector3{1.0f, 1.0f, 1.0f}));
+        e.Set(Transform::FromTRS(Mathematics::WorldPosition{}, Mathematics::Quaternion{}, Mathematics::Vector3{1.0f, 1.0f, 1.0f}));
         // The component's default sun stands mid-morning in the south-east, over the default
         // camera's shoulder, so a new scene shows sunlit vertical faces and shadows that fall
         // away from the camera.
@@ -127,7 +128,7 @@ void SeedDefaultSceneEntities(ECS::World& world, Engine::Renderer::RenderService
     {
         ECS::Entity e = world.Create();
         e.Set(Transform::FromTRS(
-            Mathematics::Vector3{0.0f, 3.0f, -10.0f},
+            Mathematics::WorldPosition{0.0, 3.0, -10.0},
             Mathematics::Quaternion{},
             Mathematics::Vector3{1.0f, 1.0f, 1.0f}));
         Camera camera{};
@@ -139,7 +140,7 @@ void SeedDefaultSceneEntities(ECS::World& world, Engine::Renderer::RenderService
     // --- Post Process Volume ---
     {
         ECS::Entity e = world.Create();
-        e.Set(Transform::FromTRS(Mathematics::Vector3{}, Mathematics::Quaternion{}, Mathematics::Vector3{1.0f, 1.0f, 1.0f}));
+        e.Set(Transform::FromTRS(Mathematics::WorldPosition{}, Mathematics::Quaternion{}, Mathematics::Vector3{1.0f, 1.0f, 1.0f}));
 
         // Tonemap is left at the component default so the default scene and a
         // volume-less world always show the same operator.
@@ -161,7 +162,7 @@ void SeedDefaultSceneEntities(ECS::World& world, Engine::Renderer::RenderService
         ECS::Entity e = world.Create();
         // The ground primitive is 1 m wide: this scale puts its edge viewDistance from the origin.
         // The grid ground tiles its 1 m cell 6000 times across the plane, which is 2 x viewDistance wide.
-        e.Set(Transform::FromTRS(Mathematics::Vector3{0.0f, 0.0f, 0.0f}, Mathematics::Quaternion{}, Mathematics::Vector3{2.0f * viewDistance, 1.0f, 2.0f * viewDistance}));
+        e.Set(Transform::FromTRS(Mathematics::WorldPosition{}, Mathematics::Quaternion{}, Mathematics::Vector3{2.0f * viewDistance, 1.0f, 2.0f * viewDistance}));
         e.Set(MakeMeshRenderer(rs, groundGuid, GroundGridMaterialGuid()));
         e.Set(Engine::Renderer::PrimitiveGenerator::MakePrimitiveLocalBounds(rs, groundGuid));
 
@@ -174,6 +175,7 @@ void SeedDefaultSceneEntities(ECS::World& world, Engine::Renderer::RenderService
         planeCollider.layer = Physics::Layers::Static;
         world.AddComponentImmediate(e.GetHandle(), planeCollider);
         world.AddComponentImmediate(e.GetHandle(), PlaneColliderShape{});
+        world.AddComponentImmediate(e.GetHandle(), TemplateGroundPlaceholder{});
 
         SetName(e, "Ground");
     }

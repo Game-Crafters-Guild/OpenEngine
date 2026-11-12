@@ -225,6 +225,22 @@ include(cmake/StageManagedAssemblies.cmake)
 include(cmake/McpServer.cmake)
 ge_add_mcp_server_target()
 
+# BuildInfo/BuildCommit.h: the short commit id of the checkout, "-dirty" when tracked files have
+# uncommitted changes (cmake/WriteBuildCommit.cmake). BuildCommit runs on every build and rewrites
+# the header only when the id changes. A consumer depends on BuildCommit, adds
+# GE_BUILD_COMMIT_INCLUDE_DIR to its include path, and includes the header in one source file.
+find_package(Git QUIET)
+set(GE_BUILD_COMMIT_INCLUDE_DIR "${CMAKE_BINARY_DIR}/generated/build-commit")
+add_custom_target(BuildCommit
+	COMMAND ${CMAKE_COMMAND}
+		"-DGIT=${GIT_EXECUTABLE}"
+		"-DSOURCE_DIR=${CMAKE_SOURCE_DIR}"
+		"-DOUTPUT=${GE_BUILD_COMMIT_INCLUDE_DIR}/BuildInfo/BuildCommit.h"
+		-P "${CMAKE_SOURCE_DIR}/cmake/WriteBuildCommit.cmake"
+	BYPRODUCTS "${GE_BUILD_COMMIT_INCLUDE_DIR}/BuildInfo/BuildCommit.h"
+	COMMENT "Recording the build commit"
+	VERBATIM)
+
 # Enable position-independent code on non-Windows so that static libraries
 # (Engine, ECS, AssetRuntime, etc.) can be safely linked into shared objects
 # such as GameEngine.Native.so on Linux.
@@ -580,6 +596,9 @@ endif()
 # The allocation counter's hook: every test executable, and the engine's images under
 # GE_DEBUG_INSTRUMENTATION. Also refuses ENABLE_MIMALLOC where the hook is compiled.
 include(cmake/AllocationHook.cmake)
+
+# ge_windows_export_all_symbols: the export step of the shared libraries that export every symbol.
+include(cmake/WindowsExportAllSymbols.cmake)
 
 # Refuses a target that links Engine and also a module Engine already contains.
 include(cmake/EngineModuleDuplicationCheck.cmake)
@@ -975,8 +994,19 @@ if(MSVC)
 		$<$<CONFIG:Debug>:/analyze:external->
 	)
 	add_definitions(-D_CRT_SECURE_NO_WARNINGS)
+	# /fp:precise, the default, never fuses a * b + c. /fp:fast and /fp:contract do, and then results
+	# differ between platforms: Math::MulAdd is the only fused multiply-add.
+	get_cmake_property(_ge_variables VARIABLES)
+	foreach(_ge_variable IN LISTS _ge_variables)
+		if(_ge_variable MATCHES "^CMAKE_(C|CXX)_FLAGS" AND "${${_ge_variable}}" MATCHES "[/-]fp:(fast|contract)")
+			message(FATAL_ERROR "${_ge_variable} contains /fp:fast or /fp:contract. Remove it: the engine needs /fp:precise, so that a * b + c gives the same bits on every platform.")
+		endif()
+	endforeach()
 else()
 	# GCC/Clang: strong warnings everywhere; dev configs default to errors.
+	# No compiler fuses a * b + c on its own (GCC fuses by default, Clang within one expression),
+	# so results are the same on every platform; Math::MulAdd is the only fused multiply-add.
+	add_compile_options($<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-ffp-contract=off>)
 	add_compile_options(
 		-Wall
 		-Wextra
@@ -997,6 +1027,17 @@ else()
 			$<$<CONFIG:RelWithDebInfo>:-Werror>
 		)
 	endif()
+endif()
+
+# Every x64 target compiles for AVX2 with FMA, so Math::MulAdd is one instruction there. Every CPU
+# with AVX2 also has FMA. Arm64 has a fused multiply-add in its base set; wasm has none.
+if(MSVC)
+	if(NOT CMAKE_GENERATOR_PLATFORM MATCHES "ARM64|arm64"
+	   AND NOT (NOT CMAKE_GENERATOR_PLATFORM AND CMAKE_SYSTEM_PROCESSOR MATCHES "ARM64|aarch64"))
+		add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:/arch:AVX2>)
+	endif()
+elseif(NOT EMSCRIPTEN AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64")
+	add_compile_options("$<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-mavx2;-mfma>")
 endif()
 
 # Release binaries hold __FILE__ relative to the source root, so no build-machine path ships.
@@ -1051,6 +1092,8 @@ if(ENABLE_TSAN)
 	message(STATUS "ThreadSanitizer: ENABLED")
 	add_compile_options("$<$<CONFIG:Debug>:-fsanitize=thread;-fno-omit-frame-pointer>")
 	add_link_options("$<$<CONFIG:Debug>:-fsanitize=thread>")
+	# Every test executable starts with the runtime options in Tests/ThreadSanitizerOptions.cpp.
+	include(cmake/ThreadSanitizerOptions.cmake)
 endif()
 
 # Clang-Tidy integration (runs during CMake builds if available)
@@ -1165,6 +1208,10 @@ if(EMSCRIPTEN)
     add_subdirectory(Engine/Modules/SplineRecipes)
     add_subdirectory(Engine/Modules/MarkupECS)
     add_subdirectory(Engine/Modules/PathfindingECS)
+    add_subdirectory(Engine/Modules/AI)
+    add_subdirectory(Engine/Modules/AIECS)
+    add_subdirectory(Engine/Modules/SpatialGrid)
+    add_subdirectory(Engine/Modules/SpatialGridECS)
     add_subdirectory(Engine/Modules/MeshPicking)
     # This list must cover every entry of Engine/CMakeLists.txt's
     # GE_ENGINE_MODULES: Engine splices each one's objects in, so a module
@@ -1246,6 +1293,14 @@ add_subdirectory(Engine/Modules/PhysicsECS)
 # Pathfinding modules
 add_subdirectory(Engine/Modules/Pathfinding)
 add_subdirectory(Engine/Modules/PathfindingECS)
+
+# AI modules
+add_subdirectory(Engine/Modules/AI)
+add_subdirectory(Engine/Modules/AIECS)
+
+# The gameplay spatial grid of moving entities
+add_subdirectory(Engine/Modules/SpatialGrid)
+add_subdirectory(Engine/Modules/SpatialGridECS)
 
 # CPU mesh picking primitives (BVH, ray-triangle). The scene raycast over them
 # (asset lookup, terrain raymarch, scene walk) is Engine/Source/Scene/SceneRaycast.cpp.
@@ -1498,6 +1553,36 @@ if(BUILD_TESTING)
         set_tests_properties(McpRgpCaptureGate PROPERTIES TIMEOUT 600 LABELS "Editor")
     else()
         message(STATUS "node not found - McpRgpCaptureGate test not registered")
+    endif()
+endif()
+
+# send_key digits: `ge send_key --key 8` sends the digit key, and a raw key code
+# from 32 up stays raw. Drives the CLI against a fake editor; the first run may
+# build mcp/dist, so the budget matches McpEditorEndpointReport.
+if(BUILD_TESTING)
+    find_program(GE_NODE_EXECUTABLE NAMES node node.exe)
+    if(GE_NODE_EXECUTABLE)
+        add_test(NAME McpSendKeyDigits
+            COMMAND ${GE_NODE_EXECUTABLE}
+                    ${CMAKE_SOURCE_DIR}/Tests/Mcp/send-key-digits-check.mjs)
+        set_tests_properties(McpSendKeyDigits PROPERTIES TIMEOUT 600 LABELS "Editor")
+    else()
+        message(STATUS "node not found - McpSendKeyDigits test not registered")
+    endif()
+endif()
+
+# `ge batch` ends with its own exit code for a file or a held pipe, and `--help` and
+# `--dry-run` do not connect. Fake editor; the first run may build mcp/dist, so the
+# budget matches McpEditorEndpointReport.
+if(BUILD_TESTING)
+    find_program(GE_NODE_EXECUTABLE NAMES node node.exe)
+    if(GE_NODE_EXECUTABLE)
+        add_test(NAME McpBatchStdin
+            COMMAND ${GE_NODE_EXECUTABLE}
+                    ${CMAKE_SOURCE_DIR}/Tests/Mcp/batch-stdin-check.mjs)
+        set_tests_properties(McpBatchStdin PROPERTIES TIMEOUT 600 LABELS "Editor")
+    else()
+        message(STATUS "node not found - McpBatchStdin test not registered")
     endif()
 endif()
 

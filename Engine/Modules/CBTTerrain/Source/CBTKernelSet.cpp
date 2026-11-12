@@ -57,10 +57,10 @@ std::vector<uint8_t> ReadFileBytes(const std::filesystem::path& path)
 {
     // Kernel .spv blobs get rewritten by external shader recompiles while the
     // engine may be re-reading them; shared-read keeps both sides unblocked.
-    Vector<uint8> bytes;
+    ByteBuffer bytes;
     if (!ReadFileBytesShared(path, bytes))
         return {};
-    return bytes;
+    return std::vector<uint8_t>(bytes.begin(), bytes.end());
 }
 } // namespace
 
@@ -111,20 +111,9 @@ DescriptorSetLayoutDesc CBTKernelSet::MakeDescriptorSetLayout(bool narrowHeap)
         b.imageFilterableFloat = true;
         dsl.bindings.push_back(b);
     }
-    // Binding 16: the editable sphere sculpt atlas SSBO (planet editing, plan
-    // §planet-editing). Host-visible, ring-buffered; only VertexEval reads it (gated on
-    // pc.sphereSculptEnabled). A single storage buffer covering the whole ring.
-    {
-        DescriptorBinding b{};
-        b.binding = kCBTSphereSculptBinding;
-        b.type = DescriptorType::StorageBuffer;
-        b.count = 1;
-        b.shaderStages = kShaderStageCompute;
-        dsl.bindings.push_back(b);
-    }
     // Binding 17: the resident-window atlas indirection table SSBO (Phase E). Host-visible
     // ring; only VertexEval reads it (gated on the frame-params atlas-enabled flag). A single
-    // storage buffer covering the whole ring (ring * kAtlasMaxTiles rows).
+    // storage buffer covering the whole ring (ring * kAtlasWindowRows rows).
     {
         DescriptorBinding b{};
         b.binding = kCBTAtlasRowsBinding;
@@ -155,16 +144,6 @@ DescriptorSetLayoutDesc CBTKernelSet::MakeDescriptorSetLayout(bool narrowHeap)
         b.imageFilterableFloat = true;
         dsl.bindings.push_back(b);
     }
-    // Binding 20: the sphere sculpt PAGE TABLE SSBO (planet editing v2). Host-visible ring, same
-    // shape as binding 16; only VertexEval reads it (gated on pc.sphereSculptEnabled).
-    {
-        DescriptorBinding b{};
-        b.binding = kCBTSphereSculptPageTableBinding;
-        b.type = DescriptorType::StorageBuffer;
-        b.count = 1;
-        b.shaderStages = kShaderStageCompute;
-        dsl.bindings.push_back(b);
-    }
     // Binding 21: the height-range pyramid (content-aware split). The narrow-heap kernels keep the
     // screen-space rule alone and do not declare it.
     if (!narrowHeap)
@@ -177,8 +156,7 @@ DescriptorSetLayoutDesc CBTKernelSet::MakeDescriptorSetLayout(bool narrowHeap)
         dsl.bindings.push_back(b);
     }
     // Bindings 22/23: the paged height resolve's page table (host-visible SSBO ring) and page cache
-    // texture ring. Wide arm only: the narrow arm's VertexEval already binds the WebGPU per-stage
-    // storage-buffer limit, so it keeps the unified and atlas heights.
+    // texture ring. Wide arm only: the narrow arm keeps the unified and atlas heights.
     if (!narrowHeap)
     {
         DescriptorBinding table{};

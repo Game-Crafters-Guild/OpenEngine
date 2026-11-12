@@ -23,9 +23,9 @@ struct Ray3D
 inline Vector3 RayPointAt(const Ray3D& ray, float t)
 {
 	return Vector3(
-		ray.origin.x + ray.direction.x * t,
-		ray.origin.y + ray.direction.y * t,
-		ray.origin.z + ray.direction.z * t);
+		Math::MulAdd(ray.direction.x, t, ray.origin.x),
+		Math::MulAdd(ray.direction.y, t, ray.origin.y),
+		Math::MulAdd(ray.direction.z, t, ray.origin.z));
 }
 
 // Intersect a ray with an infinite plane defined by a point on the plane and a

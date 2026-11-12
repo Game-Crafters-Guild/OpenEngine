@@ -25,6 +25,7 @@
 #include "Engine/Rendering/TextureService.h"
 #include "Mathematics/Interpolation.h"
 #include "SceneDrawWarm.h"
+#include "MaterialSystemTesting.h"
 
 #include "AssetCore/AssetEvents.h"
 #include "Assets/AssetManager.h"
@@ -50,7 +51,6 @@
 #include "Rendering/Materials/MaterialBuilder.h"
 #include "Rendering/Materials/MaterialHelper.h"
 #include "Rendering/Materials/MaterialKeywordDerivation.h"
-#include "AssetCore/SharedFileRead.h"
 #include "Rendering/Materials/MaterialParamsLayout.h"
 #include "Rendering/Materials/Shader/ShaderComposer.h"
 #include "Rendering/Materials/Shader/ShaderPropertyTableCache.h"
@@ -71,6 +71,7 @@
 #include <cstring>
 #include <filesystem>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -306,9 +307,12 @@ void MaterialSystem::Initialize(Rendering::IDevice* device, PerFrameWritePool& f
         });
     Logger::Log::Info("MaterialSystem: shader-compile concurrency cap = {} ({} job workers)", compileCap, workerCount);
 
-    // The device's asynchronous pipeline builds (Request*Pipeline) run on the
-    // tracked prewarm workers: capped by the compile gate, drained at shutdown.
-    device->SetPipelineBuildDispatcher([this](std::function<void()> build) { DispatchPipelineBuild(std::move(build)); });
+    // The device's pipeline builds run on the tracked prewarm workers, drained at
+    // shutdown. Load builds pass the compile gate; Blocking builds go to the pool at once.
+    device->SetPipelineBuildDispatcher(
+        {.Dispatch = [this](std::function<void()> build, Rendering::PipelineBuildPriority priority)
+         { DispatchPipelineBuild(std::move(build), priority); },
+         .CallerMayWait = &MaterialSystem::CallerMayWaitForPipelineBuild});
     // The binder binds references only (empty ctor); bind-time view/keyword reads
     // are its documented job (§0a-A3 edge 1).
     m_MaterialBinder = std::make_unique<MaterialBinder>(rs, *device);
@@ -1951,7 +1955,7 @@ bool MaterialSystem::EnsureMaterialBuildContextReady()
         if (!engine.IsInitialized())
             return false; // No Engine instance (e.g. unit-test harness).
         auto& am = engine.GetAssetManager();
-        m_MaterialBuildContext.AdapterShaderDir = ResolveAdapterShaderDir(am);
+        FillMaterialSourceRoots(am, m_MaterialBuildContext);
         // A packaged runtime's cooked cache is probed first; a miss compiles
         // into the workspace's.
         const ShaderCacheRoots& shaderCacheRoots = ShaderProgramAsset::GetShaderCacheRoots();
@@ -1959,12 +1963,6 @@ bool MaterialSystem::EnsureMaterialBuildContextReady()
         m_MaterialBuildContext.CacheRoot = shaderCacheRoots.Writable.empty()
             ? engine.GetWorkspaceRoot() / ".Cache" / "Shaders"
             : shaderCacheRoots.Writable;
-        m_MaterialBuildContext.IncludeDirs = {am.GetAssetRoot()};
-        m_MaterialBuildContext.ProjectRoots = CollectProjectRoots(am);
-        m_MaterialBuildContext.AssetSourceRoots = CollectAssetSourceRoots(am);
-        m_MaterialBuildContext.PackageShaderDirs = CollectPackageShaderDirs(am);
-        AppendStagedModuleShaderDirs(m_MaterialBuildContext.AdapterShaderDir,
-                                     m_MaterialBuildContext.PackageShaderDirs);
         m_MaterialBuildContext.ProgramIndex = LoadProgramIndex(m_MaterialBuildContext);
         m_MaterialBuildContextSourceVersion = am.GetSourceSetVersion();
     }
@@ -1981,10 +1979,6 @@ bool MaterialSystem::EnsureMaterialBuildContextReady()
         const uint64_t version = am.GetSourceSetVersion();
         if (version != m_MaterialBuildContextSourceVersion)
         {
-            m_MaterialBuildContext.ProjectRoots = CollectProjectRoots(am);
-            m_MaterialBuildContext.AssetSourceRoots = CollectAssetSourceRoots(am);
-            m_MaterialBuildContext.PackageShaderDirs = CollectPackageShaderDirs(am);
-
             // AdapterShaderDir is mount-derived too, and it is NEVER empty:
             // ResolveAdapterShaderDir falls back to the implicit overload, which
             // returns the project candidate whether or not it exists. So a first
@@ -1994,19 +1988,14 @@ bool MaterialSystem::EnsureMaterialBuildContextReady()
             // and when the root actually MOVES drop everything compiled against
             // the old one: Clear() also advances the invalidation epoch, which
             // bars an already-elected compile from publishing old-root SPIR-V.
-            std::filesystem::path adapterDir = ResolveAdapterShaderDir(am);
-            if (adapterDir != m_MaterialBuildContext.AdapterShaderDir)
+            const std::filesystem::path previousAdapterDir = m_MaterialBuildContext.AdapterShaderDir;
+            FillMaterialSourceRoots(am, m_MaterialBuildContext);
+            if (m_MaterialBuildContext.AdapterShaderDir != previousAdapterDir)
             {
-                m_MaterialBuildContext.AdapterShaderDir = std::move(adapterDir);
                 m_AdapterShaderDirVerified = false;
                 m_ShaderCompilationCache.Clear();
                 Rendering::NotifyShaderSourcesChanged();
             }
-
-            // After the re-derive, never before: the staged module roots hang off
-            // whatever AdapterShaderDir now is.
-            AppendStagedModuleShaderDirs(m_MaterialBuildContext.AdapterShaderDir,
-                                         m_MaterialBuildContext.PackageShaderDirs);
 
             m_MaterialBuildContextSourceVersion = version;
             // The lane roots just moved, so the coverage report from the first
@@ -2132,14 +2121,19 @@ std::shared_ptr<const Rendering::ShaderPropertyTable> MaterialSystem::ResolveDec
 {
     if (!EnsureMaterialBuildContextReady())
         return nullptr;
+    return Rendering::ShaderPropertyTableCache::Instance().Resolve(DeclaredPropertyInputs(doc, materialAssetPath));
+}
 
+Rendering::ShaderPropertyTableInputs MaterialSystem::DeclaredPropertyInputs(
+    const MaterialDocument& doc, const std::filesystem::path& materialAssetPath) const
+{
     Rendering::ShaderPropertyTableInputs inputs{};
     inputs.AdapterPath = m_MaterialBuildContext.AdapterShaderDir / "Adapters" / "adapter_forward.glsl";
     inputs.SurfacePath = ResolveSurfacePath(doc, materialAssetPath);
     if (!doc.vertexModifier.empty())
         inputs.VertexModifierPath = Rendering::ShaderComposer::ResolveShaderReference(
             doc.vertexModifier, MaterialDirOf(materialAssetPath), m_MaterialBuildContext);
-    return Rendering::ShaderPropertyTableCache::Instance().Resolve(inputs);
+    return inputs;
 }
 
 bool MaterialSystem::IsSurfaceProjectOwned(const MaterialDocument& doc,
@@ -2165,20 +2159,81 @@ std::optional<std::vector<std::pair<std::string, uint8_t>>> MaterialSystem::Reso
     if (!EnsureMaterialBuildContextReady())
         return std::nullopt; // headless / context not yet warm — leave the map as-is
 
-    const std::filesystem::path surfacePath = ResolveSurfacePath(doc, materialAssetPath);
-
-    std::string source;
-    if (!ReadFileTextShared(surfacePath, source))
+    const std::shared_ptr<const Rendering::TextureSlotResolution> slots =
+        Rendering::ShaderComposer::ResolveTextureSlotsOfFile(ResolveSurfacePath(doc, materialAssetPath));
+    if (!slots)
         return std::nullopt; // unresolved/unreadable — compose reports it; keep the old map
-
-    Rendering::TextureSlotResolution slots =
-        Rendering::ShaderComposer::ResolveTextureSlots(source);
     // A rejected surface fails the compose with a hard error (logged there). The
     // failed compile leaves the material's PREVIOUS pipeline running, so the old
     // routing map must survive with it — report no-result rather than empty.
-    if (slots.Rejected)
+    if (slots->Rejected)
         return std::nullopt;
-    return std::move(slots.DeclaredSlots);
+    return slots->DeclaredSlots;
+}
+
+namespace
+{
+// Set by SetNextSurfaceParseJobThrowsForTesting. The next surface-parse job clears it and throws.
+std::atomic<bool> s_ThrowInNextSurfaceParseJob{false};
+// Set by SetSurfaceParseJobsHeldForTesting. While it is true, each surface-parse job waits before it parses.
+std::atomic<bool> s_HoldSurfaceParseJobs{false};
+
+// Parses each surface of `surfaces` into the caches registration reads: its texture slots and its
+// declared property table. The job skips a file it cannot read; its registration reads it again and reports it.
+void ParseSurfaces(const std::vector<Rendering::ShaderPropertyTableInputs>& surfaces)
+{
+    if (s_ThrowInNextSurfaceParseJob.exchange(false))
+        throw std::runtime_error("the surface-parse job throws for a test");
+    s_HoldSurfaceParseJobs.wait(true);
+    for (const Rendering::ShaderPropertyTableInputs& surface : surfaces)
+    {
+        (void)Rendering::ShaderComposer::ResolveTextureSlotsOfFile(surface.SurfacePath);
+        (void)Rendering::ShaderPropertyTableCache::Instance().Resolve(surface);
+    }
+}
+} // namespace
+
+JobSystem::TaskHandle MaterialSystem::ParseSurfacesOffThread(std::span<const MaterialDocument> documents,
+                                                             const std::filesystem::path& materialAssetPath)
+{
+    auto& engine = GameEngine::EngineCore::GetInstance();
+    if (!engine.IsInitialized() || !EnsureMaterialBuildContextReady())
+        return {};
+
+    std::vector<Rendering::ShaderPropertyTableInputs> unparsed;
+    for (const MaterialDocument& document : documents)
+    {
+        // Registration resolves the reconciled surface and vertex modifier references. Copy only these, so this
+        // thread does not copy the properties and textures of the document.
+        MaterialDocument resolved;
+        resolved.surfaceShader = document.surfaceShader;
+        resolved.surfaceShaderGuid = document.surfaceShaderGuid;
+        resolved.vertexModifier = document.vertexModifier;
+        resolved.vertexModifierGuid = document.vertexModifierGuid;
+        if (m_MaterialCompiler)
+            m_MaterialCompiler->ReconcileShaderReferences(resolved);
+        Rendering::ShaderPropertyTableInputs surface = DeclaredPropertyInputs(resolved, materialAssetPath);
+        const bool parsed = Rendering::ShaderComposer::HoldsTextureSlotsOfFile(surface.SurfacePath)
+                            && Rendering::ShaderPropertyTableCache::Instance().Holds(surface);
+        const auto listed = [&surface](const Rendering::ShaderPropertyTableInputs& other)
+        { return other.SurfacePath == surface.SurfacePath && other.VertexModifierPath == surface.VertexModifierPath; };
+        if (!parsed && std::none_of(unparsed.begin(), unparsed.end(), listed))
+            unparsed.push_back(std::move(surface));
+    }
+    if (unparsed.empty())
+        return {};
+    return engine.GetJobSystem().Submit([surfaces = std::move(unparsed)] { ParseSurfaces(surfaces); });
+}
+
+void SetNextSurfaceParseJobThrowsForTesting(bool throws)
+{
+    s_ThrowInNextSurfaceParseJob.store(throws);
+}
+
+void SetSurfaceParseJobsHeldForTesting(bool held)
+{
+    s_HoldSurfaceParseJobs.store(held);
+    s_HoldSurfaceParseJobs.notify_all();
 }
 
 void MaterialSystem::CompileMaterialPipeline(Material& mat, const MaterialDocument& doc)
@@ -2585,7 +2640,49 @@ struct MaterialSystem::LoadReport
 {
     SceneLoadTracker::Category BaseCompiles;
     SceneLoadTracker::Category PipelineBuilds;
+    SceneLoadTracker::Gate BasePublishes;
+    // The device's count of building-pipeline lookups at the last Tick. It is declared before the gate
+    // that reads it, so it outlives the revoke of that gate.
+    uint64_t BuildingLookupsAtLastTick = 0;
+    SceneLoadTracker::Gate LastFrameLookedUpBuildingPipeline;
+
+    static SceneLoadTracker::GateReport EvaluateBasePublishes(MaterialSystem& materials);
+    SceneLoadTracker::GateReport EvaluateLastFrameLookups(const Rendering::IDevice* device);
 };
+
+SceneLoadTracker::GateReport MaterialSystem::LoadReport::EvaluateLastFrameLookups(const Rendering::IDevice* device)
+{
+    // The gate clears after one frame that looked up no pipeline still building. It does not prove that
+    // frame complete: a draw can wait for a step that is not a pipeline lookup, and a user system that runs
+    // before EngineCore::Update reads the Tick of the previous frame. So a game counts ready frames in a row.
+    if (!device)
+        return {};
+    const uint64_t lookups = device->GetBuildingPipelineLookupCount();
+    const bool skippedDraws = lookups != BuildingLookupsAtLastTick;
+    BuildingLookupsAtLastTick = lookups;
+    if (!skippedDraws)
+        return {};
+    // Pending stays 1: a count that changes each frame reads as progress to the stall check.
+    return {.State = SceneLoadTracker::GateState::Waiting,
+            .Reason = "the last frame skipped draws whose pipelines are building",
+            .Pending = 1};
+}
+
+SceneLoadTracker::GateReport MaterialSystem::LoadReport::EvaluateBasePublishes(MaterialSystem& materials)
+{
+    // A base compile is a ticket until its worker returns. Its pipeline then waits for the
+    // publish at the next BeginFrame, and a paused view asks for its pipelines after the publish.
+    std::size_t waiting = 0;
+    {
+        std::lock_guard<std::mutex> lk(materials.m_PendingPublishMutex);
+        waiting = materials.m_PendingPipelinePublishes.size();
+    }
+    if (waiting == 0)
+        return {};
+    return {.State = SceneLoadTracker::GateState::Waiting,
+            .Reason = "base pipelines wait for their publish",
+            .Pending = waiting};
+}
 
 void MaterialSystem::ReportLoadingWork(SceneLoadTracker& tracker)
 {
@@ -2599,6 +2696,12 @@ void MaterialSystem::ReportLoadingWork(SceneLoadTracker& tracker)
             {.Id = "shader.base-compile", .Label = "Compiling shaders", .Unit = SceneLoadTracker::CostUnit::Variants});
         m_LoadReport->PipelineBuilds = tracker.RegisterCategory(
             {.Id = "gpu.pipeline", .Label = "Building pipelines", .Unit = SceneLoadTracker::CostUnit::Pipelines});
+        m_LoadReport->BasePublishes =
+            m_LoadReport->BaseCompiles.RegisterGate([this] { return LoadReport::EvaluateBasePublishes(*this); });
+        // Lookups made before the report do not hold it.
+        m_LoadReport->BuildingLookupsAtLastTick = m_Device ? m_Device->GetBuildingPipelineLookupCount() : 0;
+        m_LoadReport->LastFrameLookedUpBuildingPipeline = m_LoadReport->PipelineBuilds.RegisterGate(
+            [this, report = m_LoadReport.get()] { return report->EvaluateLastFrameLookups(m_Device); });
     }
     Variants().ReportLoadingWork(tracker);
 }
@@ -2684,20 +2787,29 @@ void MaterialSystem::SubmitTrackedPrewarm(std::function<void()> work,
                                                                          priority);
 }
 
-void MaterialSystem::DispatchPipelineBuild(std::function<void()> build)
+void MaterialSystem::DispatchPipelineBuild(std::function<void()> build, Rendering::PipelineBuildPriority priority)
 {
-    // A pipeline build is something a frame waits on (a cold variant, a feature
-    // that declares nothing until its pipelines land), so it rides the
-    // Background lane, which the compile gate admits ahead of the Normal-lane
-    // prewarm backlog. Without the job system it runs inline.
+    // A frame waits on a pipeline build, so a Load build rides the Normal lane through the compile gate. A Blocking
+    // build has a waiting thread: it is Awaited, which the gate admits at once and every worker takes first.
+    // Without the job system, the build runs inline.
     if (!CanSubmitAsyncBaseCompile())
     {
         build();
         return;
     }
-    SubmitTrackedPrewarm(TrackLoadWork(LoadWork::PipelineBuild, "device pipeline build", PrewarmOrigin::OnDemand,
-                                       std::move(build)),
-                         JobSystem::JobPriority::Background);
+    const JobSystem::JobPriority lane = priority == Rendering::PipelineBuildPriority::Blocking
+                                            ? JobSystem::JobPriority::Awaited
+                                            : JobSystem::JobPriority::Normal;
+    SubmitTrackedPrewarm(
+        TrackLoadWork(LoadWork::PipelineBuild, "device pipeline build", PrewarmOrigin::OnDemand, std::move(build)),
+        lane);
+}
+
+bool MaterialSystem::CallerMayWaitForPipelineBuild()
+{
+    GameEngine::EngineCore& engineCore = GameEngine::EngineCore::GetInstance();
+    return engineCore.IsInitialized()
+        && !JobSystem::WorkStealingThreadPool::IsComputeWorkerOf(&engineCore.GetJobSystem());
 }
 
 void MaterialSystem::DrainPrewarmJobs()
@@ -2772,7 +2884,8 @@ Rendering::ShaderVariantKey MaterialSystem::DeriveRegistrationVariantKey(
     // path and the shader-root chain. With no asset path the flags stay at the
     // registry's StandardMesh.
     if (!materialAssetPath.empty())
-        key.vertexFlags = InferVertexAttributeFlagsFromDocument(resolvedDoc, materialAssetPath);
+        key.vertexFlags = InferVertexAttributeFlagsFromDocument(resolvedDoc, materialAssetPath,
+                                                                ResolveSurfacePath(resolvedDoc, materialAssetPath));
     // The modifier form runs on the empty-path case too — engine-authored
     // materials (grass, ocean, CBT) have no .material asset and reference their
     // modifier from a shader root, which ResolveShaderReference still finds.

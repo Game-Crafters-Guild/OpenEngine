@@ -1,7 +1,8 @@
 #version 450
 // Ocean FFT: time-evolve H0 into the spectral height + horizontal displacement
-// for the current time. Ported from the reference FFTSpectrum.compute::SpectrumUpdate
-// (MIT). Runs every frame. Outputs complex H, X, Z (still in frequency domain).
+// for the current time. Ported from Crest's FFTSpectrum.compute::SpectrumUpdate
+// at db0658ff (MIT, see Engine/Modules/Ocean/NOTICE). Runs every frame. Outputs
+// complex H, X, Z (still in frequency domain).
 
 #include "Ocean/ocean_fft_common.glsl"
 

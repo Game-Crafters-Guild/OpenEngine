@@ -484,7 +484,7 @@ void ProjectAcquisition::Acquire(const std::shared_ptr<SharedState>& state, Proj
         std::optional<ZipArchiveReader> archive;
         if (request.LocalArchivePath.empty())
         {
-            response = HttpClient::Get(request.Entry.Source.Url, {}, kMaxProjectArchiveBytes);
+            response = HttpClient::Get(request.Entry.Source.Url, {}, {.MaxResponseBytes = kMaxProjectArchiveBytes});
             if (!response.success || response.statusCode != 200 || response.body.empty())
             {
                 Fail(*state, destination, destinationExisted,

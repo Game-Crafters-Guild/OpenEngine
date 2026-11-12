@@ -61,4 +61,13 @@ std::vector<uint8> SerializePageStoreHead(const PageStoreLayout& layout);
 std::string ReadPageStoreHead(SharedFileReader& file, PageFieldKind kind, uint64 baseOffset, uint64 availableBytes,
                               PageStoreLayout& out);
 
+/// The layout of a store with `header` whose present pages are `present` (any order): for a sparse
+/// store too large for a dense presence table, such as an authored planet layer. None when an
+/// address is outside the store or repeats.
+std::optional<PageStoreLayout> MakeSparsePageStoreLayout(const PageStoreHeader& header,
+                                                         std::span<const PageAddress> present);
+
+/// The page of face `face` and level `level` whose Morton code is `code`: the inverse of PageMortonCode.
+PageAddress PageOfMortonCode(uint8 face, uint8 level, uint64 code);
+
 } // namespace GameEngine::PageStreaming

@@ -15,7 +15,7 @@ In this version you write a prefab file by hand and place it with a `[prefab]` s
 
 ## The prefab file
 
-A prefab is a text file, `Name.prefab`, in the scene file's form: a `[prefab version=1]` header, then `[resource]`, `[embed]`, `[entity]` and `[prefab]` sections. The file name is the prefab's name.
+A prefab is a text file, `Name.prefab`, in the scene file's form: a `[prefab version=1]` header, then `[resource]`, `[embed]`, `[entity]` and `[prefab]` sections. The file name is the prefab's name. In an `[entity]` section, as in a scene, a component with no fields is written and read as its bare name.
 
 ```ini title="Props/Crate.prefab"
 [prefab version=1]
@@ -74,14 +74,14 @@ An override line starts with an address, then `/`, then a component line. The ad
 | Line | What it says |
 |---|---|
 | `lid/MeshRenderer.material = ...` | A field of the entity `lid` differs from the prefab's. |
-| `+lid/AudioSource` | The instance adds a component to `lid`; its field lines follow. |
+| `+lid/AudioSource` | The instance adds a component to `lid`; its field lines follow. A component with no fields has no field lines. |
 | `-lid/BoxCollider` | The instance removes a component from `lid`. |
 | `-entity lid.handle` | The instance removes the entity `handle` under `lid`, and everything under it. |
 | `[entity id="rope" parent="crate2.lid"]` | An entity added on the instance: a scene entity whose `parent` is the instance id, `.`, and the address. |
 
 Each kind has one spelling. A component name on a line of its own is refused (write `+Component`), and so is a section that adds and removes the same component at one address.
 
-The scene saves only differences. A save compares each entity of an instance with the prefab, field by field as the file writes them, and writes a line only where they differ, so a diff of a scene shows what each instance changes. A field set back to the prefab's value writes no line, and from then on it follows the prefab. A reference the instance clears writes its clear form, as in `lid/MeshRenderer.material = 0`. A child's order under its parent is the prefab's; it is never an override.
+The scene saves only overrides. A save compares each entity of an instance with the prefab, field by field as the file writes them, and writes a line for each override, so a diff of a scene shows what each instance changes. A field you override stays an override when you set it back to the prefab's value in the Inspector or when the prefab later takes that value. The Overrides list then shows its value followed by "same as the prefab". **Revert to prefab value** in the field's menu, or **Revert** in the Overrides list, makes the field follow the prefab again; **Apply to prefab** gives the prefab the value. A reference the instance clears writes its clear form, as in `lid/MeshRenderer.material = 0`. A child's order under its parent is the prefab's; it is never an override.
 
 An override whose address names nothing in the prefab (the prefab no longer has that entity) does not stop the load: it is a row in the load report, with the line and the fix. A save does not keep it. The removal of a component no loaded module registers, or of one the entity does not have, is a row too.
 

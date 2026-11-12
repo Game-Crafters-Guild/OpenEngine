@@ -18,7 +18,7 @@ void PhysicsWritebackSystem::Update(ECS::World& world, float32 /*deltaTime*/)
     if (!pw)
         return;
 
-    const float32 alpha = PhysicsWorldService::GetRenderInterpolationAlpha();
+    const float32 alpha = world.GetSimulationClock().GetAlpha();
 
     auto q = world.Query<
         ECS::Write<GameEngine::Components::Transform>,

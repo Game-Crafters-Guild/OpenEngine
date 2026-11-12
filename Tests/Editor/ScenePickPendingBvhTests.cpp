@@ -114,7 +114,7 @@ TEST_F(ScenePickPendingBvhTests, APickProviderMeshIsHitByTheEditorPick)
     ASSERT_NE(MeshBvhCache::Instance().GetOrBuild(m_Guid, 0, Grid()), nullptr);
     const GameEngine::ECS::EntityHandle bare = m_World.CreateEntity();
     Components::WorldTransform transform{};
-    transform.matrix[12] = 100.0f;
+    transform.Position.X = 100.0;
     m_World.AddComponentImmediate(bare, transform);
     Components::LocalBounds bounds{};
     bounds.Box.halfExtents = Vector3(kGridSize * 0.5f, 0.5f, kGridSize * 0.5f);

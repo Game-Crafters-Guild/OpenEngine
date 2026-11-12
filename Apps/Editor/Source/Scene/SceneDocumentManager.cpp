@@ -19,8 +19,7 @@
 #include "Scene/SceneBackupRecovery.h"
 #include "Scene/SceneIO.h"
 #include "Scene/SceneEngineEmbedMaterializer.h"
-#include "Terrain/SphereSculptSaver.h"
-#include "Terrain/TerrainBakeCacheSave.h"
+#include "Terrain/Planet/PlanetHeightLayerSaver.h"
 #include "Terrain/TerrainMaterialLibraryMint.h"
 #include "Terrain/TerrainZonePayloadSaver.h"
 #include "TerrainECS/Scene/TerrainSceneSchemas.h"
@@ -85,9 +84,16 @@ void SceneDocumentManager::SetHierarchyUiCaptureForSave(std::function<Scene::Sce
     m_HierarchyUiCaptureForSave = std::move(capture);
 }
 
-std::optional<Scene::SceneHierarchyUiFromFile> SceneDocumentManager::ConsumeHierarchyUiFromLastDocumentLoad()
+// The one line that carries a failed save's reason: WriteSceneFile returns it and logs nothing.
+static void LogSaveFailure(const std::filesystem::path& scenePath, const Scene::SceneIOError& error)
 {
-    std::optional<Scene::SceneHierarchyUiFromFile> out = std::move(m_PendingHierarchyUiFromLoad);
+    Logger::Log::Error("SceneDocument: '{}' failed to save at {}:{}: {}", scenePath.string(), error.file.string(),
+                       error.line, error.message);
+}
+
+std::optional<SceneHierarchyUiFromFile> SceneDocumentManager::ConsumeHierarchyUiFromLastDocumentLoad()
+{
+    std::optional<SceneHierarchyUiFromFile> out = std::move(m_PendingHierarchyUiFromLoad);
     m_PendingHierarchyUiFromLoad.reset();
     return out;
 }
@@ -97,9 +103,9 @@ void SceneDocumentManager::SetEditorCameraCaptureForSave(std::function<Scene::Sc
     m_EditorCameraCaptureForSave = std::move(capture);
 }
 
-std::optional<Scene::SceneEditorCameraFromFile> SceneDocumentManager::ConsumeEditorCameraFromLastDocumentLoad()
+std::optional<SceneEditorCameraFromFile> SceneDocumentManager::ConsumeEditorCameraFromLastDocumentLoad()
 {
-    std::optional<Scene::SceneEditorCameraFromFile> out = std::move(m_PendingEditorCameraFromLoad);
+    std::optional<SceneEditorCameraFromFile> out = std::move(m_PendingEditorCameraFromLoad);
     m_PendingEditorCameraFromLoad.reset();
     return out;
 }
@@ -110,16 +116,15 @@ void SceneDocumentManager::SetSceneScopedGeneratorRelease(std::function<void()> 
 }
 
 void SceneDocumentManager::RecordLoadFailure(const std::filesystem::path& documentPath,
-                                             const std::filesystem::path& contentPath)
+                                             const std::filesystem::path& contentPath,
+                                             const Scene::SceneIOError& error)
 {
-    const auto& err = Scene::GetLastSceneIOError();
-
     SceneLoadFailure failure{};
     failure.DocumentPath = documentPath;
-    failure.Message = err.message;
-    failure.ErrorFile = err.file.empty() ? contentPath : err.file;
-    failure.ErrorLine = err.line;
-    failure.WorldCleared = err.worldCleared;
+    failure.Message = error.message;
+    failure.ErrorFile = error.file.empty() ? contentPath : error.file;
+    failure.ErrorLine = error.line;
+    failure.WorldCleared = error.worldCleared;
     failure.EntitiesInWorld = m_World ? m_World->GetEntityCount() : 0;
 
     const std::string where =
@@ -323,52 +328,47 @@ bool SceneDocumentManager::OpenSceneFromFile(const std::filesystem::path& conten
 
     Logger::Log::Info("SceneDocument: loading (replace) '{}'", contentPath.string());
 
-    // Everything scoped to the outgoing scene dies here, before ReadSceneInto
-    // reaches World::Clear.
-    ReleaseSceneScopedState(rs);
-
     Scene::EnsureTerrainSceneSchemasRegistered();
     Scene::EnsureTerrainGrassSceneSchemasRegistered();
-
-    Scene::SceneReadOptions opts{};
-    opts.clearWorldFirst = true;
-    Scene::SceneHierarchyUiFromFile hierarchyFromFile{};
-    opts.outHierarchyUiFromFile = &hierarchyFromFile;
-    Scene::SceneEditorCameraFromFile editorCameraFromFile{};
-    opts.outEditorCameraFromFile = &editorCameraFromFile;
-    Scene::SceneReadTimings timings{};
-    opts.outTimings = &timings;
-    Scene::SceneDegradation degradation{};
-    opts.outDegradation = &degradation;
 
     auto& am = EngineCore::GetInstance().GetAssetManager();
     Scene::AssetManagerSceneResolver resolver(am, EngineCore::GetInstance().GetResolvedAssetRoot(),
                                               Scene::AssetManagerSceneResolver::UnknownFile::Register);
-    opts.assetResolver = &resolver;
-    opts.assetRootOverride = resolver.GetAssetRoot();
-    opts.projectRoot = EngineCore::GetInstance().GetWorkspaceRoot();
+    const Scene::SceneReadOptions readOptions{.AssetResolver = &resolver,
+                                              .AssetRootOverride = resolver.GetAssetRoot(),
+                                              .ProjectRoot = EngineCore::GetInstance().GetWorkspaceRoot()};
     Scene::SceneEngineEmbedMaterializer embedMat(am);
-    opts.embedMaterializer = &embedMat;
 
     const auto tLoad0 = std::chrono::steady_clock::now();
     Editor::HangWatchdogPhase watchdogPhase("SceneLoad.ParseInstantiate");
-    const bool ok = Scene::ReadSceneInto(*m_World, contentPath, opts);
+    const Scene::SceneInstantiateOptions instantiateOptions{.ClearWorldFirst = true, .EmbedMaterializer = &embedMat};
+    const Scene::SceneReadResult read = Scene::ReadSceneDocument(contentPath, readOptions);
+    if (!read)
+    {
+        // The read checks every file before the world is touched, so the outgoing
+        // scene and its scene-scoped state stay as they are.
+        RecordLoadFailure(documentPath, contentPath, *read.Error);
+        return false;
+    }
+
+    // Everything scoped to the outgoing scene dies here, before InstantiateSceneDocument
+    // reaches World::Clear.
+    ReleaseSceneScopedState(rs);
+    Scene::SceneInstantiateResult instantiated = Scene::InstantiateSceneDocument(*m_World, read.Document, instantiateOptions);
     const double loadMs = std::chrono::duration<double, std::milli>(
                               std::chrono::steady_clock::now() - tLoad0)
                               .count();
-    if (!ok)
+    if (!instantiated)
     {
-        // Two different worlds can be live here. Read, parse, include expansion
-        // and validation all run BEFORE World::Clear, so those failures leave the
-        // outgoing scene intact. Failures the loader cannot continue past — an
-        // unreadable prefab, a bad remove directive, entity creation — happen
-        // AFTER it, and leave a partially-applied incoming scene in the world.
+        // The failures the placement cannot continue past (a parent that names no
+        // entity, entity creation) happen AFTER World::Clear, and leave a
+        // partially-applied incoming scene in the world.
         // A component or field that will not apply is NOT one of these: it is
         // collected into the degradation census and skipped, and the load
         // succeeds.
-        // Either way the proxies were retired above, so rebuild them against
-        // whatever the user is now looking at — while m_ScenePath still names the
-        // outgoing scene, because that is the scene those proxies belong to.
+        // The proxies were retired above, so rebuild them against whatever the
+        // user is now looking at — while m_ScenePath still names the outgoing
+        // scene, because that is the scene those proxies belong to.
         // RecordLoadFailure drops that name afterwards for the cleared case.
         //
         // WHAT TO DO with a half-loaded world (leave it, empty it, reload the
@@ -377,7 +377,7 @@ bool SceneDocumentManager::OpenSceneFromFile(const std::filesystem::path& conten
         if (rs && m_ScenePath.has_value())
             ReconcileHlodForScene(*m_ScenePath, *rs);
 
-        RecordLoadFailure(documentPath, contentPath);
+        RecordLoadFailure(documentPath, contentPath, *instantiated.Error);
         return false;
     }
 
@@ -386,12 +386,11 @@ bool SceneDocumentManager::OpenSceneFromFile(const std::filesystem::path& conten
     m_ScenePath = documentPath;
     m_DisplaySceneName = documentPath.filename().string();
     // After the display name, which this may decorate.
-    RecordLoadDegradation(documentPath, std::move(degradation));
-    m_ZoneStagingLedger.StagedDataVersions.clear();
-    m_ZoneStagingLedger.StagedSphereSculptVersion = 0;
+    RecordLoadDegradation(documentPath, std::move(instantiated.Degradation));
+    m_ZoneStagingLedger = {};
 
-    m_PendingHierarchyUiFromLoad = hierarchyFromFile;
-    m_PendingEditorCameraFromLoad = editorCameraFromFile;
+    m_PendingHierarchyUiFromLoad = SceneHierarchyUiFromFile{read.Document.HierarchyUi};
+    m_PendingEditorCameraFromLoad = SceneEditorCameraFromFile{read.Document.EditorCamera};
 
     // The scene FILE is loaded (all entities exist); the per-entity GPU mesh/
     // material resolve is the expensive part (~20s for a 21k-entity scene). Defer
@@ -412,11 +411,11 @@ bool SceneDocumentManager::OpenSceneFromFile(const std::filesystem::path& conten
     }
 
     Logger::Log::Info("SceneDocument: loaded file '{}' in {:.0f}ms main thread "
-                      "(read {:.1f} / parse {:.1f} / validate {:.1f} / clear {:.1f} / "
+                      "(read {:.1f} / parse {:.1f} / validate {:.1f} / sources {:.1f} / clear {:.1f} / "
                       "instantiate {:.1f} ms); resolving {} entities across frames",
-                      documentPath.string(), loadMs, timings.ReadMs, timings.ParseMs,
-                      timings.ValidateMs, timings.ClearMs, timings.InstantiateMs,
-                      m_BuildPump.TotalItems());
+                      documentPath.string(), loadMs, read.Timings.ReadMs, read.Timings.ParseMs,
+                      read.Timings.ValidateMs, read.Timings.SourcesMs, instantiated.Timings.ClearMs,
+                      instantiated.Timings.InstantiateMs, m_BuildPump.TotalItems());
 
     // A scene with nothing to resolve (or a headless run with no renderer)
     // completes immediately — run the tail this frame instead of waiting a pump
@@ -587,8 +586,7 @@ void SceneDocumentManager::ReleaseSceneScopedState(Engine::Renderer::RenderServi
     // incoming scene's zones re-resolve from their .tzone files. A leaked
     // resident payload would keep NeedsSave forever (phantom-dirty document) and
     // the next explicit Save would persist strokes the user chose to discard.
-    // The sphere sculpt store discards the same way — the incoming planet
-    // re-restores from its .tsculpt via EnsureSphereSculptLoaded.
+    // The planet's sculpt and modifier layers discard the same way.
     if (auto* terrain = TerrainECS::TerrainService::TryGet())
     {
         terrain->ClearZonePayloads();
@@ -683,29 +681,31 @@ bool SceneDocumentManager::LoadSceneAdditive(const std::filesystem::path& sceneP
     Scene::EnsureTerrainSceneSchemasRegistered();
     Scene::EnsureTerrainGrassSceneSchemasRegistered();
 
-    Scene::SceneReadOptions opts{};
-    opts.clearWorldFirst = false;
-
     auto& am = EngineCore::GetInstance().GetAssetManager();
     Scene::AssetManagerSceneResolver resolver(am, EngineCore::GetInstance().GetResolvedAssetRoot(),
                                               Scene::AssetManagerSceneResolver::UnknownFile::Register);
-    opts.assetResolver = &resolver;
-    opts.assetRootOverride = resolver.GetAssetRoot();
-    opts.projectRoot = EngineCore::GetInstance().GetWorkspaceRoot();
+    const Scene::SceneReadOptions readOptions{.AssetResolver = &resolver,
+                                              .AssetRootOverride = resolver.GetAssetRoot(),
+                                              .ProjectRoot = EngineCore::GetInstance().GetWorkspaceRoot()};
     Scene::SceneEngineEmbedMaterializer embedMat(am);
-    opts.embedMaterializer = &embedMat;
 
-    Scene::SceneDegradation degradation{};
-    opts.outDegradation = &degradation;
-
-    const bool ok = Scene::ReadSceneInto(*m_World, scenePath, opts);
-    if (!ok)
+    const Scene::SceneInstantiateOptions instantiateOptions{.ClearWorldFirst = false, .EmbedMaterializer = &embedMat};
+    const Scene::SceneReadResult read = Scene::ReadSceneDocument(scenePath, readOptions);
+    if (!read)
+    {
+        // The read checks every file before the world is touched, so the world is unchanged.
+        RecordLoadFailure(scenePath, scenePath, *read.Error);
+        return false;
+    }
+    Scene::SceneInstantiateResult instantiated = Scene::InstantiateSceneDocument(*m_World, read.Document, instantiateOptions);
+    if (!instantiated)
     {
         // An additive load never clears, so the open document survives — but the
         // entities this file did create before aborting are still in the world.
-        RecordLoadFailure(scenePath, scenePath);
+        RecordLoadFailure(scenePath, scenePath, *instantiated.Error);
         return false;
     }
+    Scene::SceneDegradation& degradation = instantiated.Degradation;
 
     // Additive entities join the world, so they join the next Save — anything this file could not
     // apply is data the document would write back stripped, exactly like the replace case. Merge it
@@ -777,11 +777,10 @@ void SceneDocumentManager::NewSceneUntitled(Engine::Renderer::RenderServices* re
     m_LastLoadFailure.reset(); // this world is now a new scene, not a failed one
     m_PartialLoadDocument.reset();
     m_LastLoadDegraded.reset();
-    m_ZoneStagingLedger.StagedDataVersions.clear();
-    m_ZoneStagingLedger.StagedSphereSculptVersion = 0;
+    m_ZoneStagingLedger = {};
 
-    m_PendingHierarchyUiFromLoad = Scene::SceneHierarchyUiFromFile{};
-    m_PendingEditorCameraFromLoad = Scene::SceneEditorCameraFromFile{};
+    m_PendingHierarchyUiFromLoad = SceneHierarchyUiFromFile{};
+    m_PendingEditorCameraFromLoad = SceneEditorCameraFromFile{};
 
     if (m_Notifications)
     {
@@ -862,16 +861,16 @@ bool SceneDocumentManager::Save(DegradedSavePolicy degradedPolicy)
         cameraPtr = &cameraSnap;
     }
     opts.editorCamera = cameraPtr;
-    // Persist brush-authored terrain zone payloads and the planet's sphere sculpt
-    // (+ swap their refs to the file-backed GUIDs) before the scene captures them.
+    // Persist brush-authored terrain zone payloads (+ swap their refs to the file-backed GUIDs)
+    // before the scene captures them.
     if (auto* terrain = TerrainECS::TerrainService::TryGet())
     {
         Editor::FlushDirtyZonePayloads(*m_World, *m_ScenePath, reg, *terrain,
                                        Editor::ZonePayloadFlushMode::SaveMintAndSwap,
                                        &m_ZoneStagingLedger);
-        Editor::FlushDirtySphereSculpt(*m_World, *m_ScenePath, reg, *terrain,
-                                       Editor::ZonePayloadFlushMode::SaveMintAndSwap,
-                                       &m_ZoneStagingLedger);
+        Editor::FlushPlanetHeightLayer(*m_World, *m_ScenePath, reg, *terrain,
+                                       Editor::ZonePayloadFlushMode::SaveMintAndSwap, &m_ZoneStagingLedger,
+                                       m_Notifications);
     }
     // A terrain authored before material libraries existed gains one here, minted from the
     // per-layer fields it already shades with, so the scene captures the reference below. Same
@@ -884,9 +883,12 @@ bool SceneDocumentManager::Save(DegradedSavePolicy degradedPolicy)
     // before this thread gets to, and the announcement is what marks that report as this
     // write arriving rather than as a second change.
     auto sceneWrite = EngineCore::GetInstance().GetAssetManager().ExpectWrite(*m_ScenePath);
-    const bool ok = Scene::WriteSceneFile(*m_World, *m_ScenePath, opts);
-    if (!ok)
+    const Scene::SceneIOResult written = Scene::WriteSceneFile(*m_World, *m_ScenePath, opts);
+    if (!written)
+    {
+        LogSaveFailure(*m_ScenePath, *written.Error);
         return false;
+    }
 
     // The user accepted this overwrite, and the file on disk is now a faithful copy of the world.
     // Whatever could not be read is either back in the file verbatim or gone by consent — either
@@ -899,7 +901,7 @@ bool SceneDocumentManager::Save(DegradedSavePolicy degradedPolicy)
     // Report our own write: this is the change drive, so the asset's registry metadata
     // never lags the file just produced, on any host.
     sceneWrite.Report(*m_ScenePath);
-    Editor::RequestTerrainBakeStoreForSave(*m_World, m_ScenePath, *m_ScenePath, reg);
+    Editor::AssignSavedSceneToTerrains(*m_World, m_ScenePath, *m_ScenePath, reg);
 
     // Wake the VCS poll so the panel reflects the saved scene on the next
     // tick instead of waiting up to one polling interval.
@@ -969,16 +971,19 @@ bool SceneDocumentManager::SaveAs(const std::filesystem::path& scenePath, Degrad
         Editor::FlushDirtyZonePayloads(*m_World, scenePath, reg, *terrain,
                                        Editor::ZonePayloadFlushMode::SaveMintAndSwap,
                                        &m_ZoneStagingLedger);
-        Editor::FlushDirtySphereSculpt(*m_World, scenePath, reg, *terrain,
-                                       Editor::ZonePayloadFlushMode::SaveMintAndSwap,
-                                       &m_ZoneStagingLedger);
+        Editor::FlushPlanetHeightLayer(*m_World, scenePath, reg, *terrain,
+                                       Editor::ZonePayloadFlushMode::SaveMintAndSwap, &m_ZoneStagingLedger,
+                                       m_Notifications);
     }
     Editor::MintMissingTerrainMaterialLibraries(*m_World, scenePath,
                                                 EngineCore::GetInstance().GetAssetManager());
     Editor::WriteNavigationBakedDataForSave(*m_World, scenePath, EngineCore::GetInstance().GetAssetManager());
-    const bool ok = Scene::WriteSceneFile(*m_World, scenePath, opts);
-    if (!ok)
+    const Scene::SceneIOResult written = Scene::WriteSceneFile(*m_World, scenePath, opts);
+    if (!written)
+    {
+        LogSaveFailure(scenePath, *written.Error);
         return false;
+    }
 
     const std::optional<std::filesystem::path> previousScenePath = m_ScenePath;
     m_ScenePath = scenePath;
@@ -995,7 +1000,7 @@ bool SceneDocumentManager::SaveAs(const std::filesystem::path& scenePath, Degrad
     // Report our own write: without it the scene just authored has no registry identity
     // until something else scans for it.
     sceneWrite.Report(scenePath);
-    Editor::RequestTerrainBakeStoreForSave(*m_World, previousScenePath, scenePath, reg);
+    Editor::AssignSavedSceneToTerrains(*m_World, previousScenePath, scenePath, reg);
 
     // Wake the VCS poll: a new file appeared (or the target was overwritten)
     // and the panel should reflect it on the next tick.
@@ -1038,9 +1043,9 @@ bool SceneDocumentManager::SaveBackupCopy()
         stagedPayloads = Editor::FlushDirtyZonePayloads(
             *m_World, *m_ScenePath, reg, *terrain,
             Editor::ZonePayloadFlushMode::BackupExistingOnly, &m_ZoneStagingLedger);
-        stagedPayloads += Editor::FlushDirtySphereSculpt(
-            *m_World, *m_ScenePath, reg, *terrain,
-            Editor::ZonePayloadFlushMode::BackupExistingOnly, &m_ZoneStagingLedger);
+        stagedPayloads += Editor::FlushPlanetHeightLayer(*m_World, *m_ScenePath, reg, *terrain,
+                                                         Editor::ZonePayloadFlushMode::BackupExistingOnly,
+                                                         &m_ZoneStagingLedger, m_Notifications);
     }
 
     // Only write the backup scene when there is unsaved work to protect. An
@@ -1079,7 +1084,10 @@ bool SceneDocumentManager::SaveBackupCopy()
         cameraPtr = &cameraSnap;
     }
     opts.editorCamera = cameraPtr;
-    return Scene::WriteSceneFile(*m_World, backupPath, opts);
+    const Scene::SceneIOResult written = Scene::WriteSceneFile(*m_World, backupPath, opts);
+    if (!written)
+        LogSaveFailure(backupPath, *written.Error);
+    return static_cast<bool>(written);
 }
 
 std::vector<uint8_t> SceneDocumentManager::CaptureWorldSnapshot() const

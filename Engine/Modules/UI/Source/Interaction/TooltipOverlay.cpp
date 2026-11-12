@@ -9,6 +9,7 @@
 
 #include "UI/UIPrimitive.h"
 #include "../BubblePaint.h"
+#include "../Layout/TooltipBubblePlacement.h"
 #include "../UIManager/UIManager_Internal.h"
 
 #include <algorithm>
@@ -30,24 +31,13 @@ constexpr float kArrowFillBase = 9.0f;   // the fill's base on the bubble's edge
 constexpr float kEdgePad = 6.0f;         // the bubble's least distance from the window edge
 
 // The bubble's border on the edge the arrow sits on: the arrow's tip points away from that
-// edge. 0 when the bubble draws no border.
+// edge. 0 when the bubble draws no border on that edge.
 static float FacingBorderWidth(const ResolvedStyle& style, UI::ArrowDirection direction)
 {
-    if (style.Visual.BorderStyle == BorderStyle::None || (DrawnBorderColor(style) >> 24) == 0)
+    const BoxSide edge = UI::ArrowEdge(direction);
+    if (style.Visual.BorderStyle == BorderStyle::None || (BorderSideColor(style.Visual.BorderColor, edge) >> 24) == 0)
         return 0.0f;
-    const Box4& border = style.Layout.BorderWidth;
-    switch (direction)
-    {
-    case UI::ArrowDirection::Down:
-        return border.Bottom;
-    case UI::ArrowDirection::Left:
-        return border.Left;
-    case UI::ArrowDirection::Right:
-        return border.Right;
-    case UI::ArrowDirection::Up:
-    default:
-        return border.Top;
-    }
+    return BorderSideWidth(style.Layout.BorderWidth, edge);
 }
 
 namespace
@@ -75,33 +65,20 @@ static float ReachFor(const ResolvedStyle& style, UI::ArrowDirection direction)
     return kArrowGap + ArrowSizeForBorder(FacingBorderWidth(style, direction)).Height;
 }
 
-// An explicit side the bubble does not fit on, between the source and the window
-// edge, flips to the opposite side when that one fits. Auto picks its side itself.
-static UIElement::TooltipPlacement FitPlacement(UIElement::TooltipPlacement placement, const Mathematics::Rect& source,
-                                                const ResolvedStyle& style, float tipW, float tipH, float vpW,
-                                                float vpH)
+// The arrow points from the bubble back at its anchor.
+static UI::ArrowDirection ArrowDirectionFor(UIElement::TooltipPlacement side)
 {
-    using Placement = UIElement::TooltipPlacement;
-    const float left = source.X;
-    const float top = source.Y;
-    const float right = source.Right();
-    const float bottom = source.Bottom();
-    const bool fitsRight = right + ReachFor(style, UI::ArrowDirection::Left) + tipW + kEdgePad <= vpW;
-    const bool fitsLeft = left - ReachFor(style, UI::ArrowDirection::Right) - tipW >= kEdgePad;
-    const bool fitsBelow = bottom + ReachFor(style, UI::ArrowDirection::Up) + tipH + kEdgePad <= vpH;
-    const bool fitsAbove = top - ReachFor(style, UI::ArrowDirection::Down) - tipH >= kEdgePad;
-    switch (placement)
+    switch (side)
     {
-    case Placement::Right:
-        return !fitsRight && fitsLeft ? Placement::Left : placement;
-    case Placement::Left:
-        return !fitsLeft && fitsRight ? Placement::Right : placement;
-    case Placement::Below:
-        return !fitsBelow && fitsAbove ? Placement::Above : placement;
-    case Placement::Above:
-        return !fitsAbove && fitsBelow ? Placement::Below : placement;
+    case UIElement::TooltipPlacement::Above:
+        return UI::ArrowDirection::Down;
+    case UIElement::TooltipPlacement::Right:
+        return UI::ArrowDirection::Left;
+    case UIElement::TooltipPlacement::Left:
+        return UI::ArrowDirection::Right;
+    case UIElement::TooltipPlacement::Below:
     default:
-        return placement;
+        return UI::ArrowDirection::Up;
     }
 }
 
@@ -419,90 +396,36 @@ void TooltipOverlay::PlaceTooltip(UIElement* root, UIElement* source, float mous
 
     constexpr float kGapAbove = 10.0f; // extra gap above the cursor when there is no source element
 
-    // The bubble is a window-level overlay: it anchors to the source where the
-    // source is drawn, which a CSS transform moves away from its layout rect.
-    const Mathematics::Rect src = source ? source->GetWindowRect() : Mathematics::Rect{};
-    auto placement = source ? FitPlacement(source->GetTooltipPlacement(), src, style, tipW, tipH, vpW, vpH)
-                            : UIElement::TooltipPlacement::Auto;
-
-    float x = 0.0f;
-    float y = 0.0f;
-    // Where along the bubble's facing edge the arrow aims: the source's center, or the cursor.
-    float anchor = 0.0f;
-    UI::ArrowDirection direction = UI::ArrowDirection::Up;
-
-    if (placement == UIElement::TooltipPlacement::Right && source)
+    const UIElement::TooltipPlacement placement =
+        source ? source->GetTooltipPlacement() : UIElement::TooltipPlacement::Auto;
+    // Canvas-style controls draw many virtual items inside one large UIElement (node graph
+    // nodes and wires): an Auto tooltip there points at the cursor, not at the canvas edge.
+    const bool atCursor =
+        !source || (placement == UIElement::TooltipPlacement::Auto && source->HasClass("node-canvas"));
+    Layout::PopupRect anchorRect{mouseX, mouseY - kGapAbove, 0.0f, kGapAbove};
+    Layout::PopupPosition aim{mouseX, mouseY};
+    if (!atCursor)
     {
-        anchor = src.Y + src.Height * 0.5f;
-        x = ClampF(src.Right() + ReachFor(style, UI::ArrowDirection::Left), kEdgePad, vpW - tipW - kEdgePad);
-        y = ClampF(anchor - tipH * 0.5f, kEdgePad, vpH - tipH - kEdgePad);
-        direction = UI::ArrowDirection::Left;
+        // The bubble is a window-level overlay: it anchors where the source and its anchor
+        // are drawn, which a CSS transform moves away from their layout rects.
+        const Mathematics::Rect src = source->GetWindowRect();
+        aim = {src.X + src.Width * 0.5f, src.Y + src.Height * 0.5f};
+        const UIElement* anchor = source->GetTooltipAnchor();
+        const bool anchored = anchor && IsShownUnder(*anchor, *root);
+        const Mathematics::Rect frame = anchored ? anchor->GetWindowRect() : src;
+        anchorRect = {frame.X, frame.Y, frame.Width, frame.Height};
     }
-    else if (placement == UIElement::TooltipPlacement::Left && source)
-    {
-        anchor = src.Y + src.Height * 0.5f;
-        x = ClampF(src.X - ReachFor(style, UI::ArrowDirection::Right) - tipW, kEdgePad, vpW - tipW - kEdgePad);
-        y = ClampF(anchor - tipH * 0.5f, kEdgePad, vpH - tipH - kEdgePad);
-        direction = UI::ArrowDirection::Right;
-    }
-    else if (placement == UIElement::TooltipPlacement::Below && source)
-    {
-        anchor = src.X + src.Width * 0.5f;
-        x = ClampF(anchor - tipW * 0.5f, kEdgePad, vpW - tipW - kEdgePad);
-        y = ClampF(src.Bottom() + ReachFor(style, UI::ArrowDirection::Up), kEdgePad, vpH - tipH - kEdgePad);
-        direction = UI::ArrowDirection::Up;
-    }
-    else if (placement == UIElement::TooltipPlacement::Above && source)
-    {
-        anchor = src.X + src.Width * 0.5f;
-        x = ClampF(anchor - tipW * 0.5f, kEdgePad, vpW - tipW - kEdgePad);
-        y = ClampF(src.Y - ReachFor(style, UI::ArrowDirection::Down) - tipH, kEdgePad, vpH - tipH - kEdgePad);
-        direction = UI::ArrowDirection::Down;
-    }
-    else
-    {
-        // Auto: anchor to the source element if available, otherwise cursor.
-        // Canvas-style controls draw many virtual items inside one large UIElement
-        // (for example node graph nodes/wires), so anchoring to the element rect
-        // puts the tooltip at the canvas edge instead of the hovered item.
-        const bool sourceUsesCursorAnchor = source && source->HasClass("node-canvas");
-        // Prefer below the element; fall back to above.
-        const bool hasSource = source != nullptr && !sourceUsesCursorAnchor;
-        anchor = hasSource ? src.X + src.Width * 0.5f : mouseX;
-        const float anchorTop = hasSource ? src.Y : mouseY - kGapAbove;
-        const float anchorBot = hasSource ? src.Bottom() : mouseY;
+    const Layout::TooltipReach reach{ReachFor(style, UI::ArrowDirection::Up), ReachFor(style, UI::ArrowDirection::Down),
+                                     ReachFor(style, UI::ArrowDirection::Left),
+                                     ReachFor(style, UI::ArrowDirection::Right)};
+    const Layout::TooltipBubblePlacement placed = Layout::PlaceTooltipBubble(
+        {0.0f, 0.0f, vpW, vpH}, anchorRect, aim, tipW, tipH, reach, kEdgePad, placement);
 
-        const float yBelow = anchorBot + ReachFor(style, UI::ArrowDirection::Up);
-        const float yAbove = anchorTop - ReachFor(style, UI::ArrowDirection::Down) - tipH;
-        bool below = false;
-
-        if (yBelow + tipH + kEdgePad <= vpH)
-        {
-            y = yBelow;
-            below = true;
-        }
-        else if (yAbove >= kEdgePad)
-            y = yAbove;
-        else
-        {
-            // Neither fits: pick the side with more room.
-            const float roomBelow = vpH - anchorBot;
-            const float roomAbove = anchorTop;
-            if (roomBelow >= roomAbove)
-            {
-                y = std::min(vpH - tipH - kEdgePad, yBelow);
-                below = true;
-            }
-            else
-                y = std::max(kEdgePad, yAbove);
-        }
-        x = ClampF(anchor - tipW * 0.5f, kEdgePad, vpW - tipW - kEdgePad);
-        direction = below ? UI::ArrowDirection::Up : UI::ArrowDirection::Down;
-    }
-
-    const float finalX = std::round(x);
-    const float finalY = std::round(y);
-    PlaceArrow(direction, anchor, finalX, finalY, tipW, tipH);
+    const float finalX = std::round(placed.Position.X);
+    const float finalY = std::round(placed.Position.Y);
+    // An anchored bubble's arrow lines up with the source along the anchor's facing edge: in a
+    // grid of tiles it shows the source's column or row, and the source's hover style shows the tile.
+    PlaceArrow(ArrowDirectionFor(placed.Side), placed.ArrowAim, finalX, finalY, tipW, tipH);
 
     // Skip the Set chain when nothing actually moved. Re-applying the same
     // Display/Position values would dirty the wrapper every frame.
@@ -533,28 +456,39 @@ void TooltipOverlay::PlaceArrow(UI::ArrowDirection direction, float anchor, floa
     const float border = FacingBorderWidth(style, direction);
     const ArrowSize size = ArrowSizeForBorder(border);
     const float halfBase = size.BaseWidth * 0.5f * (size.Height + border) / size.Height;
+    Mathematics::Vector2 tip;
     switch (direction)
     {
     case UI::ArrowDirection::Down:
-        m_ArrowTip = {ClampAlongEdge(anchor, bubbleX, bubbleW, radii.BottomLeft.X, radii.BottomRight.X, halfBase),
-                      bubbleY + bubbleH + size.Height};
+        tip = {ClampAlongEdge(anchor, bubbleX, bubbleW, radii.BottomLeft.X, radii.BottomRight.X, halfBase),
+               bubbleY + bubbleH + size.Height};
         break;
     case UI::ArrowDirection::Left:
-        m_ArrowTip = {bubbleX - size.Height,
-                      ClampAlongEdge(anchor, bubbleY, bubbleH, radii.TopLeft.Y, radii.BottomLeft.Y, halfBase)};
+        tip = {bubbleX - size.Height,
+               ClampAlongEdge(anchor, bubbleY, bubbleH, radii.TopLeft.Y, radii.BottomLeft.Y, halfBase)};
         break;
     case UI::ArrowDirection::Right:
-        m_ArrowTip = {bubbleX + bubbleW + size.Height,
-                      ClampAlongEdge(anchor, bubbleY, bubbleH, radii.TopRight.Y, radii.BottomRight.Y, halfBase)};
+        tip = {bubbleX + bubbleW + size.Height,
+               ClampAlongEdge(anchor, bubbleY, bubbleH, radii.TopRight.Y, radii.BottomRight.Y, halfBase)};
         break;
     case UI::ArrowDirection::Up:
     default:
-        m_ArrowTip = {ClampAlongEdge(anchor, bubbleX, bubbleW, radii.TopLeft.X, radii.TopRight.X, halfBase),
-                      bubbleY - size.Height};
+        tip = {ClampAlongEdge(anchor, bubbleX, bubbleW, radii.TopLeft.X, radii.TopRight.X, halfBase),
+               bubbleY - size.Height};
         break;
     }
+    if (!m_HasArrow || direction != m_ArrowDirection || !(tip == m_ArrowTip))
+        m_ArrowChanged = true;
+    m_ArrowTip = tip;
     m_ArrowDirection = direction;
     m_HasArrow = true;
+}
+
+bool TooltipOverlay::ConsumeArrowChange()
+{
+    const bool changed = m_ArrowChanged;
+    m_ArrowChanged = false;
+    return changed;
 }
 
 void TooltipOverlay::EmitArrowPrimitives(std::vector<UI::UIPrimitive>& prims, float opacity, float contentScale) const
@@ -575,7 +509,7 @@ void TooltipOverlay::EmitArrowPrimitives(std::vector<UI::UIPrimitive>& prims, fl
     arrow.BaseWidth = size.BaseWidth * cs;
     arrow.Height = size.Height * cs;
     arrow.FillColor = UI::PackFromARGB(style.Visual.BackgroundColor);
-    arrow.BorderColor = UI::PackFromARGB(DrawnBorderColor(style));
+    arrow.BorderColor = UI::PackFromARGB(BorderSideColor(style.Visual.BorderColor, UI::ArrowEdge(m_ArrowDirection)));
     arrow.BorderWidth = border * cs;
     const UI::PointerArrowPrimitives triangles = UI::MakePointerArrow(arrow);
     for (uint32_t i = 0; i < triangles.Count; ++i)

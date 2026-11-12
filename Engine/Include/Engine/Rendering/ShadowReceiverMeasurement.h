@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Engine/Rendering/CameraUtils.h"
 #include "Mathematics/Geometry.h"
 #include "Mathematics/Matrix4x4.h"
 #include "Mathematics/Vector3.h"
@@ -54,9 +55,11 @@ struct ShadowReceiverMeasurement
         /// perspective projection, in world units under an orthographic one.
         float WindowHalfX = 0.0f;
         float WindowHalfY = 0.0f;
-        /// The measuring projection the depth word linearizes against.
+        /// The measuring camera's near and far: the SDSM bounds clamp to them.
         float NearPlane = 0.0f;
         float FarPlane = 0.0f;
+        /// The measuring projection's depth terms: the depth words linearize against them.
+        ProjectionDepthTerms DepthTerms{};
         bool Orthographic = false;
         /// Unit light direction whose rotation-only basis
         /// (ShadowMapRenderFeature::CascadeLightRotation) the bins are

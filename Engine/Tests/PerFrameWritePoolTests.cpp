@@ -172,6 +172,18 @@ TEST_F(PerFrameWritePoolTest, Initialize_AllUsageClassesReady)
     pool.Shutdown();
 }
 
+// A usage class with no ring would fail its first allocation; the pool refuses
+// the configuration at Initialize instead.
+TEST_F(PerFrameWritePoolTest, Initialize_RefusesAZeroStartCapacity)
+{
+    PerFrameWritePool pool;
+    PerFrameWritePoolConfig cfg{};
+    cfg.FramesInFlight = 2;
+    cfg.usages[static_cast<size_t>(FrameWriteUsage::BonePalette)].capacityBytes = 0;
+    EXPECT_FALSE(pool.Initialize(m_device.get(), cfg));
+    EXPECT_FALSE(pool.IsInitialized());
+}
+
 TEST_F(PerFrameWritePoolTest, AllocateMaterialParams_Works)
 {
     PerFrameWritePool pool;
@@ -352,6 +364,27 @@ TEST_F(FrameBufferAllocatorTest, Reserve_GrowsBeforeAllocationAndPreservesLiveRe
     EXPECT_EQ(alloc.GetCurrentBuffer(), buffer);
     auto afterServe = alloc.Allocate(alloc.GetCapacity(), 16);
     EXPECT_FALSE(afterServe.IsValid()) << "a ring with a live region must not be recreated";
+
+    alloc.Shutdown();
+}
+
+// Descriptor writes bind the current buffer with GetCapacity as the range, so it
+// names the current slot's size, not the size of a slot that grew earlier.
+TEST_F(FrameBufferAllocatorTest, Capacity_IsTheCurrentSlotsCapacity)
+{
+    FrameBufferAllocator alloc;
+    constexpr size_t kInitial = 1024;
+    constexpr size_t kMax = 64u << 10;
+    ASSERT_TRUE(alloc.Initialize(m_device.get(), kInitial,
+                                 BufferUsage::Storage, /*frames=*/2,
+                                 /*align=*/16, "test_slot_capacity", kMax));
+
+    alloc.BeginFrame(0);
+    ASSERT_TRUE(alloc.Reserve(4096));
+    ASSERT_GE(alloc.GetCapacity(), 4096u);
+
+    alloc.BeginFrame(1);
+    EXPECT_EQ(alloc.GetCapacity(), kInitial) << "slot 1 did not grow; slot 0 did";
 
     alloc.Shutdown();
 }

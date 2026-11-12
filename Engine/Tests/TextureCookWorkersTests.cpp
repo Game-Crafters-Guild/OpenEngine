@@ -2,8 +2,9 @@
 // runs exactly once, helpers encode only within the decode gate's texture share
 // (the share texture decodes take too, so cooking threads that hold a texture
 // decode's slot are inside it), a full share still lets every cook finish on its
-// own thread, and a stop, a failed band or a throw (from a band or from the stop
-// callback) ends the run only after the bands already started have finished.
+// own thread, a level gets helpers when slots free during it, and a stop, a
+// failed band or a throw (from a band or from the stop callback) ends the run
+// only after the bands already started have finished.
 
 #include <gtest/gtest.h>
 
@@ -103,6 +104,35 @@ bool ShareRefills(const AssetDecodeGate& gate)
     return gate.FreeTextureSlots() == kTextureShare;
 }
 
+// Waits a bounded time for a band on a thread other than the cooking thread, so
+// a loaded machine cannot let the cooking thread finish the level alone first.
+void AwaitBandOffCaller(const BandProbe& probe)
+{
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (probe.OffCaller.load() == 0 && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+}
+
+// Encodes `band`. Before that, the cooking thread frees the whole texture share in
+// its first band and waits for a band on another thread in its second; `callerBands`
+// counts its bands.
+bool FreeShareThenEncode(BandProbe& probe, AssetDecodeGate& gate, uint32& callerBands, uint32 band)
+{
+    if (std::this_thread::get_id() == probe.Caller && ++callerBands <= 2)
+    {
+        if (callerBands == 1)
+        {
+            for (uint32 i = 0; i < kTextureShare; ++i)
+                gate.Release(AssetDecodeGate::Work::Texture);
+        }
+        else
+        {
+            AwaitBandOffCaller(probe);
+        }
+    }
+    return probe.Encode(band);
+}
+
 // A caller off the pool (the build's bake thread) holds no slot: the pool
 // workers encoding its bands stay within the texture share, though the pool has
 // idle workers past it.
@@ -191,6 +221,31 @@ TEST(TextureCookWorkers, FullShareStillFinishesOnTheCallingThread)
 
     for (uint32 i = 0; i < kTextureShare; ++i)
         gated.Gate->Release(AssetDecodeGate::Work::Texture);
+}
+
+// A cook that starts while the share is full gets helpers during its level when
+// the other cooks end: the share freed in the calling thread's first band reaches
+// the bands after it, and the helpers stay within the share.
+TEST(TextureCookWorkers, ALevelTakesHelpersAsTextureSlotsFree)
+{
+    constexpr uint32 kBands = 200;
+    GatedPool gated;
+    for (uint32 i = 0; i < kTextureShare; ++i)
+        ASSERT_TRUE(gated.Gate->TryAcquire(AssetDecodeGate::Work::Texture));
+
+    ConcurrencyMeter meter, helperMeter;
+    BandProbe probe(kBands, meter, helperMeter);
+    uint32 callerBands = 0; // only the calling thread touches it
+    AssetDecodeGate& gate = *gated.Gate;
+    EXPECT_TRUE(gated.Workers.RunBands(
+        kBands,
+        [&probe, &gate, &callerBands](uint32 band) { return FreeShareThenEncode(probe, gate, callerBands, band); },
+        {}));
+
+    ExpectEveryBandRanOnce(probe);
+    EXPECT_GT(probe.OffCaller.load(), 0u) << "the level kept the helper count it had at its start";
+    EXPECT_LE(helperMeter.Peak.load(), kTextureShare);
+    EXPECT_TRUE(ShareRefills(*gated.Gate)) << "a helper kept its gate slot";
 }
 
 // The stop is polled by the calling thread before each band it takes; once seen,

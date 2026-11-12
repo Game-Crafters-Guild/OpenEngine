@@ -24,11 +24,11 @@ namespace GameEngine
 /// header name is not an HTTP token, a value holds CR, LF or NUL, or a
 /// credential header (Authorization, Proxy-Authorization, Cookie, X-Api-Key,
 /// Api-Key, X-Goog-Api-Key) would leave over plain http to a host that is not
-/// loopback. The check reads the request URL only. PostJson and PostJsonStream
-/// do not follow redirects; Get and PostForm do, and curl replays every custom
-/// header except Authorization and Cookie to the redirect target, so a key in
-/// another header can follow a redirect to another host, plain http included.
-/// A key carried in the URL query is not checked.
+/// loopback. PostJson and PostJsonStream do not follow redirects. Get follows
+/// at most five and drops every credential header on a redirect to another
+/// origin (scheme, host and port); each hop passes the same check. PostForm
+/// follows redirects only when it sends no credential header. A key carried in
+/// the URL query is not checked.
 class HttpClient
 {
 public:
@@ -39,11 +39,11 @@ public:
         std::unordered_map<std::string, std::string> headers;
         bool success = false;
         std::string error;
-        /// True when PostOptions::Cancellation stopped the request; success is
-        /// then false and body is empty.
+        /// True when the Cancellation flag of PostOptions or GetOptions stopped
+        /// the request; success is then false and body is empty.
         bool cancelled = false;
-        /// True when the body passed the response cap (PostOptions::MaxResponseBytes,
-        /// or Get's maxBodyBytes); success is then false and error says so.
+        /// True when the body passed the MaxResponseBytes cap of PostOptions or
+        /// GetOptions; success is then false and error says so.
         bool overflowed = false;
     };
 
@@ -115,12 +115,28 @@ public:
                                        const PostOptions& options,
                                        const ChunkCallback& onChunk);
 
-    /// GET request. maxBodyBytes > 0 aborts the transfer (success=false) once
-    /// the response body exceeds the cap — callers fetching untrusted URLs
-    /// should always set it, since the body is buffered in memory.
+    struct GetOptions
+    {
+        /// Above 0, the transfer stops (success false) once the body passes
+        /// this cap. A caller that fetches an untrusted URL sets it, because
+        /// the body is kept in memory.
+        size_t MaxResponseBytes = 0;
+        /// Above 0, the limit for the whole request with its redirects, connect
+        /// to last byte. At 0 only the stall limit applies, so a large download
+        /// on a slow link still finishes.
+        std::chrono::milliseconds Timeout{0};
+        /// Set to true from any thread to stop the request, also while it
+        /// connects; the call then returns with HttpResponse::cancelled within
+        /// about a second. Must outlive the call.
+        const std::atomic<bool>* Cancellation = nullptr;
+    };
+
+    /// GET request. Each caller states its GetOptions: the body cap, the time limit and the stop
+    /// flag. Threaded wasm reads the stop flag only before and after the synchronous request and
+    /// does not enforce Timeout.
     static HttpResponse Get(const std::string& url,
-                            const std::unordered_map<std::string, std::string>& headers = {},
-                            size_t maxBodyBytes = 0);
+                            const std::unordered_map<std::string, std::string>& headers,
+                            const GetOptions& options);
 
     /// Percent-encode a string for use in URL query or path (RFC 3986).
     static std::string UrlEncode(const std::string& str);

@@ -1,11 +1,11 @@
 <uielement id="hud-root" class="hud-root">
     <uielement id="hp-panel" class="hp-panel hud-hit">
         <label class="hp-title" text="HEALTH" />
-        <uielement class="hp-track">
-            <uielement id="hp-fill" class="hp-fill" />
-        </uielement>
+        <progress id="hp" class="hp-bar" max="100" />
         <label id="hp-label" class="hp-label" text="-- / --" />
     </uielement>
     <button id="damage-btn" class="damage-btn hud-hit" text="TAKE DAMAGE" />
+    <!-- No host class: the control's own sheet (UI/controls/Button.css) draws this Button. -->
+    <button id="bare-button" text="BARE BUTTON" />
     <textfield id="chat-input" class="chat-input hud-hit" />
 </uielement>

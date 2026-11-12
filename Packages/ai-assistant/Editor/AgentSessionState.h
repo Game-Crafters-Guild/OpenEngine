@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AssistantMode.h"
+#include "Providers/ApiKeyStore.h"
 
 #include <filesystem>
 #include <memory>
@@ -24,6 +25,9 @@ class AgentSessionState
 {
 public:
     static AgentSessionState& Get();
+
+    /// The system's credential store and ClaudeApiProvider::kModelsEndpoint.
+    AgentSessionState();
 
     /// The provider for `providerId` as the settings configure it now: the same
     /// instance while its executable and the project are unchanged, a new one
@@ -53,6 +57,14 @@ public:
     /// connection's project; does nothing while the connection has no session.
     void SetSessionMode(std::string_view providerId, AssistantMode mode);
 
+    /// The Claude API key store the Claude (API key) connection reads: the system's
+    /// credential store unless a test swapped it.
+    ApiKeyStore ApiKeys() const;
+    /// Makes the Claude (API key) connection use `keys` and read `modelsUrl` for its Key
+    /// accepted step, and drops its provider so the next Provider() call uses them. For tests:
+    /// a fake store and a loopback URL, so a test never reads the real key or the network.
+    void UseApiConnectionForTesting(ApiKeyStore keys, std::string modelsUrl);
+
 private:
     struct Connection
     {
@@ -67,5 +79,7 @@ private:
 
     mutable std::mutex m_Mutex;
     std::vector<Connection> m_Connections;
+    ApiKeyStore m_ApiKeys{ApiKeyStore::SystemBackend()};
+    std::string m_ModelsUrl;
 };
 } // namespace GameEngine

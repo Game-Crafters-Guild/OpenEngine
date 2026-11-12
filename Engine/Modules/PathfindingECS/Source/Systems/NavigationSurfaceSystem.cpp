@@ -16,7 +16,6 @@
 #include "Assets/AssetManager.h"
 #include "Assets/NavGridAsset.h"
 #include "Assets/NavSurfaceAsset.h"
-#include "Components/Rendering/WorldSectorCoord.h"
 #include "Components/Transform.h"
 #include "Core/Engine.h"
 #include "ECS/Query.h"
@@ -50,9 +49,6 @@ using Components::NavigationBakeWait;
 using Components::NavigationSurface;
 using Components::NavigationSurfaceMode;
 
-static_assert(Pathfinding::kNavChartSectorSize == Components::kWorldSectorSize,
-              "a chart origin's sector is a world sector");
-
 // ~2 seconds at 60 fps: long enough that a healthy drain never trips it, short enough that a
 // wedged or starved gate surfaces while reproducible.
 constexpr uint32 kGateStarvationWarnFrames = 120;
@@ -81,8 +77,8 @@ uint64 HashBakeSettings(const NavigationSurface& surface, const Components::Worl
                                     surface.Extent.y, surface.Extent.z})
             hash = Fnv1a64Value(hash, value);
         if (transform)
-            for (size_t i = 12; i < 15; ++i)
-                hash = Fnv1a64Value(hash, transform->matrix[i]);
+            for (const float64 value : {transform->Position.X, transform->Position.Y, transform->Position.Z})
+                hash = Fnv1a64Value(hash, value);
     }
     return Fnv1a64Value(hash, surface.AuthoredCells.ToGuid());
 }
@@ -133,7 +129,7 @@ bool SameMesh(const Pathfinding::NavMeshSettings& a, const Pathfinding::NavMeshS
 Pathfinding::NavMeshChart ChartOf(const NavigationBounds& bounds, const Pathfinding::NavMeshSettings& settings)
 {
     Pathfinding::NavMeshChart chart;
-    chart.Origin = Pathfinding::ChartOrigin::AtWorld(bounds.Min[0], bounds.Min[1], bounds.Min[2]);
+    chart.Origin = Mathematics::WorldPosition{bounds.Min[0], bounds.Min[1], bounds.Min[2]};
     chart.Span = static_cast<float32>(Pathfinding::kNavChartTilesPerSide) *
                  Pathfinding::DetourNavMap::GetTileSize(settings);
     return chart;
@@ -178,9 +174,9 @@ void GatherCarves(ECS::World& world, Carves& carves)
             const Components::WorldTransform& transform) {
             if (!obstacle.Carve || !(obstacle.Radius > 0.0f))
                 return;
-            const float32 y = transform.matrix[13];
-            carves.push_back({entity, {transform.matrix[12], transform.matrix[14], obstacle.Radius,
-                                       y - obstacle.Height, y + obstacle.Height}});
+            const Mathematics::Vector3 position = transform.GetPosition() - Mathematics::WorldPosition{};
+            carves.push_back({entity, {position.x, position.z, obstacle.Radius, position.y - obstacle.Height,
+                                       position.y + obstacle.Height}});
         });
     std::sort(carves.begin(), carves.end(), [](const auto& a, const auto& b) { return a.first.id < b.first.id; });
 }
@@ -719,6 +715,14 @@ void NavigationSurfaceSystem::StartBake(ECS::World& world, ECS::EntityHandle ent
             BuildNavigationStaticGeometry(SnapshotNavigationGeometrySources(world, FindEngineMeshRegistry()), pool, nullptr));
     const NavigationStaticGeometry noGeometry;
     const NavigationBounds bounds = NavigationSurfaceBounds(surface, transform, terrain, geometry ? *geometry : noGeometry);
+    if (terrain.ReachesPlanetRelief(bounds))
+    {
+        surface.BakePhase = NavigationBakePhase::Failed;
+        surface.BakeFailure = NavigationBakeFailure::SphericalTerrain;
+        Logger::Log::Warning("[PathfindingECS] Navigation surface on entity {}: {}", entity.id,
+                             Navigation::FormatBakeStatus(surface));
+        return;
+    }
     const bool terrainInside = terrain.OverlapsXZ(bounds.Min[0], bounds.Min[2], bounds.Max[0], bounds.Max[2]);
     if (!geometry && (surface.Mode == NavigationSurfaceMode::Mesh || !terrainInside))
         geometry = std::make_shared<const NavigationStaticGeometry>(
@@ -727,7 +731,7 @@ void NavigationSurfaceSystem::StartBake(ECS::World& world, ECS::EntityHandle ent
     if (!HasGeometryInside(bounds, terrain, geometry ? *geometry : noGeometry))
     {
         surface.BakePhase = NavigationBakePhase::Failed;
-        surface.BakeFailure = terrain.Spherical ? NavigationBakeFailure::SphericalTerrain : NavigationBakeFailure::NoGeometry;
+        surface.BakeFailure = NavigationBakeFailure::NoGeometry;
         Logger::Log::Warning("[PathfindingECS] Navigation surface on entity {}: {}", entity.id,
                              Navigation::FormatBakeStatus(surface));
         return;
@@ -1234,8 +1238,9 @@ void NavigationSurfaceSystem::ApplyDynamicObstacles(ECS::World& world)
     // Rasterize each obstacle's footprint into every grid it overlaps.
     world.Query<ECS::Read<Components::NavigationObstacle>, ECS::Read<Components::WorldTransform>>().Each(
         [&](ECS::EntityHandle /*e*/, const Components::NavigationObstacle& obstacle, const Components::WorldTransform& wt) {
-            const float32 posX = wt.matrix[12];
-            const float32 posZ = wt.matrix[14];
+            const Mathematics::Vector3 position = wt.GetPosition() - Mathematics::WorldPosition{};
+            const float32 posX = position.x;
+            const float32 posZ = position.z;
             const float32 radius = obstacle.Radius;
 
             world.Query<ECS::Read<NavigationSurface>>().Each([&](ECS::EntityHandle /*e*/, const NavigationSurface& surface) {

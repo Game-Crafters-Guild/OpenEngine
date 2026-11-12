@@ -238,6 +238,29 @@ TEST_F(SkeletonStoreRuntimeTest, GetCount_ReflectsCreatedSkeletons)
     EXPECT_GE(SkeletonStore::Instance().GetCount(), 1u);
 }
 
+TEST_F(SkeletonStoreRuntimeTest, LivePaletteBoneCount_SumsAgainOnlyAfterAStoreChange)
+{
+    auto& store = SkeletonStore::Instance();
+    const size_t before = store.GetLivePaletteBoneCount();
+
+    const uint32_t rtId = store.CreateRuntime(m_SkelId);
+    EXPECT_EQ(store.GetLivePaletteBoneCount(), before + 4u);
+
+    // A sum between the resize and the joint-count write caches the old count.
+    store.EnsureSizes(m_SkelId, 6);
+    EXPECT_EQ(store.GetLivePaletteBoneCount(), before + 4u);
+
+    // A write the store does not see leaves the sum as it was: no walk ran.
+    store.Get(m_SkelId)->SkinJointCount = 6;
+    EXPECT_EQ(store.GetLivePaletteBoneCount(), before + 4u);
+
+    store.JointCountsWritten();
+    EXPECT_EQ(store.GetLivePaletteBoneCount(), before + 6u);
+
+    store.ReleaseRuntime(rtId);
+    EXPECT_EQ(store.GetLivePaletteBoneCount(), before);
+}
+
 // --- Topological sort tests ---
 // None of these skeletons has a joint table, so every bone is in the joint closure and the
 // closure's levels are the hierarchy's.

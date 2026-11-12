@@ -2,23 +2,26 @@
 // mirror of the CPU LightUploadNode.cpp::GPULightPacked (144 B, static_assert
 // -locked there). Included INSIDE a struct body:
 //
-//     struct LightPacked {                       // from Shaders/*.comp | *.frag
+//     struct LightPacked {                       // from Shaders/*.comp
 //     #include "Includes/light_packed_fields.glsl"
 //     };
 //     struct GE_LightPacked {                    // from Includes/clustered_lighting.glsl
 //     #include "light_packed_fields.glsl"
 //     };
 //
-// Consumers keep their own struct NAME (LightPacked in the standalone Forward+
-// shaders; GE_LightPacked for the composed adapter path's shared BRDF), but
+// Consumers keep their own struct NAME (LightPacked in the light cull;
+// GE_LightPacked for the composed adapter path's shared BRDF), but
 // share this field list so the layout can never drift between them.
+//
+// posRange.xyz in the LightBuffer is relative to the view's render origin
+// (view_origin.glsl). DDGI packs its own buffer with world positions.
 //
 // ---------------------------------------------------------------------------
 // LANE MAP (9 x vec4 = 144 B; each lane maps 1:1 to a GPULightPacked field)
 // ---------------------------------------------------------------------------
 //   meta (uvec4)     x=type(0=dir,1=point,2=spot,4=area) y=castsShadows
 //                    z=areaShape  w=castsLight
-//   posRange         xyz=positionWS         w=range
+//   posRange         xyz=position           w=range
 //   dirIntensity     xyz=directionWS        w=intensity
 //   colorAreaWidth   rgb=color              w=areaWidth
 //   areaParams       x=areaHeight y=areaRadius z=decay   w=spotCosInner
@@ -38,7 +41,7 @@
 // Field order and types are ABI: any change here must change GPULightPacked in
 // LightUploadNode.cpp (and its size static_assert) in the same commit.
     uvec4 meta;          // x=type, y=castsShadows, z=areaShape, w=castsLight
-    vec4 posRange;       // xyz=positionWS, w=range
+    vec4 posRange;       // xyz=position (see above), w=range
     vec4 dirIntensity;   // xyz=directionWS, w=intensity
     vec4 colorAreaWidth; // rgb=color, w=areaWidth
     vec4 areaParams;     // x=areaHeight, y=areaRadius, z=decay, w=spotCosInner

@@ -1,12 +1,16 @@
 #include "Logger/Logger.h"
 #include "JobSystem/WorkStealingThreadPool.h"
 #include "JobSystem/TaskDependencyGraph.h"
+#include "JobSystem/TaskSlabPool.h"
 #include "TestPlatform.h"
 #include "HeldWorkers.h"
+#include "Memory/AllocationCountScope.h"
+#include "ScopedLogLevel.h"
 
 #include <gtest/gtest.h>
 #include <atomic>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <future>
 #include <optional>
@@ -18,14 +22,8 @@ namespace GameEngine::Tests {
 using namespace JobSystem;
 
 class WorkStealingThreadPoolTest : public ::testing::Test {
-protected:
-    void SetUp() override {
-        Logger::Log::SetLogLevel(Logger::LogLevel::Debug);
-    }
-
-    void TearDown() override {
-        // Clean up any resources
-    }
+private:
+    ScopedLogLevel m_LogLevel{Logger::LogLevel::Debug};
 };
 
 /**
@@ -61,10 +59,11 @@ TEST_F(WorkStealingThreadPoolTest, BasicTaskExecution) {
  * (death test below); Release behavior is unchanged (silent false).
  */
 TEST_F(WorkStealingThreadPoolTest, TryGetResultFalseBranchesAreBenign) {
+    // Declared before the pool: the held job can still read it after the release.
+    std::atomic<bool> release{false};
     WorkStealingThreadPool pool(2);
 
     // Branch 1: not yet completed — false, no diagnostic.
-    std::atomic<bool> release{false};
     auto gated = pool.Submit([&release]() {
         while (!release.load()) {
             std::this_thread::yield();
@@ -106,8 +105,9 @@ TaskHandle SubmitEmptyGraphTask(WorkStealingThreadPool& pool) {
  * must die before that module unloads.
  */
 TEST_F(WorkStealingThreadPoolTest, ReleaseFinishedTasksReleasesAnIdleWorkersResult) {
-    WorkStealingThreadPool pool(1);
+    // Declared before the pool: a result the worker's batch still holds writes it when the pool dies.
     std::atomic<int> live{0};
+    WorkStealingThreadPool pool(1);
     {
         auto handle = pool.Submit([&live]() { return LiveResult(&live); });
         handle.Wait();
@@ -127,9 +127,10 @@ TEST_F(WorkStealingThreadPoolTest, ReleaseFinishedTasksReleasesAnIdleWorkersResu
  * registry holds, and keeps a result a handle holds and a task that still runs.
  */
 TEST_F(WorkStealingThreadPoolTest, ReleaseFinishedTasksReleasesOnlyRegistryHeldResults) {
+    // Declared before the pool: the held job can still read it after the release.
+    std::atomic<bool> release{false};
     WorkStealingThreadPool pool(1);
     std::atomic<int> live{0};
-    std::atomic<bool> release{false};
     auto running = pool.Submit([&release]() {
         while (!release.load()) {
             std::this_thread::yield();
@@ -195,10 +196,12 @@ TEST(TryGetResultDeathTest, TypeMismatchOnCompletedTaskAsserts) {
  * behind the pool's one busy worker, true while its body runs, false once done.
  */
 TEST(TaskHandleTest, IsRunningIsTrueOnlyWhileTheBodyRuns) {
+    // Declared before the pool: a job can still be inside set_value() after the wait returns.
+    std::promise<void> blockerEntered;
+    std::promise<void> bodyEntered;
     WorkStealingThreadPool pool(1);
     constexpr auto kTimeout = std::chrono::seconds(10);
 
-    std::promise<void> blockerEntered;
     std::promise<void> releaseBlocker;
     auto blocker = pool.Submit([&blockerEntered, gate = releaseBlocker.get_future().share()]() {
         blockerEntered.set_value();
@@ -206,7 +209,6 @@ TEST(TaskHandleTest, IsRunningIsTrueOnlyWhileTheBodyRuns) {
     });
     ASSERT_EQ(blockerEntered.get_future().wait_for(kTimeout), std::future_status::ready);
 
-    std::promise<void> bodyEntered;
     std::promise<void> releaseBody;
     auto handle = pool.Submit([&bodyEntered, gate = releaseBody.get_future().share()]() {
         bodyEntered.set_value();
@@ -263,10 +265,11 @@ TEST(TaskHandleTest, ACompletionCallbackCanRegisterAnotherOnTheSameHandle) {
  * lock too, so a failure callback may register another on the same handle.
  */
 TEST(TaskHandleTest, ACancelledTasksFailureCallbackCanRegisterAnotherOnTheSameHandle) {
+    // Declared before the pool: the blocker can still be inside set_value() after the wait returns.
+    std::promise<void> blockerEntered;
     WorkStealingThreadPool pool(1);
     constexpr auto kTimeout = std::chrono::seconds(10);
 
-    std::promise<void> blockerEntered;
     std::promise<void> releaseBlocker;
     auto blocker = pool.Submit([&blockerEntered, gate = releaseBlocker.get_future().share()]() {
         blockerEntered.set_value();
@@ -518,6 +521,142 @@ TEST_F(WorkStealingThreadPoolTest, HighConcurrency) {
     }
     
     EXPECT_EQ(completedTasks.load(), numTasks);
+}
+
+namespace {
+String ReadTaskResult(size_t index) {
+    return String(64, static_cast<char>('a' + index));
+}
+
+// Runs on the pool's one worker. The relaxed flags order nothing, so only the release of the
+// last references can order the other thread's result reads before this drain drops them.
+void DrainTheWorkersBatchAfterTheHandlesDrop(WorkStealingThreadPool& pool, std::atomic<bool>& started,
+                                             const std::atomic<bool>& handlesDropped) {
+    started.store(true, std::memory_order_relaxed);
+    while (!handlesDropped.load(std::memory_order_relaxed)) {
+        std::this_thread::yield();
+    }
+    pool.Submit([] {}); // This submit drains the worker's cleanup batch.
+}
+
+// Keeps every handle until all the tasks are done, so most handles outlive their registry cleanup.
+// The workers start after the last submit, so each call queues all of its envelope slabs at once.
+void SubmitAndHoldPastCleanup(WorkStealingThreadPool& pool, std::vector<TaskHandle>& handles, size_t count) {
+    HeldWorkers held(pool);
+    for (size_t i = 0; i < count; ++i) {
+        handles.push_back(pool.Submit([] { return 1; }));
+    }
+    held.Release();
+    for (TaskHandle& handle : handles) {
+        handle.Wait();
+    }
+    handles.clear();
+}
+} // namespace
+
+/**
+ * @brief A result read on this thread is ordered before the worker drops the
+ * task's last reference. TSan reports the read against the result's
+ * reset when only a use_count() read orders the drop.
+ */
+TEST_F(WorkStealingThreadPoolTest, AResultReadIsOrderedBeforeTheWorkerReleasesTheTask) {
+    constexpr size_t kReadTasks = 8; // less than one cleanup batch: only the drain task drains it
+    // Declared before the pool: the drain task uses them until this thread drops its handles.
+    std::atomic<bool> drainStarted{false};
+    std::atomic<bool> handlesDropped{false};
+    WorkStealingThreadPool pool(1);
+    std::vector<TaskHandle> reads;
+    for (size_t i = 0; i < kReadTasks; ++i) {
+        reads.push_back(pool.Submit([i]() { return ReadTaskResult(i); }));
+    }
+    for (TaskHandle& read : reads) {
+        read.Wait();
+    }
+    // Submitted before the result reads, so the submit does not order them before the drain.
+    TaskHandle drain = pool.Submit([&pool, &drainStarted, &handlesDropped]() {
+        DrainTheWorkersBatchAfterTheHandlesDrop(pool, drainStarted, handlesDropped);
+    });
+    while (!drainStarted.load(std::memory_order_relaxed)) {
+        std::this_thread::yield();
+    }
+
+    for (size_t i = 0; i < kReadTasks; ++i) {
+        String result;
+        EXPECT_TRUE(reads[i].TryGetResult(result));
+        EXPECT_EQ(result, ReadTaskResult(i));
+    }
+    reads.clear();
+    handlesDropped.store(true, std::memory_order_relaxed);
+    drain.Wait();
+    EXPECT_TRUE(drain.IsCompleted());
+}
+
+/**
+ * @brief A handle keeps its result after its pool is destroyed. Its last
+ * release gives the TaskData to a freelist that outlives every pool.
+ */
+TEST_F(WorkStealingThreadPoolTest, AHandleThatOutlivesItsPoolKeepsItsResult) {
+    TaskHandle outlived;
+    {
+        WorkStealingThreadPool pool(1);
+        outlived = pool.Submit([]() { return ReadTaskResult(0); });
+        outlived.Wait();
+    }
+    String result;
+    EXPECT_TRUE(outlived.TryGetResult(result));
+    EXPECT_EQ(result, ReadTaskResult(0));
+    outlived = TaskHandle();
+
+    WorkStealingThreadPool next(1);
+    TaskHandle reused = next.Submit([]() { return ReadTaskResult(1); });
+    reused.Wait();
+    EXPECT_TRUE(reused.TryGetResult(result));
+    EXPECT_EQ(result, ReadTaskResult(1));
+}
+
+/**
+ * @brief A task whose handle outlives its registry cleanup gives its TaskData
+ * back: a later round builds no new TaskData.
+ */
+TEST_F(WorkStealingThreadPoolTest, ATaskWhoseHandleOutlivesItsCleanupReusesItsTaskData) {
+    // Half the freelist capacity, so the TaskData fit when other threads keep some queue blocks.
+    constexpr size_t kTasks = kTaskSlabPoolCapacity / 2;
+    // More tasks than the freelist keeps, so the measured round cannot live on TaskData that other tests pooled.
+    constexpr size_t kWarmRounds = kTaskSlabPoolCapacity / kTasks + 1;
+    WorkStealingThreadPool pool(1);
+    std::vector<TaskHandle> handles;
+    handles.reserve(kTasks);
+    for (size_t round = 0; round < kWarmRounds; ++round) {
+        SubmitAndHoldPastCleanup(pool, handles, kTasks);
+    }
+
+    const GameEngine::Memory::AllocationCountScope allocations(GameEngine::Memory::CountWindow::ThisThread);
+    SubmitAndHoldPastCleanup(pool, handles, kTasks);
+    const std::uint64_t count = allocations.Count();
+    std::printf("[TaskData] %llu allocations for %zu tasks whose handles outlive their cleanup\n",
+                static_cast<unsigned long long>(count), kTasks);
+    EXPECT_LE(count, kTasks + kTasks / 4) << "a task took a TaskData allocation besides its registry entry";
+}
+
+/**
+ * @brief The last release resets the TaskData, so a void task that reuses it has no result.
+ */
+TEST_F(WorkStealingThreadPoolTest, AVoidTaskHasNoResultOnAReusedTaskData) {
+    constexpr size_t kTasks = 256;
+    WorkStealingThreadPool pool(1);
+    std::vector<TaskHandle> handles;
+    handles.reserve(kTasks);
+    SubmitAndHoldPastCleanup(pool, handles, kTasks); // Tasks with an int result; this thread releases most of them.
+    for (size_t i = 0; i < kTasks; ++i) {
+        handles.push_back(pool.Submit([] {}));
+    }
+    size_t withResult = 0;
+    for (TaskHandle& handle : handles) {
+        handle.Wait();
+        int result = 0;
+        withResult += handle.TryGetResult(result) ? 1 : 0;
+    }
+    EXPECT_EQ(withResult, 0u) << "a void task read the result of an earlier task on the same TaskData";
 }
 
 /**

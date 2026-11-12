@@ -172,11 +172,8 @@ layout(std430, set = 2, binding = 1) readonly buffer OceanParamsBuffer
     float uMaxHorizontalDisplacement;
     float uMaxVerticalDisplacement;
     float uRespectShallowAttenuation;
-    // Surface geometry lane. uGeometryGridSize is the compatible budget mapped
-    // to each concentric LOD tile's cell count; the vertex shader uses the cell
-    // width for displacement footprint filtering so denser tiles reveal smaller
-    // near-field waves.
-    float uGeometryGridSize;
+    // Surface geometry lane. Cells per ring tile side (ocean_ring_layout.glsl).
+    float uRingCellsPerTile;
     float uWaveOriginOffsetX;
     float uWaveOriginOffsetZ;
     float uGeometryPad0;

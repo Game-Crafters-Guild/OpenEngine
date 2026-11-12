@@ -1,0 +1,46 @@
+/* Settings > AI Assistant (AiAssistantSetupPage.uxml). The headers and rows take the settings
+   panel's classes (settings-section-header, settings-subsection-header, settings-row); the step
+   list styles itself; this sheet gives the blocks between them the same inset. */
+
+.ai-setup-page {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+}
+
+.ai-setup-step-title {
+	margin-top: var(--ui_spacing_md);
+	padding-bottom: var(--ui_spacing_sm);
+}
+
+/* The settings rows' horizontal inset, for the blocks that are not rows. */
+.ai-setup-block {
+	padding-left: var(--ui_spacing_md);
+	padding-right: var(--ui_spacing_md);
+	min-width: 0;
+}
+
+/* The one method of an assistant with one method: body text, as a tile's line reads. */
+.ai-setup-method-line {
+	font-weight: normal;
+	color: var(--ui_color_text);
+	white-space: normal;
+}
+
+.ai-setup-method-needs {
+	padding-top: var(--ui_spacing_xs);
+	font-size: var(--ui_font_size_small);
+	color: var(--ui_color_text_dim);
+	white-space: normal;
+}
+
+/* The foldout's plate starts at the content column, as the blocks above it do. */
+.ai-setup-options {
+	margin-top: var(--ui_spacing_md);
+	margin-left: var(--ui_spacing_md);
+	margin-right: var(--ui_spacing_md);
+}
+
+.ai-setup-info {
+	margin: var(--ui_spacing_md);
+}

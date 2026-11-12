@@ -443,3 +443,39 @@ TEST_F(TiledTerrainFixture, AutoStreamingRadius_CoversTerrainDiagonalAcrossSpm)
     EXPECT_GE(r1, halfDiagonal);
     EXPECT_GE(r2, halfDiagonal); // the residency band that tore stays covered at SPM 2
 }
+
+// Detail Behind Camera acts on a planar terrain whose heights come from the tile atlas, and nowhere else.
+TEST_F(TiledTerrainFixture, BehindCameraDetailAppliesOnlyToAPlanarTerrainOnTheTileAtlas)
+{
+    TiledTerrainConfig atlasConfig{};
+    atlasConfig.WorldSizeX = 12000.0f;
+    atlasConfig.WorldSizeZ = 12000.0f;
+    TiledTerrainConfig unifiedConfig{};
+    unifiedConfig.WorldSizeX = 3072.0f;
+    unifiedConfig.WorldSizeZ = 3072.0f;
+
+    TerrainService& service = TerrainService::Get();
+    Components::Terrain terrain{};
+    terrain.Domain = Components::TerrainDomain::Planar;
+    EXPECT_FALSE(BehindCameraDetailApplies(terrain, service)) << "no tiled terrain";
+
+    const TiledTerrainHandle atlasHandle = service.CreateTiledTerrain(atlasConfig);
+    const TiledTerrainHandle unifiedHandle = service.CreateTiledTerrain(unifiedConfig);
+    const TiledTerrainData* atlasData = service.GetTiledTerrainData(atlasHandle);
+    ASSERT_NE(atlasData, nullptr);
+    ASSERT_TRUE(TiledRenderExtentUsesAtlas(ComputeTiledRenderExtent(atlasData->Config)));
+
+    terrain.TiledTerrainHandle = unifiedHandle.Index;
+    terrain.TiledTerrainGeneration = unifiedHandle.Generation;
+    EXPECT_FALSE(BehindCameraDetailApplies(terrain, service)) << "one unified height texture";
+
+    terrain.TiledTerrainHandle = atlasHandle.Index;
+    terrain.TiledTerrainGeneration = atlasHandle.Generation;
+    EXPECT_TRUE(BehindCameraDetailApplies(terrain, service));
+
+    terrain.Domain = Components::TerrainDomain::Spherical;
+    EXPECT_FALSE(BehindCameraDetailApplies(terrain, service)) << "a planet";
+
+    service.DestroyTiledTerrain(atlasHandle);
+    service.DestroyTiledTerrain(unifiedHandle);
+}

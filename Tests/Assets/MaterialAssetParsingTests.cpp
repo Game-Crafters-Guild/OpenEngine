@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <string_view>
 #include <variant>
 
 #include "Assets/MaterialAsset.h"
@@ -12,6 +13,8 @@
 #include "Rendering/Materials/MaterialBuildService.h"
 #include "StagedTestPaths.h"
 #include "TestTempDir.h"
+
+#include <nlohmann/json.hpp>
 
 using namespace GameEngine;
 
@@ -41,6 +44,12 @@ static bool ErrorsContain(const MaterialAsset& m, const std::string& needle)
             return true;
     }
     return false;
+}
+
+// The bytes of `text`, as a file read into memory hands them to LoadFromData.
+static Vector<uint8> BytesOf(std::string_view text)
+{
+    return Vector<uint8>(text.begin(), text.end());
 }
 
 // A flat OpenPBR-surface MaterialX document exercising several lobes (constant-value inputs).
@@ -184,14 +193,13 @@ TEST(MaterialAssetParsing, RejectsWrongSchemaVersion)
 // place or the field named, and never throws: the web build has no exception catching.
 TEST(MaterialAssetParsing, RefusesUnreadableJsonNamingThePlaceOrTheField)
 {
-    const auto bytes = [](std::string_view text) { return Vector<uint8>(text.begin(), text.end()); };
 
     MaterialAsset truncated(GUID{}, "Materials/Truncated.material");
-    EXPECT_FALSE(truncated.LoadFromData(bytes(R"({"shader": "StandardPBR", )")));
+    EXPECT_FALSE(truncated.LoadFromData(BytesOf(R"({"shader": "StandardPBR", )")));
     EXPECT_TRUE(ErrorsContain(truncated, "the file is not JSON (parse error at line 1, column"));
 
     MaterialAsset mistyped(GUID{}, "Materials/Mistyped.material");
-    EXPECT_FALSE(mistyped.LoadFromData(bytes(R"({"schemaVersion": 3, "doubleSided": "yes"})")));
+    EXPECT_FALSE(mistyped.LoadFromData(BytesOf(R"({"schemaVersion": 3, "doubleSided": "yes"})")));
     EXPECT_TRUE(ErrorsContain(mistyped, "'doubleSided' is a string; write it as true or false"));
 
     // An authored key in a field name is escaped and cut to 64 bytes, its length given: a line
@@ -200,9 +208,29 @@ TEST(MaterialAssetParsing, RefusesUnreadableJsonNamingThePlaceOrTheField)
     const std::string longKey = R"(a\nb)" + std::string(200, 'k');
     MaterialAsset longKeyed(GUID{}, "Materials/LongKey.material");
     EXPECT_FALSE(longKeyed.LoadFromData(
-        bytes(R"({"schemaVersion": 3, "textures": {")" + longKey + R"(": {"guid": 5}}})")));
+        BytesOf(R"({"schemaVersion": 3, "textures": {")" + longKey + R"(": {"guid": 5}}})")));
     EXPECT_TRUE(ErrorsContain(longKeyed, R"('textures.a\nb)" + std::string(52, 'k') +
                                              "'... (217 bytes) is a number; write it as a string"));
+}
+
+// A .material is parsed straight from the bytes it was read into: the whitespace an editor leaves
+// around the document is skipped there, and the material loads as the bare document does.
+TEST(MaterialAssetParsing, WhitespaceAroundTheDocumentLoadsTheSameMaterial)
+{
+    const std::string document = R"({"schemaVersion": 3, "materialName": "Padded", "lightingModel": "StandardPBR",)"
+                                 R"( "surfaceShader": "surfaces/standard_surface.glsl", "doubleSided": true,)"
+                                 R"( "properties": {"roughness": 0.25}})";
+
+    MaterialAsset bare(GUID{}, "Materials/Bare.material");
+    ASSERT_TRUE(bare.LoadFromData(BytesOf(document)));
+    MaterialAsset padded(GUID{}, "Materials/Padded.material");
+    ASSERT_TRUE(padded.LoadFromData(BytesOf(" \r\n\t" + document + "\n\n")))
+        << (padded.GetErrors().empty() ? "" : padded.GetErrors().front());
+
+    EXPECT_EQ(SerializeMaterialDocument(padded.GetDocument()).dump(),
+              SerializeMaterialDocument(bare.GetDocument()).dump());
+    EXPECT_TRUE(padded.GetDocument().doubleSided);
+    EXPECT_FLOAT_EQ(std::get<float>(padded.GetDocument().properties.at("roughness")), 0.25f);
 }
 
 TEST(MaterialAssetParsing, MissingSurfaceShaderFailsFast)

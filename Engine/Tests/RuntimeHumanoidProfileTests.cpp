@@ -92,7 +92,8 @@ class RuntimeHumanoidProfileTest : public testing::Test
         fs::copy_file(reference.GetPath(), file);
         return file;
     }
-    uint32 Skeleton(const fs::path& path)
+    // Without skin joints the skeleton is a node skeleton, as the loaders give a static model.
+    uint32 Skeleton(const fs::path& path, bool hasSkinJoints = true)
     {
         const auto count = static_cast<uint32>(reference.Bones().size());
         auto& store = Renderer::SkeletonStore::Instance();
@@ -113,7 +114,7 @@ class RuntimeHumanoidProfileTest : public testing::Test
             data.RestRotation.insert(data.RestRotation.end(), {0, 0, 0, 1});
             data.RestScale.insert(data.RestScale.end(), {1, 1, 1});
         }
-        data.SkinJointCount = count;
+        data.SkinJointCount = hasSkinJoints ? count : 0;
         data.JointNodes.resize(count);
         std::iota(data.JointNodes.begin(), data.JointNodes.end(), 0);
         data.BindPose.resize(count * 16);
@@ -201,6 +202,41 @@ TEST_F(RuntimeHumanoidProfileTest, UnchangedSidecarIsNotRewritten)
     fs::last_write_time(sidecar, stamped);
     Import(modelPath, skeleton);
     EXPECT_EQ(fs::last_write_time(sidecar), stamped) << "PostLoad rewrote an unchanged humanoid sidecar";
+}
+
+// A skinned mesh makes the model a rig candidate when its skeleton has no skin joint table.
+TEST_F(RuntimeHumanoidProfileTest, SkinnedMeshWithoutSkinJointsWritesSidecar)
+{
+    Stage(root / "project");
+    const auto modelPath = root / "project/model.fbx";
+    Mesh mesh;
+    mesh.Skinned = true;
+    mesh.Vertices.resize(1);
+    mesh.Joints0 = {0, 0, 0, 0};
+    mesh.Weights0 = {1, 0, 0, 0};
+    ModelAsset model(GUID::Generate(), modelPath);
+    model.SetMeshesForTest({mesh});
+    model.SetSkeletonIdForTest(Skeleton(modelPath, false));
+    {
+        AssetManager::ScopedThreadAssetManager context(assets);
+        model.PostLoad();
+    }
+    EXPECT_TRUE(fs::exists(root / "project/model.humanoidrig.json"));
+}
+
+// An animation makes the model a rig candidate when it has no skin joint table and no skinned mesh.
+TEST_F(RuntimeHumanoidProfileTest, AnimationWithoutSkinJointsWritesSidecar)
+{
+    Stage(root / "project");
+    const auto modelPath = root / "project/model.fbx";
+    ModelAsset model(GUID::Generate(), modelPath);
+    model.SetHasAnimationsForTest(true);
+    model.SetSkeletonIdForTest(Skeleton(modelPath, false));
+    {
+        AssetManager::ScopedThreadAssetManager context(assets);
+        model.PostLoad();
+    }
+    EXPECT_TRUE(fs::exists(root / "project/model.humanoidrig.json"));
 }
 
 TEST_F(RuntimeHumanoidProfileTest, ModelPostLoadRetainsInstalledProfileIdentity)

@@ -47,6 +47,7 @@
 #include "CBTTestHarness.h"
 #include "Mathematics/MatrixOps.h"
 #include "Mathematics/Vector3.h"
+#include "Mathematics/Vector3Int.h"
 #include "Rendering/Core/CommandList.h"
 
 using namespace GameEngine::CBTTerrain;
@@ -260,7 +261,6 @@ CBTClassifyDesc ProductionClassify(uint32_t maxDepth)
     c.Mode = kClassifyScreenSpace;
     c.TargetDepth = maxDepth;
     c.GateVertexEval = 1u;
-    c.EditRetessEnabled = 1u;
     c.NearFieldGate = 1u;
     c.PoolPressure = 1u;
     return c;
@@ -1086,4 +1086,58 @@ TEST_F(CBTWatertightness, WideViewDownwardPoseSettlesThePool)
         EXPECT_TRUE(a.Watertight()) << arm.Label << ": " << Describe(a);
         inst.Shutdown();
     }
+}
+
+namespace
+{
+// A right triangle with legs `leg` (m) in the plane z = `depth`, corners in the corner cache's world form.
+CBTVertexData LatticeFacet(float x, float y, float depth, float leg)
+{
+    CBTVertexData v;
+    v.Corner0[0] = x;
+    v.Corner0[1] = y;
+    v.Corner0[2] = depth;
+    v.Corner1[0] = x + leg;
+    v.Corner1[1] = y;
+    v.Corner1[2] = depth;
+    v.Corner2[0] = x;
+    v.Corner2[1] = y + leg;
+    v.Corner2[2] = depth;
+    return v;
+}
+} // namespace
+
+// The visible stream's leaves fall into the three area bands once each. A projection with clip w = z maps
+// 1 m at z = 1 to 100 px on a 200 x 200 viewport, so a facet's band follows from its legs and depth.
+TEST(CBTTreeAuditArea, TheVisibleLeavesSplitByProjectedAreaSumToTheVisibleCount)
+{
+    CBTTreeSnapshot snapshot;
+    snapshot.PoolSize = 8u;
+    snapshot.Vertices = {
+        LatticeFacet(0.0f, 0.0f, 1.0f, 0.01f),  // 0.5 px^2
+        LatticeFacet(0.1f, 0.0f, 1.0f, 0.04f),  // 8 px^2
+        LatticeFacet(0.2f, 0.0f, 1.0f, 0.2f),   // 200 px^2
+        LatticeFacet(0.0f, 0.1f, -1.0f, 0.01f), // behind the eye plane: the largest band
+        LatticeFacet(0.0f, 0.2f, 2.0f, 0.02f),  // 0.5 px^2 after the divide by depth
+        LatticeFacet(0.0f, 0.3f, 1.0f - static_cast<float>(GameEngine::Mathematics::kWorldSectorSize), 0.01f),
+        LatticeFacet(0.0f, 0.0f, 1.0f, 0.5f), // live, not visible
+        LatticeFacet(0.0f, 0.0f, 1.0f, 0.5f), // live, not visible
+    };
+    // Slot 5 carries the deep tag: sector z 1 plus a local z of 1 - sector size puts it at z = 1 (0.5 px^2).
+    snapshot.Vertices[5].DeepTag[0] = 1u;
+    for (uint32_t* sector : {snapshot.Vertices[5].Sector0, snapshot.Vertices[5].Sector1, snapshot.Vertices[5].Sector2})
+        sector[1] = PackSectorPair(1, 0);
+    snapshot.IndicesVisible = {0u, 1u, 2u, 3u, 4u, 5u};
+    snapshot.VisibleCount = 6u;
+
+    Matrix4x4 clipWIsZ;
+    clipWIsZ[2][2] = 0.0f;
+    clipWIsZ[2][3] = 1.0f;
+    clipWIsZ[3][3] = 0.0f;
+    const CBTVisibleAreaBands bands =
+        CountVisibleLeavesByArea(snapshot, clipWIsZ, GameEngine::Mathematics::Vector3Int(), 200u, 200u);
+    EXPECT_EQ(bands.BelowOnePx, 3u);
+    EXPECT_EQ(bands.OneToSixteenPx, 1u);
+    EXPECT_EQ(bands.AboveSixteenPx, 2u);
+    EXPECT_EQ(bands.BelowOnePx + bands.OneToSixteenPx + bands.AboveSixteenPx, snapshot.VisibleCount);
 }

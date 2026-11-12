@@ -170,9 +170,7 @@ TEST(SplineChunkCommit, ANewChunkStartsAtItsOwnersWorldPose)
     MeshGPURegistry registry;
     SplineChunkCommit commit;
     Components::WorldTransform ownerWorld{};
-    ownerWorld.matrix[12] = 5.0f;
-    ownerWorld.matrix[13] = 2.0f;
-    ownerWorld.matrix[14] = -3.0f;
+    ownerWorld.Position = Mathematics::WorldPosition{5.0, 2.0, -3.0};
     ownerWorld.Version = 7u;
     ECS::Entity ownerEntity = world.Create();
     ownerEntity.Set(Components::Transform{});
@@ -190,8 +188,9 @@ TEST(SplineChunkCommit, ANewChunkStartsAtItsOwnersWorldPose)
     const auto* chunkWorld = world.GetComponent<Components::WorldTransform>(chunk);
     ASSERT_NE(chunkWorld, nullptr);
     EXPECT_NE(chunkWorld->Version, 0u) << "an unresolved chunk is skipped by extraction for one frame";
-    for (int i = 0; i < 16; ++i)
-        EXPECT_EQ(chunkWorld->matrix[i], ownerWorld.matrix[i]) << "matrix element " << i;
+    EXPECT_TRUE(chunkWorld->Position == ownerWorld.Position);
+    for (int column = 0; column < 3; ++column)
+        EXPECT_TRUE(chunkWorld->Basis[column] == ownerWorld.Basis[column]) << "basis column " << column;
 }
 
 // An owner the hierarchy has not resolved yet gives no pose: the chunk waits for the hierarchy.

@@ -1,6 +1,7 @@
 #version 450
-// Ocean FFT: initial spectrum H0 per cascade. Faithful port of the reference
-// FFTSpectrum.compute::SpectrumInitalize (MIT). Runs when the spectrum changes.
+// Ocean FFT: initial spectrum H0 per cascade. Faithful port of Crest's
+// FFTSpectrum.compute::SpectrumInitalize at db0658ff (MIT, see
+// Engine/Modules/Ocean/NOTICE). Runs when the spectrum changes.
 // Writes complex (ampPos, ampNeg) into _H0, with each cascade band-limited to a
 // narrow frequency range (the largest cascade keeps all low frequencies).
 

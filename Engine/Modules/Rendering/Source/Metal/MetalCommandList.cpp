@@ -8,6 +8,7 @@
 #include "Logger/Logger.h"
 
 #include <algorithm>
+#include <cassert>
 #include <cstring>
 
 namespace GameEngine
@@ -600,7 +601,7 @@ void MetalCommandList::BeginRenderPass(const RenderPassDesc& desc)
 
             // Combined depth/stencil formats need the stencil attachment set
             // alongside depth or Metal validation rejects the pass.
-            if (depthTexture->pixelFormat() == MTL::PixelFormatDepth32Float_Stencil8)
+            if (MetalMappings::IsCombinedDepthStencil(depthTexture->pixelFormat()))
             {
                 MTL::RenderPassStencilAttachmentDescriptor* stencil = rpd->stencilAttachment();
                 stencil->setTexture(depthTexture);
@@ -944,10 +945,15 @@ void ValidateSetAgainstPipeline(uint32_t setIndex, const MetalDescriptorSet& ds,
     {
         return;
     }
-    const MetalArgumentBufferLayout& expected = pipeline.setLayouts[setIndex];
-    for (const MetalArgumentSlot& want : expected.Slots)
+    // A set made from the desc the pipeline was translated with points at the same shared layout.
+    const MetalArgumentBufferLayout* expected = pipeline.setLayouts[setIndex];
+    if (ds.layout == expected)
     {
-        const MetalArgumentSlot* have = ds.layout.FindBinding(want.Binding);
+        return;
+    }
+    for (const MetalArgumentSlot& want : expected->Slots)
+    {
+        const MetalArgumentSlot* have = ds.layout->FindBinding(want.Binding);
         if (have == nullptr)
         {
             Logger::Log::Error(
@@ -971,6 +977,31 @@ void ValidateSetAgainstPipeline(uint32_t setIndex, const MetalDescriptorSet& ds,
         }
     }
 }
+
+// Debug builds: the set must declare writable each storage binding that the pipeline's shader can write.
+// The bind declares a read-only binding with Read usage, and Metal does not order a write through it.
+void AssertSetDeclaresShaderWrites(uint32_t setIndex, const MetalDescriptorSet& ds, const MetalPipeline& pipeline)
+{
+#ifndef NDEBUG
+    for (const MetalWrittenBinding& written : pipeline.writtenStorage)
+    {
+        const MetalArgumentSlot* slot = written.Set == setIndex ? ds.layout->FindBinding(written.Binding) : nullptr;
+        const bool storage = slot != nullptr && (slot->Type == DescriptorType::StorageBuffer ||
+                                                 slot->Type == DescriptorType::StorageImage);
+        if (storage && !slot->Writable)
+        {
+            Logger::Log::Error("MetalBindingValidate: pipeline '{}' writes set {} binding {}, but set '{}' declares it "
+                               "read-only. Clear the read-only flag of the binding in the set layout.",
+                               pipeline.debugName, setIndex, written.Binding, ds.debugName);
+            assert(false && "a set declares read-only a storage binding that the pipeline's shader writes");
+        }
+    }
+#else
+    (void)setIndex;
+    (void)ds;
+    (void)pipeline;
+#endif
+}
 } // namespace
 
 void MetalCommandList::BindDescriptorSet(uint32_t set, DescriptorSetHandle descriptorSet, PipelineHandle pipeline)
@@ -983,6 +1014,7 @@ void MetalCommandList::BindDescriptorSet(uint32_t set, DescriptorSetHandle descr
     if (const MetalPipeline* mp = m_Device.GetMetalPipeline(pipeline))
     {
         ValidateSetAgainstPipeline(set, *ds, *mp);
+        AssertSetDeclaresShaderWrites(set, *ds, *mp);
     }
 
     if (ds->residentsDirty)
@@ -1004,7 +1036,7 @@ void MetalCommandList::BindDescriptorSet(uint32_t set, DescriptorSetHandle descr
         if (s_Budget > 0)
         {
             const uint64_t* entries = ds->entries;
-            for (const MetalArgumentSlot& slot : ds->layout.Slots)
+            for (const MetalArgumentSlot& slot : ds->layout->Slots)
             {
                 if (slot.Type != DescriptorType::UniformBuffer || slot.BufferId == MetalArgumentSlot::kUnused)
                 {

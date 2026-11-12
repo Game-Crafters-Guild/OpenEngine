@@ -134,15 +134,11 @@ protected:
         entity.Set(state);
 
         Components::Transform xf{};
-        xf.matrix[0] = 1.0f; xf.matrix[5] = 1.0f; xf.matrix[10] = 1.0f; xf.matrix[15] = 1.0f;
-        xf.matrix[12] = startX;
-        xf.matrix[14] = startZ;
+        xf.Position = Mathematics::WorldPosition{startX, 0.0, startZ};
         entity.Set(xf);
 
         Components::WorldTransform wt{};
-        wt.matrix[0] = 1.0f; wt.matrix[5] = 1.0f; wt.matrix[10] = 1.0f; wt.matrix[15] = 1.0f;
-        wt.matrix[12] = startX;
-        wt.matrix[14] = startZ;
+        wt.Position = xf.Position;
         entity.Set(wt);
 
         m_World->ProcessCommands();

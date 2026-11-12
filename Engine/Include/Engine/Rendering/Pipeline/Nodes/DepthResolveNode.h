@@ -60,6 +60,12 @@ class DepthResolveNode final : public IRenderPipelineNode
     bool Initialize(std::string nodeId, std::string nodeJson, std::string* outError) override;
     void Declare(RenderPipelineInstance& instance, const PipelineDeclareContext& ctx) override;
     void DeclareForView(ViewDeclare& d) override;
+    // Asks for the copy or the MSAA resolve that DeclareForView binds for the view's depth.
+    void RequestPausedViewPipelines(const PausedViewPrewarm& prewarm) override;
+
+    // Asks the device for the pipeline that DeclareForView binds for a view depth with
+    // `depthSampleCount` samples. The build runs off the calling thread.
+    void RequestPipeline(IDevice& device, uint32_t depthSampleCount);
 
   private:
     void LoadShaders(IDevice* device);

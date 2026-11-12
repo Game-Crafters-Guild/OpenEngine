@@ -13,6 +13,7 @@ public:
     const char* GetTypeName() const override { return "TerrainGrass"; }
     bool Initialize(std::string nodeId, std::string nodeJson, std::string* outError) override;
     void DeclareForView(Engine::Renderer::Pipeline::ViewDeclare& d) override;
+    void RequestPausedViewPipelines(const Engine::Renderer::Pipeline::PausedViewPrewarm& prewarm) override;
 
 private:
     std::string m_Id;

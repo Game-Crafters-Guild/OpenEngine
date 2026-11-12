@@ -1,24 +1,42 @@
 #include "Terrain/TerrainRule/TerrainRuleNotices.h"
 
+#include "Components/Terrain/Terrain.h"
 #include "Components/Terrain/TerrainSurfaceRules.h"
 #include "Inspectors/InspectorUIHelpers.h"
 #include "Terrain/TerrainRule/TerrainRuleConditionVocabulary.h"
+#include "TerrainECS/Scene/TerrainSceneSchemas.h"
 #include "UI/Controls/InspectorNotice.h"
 
-#include <memory>
 #include <string>
 
 namespace GameEngine::Editor
 {
+namespace
+{
+
+// Every rules notice is a problem of the rows: the warning look.
+constexpr EditorUI::InspectorNotice::Kind kWarning = EditorUI::InspectorNotice::Kind::Warning;
+
+} // namespace
 
 void AddSurfaceRulesEmptyNotice(UIElement* parent, uint32 ruleCount)
 {
     if (!parent || ruleCount > 0)
         return;
 
-    parent->AddChild(std::make_unique<EditorUI::InspectorNotice>(
-        "No rules yet, so this effect writes nothing. Add Rule below, then give the rule a "
-        "condition to say where it applies."));
+    InspectorUI::AddNotice(parent,
+        "No rules yet, so this effect writes nothing. Add Rule below, then give the rule a condition "
+        "to say where it applies, or pick a rule set from the Replace rules list under Add Rule.", kWarning);
+}
+
+void AddSurfaceRulesPlanetNotice(UIElement* parent, Components::TerrainDomain domain)
+{
+    if (!parent || domain != Components::TerrainDomain::Spherical)
+        return;
+
+    InspectorUI::AddNotice(parent,
+        "Surface rules do not paint a planet. The rows are saved with the scene and do nothing here. "
+        "Shape a planet's ground with Noise, Flatten, Stamp or Sculpt zones.", kWarning);
 }
 
 void AddRuleRowStateNotice(UIElement* parent, const Components::TerrainSurfaceRule& rule,
@@ -30,7 +48,7 @@ void AddRuleRowStateNotice(UIElement* parent, const Components::TerrainSurfaceRu
     const std::string inert = TerrainRuleVocabulary::RuleInertReason(rule);
     if (!inert.empty())
     {
-        parent->AddChild(std::make_unique<EditorUI::InspectorNotice>(inert));
+        InspectorUI::AddNotice(parent, inert, kWarning);
         return;
     }
 
@@ -69,7 +87,7 @@ void AddRuleCapNotice(UIElement* parent, uint32 ruleCount)
     const std::string reason = RuleCapReason(ruleCount);
     if (!parent || reason.empty())
         return;
-    parent->AddChild(std::make_unique<EditorUI::InspectorNotice>(reason));
+    InspectorUI::AddNotice(parent, reason, kWarning);
 }
 
 void AddConditionCapNotice(UIElement* parent, uint32 ruleIndex, uint32 conditionCount)
@@ -77,7 +95,15 @@ void AddConditionCapNotice(UIElement* parent, uint32 ruleIndex, uint32 condition
     const std::string reason = ConditionCapReason(ruleIndex, conditionCount);
     if (!parent || reason.empty())
         return;
-    parent->AddChild(std::make_unique<EditorUI::InspectorNotice>(reason));
+    InspectorUI::AddNotice(parent, reason, kWarning);
+}
+
+void AddRefusedConditionNotice(UIElement* parent, uint32 ruleIndex, uint32 conditionIndex, uint8 refusedKind)
+{
+    if (!parent || refusedKind == 0)
+        return;
+    InspectorUI::AddNotice(parent,
+        Scene::RefusedRuleConditionKindMessage(ruleIndex, conditionIndex, refusedKind), kWarning);
 }
 
 } // namespace GameEngine::Editor

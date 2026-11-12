@@ -15,7 +15,7 @@ void ImportEnvironmentFromUrl()
     char* packed = static_cast<char*>(EM_ASM_PTR({
         const params = new URLSearchParams(globalThis.location.search);
         const nul = String.fromCharCode(0);
-        let packed = '';
+        let packed = "";
         for (const [name, value] of params)
         {
             // NUL separates the C++ name/value pairs. Reject embedded NULs

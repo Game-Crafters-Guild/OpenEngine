@@ -50,7 +50,8 @@ struct SplineNodeArm
     ECS::EntityHandle Member{};
     // +1 toward the member's end, -1 toward its start.
     int8 Direction = 1;
-    // The arm's direction in the ground plane: atan2(Forward.z, Forward.x), radians in (-pi, pi].
+    // The arm's angle in the ground plane from +X toward +Z, radians in (-pi, pi]. -X, and a
+    // direction within float rounding of -X, is +pi.
     float32 AngleRadians = 0.0f;
     // Unit tangent along the arm, leaving the node.
     Mathematics::Vector3 Forward{};

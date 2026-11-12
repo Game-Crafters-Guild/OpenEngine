@@ -16,13 +16,13 @@
 #include "Components/Rendering/LocalBounds.h"
 #include "Components/Transform.h"
 
-#include "Components/Rendering/WorldSectorCoord.h" // kWorldSectorSize (unified sector scale)
 #include "ECS/ChangeFilter.h"
 #include "ECS/Entity.h"
 #include "ECSModules/Rendering/Systems/RenderExtractionSystem.h"
 #include "JobSystem/TaskHandle.h"
 #include "Mathematics/Geometry.h"
 #include "Mathematics/Vector3.h"
+#include "Mathematics/WorldPosition.h"
 #include "Scene/SceneTlas.h"
 #include "Types/InlineVector.h"
 #include "Types/Types.h"
@@ -186,19 +186,10 @@ struct SceneTlasImpl
     // set is held even if floor-rounding would otherwise migrate it.
     std::unordered_map<GameEngine::ECS::EntityId, AABB> EntityStableAabb;
 
-    // Sector dimensions in world units. THE shared sector scale
-    // (Components::kWorldSectorSize = 1024m), the same constant the camera-
-    // relative render path reconstructs through (RenderOrigin.h::kSectorSize),
-    // so a tagged entity's picked/raycast world position matches where it
-    // renders. Existing scenes fit inside one sector at world origin and take
-    // the no-op single-sector path. Test fixtures override via
-    // SetSectorSizeForTesting() to shrink sectors and exercise replication /
-    // multi-sector traversal.
-    //
-    // std::atomic so GetSectorSize() (read by the picker per pick) doesn't
-    // need to take Mutex. Writers (SetSectorSizeForTesting) hold the
-    // unique_lock anyway and assert the TLAS is empty before storing.
-    std::atomic<float32>                                     SectorSize{GameEngine::Components::kWorldSectorSize};
+    // Meters per sector: Mathematics::kWorldSectorSize, the render path's sector, so a pick lands
+    // where the entity renders. Tests shrink it with SetSectorSizeForTesting on an empty TLAS.
+    // Atomic so the picker reads it without the mutex.
+    std::atomic<float32>                                     SectorSize{static_cast<float32>(GameEngine::Mathematics::kWorldSectorSize)};
 
     // Refit-fast-path scratch (SyncEntities, S1.a): dedup stamps sized to
     // the world's live entity-index bound (grown on demand — never eagerly
@@ -212,8 +203,7 @@ struct SceneTlasImpl
     // by World::GetComponentsBatch under a single worldMutex shared-lock
     // hold. nullptr WorldTransform doubles as the dead/absent skip.
     using ResolvedComponents = std::tuple<const Components::WorldTransform*,
-                                          const Components::LocalBounds*,
-                                          const Components::WorldSectorCoord*>;
+                                          const Components::LocalBounds*>;
     std::vector<ResolvedComponents>                          ResolvedScratch;
 
     // What the refit needs of one candidate: its transform version and the
@@ -257,14 +247,13 @@ struct SceneTlasImpl
     // The moved renderables as of the kick: entity, version, world bounds.
     std::vector<RefitInput>                                  RefitSnapshot;
     // One changed chunk's share of the kick: where its columns are and where
-    // its rows go in RefitSnapshot. LocalBounds and WorldSectorCoord are
-    // optional per chunk (null when the chunk's archetype lacks them).
+    // its rows go in RefitSnapshot. LocalBounds is optional per chunk (null
+    // when the chunk's archetype lacks it).
     struct MovedChunk
     {
         const GameEngine::ECS::EntityHandle* Entities = nullptr;
         const Components::WorldTransform*    Transforms = nullptr;
         const Components::LocalBounds*       Bounds = nullptr;
-        const Components::WorldSectorCoord*  Sectors = nullptr;
         std::size_t                          Count = 0;
         std::size_t                          Offset = 0;
     };
@@ -383,12 +372,10 @@ SectorState& GetOrCreateSector(SceneTlasImpl& impl, const SectorKey& key);
 void   BuildFromLeaves(SectorState& sector);
 void   RefitDirty(SectorState& sector);
 
-// The world bounds a renderable's transform, local bounds (default box when
-// absent) and sector coordinate give it, as a leaf stores them.
+// The world bounds a renderable's transform and local bounds (default box
+// when absent) give it, as a leaf stores them.
 AABB   DeriveCandidateBounds(const Components::WorldTransform& transform,
-                             const Components::LocalBounds* bounds,
-                             const Components::WorldSectorCoord* sector,
-                             float32 sectorSize);
+                             const Components::LocalBounds* bounds);
 
 void   ReconcileFromRecords(
     SceneTlasImpl& impl,

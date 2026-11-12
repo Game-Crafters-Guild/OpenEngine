@@ -13,7 +13,7 @@ namespace GameEngine::Engine::Renderer
 {
 
 class RenderServices;
-struct Camera;
+class Camera;
 struct CameraAspectResolution;
 
 // Resolve `camera`'s AA overrides against the engine defaults, publish the

@@ -16,7 +16,7 @@ namespace {
 // engine decodes Vorbis only. An Opus stream's first Ogg page carries the "OpusHead"
 // identification packet (RFC 7845, section 3): the packet starts after the 27-byte
 // page header and its segment table, whose length is the header's last byte.
-bool IsOggOpus(const Vector<uint8>& data)
+bool IsOggOpus(std::span<const uint8> data)
 {
     constexpr std::string_view kCapturePattern = "OggS";
     constexpr std::string_view kOpusHead = "OpusHead";
@@ -60,22 +60,23 @@ bool AudioAsset::Load() {
     }
 
     // Read file data
-    Vector<uint8> fileData;
+    ByteBuffer fileData;
     if (!ReadFileBytesShared(GetPath(), fileData)) {
         Logger::Log::Error("Failed to read audio file: {}", GetPath().string());
         SetState(AssetState::Failed);
         return false;
     }
 
-    return LoadFromData(fileData);
+    const size_t fileSize = fileData.Size();
+    return LoadFromDataWithRuntimeSettings(std::move(fileData), RuntimeSettings{}, fileSize);
 }
 
-bool AudioAsset::LoadFromData(const Vector<uint8>& data) {
+bool AudioAsset::LoadFromData(std::span<const uint8> data) {
     if (GetState() == AssetState::Loaded) {
         return true;
     }
 
-    return LoadFromDataWithRuntimeSettings(data, RuntimeSettings{}, data.size());
+    return LoadFromDataWithRuntimeSettings(ByteBuffer::CopyOf(data), RuntimeSettings{}, data.size());
 }
 
 bool AudioAsset::AdoptReloadedPayload(Asset& staged) {
@@ -104,7 +105,7 @@ bool AudioAsset::AdoptReloadedPayload(Asset& staged) {
 
 void AudioAsset::Unload() {
     m_PcmData.clear();
-    m_EncodedData.clear();
+    m_EncodedData = ByteBuffer{};
     m_FrameCount = 0;
     m_Duration = 0.0f;
     m_SampleRate = 0;
@@ -161,7 +162,7 @@ bool AudioAsset::ShouldDecodeToPCM(AudioFormat format,
     return true;
 }
 
-bool AudioAsset::LoadFromDataWithRuntimeSettings(const Vector<uint8>& data,
+bool AudioAsset::LoadFromDataWithRuntimeSettings(ByteBuffer data,
                                                 const RuntimeSettings& settings,
                                                 size_t fileSizeBytes)
 {
@@ -173,7 +174,7 @@ bool AudioAsset::LoadFromDataWithRuntimeSettings(const Vector<uint8>& data,
     SetState(AssetState::Loading);
     Logger::Log::Info("Loading audio from memory data: {}", GetName());
 
-    if (data.empty())
+    if (data.Size() == 0)
     {
         Logger::Log::Error("Empty audio data provided");
         SetState(AssetState::Failed);
@@ -188,7 +189,7 @@ bool AudioAsset::LoadFromDataWithRuntimeSettings(const Vector<uint8>& data,
     // Probe via miniaudio decoder (cheap header parse; used for duration heuristics + metadata).
     ma_decoder_config cfg = Audio::MakeDecoderConfig();
     ma_decoder decoder{};
-    const ma_result ir = ma_decoder_init_memory(data.data(), data.size(), &cfg, &decoder);
+    const ma_result ir = ma_decoder_init_memory(data.Data(), data.Size(), &cfg, &decoder);
     if (ir != MA_SUCCESS && IsOggOpus(data))
     {
         Logger::Log::Error("Audio '{}' is Ogg Opus, which the engine does not decode; re-encode it as Ogg Vorbis, FLAC, MP3 or WAV",
@@ -200,7 +201,7 @@ bool AudioAsset::LoadFromDataWithRuntimeSettings(const Vector<uint8>& data,
     {
         Logger::Log::Error("Audio decode init failed for '{}': ma_result={} '{}', format={}, size={} bytes", 
             GetName(), (int)ir, ma_result_description(ir), 
-            extension, data.size());
+            extension, data.Size());
         SetState(AssetState::Failed);
         return false;
     }
@@ -219,13 +220,13 @@ bool AudioAsset::LoadFromDataWithRuntimeSettings(const Vector<uint8>& data,
         durationSeconds = static_cast<float>(lengthFrames) / static_cast<float>(outSr);
     }
 
-    const size_t sizeHint = (fileSizeBytes != 0) ? fileSizeBytes : data.size();
+    const size_t sizeHint = (fileSizeBytes != 0) ? fileSizeBytes : data.Size();
     const bool decodeToPcm = ShouldDecodeToPCM(m_Format, settings, sizeHint, durationSeconds);
 
     // Populate metadata (even for stream).
     m_PcmFormat = AudioPCMFormat::Unknown;
     m_PcmData.clear();
-    m_EncodedData.clear();
+    m_EncodedData = ByteBuffer{};
     m_FrameCount = 0;
     m_SampleRate = outSr;
     m_Channels = static_cast<AudioChannels>(outCh == 0 ? 1 : outCh);
@@ -303,7 +304,7 @@ bool AudioAsset::LoadFromDataWithRuntimeSettings(const Vector<uint8>& data,
     else
     {
         // Stream: keep encoded data; no full PCM decode.
-        m_EncodedData = data;
+        m_EncodedData = std::move(data);
         m_PcmData.clear();
         m_PcmFormat = AudioPCMFormat::Unknown;
         m_FrameCount = 0;

@@ -1,5 +1,5 @@
-// CompileConcurrencyGate: at most `cap` tasks run at once, every submitted task drains (Background
-// before Normal), no work runs inline on the submitter, a throwing dispatch leaks or strands
+// CompileConcurrencyGate: at most `cap` tasks run at once, every submitted task drains (Normal
+// before Background), no work runs inline on the submitter, a throwing dispatch leaks or strands
 // nothing, and Close destroys the queued work unrun.
 
 #include "Engine/Rendering/CompileConcurrencyGate.h"
@@ -346,29 +346,65 @@ TEST(CompileConcurrencyGate, RunningTasksFinishOnceAfterClose)
     EXPECT_EQ(gate.PendingCount(), 0u);
 }
 
-// Background-lane jobs (user-visible variant misses) drain before Normal-lane
-// prewarm even when queued after it.
-TEST(CompileConcurrencyGate, BackgroundLaneDrainsBeforeNormal)
+// The gate admits in the pool's order: Normal before Background, each on its own lane. A slot given to
+// Background work while Normal work waits can sit behind a Normal flood in the pool and admit nothing.
+TEST(CompileConcurrencyGate, NormalLaneDrainsBeforeBackground)
 {
     ManualExecutor executor;
-    CompileConcurrencyGate gate(1, [&executor](std::function<void()> work, JobPriority priority)
-                                { executor.Dispatch(std::move(work), priority); });
+    std::vector<JobPriority> lanes;
+    CompileConcurrencyGate gate(1, [&executor, &lanes](std::function<void()> work, JobPriority priority)
+                                {
+                                    lanes.push_back(priority);
+                                    executor.Dispatch(std::move(work), priority);
+                                });
 
     std::vector<std::string> order;
-    gate.Submit([&order]() { order.push_back("A_normal"); }, JobPriority::Normal);        // admitted
-    gate.Submit([&order]() { order.push_back("B_normal"); }, JobPriority::Normal);        // pending
-    gate.Submit([&order]() { order.push_back("C_normal"); }, JobPriority::Normal);        // pending
+    gate.Submit([&order]() { order.push_back("A_normal"); }, JobPriority::Normal);         // admitted
     gate.Submit([&order]() { order.push_back("X_background"); }, JobPriority::Background); // pending
+    gate.Submit([&order]() { order.push_back("B_normal"); }, JobPriority::Normal);         // pending
+    gate.Submit([&order]() { order.push_back("C_normal"); }, JobPriority::Normal);         // pending
 
     executor.RunAll();
 
     ASSERT_EQ(order.size(), 4u);
-    EXPECT_EQ(order[0], "A_normal");     // already running when the rest queued
-    EXPECT_EQ(order[1], "X_background"); // Background jumps ahead of the Normal backlog
-    EXPECT_EQ(order[2], "B_normal");
-    EXPECT_EQ(order[3], "C_normal");
+    EXPECT_EQ(order[0], "A_normal"); // already running when the rest queued
+    EXPECT_EQ(order[1], "B_normal"); // the Normal backlog goes first, as in the pool
+    EXPECT_EQ(order[2], "C_normal");
+    EXPECT_EQ(order[3], "X_background");
+    const std::vector<JobPriority> expectedLanes{JobPriority::Normal, JobPriority::Normal, JobPriority::Normal,
+                                                 JobPriority::Background};
+    EXPECT_EQ(lanes, expectedLanes);
     EXPECT_EQ(gate.Running(), 0u);
     EXPECT_EQ(gate.PendingCount(), 0u);
+}
+
+// Awaited work goes to the executor at once on the Awaited lane, while every
+// slot is taken and work waits in the other lanes, and it takes no slot.
+TEST(CompileConcurrencyGate, AwaitedWorkIsAdmittedAtOnce)
+{
+    ManualExecutor executor;
+    std::vector<JobPriority> dispatched;
+    CompileConcurrencyGate gate(1,
+                                [&executor, &dispatched](std::function<void()> work, JobPriority priority)
+                                {
+                                    dispatched.push_back(priority);
+                                    executor.Dispatch(std::move(work), priority);
+                                });
+
+    std::vector<std::string> order;
+    gate.Submit([&order]() { order.push_back("A_normal"); }, JobPriority::Normal);         // admitted
+    gate.Submit([&order]() { order.push_back("X_background"); }, JobPriority::Background); // pending
+    gate.Submit([&order]() { order.push_back("W_awaited"); }, JobPriority::Awaited);       // dispatched
+    ASSERT_EQ(dispatched.size(), 2u);
+    EXPECT_EQ(dispatched[1], JobPriority::Awaited);
+    EXPECT_EQ(gate.PendingCount(), 1u);
+    EXPECT_EQ(gate.Running(), 1u);
+
+    executor.RunAll();
+
+    EXPECT_EQ(order, (std::vector<std::string>{"A_normal", "W_awaited", "X_background"}));
+    EXPECT_EQ(gate.Running(), 0u);
+    EXPECT_EQ(gate.HighWater(), 1u);
 }
 
 // The real main-thread + BeginFrame shape: many concurrent submitters, mixed

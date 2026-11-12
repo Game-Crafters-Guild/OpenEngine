@@ -28,7 +28,14 @@
 
 namespace GameEngine::Editor
 {
-static void SetRuntimeSimulationSystemsEnabled(bool enabled)
+static void SetRuntimeAudioSystemsEnabled(bool enabled)
+{
+    // Audio ECS systems (names come from Engine::Audio::AddAudioSystemsToSchedule).
+    EngineCore::GetInstance().SetRenderingSystemEnabled("AudioListener", enabled);
+    EngineCore::GetInstance().SetRenderingSystemEnabled("AudioEmitter", enabled);
+}
+
+static void SetRuntimePhysicsSystemsEnabled(bool enabled)
 {
     // PhysicsECS systems (names come from PhysicsECS::AddPhysicsSystemsToSchedule).
     EngineCore::GetInstance().SetRenderingSystemEnabled("PhysicsWorldBootstrap", enabled);
@@ -38,6 +45,11 @@ static void SetRuntimeSimulationSystemsEnabled(bool enabled)
     EngineCore::GetInstance().SetRenderingSystemEnabled("PhysicsStep", enabled);
     EngineCore::GetInstance().SetRenderingSystemEnabled("CharacterControllerWriteback", enabled);
     EngineCore::GetInstance().SetRenderingSystemEnabled("PhysicsWriteback", enabled);
+}
+
+static void SetRuntimeSimulationSystemsEnabled(bool enabled)
+{
+    SetRuntimePhysicsSystemsEnabled(enabled);
 
     // Rendering-loop animation system name is "Animation" (see RegisterRenderingSystems.cpp).
     // Don't unconditionally disable Animation: AnimationPreviewManager may have it
@@ -47,9 +59,7 @@ static void SetRuntimeSimulationSystemsEnabled(bool enabled)
     EngineCore::GetInstance().SetRenderingSystemEnabled(
         "Animation", enabled || keepAnimationForPreview);
 
-    // Audio ECS systems (names come from Engine::Audio::AddAudioSystemsToSchedule).
-    EngineCore::GetInstance().SetRenderingSystemEnabled("AudioListener", enabled);
-    EngineCore::GetInstance().SetRenderingSystemEnabled("AudioEmitter", enabled);
+    SetRuntimeAudioSystemsEnabled(enabled);
 }
 
 static void ResetTransientRenderState(ECS::World& world)
@@ -173,14 +183,19 @@ void PlayModeManager::TogglePause()
 {
     if (m_State == PlayModeState::Play)
     {
-        // Pause runtime simulation systems (rendering continues).
-        SetRuntimeSimulationSystemsEnabled(false);
+        // The stopped clock holds gameplay time. The physics writeback runs every frame and writes
+        // over an edit to a body, so physics stops. The audio engine plays when the clock stops, so audio stops.
+        SetRuntimePhysicsSystemsEnabled(false);
+        SetRuntimeAudioSystemsEnabled(false);
+        PauseSimulationClock();
         SetState(PlayModeState::Paused);
         return;
     }
     if (m_State == PlayModeState::Paused)
     {
-        SetRuntimeSimulationSystemsEnabled(true);
+        ResumeSimulationClock();
+        SetRuntimePhysicsSystemsEnabled(true);
+        SetRuntimeAudioSystemsEnabled(true);
         SetState(PlayModeState::Play);
         return;
     }
@@ -338,6 +353,8 @@ void PlayModeManager::ExitPlayMode()
         return;
 
     m_ExitRequested = false;
+    if (m_State == PlayModeState::Paused)
+        ResumeSimulationClock();
     SetState(PlayModeState::ExitingPlay);
 
     // Best-effort managed play-mode exit hook (called before tearing down runtime systems).
@@ -378,15 +395,11 @@ void PlayModeManager::ExitPlayMode()
         GameEngine::PhysicsECS::PhysicsWorldService::Shutdown();
     }
 
-    // Release per-page and per-face terrain-collider slots. The collider entities are
-    // runtime-only and vanish with the snapshot restore below, but that path never runs
-    // the TerrainPhysicsSystem teardown sweep, so their page and planet-face slots would
-    // otherwise leak across Play sessions.
+    // Release the terrain and planet page-collider slots. Play makes the collider entities after
+    // the snapshot, so the restore below does not bring them back, but that path never runs the
+    // TerrainPhysicsSystem teardown sweep, so their slots would otherwise leak across Play sessions.
     if (auto* terrain = TerrainECS::TerrainService::TryGet())
-    {
         terrain->ReleaseAllPagePhysicsHandles();
-        terrain->ReleaseAllPlanetFacePhysicsHandles();
-    }
 
     if (auto* audio = EngineCore::GetInstance().GetAudioSystem())
     {
@@ -565,6 +578,21 @@ void PlayModeManager::Tick(float deltaSeconds)
     // User C++ systems: OnUpdate(world, dt) on each, every play frame.
     if (m_World)
         GameEngine::NativeScripting::TickUserSystems(*m_World, deltaSeconds);
+}
+
+void PlayModeManager::PauseSimulationClock()
+{
+    if (!m_World)
+        return;
+    ECS::SimulationClock& clock = m_World->GetSimulationClock();
+    m_TimeScaleBeforePause = clock.GetTimeScale();
+    clock.SetTimeScale(0.0);
+}
+
+void PlayModeManager::ResumeSimulationClock()
+{
+    if (m_World)
+        m_World->GetSimulationClock().SetTimeScale(m_TimeScaleBeforePause);
 }
 
 void PlayModeManager::SetState(PlayModeState s)

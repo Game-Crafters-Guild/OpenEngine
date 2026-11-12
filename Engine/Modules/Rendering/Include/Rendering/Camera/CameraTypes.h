@@ -31,17 +31,12 @@ struct CameraData
     // A cascade shadow view puts the light direction in xyz. A spot, point or area shadow view
     // puts the light position in xyz and its far plane in w (negative for an area light).
     Mathematics::Vector4 cameraPos;
-    // Camera-relative rendering (Earth-scale precision). Rebased view / view-proj
-    // built from the camera's sector-local position (camera minus render origin);
-    // the vertex stage projects render-origin-relative positions through these so
-    // the clip position stays fp32-precise at planetary distance. When the origin
-    // is inactive (renderOriginSector.xyz all zero) these equal view/viewProj and
-    // the shader takes the full-world path (byte-identical to the pre-feature
-    // layout). Filled by RenderOrigin.h::ComputeRebasedView at the
-    // ViewRegistry::ResolveCameraData chokepoint; GLSL mirror camera_ubo_fields.glsl.
+    // View and view-proj relative to the render origin, the eye's own sector. The vertex stage
+    // projects origin-relative positions through them. At sector (0,0,0) they equal view and viewProj.
+    // RenderOrigin.h SetCameraEye fills them from the double eye; GLSL mirror camera_ubo_fields.glsl.
     Mathematics::Matrix4x4 viewRel{glm::mat4(0.0f)};
     Mathematics::Matrix4x4 viewProjRel{glm::mat4(0.0f)};
-    int32 renderOriginSector[4]; // xyz = render origin sector; w = sector size (meters)
+    int32 renderOriginSector[4]{}; // xyz = render origin sector; w = sector size (meters), 0 until set
 };
 static_assert(sizeof(CameraData) == 352,
               "CameraData must be 352 bytes (5 mat4 + 1 vec4 + 1 ivec4) to match camera_ubo_fields.glsl");
@@ -49,6 +44,14 @@ static_assert(offsetof(CameraData, proj) == 64 && offsetof(CameraData, viewProj)
                   offsetof(CameraData, cameraPos) == 192 && offsetof(CameraData, viewRel) == 208 &&
                   offsetof(CameraData, viewProjRel) == 272 && offsetof(CameraData, renderOriginSector) == 336,
               "CameraData member offsets must match camera_ubo_fields.glsl");
+
+/// A camera's near distance and culling range, in meters. The owner of the camera sets them;
+/// no code recovers them from the projection matrix.
+struct CameraRanges
+{
+    float Near = 0.0f;
+    float CullingRange = 0.0f;
+};
 
 // Optional aggregate that carries a camera identifier, its data,
 // and an optional debug label. The debugName is non-owning and
@@ -58,6 +61,9 @@ struct CameraInfo
     CameraId id;
     CameraData data;
     const char* debugName; // may be nullptr
+    CameraRanges ranges;
+    // True after the registry logged that this camera has no eye. It logs once per camera.
+    bool missingEyeLogged = false;
 };
 
 // --- Views ---
@@ -146,6 +152,13 @@ struct ViewDesc
     // are None while it sleeps.
     ViewParticipation participation = ViewParticipation::Always;
     uint32 participationFrames = 0;
+    // While true, the view draws no world: the pipeline only clears its output to the clear
+    // colour, so the UI over it still presents. Culling, extraction and shadows skip the view.
+    bool worldPaused = false;
+    // True for a game view whose worldPaused follows its world's active camera. Extraction then
+    // copies the camera's pause into worldPaused before it reads the view, so the frame that
+    // resumes the camera extracts the view and draws it.
+    bool worldPauseFollowsActiveCamera = false;
 
     // Whether the view's passes, its own shadow passes included, leave out what the
     // Scene View eye hides (kInstanceFlagEditorHidden): the editor Scene View only.
@@ -158,7 +171,15 @@ struct ViewDesc
     {
         return participation != ViewParticipation::OnDemand || participationFrames > 0;
     }
+    // Whether the active render pipeline renders the view this frame: its switch is on and it takes
+    // part. A view on no layer still renders its clear and its sky.
+    bool RenderedByPipeline() const { return activeRenderPipeline && Participates(); }
     RenderLayerMask ActiveRenderLayerMask() const
+    {
+        return worldPaused ? RenderLayerMask::None() : UnpausedRenderLayerMask();
+    }
+    // The layers the view culls and draws once its world is not paused.
+    RenderLayerMask UnpausedRenderLayerMask() const
     {
         return Participates() ? renderLayerMask : RenderLayerMask::None();
     }

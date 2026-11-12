@@ -8,6 +8,22 @@ namespace GameEngine::Rendering
 PipelineBuildTable::RequestResult PipelineBuildTable::Request(uint64_t key, uint64_t invalidationEpoch)
 {
     std::lock_guard lock(m_Mutex);
+    return RequestLocked(key, invalidationEpoch);
+}
+
+PipelineBuildTable::BlockingRequestResult PipelineBuildTable::RequestBlocking(uint64_t key,
+                                                                              uint64_t invalidationEpoch)
+{
+    std::lock_guard lock(m_Mutex);
+    auto it = m_Rows.find(key);
+    if (it != m_Rows.end() && it->second.RowStatus != Status::Failed)
+        return {PipelineBuildState::Pending, it->second.Ticket, it->second.RowStatus == Status::Queued};
+    const RequestResult queued = RequestLocked(key, invalidationEpoch);
+    return {queued.State, queued.Ticket, queued.Ticket != 0};
+}
+
+PipelineBuildTable::RequestResult PipelineBuildTable::RequestLocked(uint64_t key, uint64_t invalidationEpoch)
+{
     auto it = m_Rows.find(key);
     if (it != m_Rows.end())
     {
@@ -19,6 +35,20 @@ PipelineBuildTable::RequestResult PipelineBuildTable::Request(uint64_t key, uint
     const uint64_t ticket = m_NextTicket++;
     m_Rows.insert_or_assign(key, Row{Status::Queued, ticket, 0});
     return {PipelineBuildState::Pending, ticket};
+}
+
+bool PipelineBuildTable::WaitForBuildEnd(uint64_t key, uint64_t ticket)
+{
+    std::unique_lock lock(m_Mutex);
+    m_BuildEnded.wait(lock,
+                      [this, key, ticket]
+                      {
+                          const auto row = m_Rows.find(key);
+                          return row == m_Rows.end() || row->second.Ticket != ticket ||
+                                 row->second.RowStatus == Status::Failed;
+                      });
+    const auto row = m_Rows.find(key);
+    return row != m_Rows.end() && row->second.Ticket == ticket;
 }
 
 bool PipelineBuildTable::ClaimQueued(uint64_t key, uint64_t ticket)
@@ -78,10 +108,15 @@ void PipelineBuildTable::Finish(uint64_t key, uint64_t ticket, bool succeeded, u
 
 void PipelineBuildTable::ReleaseUnrun(uint64_t key, uint64_t ticket)
 {
-    std::lock_guard lock(m_Mutex);
-    auto it = m_Rows.find(key);
-    if (it != m_Rows.end() && it->second.Ticket == ticket && it->second.RowStatus == Status::Queued)
+    {
+        std::lock_guard lock(m_Mutex);
+        auto it = m_Rows.find(key);
+        if (it == m_Rows.end() || it->second.Ticket != ticket || it->second.RowStatus != Status::Queued)
+            return;
         m_Rows.erase(it);
+    }
+    // A caller in WaitForBuildEnd asks again.
+    m_BuildEnded.notify_all();
 }
 
 std::optional<PipelineBuildState> PipelineBuildTable::Find(uint64_t key, uint64_t invalidationEpoch) const
@@ -101,6 +136,8 @@ void PipelineBuildTable::Quiesce()
 {
     std::unique_lock lock(m_Mutex);
     std::erase_if(m_Rows, [](const auto& row) { return row.second.RowStatus != Status::Running; });
+    // A caller in WaitForBuildEnd on a cancelled row asks again.
+    m_BuildEnded.notify_all();
     m_BuildEnded.wait(lock,
                       [this]
                       {

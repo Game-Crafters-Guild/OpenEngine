@@ -4,13 +4,14 @@
 
 #include "Logger/Logger.h"
 
+#include <utility>
+
 namespace GameEngine::PhysicsECS
 {
 std::unique_ptr<Physics::PhysicsWorld> PhysicsWorldService::s_World;
 Physics::PhysicsWorldSettings PhysicsWorldService::s_Settings{};
-float32 PhysicsWorldService::s_RenderInterpolationAlpha = 1.0f;
 std::uint64_t PhysicsWorldService::s_WorldGeneration = 0;
-float32 PhysicsWorldService::s_LastStepMs = 0.0f;
+float32 PhysicsWorldService::s_StepMs = 0.0f;
 uint32 PhysicsWorldService::s_LastBodiesComposed = 0;
 uint32 PhysicsWorldService::s_LastCharactersComposed = 0;
 uint32 PhysicsWorldService::s_LastKinematicBodiesMoving = 0;
@@ -20,8 +21,7 @@ void PhysicsWorldService::Initialize(const Physics::PhysicsWorldSettings& settin
     if (s_World)
         return;
     s_Settings = settings;
-    s_RenderInterpolationAlpha = 1.0f;
-    s_LastStepMs = 0.0f;
+    s_StepMs = 0.0f;
     s_LastBodiesComposed = 0;
     s_LastCharactersComposed = 0;
     s_LastKinematicBodiesMoving = 0;
@@ -34,8 +34,7 @@ void PhysicsWorldService::Shutdown()
 {
     PhysicsEntityEventCallbacks::ClearAll();
     s_World.reset();
-    s_RenderInterpolationAlpha = 1.0f;
-    s_LastStepMs = 0.0f;
+    s_StepMs = 0.0f;
     s_LastBodiesComposed = 0;
     s_LastCharactersComposed = 0;
     s_LastKinematicBodiesMoving = 0;
@@ -63,33 +62,19 @@ const Physics::PhysicsWorldSettings& PhysicsWorldService::GetSettings()
     return s_Settings;
 }
 
-float32 PhysicsWorldService::GetRenderInterpolationAlpha()
-{
-    return s_RenderInterpolationAlpha;
-}
-
-void PhysicsWorldService::SetRenderInterpolationAlpha(float32 a)
-{
-    if (a < 0.0f)
-        a = 0.0f;
-    if (a > 1.0f)
-        a = 1.0f;
-    s_RenderInterpolationAlpha = a;
-}
-
 std::uint64_t PhysicsWorldService::GetWorldGeneration()
 {
     return s_WorldGeneration;
 }
 
-float32 PhysicsWorldService::GetLastStepMs()
+float32 PhysicsWorldService::TakeStepMs()
 {
-    return s_LastStepMs;
+    return std::exchange(s_StepMs, 0.0f);
 }
 
-void PhysicsWorldService::SetLastStepMs(float32 ms)
+void PhysicsWorldService::AddStepMs(float32 ms)
 {
-    s_LastStepMs = ms;
+    s_StepMs += ms;
 }
 
 uint32 PhysicsWorldService::GetLastBodiesComposed()

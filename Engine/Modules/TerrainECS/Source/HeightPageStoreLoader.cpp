@@ -212,6 +212,12 @@ std::shared_ptr<const PageStreaming::PageStoreReader> HeightPageStoreLoader::Sto
     return entry.Reader;
 }
 
+bool HeightPageStoreLoader::NeverOpensStore(const GUID& asset) const
+{
+    const auto it = m_Entries.find(asset);
+    return it != m_Entries.end() && it->second.Failed;
+}
+
 void HeightPageStoreLoader::CookStatuses(std::vector<CookStatus>& out) const
 {
     out.clear();

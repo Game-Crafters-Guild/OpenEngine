@@ -57,6 +57,9 @@ struct ScriptWriteRule
     std::span<const ScriptWritableRange> Ranges;
 };
 
+// Thread rule: FindByName runs on any thread, also while the main thread registers. Every other call
+// runs on the main thread and takes no lock. A span or view that a call returns stays valid until its
+// type registers again or its module is purged.
 class ComponentFieldRegistry
 {
 public:

@@ -7,6 +7,7 @@
 #include "Inspectors/InspectorDragHelpers.h"  // AddFloatRowWithDrag / AddIntRowWithDrag / AddToggleRow
 #include "Inspectors/InspectorUIHelpers.h"    // InspectorUI::AddLine
 #include "Inspectors/InspectorComponent/InspectorComponentRowHelpers.h"  // MakeComponentSnapshotTargetById
+#include "Inspectors/InspectorOverrideRows.h"  // BindFieldRow: the override marks and menu of a field row
 #include "Inspectors/PreservedFieldNotice.h"          // AddPreservedFieldNotice
 #include "Inspectors/RenderLayers/RenderLayerField.h"              // the render layer rows on the project's names
 #include "UI/Controls/MaskField.h"
@@ -14,7 +15,6 @@
 #include "UI/Controls/Dropdown.h"             // enum name dropdown (scanner-detected enum fields)
 #include "UI/Controls/Label.h"                // the entity header's badge text
 #include "UI/Controls/Slider.h"               // compact ocean planar reflection strength slider
-#include "UI/Interaction/ContextMenuManipulator.h" // the override menu of a field row
 #include "UI/StyleProperties.h"               // Style::* for the Color swatch drawer
 #include "UI/UIManager.h"                      // GetFocusedElementId for the live-refresh focus skip
 
@@ -505,7 +505,7 @@ void EmitFloatRow(UIElement* parent, RefreshPlan* plan, const Snapshot& bytes,
                                                  std::move(onChanged),
                                                  std::numeric_limits<float>::quiet_NaN(), tooltip);
         if (f && noneValue)
-            f->SetNoneValue(*noneValue);
+            f->SetNoneValue(*noneValue, FloatField::kNoneText);
         if (mixed && f)
             f->SetMixed();
         RecordFloatFieldRefresh(plan, f, offset);
@@ -1467,34 +1467,6 @@ void CollectRows(UIElement* parent, std::size_t begin, std::vector<UIElement*>& 
         rows.push_back(children[index].get());
 }
 
-// The menu items of the entries the override answerer gives `target`, each followed by `refresh`.
-std::vector<ContextMenuManipulator::Item> OverrideMenuItems(const OverrideMenuTarget& target,
-                                                            const std::function<void()>& refresh)
-{
-    std::vector<ContextMenuManipulator::Item> items;
-    if (!target.World || !target.World->IsValid(target.Entity))
-        return items;
-    for (OverrideMenuEntry& entry : InspectorRegistry::Get().QueryOverrideMenu(target))
-    {
-        items.push_back({.Path = std::move(entry.Label),
-                         .IconPath = std::move(entry.IconPath),
-                         .OnActivate = [run = std::move(entry.Run), refresh]()
-                         {
-                             run();
-                             if (refresh)
-                                 refresh();
-                         }});
-    }
-    return items;
-}
-
-void SetFieldRowMarks(const std::vector<FieldRows>& fields, const ComponentOverrides& overrides)
-{
-    for (const FieldRows& field : fields)
-        for (UIElement* row : field.Rows)
-            InspectorUI::SetRowOverridden(row, overrides.IsFieldOverridden(field.Field));
-}
-
 // The header's declared badge (InspectorPanel::MountHeaderTrailingSlot) shows `text`; an empty `text` hides it.
 void SetEntityHeaderBadge(UIElement& header, const std::string& text, const std::string& tooltip)
 {
@@ -1510,12 +1482,6 @@ void SetEntityHeaderBadge(UIElement& header, const std::string& text, const std:
 }
 
 } // namespace
-
-void AttachOverrideMenu(UIElement& element, const OverrideMenuTarget& target, std::function<void()> refresh)
-{
-    element.AddManipulator(ContextMenuManipulator::Create([target, refresh = std::move(refresh)]()
-                                                          { return OverrideMenuItems(target, refresh); }));
-}
 
 void UpdateEntityNameOverrideMark(UIElement& header, UIElement& nameField, ECS::World& world, ECS::EntityHandle entity)
 {
@@ -1984,20 +1950,9 @@ static bool RenderFieldRows(const InspectorContext& ctx, ECS::ComponentTypeId ty
 
     if (fieldRowsBegin)
         CollectRows(parent, *fieldRowsBegin, fieldRows.back().Rows);
-    if (marksOverrides)
-    {
-        SetFieldRowMarks(fieldRows, InspectorRegistry::Get().QueryComponentOverrides(*ctx.World, ctx.Entity, typeId));
-        for (const FieldRows& field : fieldRows)
-        {
-            const OverrideMenuTarget target{ctx.World, ctx.Entity, typeId, field.Field, ctx.Undo, ctx.ChangeNotifications};
-            for (UIElement* row : field.Rows)
-                AttachOverrideMenu(*row, target, ctx.RequestInspectorRefresh);
-        }
-        if (ctx.OverrideMarkRefreshCallbacks)
-            ctx.OverrideMarkRefreshCallbacks->push_back(
-                [world = ctx.World, entity = ctx.Entity, typeId, fields = std::move(fieldRows)]()
-                { SetFieldRowMarks(fields, InspectorRegistry::Get().QueryComponentOverrides(*world, entity, typeId)); });
-    }
+    for (const FieldRows& field : fieldRows)
+        for (UIElement* row : field.Rows)
+            BindFieldRow(ctx, typeId, row, field.Field);
 
     // One sim-refresh callback for the whole section: re-capture the component bytes
     // once, fetch the focused-element id once, then replay every field's Apply thunk.

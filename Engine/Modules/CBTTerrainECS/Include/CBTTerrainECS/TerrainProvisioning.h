@@ -101,6 +101,7 @@ enum class TerrainPreset : uint8
 
 // Builds the Terrain field bundle for a preset. Runtime handles stay zero — the
 // caller provisions the TerrainService data and (for planar terrains) physics.
+// A planar preset is flat at its transform's height; noise is an authoring choice.
 Components::Terrain MakeTerrainPreset(TerrainPreset preset);
 
 // Builds the base relief the planet presets ship with (amplitude ~= R/40, 3 octaves).

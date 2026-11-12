@@ -12,10 +12,9 @@
 namespace GameEngine::CBTTerrain
 {
 
-// DemandTuning.x — near-field world facet target (m), the behind-eye/straddle force-split floor
-// (finding 2): the product bar. The straddle band sits AT the eye plane (grazing ~90 degrees)
-// where cap-depth detail is invisible; bounding it here reclaims the near-plane over-refinement
-// the deeper 0.25 m cap would cause.
+// DemandTuning.x — near-field world facet target (m): the finest split edge of a facet that touches
+// or crosses the eye plane. Such a facet also stops at the density the screen would give it in front,
+// so only the facets near the eye reach this target.
 inline constexpr float kNearFieldFacetTargetM = 0.5f;
 
 // DemandTuning.y — an off-frustum bisector keeps its depth while live occupancy is below this
@@ -48,8 +47,9 @@ inline constexpr float kOffFrustumKeepWidestNdc = 1024.0f;
 // stride's octave per update cannot carry occupancy from full across the 30% hold band.
 inline constexpr uint32_t kOffFrustumKeepStepsPerOctave = 2u;
 // The last step, where the band is 0. Step 23 is 0.5 NDC, the bottom of the measured range. Under the
-// criterion a box behind the eye sits at 8 NDC or more (CBT_PlanarBehindExcess) and leaves over steps 1 to 16;
-// under the edge rule every facet behind the eye sits at 8 NDC (CBT_SplitGate) and leaves at step 16.
+// criterion a box behind the eye sits at 8 NDC or more (CBT_PlanarBehindExcess) and leaves over steps 1 to 16.
+// Outside the criterion a planar instance takes the sphere's occupancy-ramped keep band beside the frustum, and
+// the keep step only for the ground wholly behind the eye (CBTClassifyDesc::BehindEye).
 inline constexpr uint32_t kOffFrustumKeepSteps = 24u;
 // Steps per update while occupancy is also at or above kCBTSaturatedOccupancy (0.98, where splits are
 // rolled back and in-view refinement waits), so a view that does not fit spends fewer updates full:

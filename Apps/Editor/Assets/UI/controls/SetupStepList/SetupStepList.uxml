@@ -1,0 +1,10 @@
+<!-- SetupStepList: the summary head (the state pill, the line beside it, Check again), then the
+     framed rows, one SetupStepRow.uxml each. The ids are the contract with SetupStepList.cpp. -->
+<UIElement class="setup-step-list">
+  <UIElement class="setup-step-head">
+    <Label id="SetupStepPill" class="setup-status-pill" />
+    <Label id="SetupStepSummary" class="setup-step-summary" />
+    <Button id="SetupStepCheckAgain" class="small secondary setup-step-check-again" text="Check again" />
+  </UIElement>
+  <UIElement id="SetupStepRows" class="setup-step-rows hidden" />
+</UIElement>

@@ -221,18 +221,6 @@ public static unsafe partial class CoreBridge
         catch { return -1; }
     }
 
-        /// <summary>
-        /// Swap the process's current runtime domain to <paramref name="newDomain"/>.
-        /// Returns 0 on success; non-zero on failure.
-        /// </summary>
-
-    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    public static int SwapRuntimeDomain(ulong newDomain)
-    {
-        try { var b = GetCurrentBinding(); return b?.TryScriptsDomainSwap(newDomain) ?? -1; }
-        catch { return -1; }
-    }
-
     /// <summary>
     /// Unload a managed scripting domain identified by domain id. Returns 0 on success.
     /// </summary>

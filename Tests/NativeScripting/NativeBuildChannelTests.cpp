@@ -15,17 +15,26 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <filesystem>
 #include <fstream>
 #include <functional>
-#include <future>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
+
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <tlhelp32.h>
+#endif
 
 namespace ns = GameEngine::NativeScripting;
 using namespace std::chrono_literals;
@@ -34,6 +43,8 @@ namespace
 {
 
 constexpr auto kDeadline = 10s;
+// A canceled probe ends at the next 15 ms cancel poll; vcvars alone runs for seconds.
+constexpr auto kCanceledDetectionJoinDeadline = 1s;
 // A compute job on an idle worker finishes in microseconds; this bounds it on a
 // loaded machine without letting a parked worker pass.
 constexpr auto kComputeJobDeadline = 5s;
@@ -45,6 +56,8 @@ constexpr auto kComputeJobDeadline = 5s;
 constexpr auto kReachCMakeDeadline = 60s;
 constexpr auto kToolchainDetectionDeadline = 60s;
 
+// A latch the test opens. Declare it before the pool: a job can still be
+// inside Wait() after the gate opens, and only the pool's destructor joins it.
 class Gate
 {
 public:
@@ -77,6 +90,43 @@ bool WaitUntil(const std::function<bool()>& pred, std::chrono::milliseconds time
     }
     return true;
 }
+
+#if defined(_WIN32)
+// Adds the id of each running child process of this process to `seen`, once.
+void CollectChildProcessIds(std::vector<DWORD>& seen)
+{
+    const HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE)
+        return;
+    const DWORD self = GetCurrentProcessId();
+    PROCESSENTRY32W entry{};
+    entry.dwSize = sizeof(entry);
+    for (BOOL more = Process32FirstW(snapshot, &entry); more; more = Process32NextW(snapshot, &entry))
+    {
+        if (entry.th32ParentProcessID == self && std::find(seen.begin(), seen.end(), entry.th32ProcessID) == seen.end())
+            seen.push_back(entry.th32ProcessID);
+    }
+    CloseHandle(snapshot);
+}
+
+// The detection starts one child process per probe: where ninja, vswhere, then vcvars. True once
+// the third one started: the vcvars probe, which runs for seconds.
+bool WaitUntilTheVcvarsProbeRuns()
+{
+    std::vector<DWORD> seen;
+    return WaitUntil(
+        [&seen] {
+            CollectChildProcessIds(seen);
+            return seen.size() >= 3;
+        },
+        kToolchainDetectionDeadline);
+}
+
+bool HasVswhere()
+{
+    return std::filesystem::exists("C:/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe");
+}
+#endif
 
 // Parks every cmake process the build starts on a gate, then reports a failed
 // process. Restores the shell and opens the gate when it leaves scope; a manager
@@ -165,8 +215,8 @@ TEST(NativeBuildChannel, ParkedModuleBuildHoldsNoComputeWorker)
 TEST(NativeBuildChannel, ToolchainDetectionHoldsNoComputeWorker)
 {
     GameEngine::TestUtils::ScopedTempDir toolchainCache(GameEngine::TestUtils::MakeUniqueTempDirectory("ge_nbc_toolchain"));
-    JobSystem::WorkStealingThreadPool pool(1);
     Gate workerGate;
+    JobSystem::WorkStealingThreadPool pool(1);
     std::atomic<bool> workerParked{false};
     JobSystem::TaskHandle parked = pool.Submit([&] {
         workerParked.store(true);
@@ -176,14 +226,113 @@ TEST(NativeBuildChannel, ToolchainDetectionHoldsNoComputeWorker)
 
     ns::MsvcToolchain toolchain;
     toolchain.WarmAsync(&pool, toolchainCache.Path());
-    auto joined = std::async(std::launch::async, [&toolchain] { toolchain.JoinWarm(); });
-    const bool detectedWhileWorkerParked = joined.wait_for(kToolchainDetectionDeadline) == std::future_status::ready;
+    // Wait before JoinWarm: JoinWarm cancels the probes, and this test needs a full detection.
+    const auto waitStart = std::chrono::steady_clock::now();
+    toolchain.WaitUntilReady(kToolchainDetectionDeadline);
+    const bool detectedWhileWorkerParked = std::chrono::steady_clock::now() - waitStart < kToolchainDetectionDeadline;
 
     workerGate.Open();
-    joined.wait();
+    toolchain.JoinWarm();
     parked.Wait();
     EXPECT_TRUE(detectedWhileWorkerParked) << "toolchain detection waited for the only compute worker";
 }
+
+#if defined(_WIN32)
+// A quit right after start-up must not wait for the vswhere and vcvars probes (seconds): JoinWarm
+// terminates the running probe, so the join is short and the canceled detection finds nothing.
+TEST(NativeBuildChannel, JoinWarmCancelsTheToolchainProbes)
+{
+    if (!HasVswhere())
+        GTEST_SKIP() << "no vswhere: detection starts no Visual Studio probe to cancel";
+    GameEngine::TestUtils::ScopedTempDir toolchainCache(GameEngine::TestUtils::MakeUniqueTempDirectory("ge_nbc_toolchain"));
+    JobSystem::WorkStealingThreadPool pool(1);
+    ns::MsvcToolchain toolchain;
+    toolchain.WarmAsync(&pool, toolchainCache.Path());
+    EXPECT_TRUE(WaitUntilTheVcvarsProbeRuns()) << "the detection started no vcvars probe";
+
+    const auto joinStart = std::chrono::steady_clock::now();
+    toolchain.JoinWarm();
+    const auto joinTime = std::chrono::steady_clock::now() - joinStart;
+
+    EXPECT_LT(joinTime, kCanceledDetectionJoinDeadline) << "JoinWarm waited for the probes instead of canceling them";
+    EXPECT_FALSE(toolchain.NinjaReady()) << "the detection ran to completion after JoinWarm";
+}
+
+// A quit while a module build waits for the toolchain detection does not wait for the probes either.
+TEST(NativeBuildChannel, ShutdownDuringABuildThatWaitsForTheToolchainCancelsTheProbes)
+{
+    if (!HasVswhere())
+        GTEST_SKIP() << "no vswhere: detection starts no Visual Studio probe to cancel";
+    GameEngine::TestUtils::ScopedTempDir scratch(GameEngine::TestUtils::MakeUniqueTempDirectory("ge_nbc_quit_build"));
+    const std::filesystem::path root = scratch.Path();
+    std::error_code ec;
+    std::filesystem::create_directories(root / "Source", ec);
+    std::ofstream(root / "Source" / "QuitModule.cpp") << "int GeQuitModuleProbe() { return 1; }\n";
+
+    ns::NativeBuildConfig config;
+    config.SourceDir = root / "Source";
+    config.ProjectDir = root / "Project";
+    config.BuildDir = root / "Cache" / "NativeScripts" / "build";
+    config.ActiveDir = root / "Cache" / "NativeScripts" / "active";
+    config.ModuleName = "QuitModule";
+
+    JobSystem::WorkStealingThreadPool pool(1);
+    ParkedCMakeProcesses cmake;
+    ns::NativeScriptManager manager;
+    ASSERT_TRUE(manager.Initialize(&pool));
+    manager.SetPackageModuleConfigs({config});
+    manager.RequestRebuild();
+    manager.Tick(); // dispatches the build, which waits for the toolchain detection
+    EXPECT_TRUE(WaitUntilTheVcvarsProbeRuns()) << "the detection started no vcvars probe";
+    cmake.Open(); // the build fails at once when it reaches cmake
+
+    const auto shutdownStart = std::chrono::steady_clock::now();
+    manager.Shutdown();
+    const auto shutdownTime = std::chrono::steady_clock::now() - shutdownStart;
+
+    EXPECT_LT(shutdownTime, kCanceledDetectionJoinDeadline) << "Shutdown waited for the build's toolchain wait";
+}
+
+// A warm without a job system after a joined warm does not wait for a detection that never starts.
+TEST(NativeBuildChannel, WarmAsyncWithoutAJobSystemAfterJoinWarmDoesNotWait)
+{
+    GameEngine::TestUtils::ScopedTempDir toolchainCache(GameEngine::TestUtils::MakeUniqueTempDirectory("ge_nbc_toolchain"));
+    JobSystem::WorkStealingThreadPool pool(1);
+    ns::MsvcToolchain toolchain;
+    toolchain.WarmAsync(&pool, toolchainCache.Path());
+    toolchain.JoinWarm();
+    toolchain.WarmAsync(nullptr, toolchainCache.Path());
+
+    const auto waitStart = std::chrono::steady_clock::now();
+    toolchain.WaitUntilReady(kDeadline);
+    const auto waitTime = std::chrono::steady_clock::now() - waitStart;
+
+    EXPECT_LT(waitTime, kCanceledDetectionJoinDeadline) << "WaitUntilReady waited for a detection that never starts";
+}
+
+// A warm after JoinWarm runs a full detection: the cancel of the previous detection does not carry over.
+TEST(NativeBuildChannel, WarmAsyncAfterJoinWarmDetectsAgain)
+{
+    GameEngine::TestUtils::ScopedTempDir toolchainCache(GameEngine::TestUtils::MakeUniqueTempDirectory("ge_nbc_toolchain"));
+    JobSystem::WorkStealingThreadPool pool(1);
+    ns::MsvcToolchain toolchain;
+    toolchain.WarmAsync(&pool, toolchainCache.Path());
+    toolchain.JoinWarm();
+    toolchain.WarmAsync(&pool, toolchainCache.Path());
+    const bool readyAfterRewarm = toolchain.WaitUntilReady(kToolchainDetectionDeadline);
+    toolchain.JoinWarm();
+    if (readyAfterRewarm)
+        return;
+
+    ns::MsvcToolchain reference;
+    reference.WarmAsync(&pool, toolchainCache.Path());
+    const bool hostHasToolchain = reference.WaitUntilReady(kToolchainDetectionDeadline);
+    reference.JoinWarm();
+    if (!hostHasToolchain)
+        GTEST_SKIP() << "no Ninja and MSVC environment on this host: a full detection finds nothing either";
+    ADD_FAILURE() << "the warm after JoinWarm found no toolchain, but a fresh detection does";
+}
+#endif
 
 #if !defined(_WIN32)
 // POSIX detection is a PATH scan, so a host without a job system builds with Ninja, as the editor

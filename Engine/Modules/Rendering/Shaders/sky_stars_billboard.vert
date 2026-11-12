@@ -120,7 +120,7 @@ float SkyLuminanceBehind(vec3 lutDirection)
 
 void main()
 {
-    vec3 planetCenter = vec3(0.0, -uAtmos.planetRadius, 0.0);
+    vec3 planetCenter = uAtmos.planetCenter;
     float camR = length(uSky.cameraPositionWS - planetCenter);
     vec3 up = (uSky.cameraPositionWS - planetCenter) / max(camR, 1e-5);
 

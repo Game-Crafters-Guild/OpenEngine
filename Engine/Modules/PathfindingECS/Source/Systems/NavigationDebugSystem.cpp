@@ -343,9 +343,10 @@ void NavigationDebugSystem::Update(ECS::World& world, float32 deltaTime)
                 const Components::NavigationAgentState& state,
                 const Components::WorldTransform& wt)
             {
-                float32 posX = wt.matrix[12];
-                float32 posY = wt.matrix[13];
-                float32 posZ = wt.matrix[14];
+                const Mathematics::Vector3 position = wt.GetPosition() - Mathematics::WorldPosition{};
+                float32 posX = position.x;
+                float32 posY = position.y;
+                float32 posZ = position.z;
 
                 if (showPaths)
                 {

@@ -188,16 +188,21 @@ namespace
 const std::string kNoTooltipText;
 } // namespace
 
+void UIElement::ReleaseEmptyTooltipData()
+{
+    if (m_TooltipData && m_TooltipData->Text.empty() && m_TooltipData->Template.LayoutPath.empty() &&
+        !m_TooltipData->Anchor.Get())
+        m_TooltipData.reset();
+}
+
 void UIElement::SetTooltip(std::string text)
 {
-    if (text.empty() && (!m_TooltipData || m_TooltipData->Template.LayoutPath.empty()))
-    {
-        m_TooltipData.reset();
+    if (text.empty() && !m_TooltipData)
         return;
-    }
     if (!m_TooltipData)
         m_TooltipData = std::make_unique<TooltipData>();
     m_TooltipData->Text = std::move(text);
+    ReleaseEmptyTooltipData();
 }
 
 const std::string& UIElement::GetTooltip() const
@@ -207,21 +212,34 @@ const std::string& UIElement::GetTooltip() const
 
 void UIElement::SetTooltipTemplate(std::string layoutPath, TooltipBinder binder)
 {
-    if (layoutPath.empty() && (!m_TooltipData || m_TooltipData->Text.empty()))
-    {
-        m_TooltipData.reset();
+    if (layoutPath.empty() && !m_TooltipData)
         return;
-    }
     if (!m_TooltipData)
         m_TooltipData = std::make_unique<TooltipData>();
     if (layoutPath.empty())
         binder = nullptr;
     m_TooltipData->Template = {std::move(layoutPath), std::move(binder)};
+    ReleaseEmptyTooltipData();
 }
 
 const UIElement::TooltipTemplate* UIElement::GetTooltipTemplate() const
 {
     return m_TooltipData && !m_TooltipData->Template.LayoutPath.empty() ? &m_TooltipData->Template : nullptr;
+}
+
+void UIElement::SetTooltipAnchor(UIElement* anchor)
+{
+    if (!anchor && !m_TooltipData)
+        return;
+    if (!m_TooltipData)
+        m_TooltipData = std::make_unique<TooltipData>();
+    m_TooltipData->Anchor = MakeWeakRef(anchor);
+    ReleaseEmptyTooltipData();
+}
+
+UIElement* UIElement::GetTooltipAnchor() const
+{
+    return m_TooltipData ? m_TooltipData->Anchor.Get() : nullptr;
 }
 
 UIElement::~UIElement()

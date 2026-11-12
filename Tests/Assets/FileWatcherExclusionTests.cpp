@@ -10,6 +10,7 @@
 #include <thread>
 #include <vector>
 #include "FileWatcher/FileWatcher.h"
+#include "Memory/AllocationCountScope.h"
 #include "TestTempDir.h"
 
 namespace GameEngine
@@ -247,54 +248,86 @@ TEST(FileWatcherStop, StopDuringTheFirstSnapshotReturnsWellInsideThePollInterval
 // it, so a write is noticed in FSEvents time rather than in poll time. Worth
 // pinning because the poll interval is what a shader hot-reload's
 // edit-to-pixels latency was mostly made of.
-TEST(FileWatcherLatency, ChangeIsDetectedWellInsideThePollInterval)
+// Records what a watch thread reports, so a test can wait for one event.
+class HeardEvents
+{
+  public:
+    void OnChange(const FileChangeEvent& event)
+    {
+        std::lock_guard<std::mutex> lock(m_Mutex);
+        m_Heard.emplace_back(event.Type, event.Path.filename().string());
+        m_Changed.notify_all();
+    }
+
+    bool WaitFor(FileChangeType type, const std::string& name, std::chrono::milliseconds timeout)
+    {
+        std::unique_lock<std::mutex> lock(m_Mutex);
+        return m_Changed.wait_for(lock, timeout, [&] {
+            return std::find(m_Heard.begin(), m_Heard.end(), std::make_pair(type, name)) != m_Heard.end();
+        });
+    }
+
+  private:
+    std::mutex m_Mutex;
+    std::condition_variable m_Changed;
+    std::vector<std::pair<FileChangeType, std::string>> m_Heard;
+};
+
+TEST(FileWatcherLatency, AnAddAChangeAndADeleteAreEachDetectedWellInsideThePollInterval)
 {
     namespace fs = std::filesystem;
+    using Milliseconds = std::chrono::milliseconds;
     const fs::path dir = TestUtils::MakeUniqueTempDirectory("ge_fw_latency");
     ASSERT_TRUE(fs::create_directories(dir));
+    const fs::path probe = dir / "probe.txt";
 
     // Long enough that a poll-only watcher cannot pass by accident: the
     // assertion allows a fifth of it.
     constexpr uint32 kPollIntervalMs = 5000;
-    constexpr auto kAllowed = std::chrono::milliseconds(kPollIntervalMs / 5);
+    constexpr auto kAllowed = Milliseconds(kPollIntervalMs / 5);
+    constexpr auto kTimeout = Milliseconds(kPollIntervalMs * 2);
 
-    std::mutex m;
-    std::condition_variable cv;
-    bool seen = false;
+    HeardEvents heard;
     FileWatcher watcher;
     watcher.SetPollingInterval(kPollIntervalMs);
-    watcher.SetCallback([&](const FileChangeEvent&) {
-        std::lock_guard<std::mutex> lock(m);
-        seen = true;
-        cv.notify_all();
-    });
+    watcher.SetCallback([&heard](const FileChangeEvent& event) { heard.OnChange(event); });
     ASSERT_TRUE(watcher.StartWatching(dir, /*recursive=*/true));
 
     // Let the initial scan finish so the write below is a change rather than
     // part of the baseline snapshot.
-    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    std::this_thread::sleep_for(Milliseconds(300));
 
-    const auto start = std::chrono::steady_clock::now();
-    {
-        std::ofstream f(dir / "probe.txt");
-        f << "hello";
-    }
+    auto start = std::chrono::steady_clock::now();
+    std::ofstream(probe) << "hello";
+    const bool added = heard.WaitFor(FileChangeType::Created, "probe.txt", kTimeout);
+    const auto addLatency = std::chrono::duration_cast<Milliseconds>(std::chrono::steady_clock::now() - start);
 
-    {
-        std::unique_lock<std::mutex> lock(m);
-        cv.wait_for(lock, std::chrono::milliseconds(kPollIntervalMs * 2), [&] { return seen; });
-    }
-    const auto elapsed = std::chrono::steady_clock::now() - start;
+    // The timestamp moves a second on, so the scan sees the change whatever the timestamp resolution.
+    start = std::chrono::steady_clock::now();
+    const auto before = fs::last_write_time(probe);
+    std::ofstream(probe, std::ios::trunc) << "changed";
+    fs::last_write_time(probe, before + std::chrono::seconds(1));
+    const bool changed = heard.WaitFor(FileChangeType::Modified, "probe.txt", kTimeout);
+    const auto changeLatency = std::chrono::duration_cast<Milliseconds>(std::chrono::steady_clock::now() - start);
+
+    start = std::chrono::steady_clock::now();
+    fs::remove(probe);
+    const bool deleted = heard.WaitFor(FileChangeType::Deleted, "probe.txt", kTimeout);
+    const auto deleteLatency = std::chrono::duration_cast<Milliseconds>(std::chrono::steady_clock::now() - start);
+
     watcher.StopWatching();
     std::error_code ec;
     fs::remove_all(dir, ec);
+    RecordProperty("addMs", static_cast<int>(addLatency.count()));
+    RecordProperty("changeMs", static_cast<int>(changeLatency.count()));
+    RecordProperty("deleteMs", static_cast<int>(deleteLatency.count()));
 
-    ASSERT_TRUE(seen) << "the watcher never reported the write";
-    EXPECT_LT(elapsed, kAllowed)
-        << "detected in "
-        << std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count()
-        << " ms with a " << kPollIntervalMs
-        << " ms poll interval — the change signal is not waking the loop";
+    // A Deleted is held for kDeletedEventHold before it fires, which the allowance covers.
+    ASSERT_TRUE(added && changed && deleted)
+        << "heard the add " << added << ", the change " << changed << ", the delete " << deleted;
+    EXPECT_LT(addLatency, kAllowed) << "add detected in " << addLatency.count() << " ms";
+    EXPECT_LT(changeLatency, kAllowed) << "change detected in " << changeLatency.count() << " ms";
+    EXPECT_LT(deleteLatency, kAllowed) << "delete detected in " << deleteLatency.count() << " ms";
 }
 #endif // PLATFORM_MACOS
 
@@ -362,6 +395,11 @@ class FileWatcherLostEventsTest : public ::testing::Test
     }
 
     void Snapshot() { m_Watcher.SnapshotWatchedFiles(); }
+
+    // One tick of the polling backend, on the calling thread.
+    void Poll() { m_Watcher.PollOnce(); }
+
+    size_t SnapshotFileCount() const { return m_Watcher.m_PolledFiles.size(); }
 
     // A change the platform reported, handed on the way the Windows backend does.
     void Report(FileChangeType type, const char* name, const char* oldName = nullptr)
@@ -448,6 +486,12 @@ TEST_F(FileWatcherLostEventsTest, LostChangesAreReportedAsOrdinaryEventsByTheRes
     EXPECT_EQ(Heard(), (std::vector<std::string>{"Created added.glsl", "Deleted removed.glsl",
                                                  "Modified edited.glsl", "Modified sub/nested.glsl",
                                                  "Renamed old_name.glsl -> new_name.glsl"}));
+
+    // The snapshot took each change, so the next rescan reports none of them again.
+    m_Events.clear();
+    LoseEvents();
+    FireHeldEvents();
+    EXPECT_EQ(Heard(), (std::vector<std::string>{}));
 }
 
 TEST_F(FileWatcherLostEventsTest, AChangeAlreadyReportedIsNotReportedAgainByTheRescan)
@@ -584,6 +628,48 @@ TEST_F(FileWatcherLostEventsTest, AnOwedRescanWalksAtMostOncePerPollInterval)
     QuietSliceAPollIntervalLater();
     FireHeldEvents();
     EXPECT_EQ(Heard(), (std::vector<std::string>{"Created added.glsl"}));
+}
+
+// The polling backend walks every watched root once per poll interval while
+// the editor is idle. A poll of a tree that did not change must not allocate
+// after the first polls.
+TEST_F(FileWatcherLostEventsTest, AWarmPollOfAnUnchangedTreeAllocatesNothing)
+{
+#ifdef _WIN32
+    GTEST_SKIP() << "the Windows backend reports changes from the platform and walks only after lost events";
+#else
+    // Names longer than the small-string buffer, so a path copy cannot hide in it.
+    const std::string longName = "a_file_name_longer_than_the_small_string_buffer_";
+    const std::string deep = "sub/a_directory_with_a_long_name/another_directory_with_a_long_name/";
+    std::filesystem::create_directories(m_Root / deep);
+    std::filesystem::create_directories(m_Root / "build");
+    constexpr int kFilesPerDirectory = 8;
+    for (const std::string& directory : {std::string(), std::string("sub/"), deep})
+    {
+        for (int i = 0; i < kFilesPerDirectory; ++i)
+            Write((directory + longName + std::to_string(i) + ".glsl").c_str(), "x");
+    }
+    // Files the filters skip: an excluded directory, a build extension in upper case, a dot file.
+    Write("build/excluded_by_its_directory.glsl", "x");
+    Write("sub/stale_safe_save_intermediate.TMP", "x");
+    Write("sub/.hidden_dot_file", "x");
+    // A link to a file is watched as that file. The walk does not follow a link to a directory.
+    std::filesystem::create_symlink(m_Root / "sub" / (longName + "0.glsl"), m_Root / "link_to_a_file.glsl");
+    std::filesystem::create_directory_symlink(m_Root / "sub", m_Root / "link_to_a_directory");
+
+    Snapshot();
+    Poll();
+    Poll();
+    ASSERT_EQ(SnapshotFileCount(), 3u * kFilesPerDirectory + 1);
+
+    const Memory::AllocationCountScope probe(Memory::CountWindow::ThisThread);
+    Poll();
+    const uint64 allocations = probe.Count();
+
+    EXPECT_EQ(allocations, 0u) << "a poll of " << SnapshotFileCount() << " unchanged files allocated "
+                               << allocations << " times";
+    EXPECT_EQ(Heard(), (std::vector<std::string>{}));
+#endif
 }
 
 #ifdef _WIN32

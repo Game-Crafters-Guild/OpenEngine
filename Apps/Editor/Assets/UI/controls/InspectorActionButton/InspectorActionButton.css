@@ -33,6 +33,10 @@
     background-image: url("editor:Icons/plus.svg");
 }
 
+.inspector-action-remove {
+    background-image: url("editor:Icons/trash.svg");
+}
+
 .inspector-action-restart {
     background-image: url("editor:Icons/ResetReload.svg");
 }

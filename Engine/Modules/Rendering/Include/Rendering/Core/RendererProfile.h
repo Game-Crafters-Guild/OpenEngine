@@ -33,8 +33,11 @@ struct RendererProfile
     bool UseRayTracing = true;
     bool UseInt64Compute = true;     // CBT terrain and friends
     // interpolateAtOffset in shaders (the parallax footprint at the pixel centre); off where the
-    // device has no sampleRateShading, and the footprint then takes the centroid inputs' derivatives
+    // device has no interpolation functions, and the footprint then takes the centroid inputs' derivatives
     bool UseInterpolationFunctions = true;
+    // gl_ClipDistance in vertex shaders (a tiled terrain clipped at its authored edge); off where the
+    // device has no clip distances, and the terrain then ends at the last triangle across the edge
+    bool UseClipDistance = true;
 
     // Anisotropy ratio of the material trilinear sampler
     // (SamplerPreset::LinearRepeat): the engine's request, the same on every

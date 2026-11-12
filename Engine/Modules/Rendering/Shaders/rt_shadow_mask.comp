@@ -74,13 +74,15 @@ layout(set = 0, binding = 2, std140) uniform RTShadowMaskParams
     // The terrain's clearance map (terrain_shadow.glsl) in the full world frame, ShadowData's
     // terrainShadowGrid* layout; uTerrainSource x = 1 when present, y = map side (texels), z = the lit
     // field's levels (0: none); uTerrainView x = the terrain draw's level scale (0: no level rule, and
-    // no pixel reads the field).
+    // no pixel reads the field); uTerrainHeightSpan xy = the extent the height texture spans (ShadowData's
+    // terrainShadowHeightSpan).
     vec4 uTerrainGrid0;
     vec4 uTerrainGrid1;
     vec4 uTerrainGrid2;
     vec4 uTerrainGrid3;
     uvec4 uTerrainSource;
     vec4 uTerrainView;
+    vec4 uTerrainHeightSpan;
 };
 
 layout(set = 0, binding = 3) uniform accelerationStructureEXT uTlas;
@@ -97,7 +99,7 @@ vec2 GE_TerrainShadowReadClearance(vec2 gridCoord)
 float GE_TerrainShadowReadGround(float x, float z)
 {
     vec2 dim = vec2(textureSize(uTerrainHeight, 0));
-    vec2 terrainUV = clamp((vec2(x, z) - uTerrainGrid0.zw) / uTerrainGrid1.xy, 0.0, 1.0);
+    vec2 terrainUV = clamp((vec2(x, z) - uTerrainGrid0.zw) / uTerrainHeightSpan.xy, 0.0, 1.0);
     return textureLod(uTerrainHeight, (terrainUV * (dim - 1.0) + 0.5) / dim, 0.0).r * uTerrainGrid3.w;
 }
 #define GE_TERRAIN_SHADOW_READS_FIELD 1

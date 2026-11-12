@@ -165,6 +165,7 @@ Components::Terrain MakeTerrainPreset(TerrainPreset preset)
         t.HeightScale = 128.0f;
         t.SamplesPerMeter = 2.0f;
         t.MaterialTiling = 10.0f;
+        t.BaseSource = Components::TerrainBaseSource::Flat;
         break;
     case TerrainPreset::LargePlanar:
         t.Domain = Components::TerrainDomain::Planar;
@@ -173,6 +174,7 @@ Components::Terrain MakeTerrainPreset(TerrainPreset preset)
         t.HeightScale = 512.0f;
         t.SamplesPerMeter = 1.0f; // 1 spm for 4 km+: halves memory, holds the size ceiling
         t.MaterialTiling = 80.0f; // ~10 per 512 m of extent to hold texel density at eye level
+        t.BaseSource = Components::TerrainBaseSource::Flat;
         break;
     case TerrainPreset::Planet5km:
         t.Domain = Components::TerrainDomain::Spherical;

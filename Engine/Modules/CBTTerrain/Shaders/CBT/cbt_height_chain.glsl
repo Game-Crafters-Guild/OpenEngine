@@ -75,7 +75,13 @@ uint CBT_ChainLevelWord(uint samplesX, uint samplesZ, uint level)
 // scale = t / (f x s0) (mirror TerrainECS GeometryPageLevel). Negative is finer than level 0.
 float CBT_ChainLevel(float distance, float scale)
 {
+#if defined(GE_STAGE_FRAGMENT)
+    // The fragment stage uses the level only to shade, from its own pixel distance. On Metal a precise
+    // operation becomes a function call, and a fragment with a call costs many times more under MSAA.
+    float edge = max(distance, 1.17549435e-38f) * scale;
+#else
     precise float edge = max(distance, 1.17549435e-38f) * scale;
+#endif
     return log2(edge);
 }
 

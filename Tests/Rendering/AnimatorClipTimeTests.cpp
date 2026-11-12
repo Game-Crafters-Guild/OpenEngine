@@ -221,5 +221,5 @@ TEST_F(AnimatorClipTimeTests, PausedRigidAnimatorWithInfiniteTimeCompletes)
     Engine::Renderer::RigidAnimationSystem system;
     system.Update(world, 0.25f);
     EXPECT_FLOAT_EQ(world.GetComponent<Components::AnimatorRef>(entity)->Time, 0.0f);
-    EXPECT_FLOAT_EQ(world.GetComponent<Components::Transform>(entity)->matrix[12], 1.0f);
+    EXPECT_DOUBLE_EQ(world.GetComponent<Components::Transform>(entity)->Position.X, 1.0);
 }

@@ -5,6 +5,7 @@
 #include "../DefaultStylesheet.h"
 #include "UI/UiContext.h"
 #include "UI/UiDispatcher.h"
+#include "../UIOpaqueInteriors.h"
 #include "UI/UIFrameBufferRing.h"
 #include "UI/UIPrimitive.h"
 #include "UI/UITextureRegistry.h"
@@ -1194,7 +1195,8 @@ UIManager::UIManager(IDevice* device, AssetManager* assetManager)
       m_BackgroundImages(device, assetManager, m_Dispatcher,
                          UI::BackgroundImageCache::Hooks{[this]() { RepaintForBackgroundImages(); },
                                                          [this](Rendering::TextureHandle handle)
-                                                         { ReleaseBackgroundImageSlot(handle); }})
+                                                         { ReleaseBackgroundImageSlot(handle); }}),
+      m_SdfOpaqueInteriors(std::make_unique<UI::UIOpaqueInteriors>())
 {
 
 #if defined(GE_HAVE_YOGA) && GE_HAVE_YOGA

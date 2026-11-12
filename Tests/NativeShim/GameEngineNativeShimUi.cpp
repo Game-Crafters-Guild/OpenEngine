@@ -30,6 +30,8 @@
 #define GE_SCRIPTING_BUILD 1
 #include "Scripting/ScriptingABI.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -55,6 +57,8 @@ struct ShimElement
     float ScrollX = 0.0f;
     float ScrollY = 0.0f;
     int SelectedIndex = -1;
+    float ProgressMax = 1.0f;
+    bool ProgressIndeterminate = false;
     // Seeded by GE_TestUI_SetDropdownData: the double has no option list, only the pair the
     // current selection resolves to.
     std::string DropdownValue;
@@ -134,7 +138,7 @@ bool IsTag(const ShimElement& el, const char* tagLower)
 // GameUIElementHandleTests, which drives the real exports.
 bool IsFloatField(const ShimElement& el) // Field<float>
 {
-    return IsTag(el, "slider") || IsTag(el, "floatfield");
+    return IsTag(el, "slider") || IsTag(el, "floatfield") || IsTag(el, "progressbar");
 }
 
 bool IsBoolField(const ShimElement& el) // Field<bool>
@@ -420,6 +424,60 @@ GE_API GE_Result GE_CDECL GE_UIElement_SetValueFloat(uint64_t instanceId, float 
     el->FloatValue = value;
     if (notify != 0)
         AnnounceValue(instanceId, value, nullptr);
+    return GE_Result_Ok;
+}
+
+// The progress bar's range and state. Like the engine, a new max clamps the value down.
+GE_API GE_Result GE_CDECL GE_UIElement_GetProgressMax(uint64_t instanceId, float* outMax)
+{
+    if (!outMax)
+        return GE_Result_InvalidArg;
+    *outMax = 0.0f;
+    ShimElement* el = Resolve(instanceId);
+    if (!el)
+        return GE_Result_NotFound;
+    if (!IsTag(*el, "progressbar"))
+        return GE_Result_InvalidArg;
+    *outMax = el->ProgressMax;
+    return GE_Result_Ok;
+}
+
+GE_API GE_Result GE_CDECL GE_UIElement_SetProgressMax(uint64_t instanceId, float max)
+{
+    if (!std::isfinite(max) || max <= 0.0f)
+        return GE_Result_InvalidArg;
+    ShimElement* el = Resolve(instanceId);
+    if (!el)
+        return GE_Result_NotFound;
+    if (!IsTag(*el, "progressbar"))
+        return GE_Result_InvalidArg;
+    el->ProgressMax = max;
+    el->FloatValue = std::min(el->FloatValue, max);
+    return GE_Result_Ok;
+}
+
+GE_API GE_Result GE_CDECL GE_UIElement_GetProgressIndeterminate(uint64_t instanceId, int32_t* outIndeterminate)
+{
+    if (!outIndeterminate)
+        return GE_Result_InvalidArg;
+    *outIndeterminate = 0;
+    ShimElement* el = Resolve(instanceId);
+    if (!el)
+        return GE_Result_NotFound;
+    if (!IsTag(*el, "progressbar"))
+        return GE_Result_InvalidArg;
+    *outIndeterminate = el->ProgressIndeterminate ? 1 : 0;
+    return GE_Result_Ok;
+}
+
+GE_API GE_Result GE_CDECL GE_UIElement_SetProgressIndeterminate(uint64_t instanceId, int32_t indeterminate)
+{
+    ShimElement* el = Resolve(instanceId);
+    if (!el)
+        return GE_Result_NotFound;
+    if (!IsTag(*el, "progressbar"))
+        return GE_Result_InvalidArg;
+    el->ProgressIndeterminate = indeterminate != 0;
     return GE_Result_Ok;
 }
 

@@ -536,6 +536,22 @@ std::vector<std::string> ShaderComposer::DiagnoseUnreadKeywords(
     return lines;
 }
 
+std::shared_ptr<const TextureSlotResolution> ShaderComposer::ResolveTextureSlotsOfFile(
+    const std::filesystem::path& surfacePath)
+{
+    return ShaderSourceCache::Get().TextureSlots(surfacePath, ShaderSourceCache::NormalizedKey(surfacePath));
+}
+
+bool ShaderComposer::HoldsTextureSlotsOfFile(const std::filesystem::path& surfacePath)
+{
+    return ShaderSourceCache::Get().HoldsTextureSlots(ShaderSourceCache::NormalizedKey(surfacePath));
+}
+
+bool ShaderComposer::ReadSourceFileText(const std::filesystem::path& path, std::string& out)
+{
+    return ShaderSourceCache::Get().ReadText(path, out);
+}
+
 TextureSlotResolution ShaderComposer::ResolveTextureSlots(const std::string& surfaceSource)
 {
     TextureSlotResolution result{};

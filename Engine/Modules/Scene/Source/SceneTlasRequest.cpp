@@ -11,7 +11,6 @@
 
 #include "Components/Rendering/LocalBounds.h"
 #include "Components/Rendering/MeshRenderer.h"
-#include "Components/Rendering/WorldSectorCoord.h"
 #include "Components/Transform.h"
 #include "Core/CpuProfiler.h"
 #include "ECS/ChangeFilter.h"
@@ -36,10 +35,9 @@ void GatherRecords(ECS::World& world,
     using namespace GameEngine::ECS;
     records.clear();
     world.Query<Read<Components::WorldTransform>, Read<Components::MeshRenderer>,
-                Optional<Components::LocalBounds>, Optional<Components::WorldSectorCoord>>()
+                Optional<Components::LocalBounds>>()
         .Each([&records](EntityHandle entity, const Components::WorldTransform& transform,
-                         const Components::MeshRenderer& mesh, const Components::LocalBounds* bounds,
-                         const Components::WorldSectorCoord* sector)
+                         const Components::MeshRenderer& mesh, const Components::LocalBounds* bounds)
         {
             RenderExtractionSystem::WorldRenderableRecord record{};
             record.entity         = entity;
@@ -48,16 +46,13 @@ void GatherRecords(ECS::World& world,
             record.hasBounds      = bounds != nullptr;
             if (bounds)
                 record.bounds = *bounds;
-            record.hasSectorCoord = sector != nullptr;
-            if (sector)
-                record.sectorCoord = *sector;
             records.push_back(record);
         });
 }
 
 using MovedChunk = Internal::SceneTlasImpl::MovedChunk;
 
-void SnapshotMovedChunks(std::span<const MovedChunk> chunks, float32 sectorSize,
+void SnapshotMovedChunks(std::span<const MovedChunk> chunks,
                          std::vector<Internal::SceneTlasImpl::RefitInput>& snapshot)
 {
     for (const MovedChunk& chunk : chunks)
@@ -68,8 +63,7 @@ void SnapshotMovedChunks(std::span<const MovedChunk> chunks, float32 sectorSize,
             input.Entity      = chunk.Entities[row];
             input.Version     = chunk.Transforms[row].Version;
             input.WorldBounds = Internal::DeriveCandidateBounds(
-                chunk.Transforms[row], chunk.Bounds ? &chunk.Bounds[row] : nullptr,
-                chunk.Sectors ? &chunk.Sectors[row] : nullptr, sectorSize);
+                chunk.Transforms[row], chunk.Bounds ? &chunk.Bounds[row] : nullptr);
         }
     }
 }
@@ -82,29 +76,27 @@ void SnapshotMovedChunks(std::span<const MovedChunk> chunks, float32 sectorSize,
 // participating. The leaf's cached transform version decides later whether
 // each one actually moved. Runs between frames, so no structural change can
 // move the chunks it read.
-void SnapshotMovedRenderables(ECS::World& world, ECS::ChangeGate& gate, float32 sectorSize,
+void SnapshotMovedRenderables(ECS::World& world, ECS::ChangeGate& gate,
                               JobSystem::WorkStealingThreadPool* pool, std::vector<MovedChunk>& chunks,
                               std::vector<Internal::SceneTlasImpl::RefitInput>& snapshot)
 {
     using namespace GameEngine::ECS;
     chunks.clear();
     std::size_t total = 0;
-    auto query = world.Query<Read<Components::WorldTransform>, Optional<Components::LocalBounds>,
-                             Optional<Components::WorldSectorCoord>>();
+    auto query = world.Query<Read<Components::WorldTransform>, Optional<Components::LocalBounds>>();
     query.With<Components::MeshRenderer>();
     query.Changed<Components::WorldTransform>(gate);
     query.BatchEach([&chunks, &total](const EntityHandle* entities, const Components::WorldTransform* transforms,
-                                      const Components::LocalBounds* bounds,
-                                      const Components::WorldSectorCoord* sectors, std::size_t count)
+                                      const Components::LocalBounds* bounds, std::size_t count)
     {
-        chunks.push_back({entities, transforms, bounds, sectors, count, total});
+        chunks.push_back({entities, transforms, bounds, count, total});
         total += count;
     });
     snapshot.resize(total);
     constexpr std::size_t kMinChunksPerTask = 4;
     if (!pool || chunks.size() < 2 * kMinChunksPerTask)
     {
-        SnapshotMovedChunks(chunks, sectorSize, snapshot);
+        SnapshotMovedChunks(chunks, snapshot);
         return;
     }
     const std::size_t tasks =
@@ -112,11 +104,11 @@ void SnapshotMovedRenderables(ECS::World& world, ECS::ChangeGate& gate, float32 
                  std::max<std::size_t>(1, pool->GetWorkerCount()) * 4u);
     const std::size_t perTask = (chunks.size() + tasks - 1) / tasks;
     const std::size_t taskCount = (chunks.size() + perTask - 1) / perTask;
-    const auto snapshotTask = [&chunks, perTask, sectorSize, &snapshot](std::size_t task)
+    const auto snapshotTask = [&chunks, perTask, &snapshot](std::size_t task)
     {
         const std::size_t begin = task * perTask;
         SnapshotMovedChunks(std::span<const MovedChunk>(chunks.data() + begin, std::min(perTask, chunks.size() - begin)),
-                            sectorSize, snapshot);
+                            snapshot);
     };
     JobSystem::ParallelFor(pool, taskCount, snapshotTask);
 }
@@ -180,8 +172,7 @@ SceneTlas::Readiness SceneTlas::RequestCurrent(GameEngine::ECS::World& world)
         return Readiness::Ready;
     }
 
-    SnapshotMovedRenderables(world, impl.TransformGate, impl.SectorSize.load(std::memory_order_relaxed), pool,
-                             impl.MovedChunks, impl.RefitSnapshot);
+    SnapshotMovedRenderables(world, impl.TransformGate, pool, impl.MovedChunks, impl.RefitSnapshot);
     impl.TransformGate.LastRunVersion = entryVersion;
     if (impl.RefitSnapshot.empty())
     {

@@ -21,14 +21,13 @@ class CodexSessionProvider final : public CliSessionProvider
 public:
     /// The provider's id (Id()).
     static constexpr std::string_view kId = "codex-session";
+    /// The executable the settings default to: `codex` on PATH.
+    static constexpr std::string_view kDefaultExecutable = "codex";
 
     using CliSessionProvider::CliSessionProvider;
 
     std::string_view Id() const override { return kId; }
 
-    /// `codex login status`: its first line, cut before " - " so a masked key the
-    /// line may end with is never shown.
-    LoginStatus CheckLogin(const CancelToken& cancel) const override;
     /// The sessions under `<CODEX_HOME or ~/.codex>/sessions/` whose directory is the
     /// working directory (CliSessionFiles::ReadCodexSessions).
     CliSessionList ListSessions(const CancelToken& cancel) const override;
@@ -43,9 +42,17 @@ public:
 private:
     std::string_view DisplayName() const override { return "Codex"; }
     void ReadLine(std::string_view line, TurnState& turn) const override;
-    /// A logged-in CheckLogin(). Codex has no version floor: every flag a turn
+    /// `codex --version` printed a line. Codex has no version floor: every flag a turn
     /// passes is in 0.162.
-    std::string CheckReadiness(const CancelToken& cancel) const override;
+    SetupStep CheckProgram(const CancelToken& cancel, SetupSurface surface) const override;
+    /// `codex login status`: its first line, cut before " - " so a masked key the
+    /// line may end with is never shown.
+    SetupStep CheckLogin(const CancelToken& cancel, SetupSurface surface) const override;
+    /// On Windows, the native codex.exe, not npm's codex.cmd script.
+    std::string ProgramToPick() const override;
+    std::string InstallSource() const override;
+    /// Empty: no Codex desktop app shares the program's name.
+    std::string DesktopAppHint(bool printedNothing) const override;
     /// Codex keeps a shell tool in its read-only sandbox, and a shell command that can
     /// open the editor's port reaches it outside the attached server and its checks.
     /// Runs `codex sandbox` in the sandbox mode a turn uses with a `node` command that

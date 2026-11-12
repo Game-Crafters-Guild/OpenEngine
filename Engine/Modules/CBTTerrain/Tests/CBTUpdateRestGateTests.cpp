@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 
 #include "CBTTerrain/CBTLayout.h"
@@ -15,6 +16,8 @@ namespace
 {
 constexpr std::array<uint8_t, 4> kInputsA{1, 2, 3, 4};
 constexpr std::array<uint8_t, 4> kInputsB{1, 2, 3, 5};
+// One clock reading for every call: the inputs never hold long enough to last.
+const std::chrono::steady_clock::time_point kStill{};
 
 CBTUpdateActivity Quiet()
 {
@@ -35,23 +38,23 @@ CBTUpdateActivity Splitting()
 TEST(CBTUpdateRestGateTest, RestsAfterQuietReadingsOfTheCurrentInputs)
 {
     CBTUpdateRestGate gate;
-    EXPECT_FALSE(gate.CanSkip(kInputsA));
+    EXPECT_FALSE(gate.CanSkip(kInputsA, kStill));
     for (uint64_t expected = 0; expected < 6u; ++expected)
         EXPECT_EQ(gate.OnUpdateRecorded(false), expected);
 
     gate.OnActivityRead(0u, Splitting());
     gate.OnActivityRead(1u, Quiet());
-    EXPECT_FALSE(gate.CanSkip(kInputsA)) << "one quiet reading proves nothing about the steps";
+    EXPECT_FALSE(gate.CanSkip(kInputsA, kStill)) << "one quiet reading proves nothing about the steps";
     gate.OnActivityRead(2u, Quiet());
-    EXPECT_TRUE(gate.CanSkip(kInputsA));
+    EXPECT_TRUE(gate.CanSkip(kInputsA, kStill));
 
     CBTUpdateActivity pressureMoved{};
     pressureMoved.PressureStep = 1;
     gate.OnActivityRead(3u, pressureMoved);
-    EXPECT_FALSE(gate.CanSkip(kInputsA)) << "a moved pressure step is not rest";
+    EXPECT_FALSE(gate.CanSkip(kInputsA, kStill)) << "a moved pressure step is not rest";
     gate.OnActivityRead(4u, pressureMoved);
     gate.OnActivityRead(5u, pressureMoved);
-    EXPECT_TRUE(gate.CanSkip(kInputsA));
+    EXPECT_TRUE(gate.CanSkip(kInputsA, kStill));
 }
 
 // New inputs, or a forced full re-evaluation, restart the count, and readings of updates recorded
@@ -59,27 +62,27 @@ TEST(CBTUpdateRestGateTest, RestsAfterQuietReadingsOfTheCurrentInputs)
 TEST(CBTUpdateRestGateTest, NewInputsAndForcedUpdatesRestartTheCount)
 {
     CBTUpdateRestGate gate;
-    EXPECT_FALSE(gate.CanSkip(kInputsA));
+    EXPECT_FALSE(gate.CanSkip(kInputsA, kStill));
     for (uint64_t i = 0; i < 3u; ++i)
         gate.OnActivityRead(gate.OnUpdateRecorded(false), Quiet());
-    ASSERT_TRUE(gate.CanSkip(kInputsA));
+    ASSERT_TRUE(gate.CanSkip(kInputsA, kStill));
 
     const uint64_t beforeChange = gate.OnUpdateRecorded(false);
-    EXPECT_FALSE(gate.CanSkip(kInputsB));
+    EXPECT_FALSE(gate.CanSkip(kInputsB, kStill));
     gate.OnActivityRead(beforeChange, Quiet());
     gate.OnActivityRead(beforeChange, Quiet());
-    EXPECT_FALSE(gate.CanSkip(kInputsB)) << "readings from before the input change count";
+    EXPECT_FALSE(gate.CanSkip(kInputsB, kStill)) << "readings from before the input change count";
     for (uint64_t i = 0; i < 3u; ++i)
         gate.OnActivityRead(gate.OnUpdateRecorded(false), Quiet());
-    ASSERT_TRUE(gate.CanSkip(kInputsB));
+    ASSERT_TRUE(gate.CanSkip(kInputsB, kStill));
 
     const uint64_t forced = gate.OnUpdateRecorded(true);
     gate.OnActivityRead(forced, Quiet());
     gate.OnActivityRead(forced, Quiet());
-    EXPECT_FALSE(gate.CanSkip(kInputsB)) << "a forced update's own reading counts";
+    EXPECT_FALSE(gate.CanSkip(kInputsB, kStill)) << "a forced update's own reading counts";
     for (uint64_t i = 0; i < 3u; ++i)
         gate.OnActivityRead(gate.OnUpdateRecorded(false), Quiet());
-    EXPECT_TRUE(gate.CanSkip(kInputsB));
+    EXPECT_TRUE(gate.CanSkip(kInputsB, kStill));
 }
 
 // The inputs hold when they equal the previous call's (the camera is still), which is when the update
@@ -87,17 +90,34 @@ TEST(CBTUpdateRestGateTest, NewInputsAndForcedUpdatesRestartTheCount)
 TEST(CBTUpdateRestGateTest, InputsHoldOnlyWhileTheyRepeat)
 {
     CBTUpdateRestGate gate;
-    EXPECT_FALSE(gate.InputsHeld());
-    gate.CanSkip(kInputsA);
-    EXPECT_FALSE(gate.InputsHeld()) << "the first update at new inputs is not at rest";
-    gate.CanSkip(kInputsA);
-    EXPECT_TRUE(gate.InputsHeld());
-    gate.CanSkip(kInputsB);
-    EXPECT_FALSE(gate.InputsHeld());
-    gate.CanSkip(kInputsB);
-    EXPECT_TRUE(gate.InputsHeld());
+    EXPECT_EQ(gate.Settle(), kSettleMoved);
+    gate.CanSkip(kInputsA, kStill);
+    EXPECT_EQ(gate.Settle(), kSettleMoved) << "the first update at new inputs is not at rest";
+    gate.CanSkip(kInputsA, kStill);
+    EXPECT_EQ(gate.Settle(), kSettleHeld);
+    gate.CanSkip(kInputsB, kStill);
+    EXPECT_EQ(gate.Settle(), kSettleMoved);
+    gate.CanSkip(kInputsB, kStill);
+    EXPECT_EQ(gate.Settle(), kSettleHeld);
     gate.Reset();
-    EXPECT_FALSE(gate.InputsHeld());
+    EXPECT_EQ(gate.Settle(), kSettleMoved);
+}
+
+// The rest lasts once the inputs have held for kKeepProbeSettle, counted from the update where they changed; a
+// change starts the count again.
+TEST(CBTUpdateRestGateTest, TheRestLastsAfterTheProbeSettle)
+{
+    const auto settle = CBTUpdateRestGate::kKeepProbeSettle;
+    CBTUpdateRestGate gate;
+    gate.CanSkip(kInputsA, kStill);
+    gate.CanSkip(kInputsA, kStill + settle - std::chrono::milliseconds(1));
+    EXPECT_EQ(gate.Settle(), kSettleHeld) << "a rest shorter than the settle has not lasted";
+    gate.CanSkip(kInputsA, kStill + settle);
+    EXPECT_EQ(gate.Settle(), kSettleLasted);
+    gate.CanSkip(kInputsB, kStill + 2 * settle);
+    EXPECT_EQ(gate.Settle(), kSettleMoved);
+    gate.CanSkip(kInputsB, kStill + 2 * settle + std::chrono::milliseconds(1));
+    EXPECT_EQ(gate.Settle(), kSettleHeld) << "the settle counts from the last change";
 }
 
 // A reading whose keep search has a step left to take is not rest, even when it split and merged nothing with
@@ -117,10 +137,10 @@ TEST(CBTUpdateRestGateTest, AnOpenKeepSearchIsNotRest)
     for (const CBTUpdateActivity& open : {probing, arriving, searching})
     {
         CBTUpdateRestGate gate;
-        EXPECT_FALSE(gate.CanSkip(kInputsA));
+        EXPECT_FALSE(gate.CanSkip(kInputsA, kStill));
         for (uint64_t i = 0; i < 3u; ++i)
             gate.OnActivityRead(gate.OnUpdateRecorded(false), open);
-        EXPECT_FALSE(gate.CanSkip(kInputsA)) << "keep step " << open.OffFrustumKeepStep << ", floor "
+        EXPECT_FALSE(gate.CanSkip(kInputsA, kStill)) << "keep step " << open.OffFrustumKeepStep << ", floor "
                                              << open.OffFrustumKeepFloor;
     }
 
@@ -132,10 +152,10 @@ TEST(CBTUpdateRestGateTest, AnOpenKeepSearchIsNotRest)
     for (const CBTUpdateActivity& rest : {found, movedUngated})
     {
         CBTUpdateRestGate gate;
-        EXPECT_FALSE(gate.CanSkip(kInputsA));
+        EXPECT_FALSE(gate.CanSkip(kInputsA, kStill));
         for (uint64_t i = 0; i < 3u; ++i)
             gate.OnActivityRead(gate.OnUpdateRecorded(false), rest);
-        EXPECT_TRUE(gate.CanSkip(kInputsA)) << "keep step " << rest.OffFrustumKeepStep << ", floor "
+        EXPECT_TRUE(gate.CanSkip(kInputsA, kStill)) << "keep step " << rest.OffFrustumKeepStep << ", floor "
                                             << rest.OffFrustumKeepFloor;
     }
 }

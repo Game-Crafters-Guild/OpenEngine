@@ -19,6 +19,7 @@
 #include "Core/Engine.h"
 #include "ECS/World.h"
 #include "Editor/Entities/EditorECSHelpers.h"
+#include "Editor/Entities/EntityDisplayName.h"
 #include "EditorChangeNotifications.h"
 #include "Logger/Logger.h"
 #include "TerrainECS/TerrainGpuBake.h"
@@ -30,11 +31,14 @@
 #include "Inspectors/InspectorDragHelpers.h"
 #include "Inspectors/InspectorUIHelpers.h"
 #include "Terrain/TerrainVolumeNotices.h"
+#include "Terrain/TerrainModifier/GeneratedNoiseNoticeHost.h"
 #include "Terrain/TerrainBrushTool.h"
 #include "Terrain/TerrainInteractiveModifierEdit.h"
 #include "Terrain/TerrainLayers.h"
 #include "Terrain/TerrainRoleMaterials.h"
 #include "Terrain/TerrainRule/TerrainRuleRows.h"
+#include "Types/FormatNumber.h"
+#include "Types/ParseNumber.h"
 #include "UI/Controls/Button.h"
 #include "UI/Controls/InspectorNotice.h"
 #include "UI/Controls/SearchDialog.h"
@@ -99,18 +103,18 @@ bool AnyActiveSphericalTerrain(ECS::World* world)
     return sphere;
 }
 
-// The terrain whose channel names label a paint effect's picker. A paint effect belongs to one
-// scene's terrain, so the first enabled one is the answer; the labels degrade to the semantic
-// channel names when there is none, which is also what an unmigrated terrain shows.
-const Components::Terrain* FindTerrainForChannelLabels(ECS::World* world)
+// The terrain entity whose channel names label a paint effect's picker. A paint effect belongs
+// to one scene's terrain, so the first one is the answer. With none, the labels are the
+// semantic channel names, which is also what an unmigrated terrain shows.
+ECS::EntityHandle FindTerrainForChannelLabels(ECS::World* world)
 {
+    ECS::EntityHandle found{};
     if (!world)
-        return nullptr;
-    const Components::Terrain* found = nullptr;
+        return found;
     world->Query<ECS::Read<Components::Terrain>>()
-        .Each([&](const Components::Terrain& terrain) {
-            if (!found)
-                found = &terrain;
+        .Each([&found](ECS::EntityHandle entity, const Components::Terrain&) {
+            if (!found.IsValid())
+                found = entity;
         });
     return found;
 }
@@ -178,11 +182,7 @@ void AddBlendModeDropdown(UIElement* parent, TerrainModifierBlend currentBlend,
         includeAverage ? kBlendOptionsWithAverage : kBlendOptions;
 
     const auto optionIndex = [&options](TerrainModifierBlend blend) {
-        const std::string want = std::to_string(static_cast<int>(blend));
-        for (std::size_t i = 0; i < options.size(); ++i)
-            if (options[i].value == want)
-                return static_cast<int>(i);
-        return -1;
+        return InspectorUI::OptionIndexOfValue(options, std::to_string(static_cast<int>(blend)));
     };
     int selectedIdx = optionIndex(currentBlend);
     if (selectedIdx < 0)
@@ -366,6 +366,135 @@ void AddClaimRespectingRulesCpuBakeNotice(const InspectorContext& ctx, bool resp
         "Stopping at claimed ground is a CPU-side accumulate across the modifier stack, which the "
         "GPU splat bake cannot express - the whole terrain's splat bake falls back to the CPU "
         "while it is on."));
+}
+
+// Option values are the TerrainNoiseMode enumerators, as the scene file's TerrainNoiseEffect.mode.
+const std::vector<Dropdown::Option>& NoiseModeOptions()
+{
+    static const std::vector<Dropdown::Option> kOptions = {
+        {"1", "Generated"},
+        {"0", "Displace"},
+    };
+    return kOptions;
+}
+
+// Option values are the TerrainNoisePreset enumerators, as the scene file's TerrainNoiseEffect.preset.
+// The list goes from the least to the most fine relief.
+const std::vector<Dropdown::Option>& NoisePresetOptions()
+{
+    static const std::vector<Dropdown::Option> kOptions = {
+        {"1", "Smooth"},
+        {"0", "Rolling"},
+        {"2", "Rugged"},
+    };
+    return kOptions;
+}
+
+void AddNoiseModeRow(const InspectorContext& ctx, TerrainNoiseMode mode)
+{
+    Dropdown* dropdown = InspectorUI::AddDropdownRow(
+        ctx.Parent, "Mode", NoiseModeOptions(),
+        InspectorUI::OptionIndexOfValue(NoiseModeOptions(), std::to_string(static_cast<uint32>(mode))),
+        "Generated: the terrain's relief, from a preset, on a Global volume over a Flat base. "
+        "Displace: noise added inside the volume, from the rows below.");
+    dropdown->SetId("terrain-noise-mode");
+    dropdown->SetOnValueChanged(
+        [world = ctx.World, entity = ctx.Entity, notifications = ctx.ChangeNotifications, undo = ctx.Undo,
+         requestRefresh = ctx.RequestInspectorRefresh](const std::string& value) {
+            const std::optional<uint64_t> index = ParseUnsigned(value);
+            if (!index)
+                return;
+            const auto picked = static_cast<TerrainNoiseMode>(*index);
+            InspectorDrag::CommitComponentWithUndo<TerrainNoiseEffect>(
+                world, entity, notifications, undo, "Change Noise Mode",
+                [picked](TerrainNoiseEffect& u) { u.Mode = picked; });
+            // The rows below belong to one mode.
+            if (requestRefresh)
+                requestRefresh();
+        });
+}
+
+void AddNoisePresetRow(const InspectorContext& ctx, TerrainNoisePreset preset)
+{
+    Dropdown* dropdown = InspectorUI::AddDropdownRow(
+        ctx.Parent, "Noise Preset", NoisePresetOptions(),
+        InspectorUI::OptionIndexOfValue(NoisePresetOptions(), std::to_string(static_cast<uint32>(preset))),
+        "How rough the ground is. Smooth: soft ground. Rolling: hills at every scale. Rugged: broken "
+        "ground. On a terrain of 2 km or more, larger hills grow with the terrain's size, in the same places "
+        "for every preset: the terrain's Height Range shows the range they reach.");
+    dropdown->SetId("terrain-noise-preset");
+    dropdown->SetOnValueChanged(
+        [world = ctx.World, entity = ctx.Entity, notifications = ctx.ChangeNotifications,
+         undo = ctx.Undo](const std::string& value) {
+            const std::optional<uint64_t> index = ParseUnsigned(value);
+            if (!index)
+                return;
+            const auto picked = static_cast<TerrainNoisePreset>(*index);
+            InspectorDrag::CommitComponentWithUndo<TerrainNoiseEffect>(
+                world, entity, notifications, undo, "Change Noise Preset",
+                [picked](TerrainNoiseEffect& u) { u.Preset = picked; });
+        });
+}
+
+// True when a planar terrain with a Flat base is in `world`: the only terrain a Generated noise reaches.
+bool AnyFlatPlanarTerrain(ECS::World& world)
+{
+    bool found = false;
+    world.Query<ECS::Read<Components::Terrain>>().Each([&found](const Components::Terrain& terrain) {
+        if (terrain.Domain == TerrainDomain::Planar && terrain.BaseSource == TerrainBaseSource::Flat)
+            found = true;
+    });
+    return found;
+}
+
+// A Generated noise is read only on a Global volume, and only by a Flat planar terrain.
+void AddGeneratedNoiseNotice(UIElement& parent, ECS::World& world, ECS::EntityHandle entity)
+{
+    const auto* volume = world.GetComponent<TerrainModifierVolume>(entity);
+    if (volume && volume->Shape != TerrainVolumeShape::Global)
+    {
+        InspectorUI::AddNotice(&parent,
+            "Generated noise is the relief of the whole terrain, so a part-terrain shape cannot carry it. Set the "
+            "volume's Shape to Global, or set Mode to Displace for noise inside the shape.",
+            EditorUI::InspectorNotice::Kind::Warning);
+        return;
+    }
+    if (volume && volume->Weight <= 0.0f)
+    {
+        InspectorUI::AddNotice(&parent,
+            "This volume's Weight is 0, so its Generated noise is off. Set the volume's Weight above 0.",
+            EditorUI::InspectorNotice::Kind::Warning);
+        return;
+    }
+    const auto* noise = world.GetComponent<TerrainNoiseEffect>(entity);
+    if (noise && !noise->Enabled)
+        return;
+    const ECS::EntityHandle winner = TerrainECS::FindGeneratedNoiseVolume(world);
+    if (winner.IsValid() && winner != entity)
+    {
+        const std::string winnerName = "\"" + Editor::EntityDisplayName(world, winner) + "\"";
+        const std::string winnerPriority = FormatFloat(world.GetComponent<TerrainModifierVolume>(winner)->Priority);
+        InspectorUI::AddNotice(&parent,
+            winnerName + " (Priority " + winnerPriority + ") supplies the relief; only one Generated noise can. "
+            "Raise this volume's Priority above " + winnerPriority + ", or disable " + winnerName + ".",
+            EditorUI::InspectorNotice::Kind::Warning);
+        return;
+    }
+    if (!AnyFlatPlanarTerrain(world))
+        InspectorUI::AddNotice(&parent,
+            "No terrain reads this noise: Generated noise is the relief of a planar terrain whose Base "
+            "Source is Flat. Set the terrain's Base Source to Flat, or set Mode to Displace.",
+            EditorUI::InspectorNotice::Kind::Warning);
+}
+
+// The Generated noise notices, built again when another volume or terrain changes.
+void AddGeneratedNoiseNoticeHost(const InspectorContext& ctx)
+{
+    InspectorUI::AddControl(ctx.Parent, std::make_unique<Editor::GeneratedNoiseNoticeHost>(
+        ctx.World, ctx.ChangeNotifications, [world = ctx.World, entity = ctx.Entity](UIElement& host) {
+            if (world->IsValid(entity))
+                AddGeneratedNoiseNotice(host, *world, entity);
+        }));
 }
 
 void AddOrphanEffectNotice(const InspectorContext& ctx)
@@ -778,10 +907,14 @@ void RegisterTerrainModifierInspectors()
                 "a plateau's shoulder into one continuous slope.");
         }
 
-        AddComponentFloatRowWithDrag<TerrainModifierVolume>(
-            ctx.Parent, "Weight", comp->Weight, w, e, n,
+        // A Generated noise multiplies its relief height by the Weight (GeneratedNoiseStackOf).
+        const auto* noise = w->GetComponent<TerrainNoiseEffect>(e);
+        const bool generatedNoise = noise && noise->Mode == TerrainNoiseMode::Generated;
+        AddComponentSliderWithValueRow<TerrainModifierVolume>(
+            ctx.Parent, "Weight", comp->Weight, 0.0f, 1.0f, w, e, n,
             [](TerrainModifierVolume& u, float v) { u.Weight = Math::Clamp01(v); },
-            "Master strength for every effect in this volume (0-1)");
+            generatedNoise ? "Scales the relief: 0.5 gives half the preset's height. 0 turns it off. For more relief, raise the terrain's Height Scale."
+                           : "Master strength for every effect in this volume (0-1)");
 
         AddComponentFloatRowWithDrag<TerrainModifierVolume>(
             ctx.Parent, "Priority", comp->Priority, w, e, n,
@@ -1007,7 +1140,17 @@ void RegisterTerrainModifierInspectors()
         ECS::EntityHandle e = ctx.Entity;
         Editor::EditorChangeNotifications* n = ctx.ChangeNotifications;
 
+        // A Generated noise is not in the modifier stack, so it shows no stack position.
+        if (comp->Mode == TerrainNoiseMode::Generated)
+        {
+            AddOrphanEffectNotice(ctx);
+            AddNoiseModeRow(ctx, comp->Mode);
+            AddNoisePresetRow(ctx, comp->Preset);
+            AddGeneratedNoiseNoticeHost(ctx);
+            return;
+        }
         AddEffectHeader(ctx, comp);
+        AddNoiseModeRow(ctx, comp->Mode);
 
         AddBlendModeDropdown(ctx.Parent, comp->Blend,
             [w, e, n](TerrainModifierBlend blend) {
@@ -1174,7 +1317,9 @@ void RegisterTerrainModifierInspectors()
             // Built per draw, not once per process: the labels are the materials the terrain
             // binds to each channel, so a rebind or a rename has to reach this list. The
             // process-lifetime static this replaces could only ever show "Layer 0 (Grass)".
-            const Components::Terrain* terrain = FindTerrainForChannelLabels(w);
+            const ECS::EntityHandle terrainEntity = FindTerrainForChannelLabels(w);
+            const Components::Terrain* terrain =
+                terrainEntity.IsValid() ? w->GetComponent<Components::Terrain>(terrainEntity) : nullptr;
             TerrainMaterialLibraryAsset* library =
                 terrain ? Editor::TerrainRoleMaterials::ResolveLibrary(*terrain) : nullptr;
             const std::vector<Dropdown::Option> layerOptions =
@@ -1237,9 +1382,10 @@ void RegisterTerrainModifierInspectors()
         if (!comp) return;
 
         AddEffectHeader(ctx, comp);
-        AddSphereUnsupportedNotice(ctx); // splat effect: needs a per-face sphere splat layer
 
-        const Components::Terrain* terrain = FindTerrainForChannelLabels(ctx.World);
+        const ECS::EntityHandle terrainEntity = FindTerrainForChannelLabels(ctx.World);
+        const Components::Terrain* terrain =
+            terrainEntity.IsValid() ? ctx.World->GetComponent<Components::Terrain>(terrainEntity) : nullptr;
         TerrainMaterialLibraryAsset* library =
             terrain ? Editor::TerrainRoleMaterials::ResolveLibrary(*terrain) : nullptr;
 
@@ -1255,9 +1401,16 @@ void RegisterTerrainModifierInspectors()
         AddClaimedGroundNeedsPaintNotice(ctx, comp->RespectClaims);
         AddClaimRespectingRulesCpuBakeNotice(ctx, comp->RespectClaims);
 
-        AddTerrainSurfaceRuleRows(ctx, *comp, terrain, library);
+        AddTerrainSurfaceRuleRows(ctx, *comp, terrainEntity, library);
     });
 
+}
+
+const std::string& TerrainNoisePresetLabel(Components::TerrainNoisePreset preset)
+{
+    const std::vector<Dropdown::Option>& options = NoisePresetOptions();
+    const int index = InspectorUI::OptionIndexOfValue(options, std::to_string(static_cast<uint32>(preset)));
+    return options[index < 0 ? 0 : static_cast<size_t>(index)].label;
 }
 
 } // namespace GameEngine

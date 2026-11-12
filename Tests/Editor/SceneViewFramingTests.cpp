@@ -41,9 +41,7 @@ constexpr float kEpsilon = 1.0e-4f;
 WorldTransform MakeTranslation(float x, float y, float z)
 {
     WorldTransform xf{};
-    xf.matrix[12] = x;
-    xf.matrix[13] = y;
-    xf.matrix[14] = z;
+    xf.Position = GameEngine::Mathematics::WorldPosition{x, y, z};
     return xf;
 }
 
@@ -170,15 +168,13 @@ TEST_F(SceneViewFramingTests, RotatedScaledChildSwapsExtents)
     root.Set(MakeTranslation(0.0f, 0.0f, 0.0f));
 
     // Child world matrix: rotate 90 degrees about Y, scale local Y by 2,
-    // translate to (3, 0, 0). Column-major: column0 = image of local X,
-    // column1 = image of local Y, column2 = image of local Z.
+    // translate to (3, 0, 0). Basis column 0 = image of local X,
+    // column 1 = image of local Y, column 2 = image of local Z.
     WorldTransform childXf{};
-    float m[16] = {
-        0.0f, 0.0f, -1.0f, 0.0f, // local X -> world -Z
-        0.0f, 2.0f, 0.0f, 0.0f,  // local Y -> world Y, scaled by 2
-        1.0f, 0.0f, 0.0f, 0.0f,  // local Z -> world X
-        3.0f, 0.0f, 0.0f, 1.0f};
-    std::memcpy(childXf.matrix, m, sizeof(m));
+    childXf.Basis[0] = glm::vec3(0.0f, 0.0f, -1.0f); // local X -> world -Z
+    childXf.Basis[1] = glm::vec3(0.0f, 2.0f, 0.0f);  // local Y -> world Y, scaled by 2
+    childXf.Basis[2] = glm::vec3(1.0f, 0.0f, 0.0f);  // local Z -> world X
+    childXf.Position = GameEngine::Mathematics::WorldPosition{3.0, 0.0, 0.0};
 
     Entity child = world->Create();
     child.Set(Parent{root.GetHandle()});

@@ -36,6 +36,8 @@ endif()
 #   Tools/Web/smoke-project/Assets/Particles/ the particle stack they reference
 #   Tests/Assets/TestData/BigglesCaseShadow.assetdb  frozen pre-migration journal
 #   Apps/Editor/ProjectTemplates/      shipped picker scenes and their assets
+#   Ocean, Includes, TerrainGrass, CBT shader folders -> bin/<Config>/Tests/Assets/Shaders/,
+#                                      the exe-anchored root every test executable shares
 if(EXISTS ${CMAKE_SOURCE_DIR}/Engine/Assets)
   # Each mirror is copy + orphan prune: copy_directory_if_different never
   # deletes, so without the prune a staged mirror keeps files whose sources
@@ -43,6 +45,12 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/Engine/Assets)
   # tree does not have. The prune removes only files the mirror itself staged
   # (cmake/PruneStagedMirrorOrphans.cmake), so runtime state tests write into
   # the staged root — script assemblies, derived cache, logs — is never touched.
+  # The test shader root follows the layout rule in cmake/OutputLayout.cmake.
+  if(CMAKE_CONFIGURATION_TYPES OR CMAKE_BUILD_TYPE)
+    set(_ge_test_shaders_dir "${CMAKE_BINARY_DIR}/bin/$<CONFIG>/Tests/Assets/Shaders")
+  else()
+    set(_ge_test_shaders_dir "${CMAKE_BINARY_DIR}/bin/Tests/Assets/Shaders")
+  endif()
   add_custom_target(StageTestAssets
     COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
             ${CMAKE_SOURCE_DIR}/Apps/Editor/ProjectTemplates
@@ -71,6 +79,37 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/Engine/Assets)
     COMMAND ${CMAKE_COMMAND}
             -DSRC=${CMAKE_SOURCE_DIR}/Engine/Modules/Rendering/Shaders
             -DDST=${CMAKE_BINARY_DIR}/Engine/Modules/Rendering/Shaders
+            -P ${CMAKE_SOURCE_DIR}/cmake/PruneStagedMirrorOrphans.cmake
+    # Shaders that tests compile at runtime from the exe-anchored Assets/Shaders:
+    # the ocean simulations (Ocean, Includes) and the grass-placement oracles
+    # (TerrainGrass, CBT).
+    COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
+            ${CMAKE_SOURCE_DIR}/Engine/Modules/Rendering/Shaders/Ocean
+            ${_ge_test_shaders_dir}/Ocean
+    COMMAND ${CMAKE_COMMAND}
+            -DSRC=${CMAKE_SOURCE_DIR}/Engine/Modules/Rendering/Shaders/Ocean
+            -DDST=${_ge_test_shaders_dir}/Ocean
+            -P ${CMAKE_SOURCE_DIR}/cmake/PruneStagedMirrorOrphans.cmake
+    COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
+            ${CMAKE_SOURCE_DIR}/Engine/Modules/Rendering/Shaders/Includes
+            ${_ge_test_shaders_dir}/Includes
+    COMMAND ${CMAKE_COMMAND}
+            -DSRC=${CMAKE_SOURCE_DIR}/Engine/Modules/Rendering/Shaders/Includes
+            -DDST=${_ge_test_shaders_dir}/Includes
+            -P ${CMAKE_SOURCE_DIR}/cmake/PruneStagedMirrorOrphans.cmake
+    COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
+            ${CMAKE_SOURCE_DIR}/Engine/Modules/TerrainGrass/Shaders/TerrainGrass
+            ${_ge_test_shaders_dir}/TerrainGrass
+    COMMAND ${CMAKE_COMMAND}
+            -DSRC=${CMAKE_SOURCE_DIR}/Engine/Modules/TerrainGrass/Shaders/TerrainGrass
+            -DDST=${_ge_test_shaders_dir}/TerrainGrass
+            -P ${CMAKE_SOURCE_DIR}/cmake/PruneStagedMirrorOrphans.cmake
+    COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
+            ${CMAKE_SOURCE_DIR}/Engine/Modules/CBTTerrain/Shaders/CBT
+            ${_ge_test_shaders_dir}/CBT
+    COMMAND ${CMAKE_COMMAND}
+            -DSRC=${CMAKE_SOURCE_DIR}/Engine/Modules/CBTTerrain/Shaders/CBT
+            -DDST=${_ge_test_shaders_dir}/CBT
             -P ${CMAKE_SOURCE_DIR}/cmake/PruneStagedMirrorOrphans.cmake
     COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
             ${CMAKE_SOURCE_DIR}/Engine/Modules/GPUFogParticles/Shaders
@@ -417,6 +456,16 @@ if(MSVC)
             -DSCRIPT=${CMAKE_SOURCE_DIR}/cmake/GenerateEngineExportsDef.cmake
             -DWORK=${CMAKE_BINARY_DIR}/Tests/GenerateEngineExportsDefScratch
             -P ${CMAKE_SOURCE_DIR}/cmake/Tests/GenerateEngineExportsDefTest.cmake)
+endif()
+
+# The export-all step of the shared libraries that export every symbol writes exports.def again
+# after a source leaves the target; this exercises that rule against a scratch object list, without a build.
+if(CMAKE_GENERATOR MATCHES "^Visual Studio")
+  add_test(NAME WindowsExportAllSymbols.RewritesAStaleDefinition
+    COMMAND ${CMAKE_COMMAND}
+            -DSCRIPT=${CMAKE_SOURCE_DIR}/cmake/WindowsExportAllSymbols.cmake
+            -DWORK=${CMAKE_BINARY_DIR}/Tests/WindowsExportAllSymbolsScratch
+            -P ${CMAKE_SOURCE_DIR}/cmake/Tests/WindowsExportAllSymbolsTest.cmake)
 endif()
 
 # An export outside the build tree compiles the Player against the staged SDK with no vcpkg tree.
@@ -1176,8 +1225,11 @@ endforeach()
 add_executable(TerrainRegionBakeTests
   ${_GE_SURFACE_RULE_HEADERS}
   TerrainRegionBakeTests.cpp
-  # The single terrain's baked-terrain cache: hit identity, key classes, pins.
-  TerrainBakeCacheTests.cpp
+  # Helpers the target's terrain test files share: the planet layer oracle.
+  TerrainTestHelpers.h
+  TerrainTestHelpers.cpp
+  # The modifier bake output pins: an output change bumps the bake version.
+  TerrainBakeOutputPinTests.cpp
   # The terrain colour map: the compose of its writers, the grass's ground write, the colour zones.
   TerrainColorMapTests.cpp
   # Raw .r16/.r32 heightmaps: the grid their import settings declare, and the refusal that
@@ -1198,12 +1250,24 @@ add_executable(TerrainRegionBakeTests
   # in every blend mode, and the contracts around them (a claim writes no
   # height; claims combine by max). Emits the offline twin's parity fixture.
   TerrainFlattenPoolTests.cpp
+  # The route's segment grid against the station scan, bit for bit, and the streamed-tile
+  # height bake's bytes pinned for a route, a polygon area and noise across a tile border.
+  TerrainStreamedBakeParityTests.cpp
   # The GPU height bake's refusal report: the reason and the volume that keep a bake on the CPU.
   TerrainGpuBakeRefusalTests.cpp
   # Surface rules (F10 S2): condition evaluation, the AND product, the band and
   # curve shapes, the caps, the GPU splat gate, and the rules arm of the splat
   # claim end to end.
   TerrainSurfaceRulesTests.cpp
+  # Surface rules on a planet: the planet sample, the Latitude kind, the default planet
+  # rows against the slope-and-altitude blend, and the rule-set presets.
+  TerrainPlanetSurfaceRulesTests.cpp
+  # The planet's generated surface pages: the rule oracle on six faces and the apron across a face edge.
+  TerrainPlanetSurfacePageTests.cpp
+  # The planet's rule weights over a row of texels against the scalar weight, bit for bit.
+  TerrainPlanetSurfaceRuleRowTests.cpp
+  # The atmosphere height of a planet: Auto from the radius and the relief, and the two authored modes.
+  PlanetAtmosphereHeightTests.cpp
   # Default surface rules (F10 S5): the measured slope/height distribution the
   # default rows are placed against, the pin that every authored band stays
   # REACHABLE on real ground, and what the rows actually place for the look review.
@@ -1218,9 +1282,6 @@ add_executable(TerrainRegionBakeTests
   # CBTTreeSeed: when the CBT tree restarts from its roots (a retired terrain, a lowered depth
   # cap, a domain switch).
   CBTTreeSeedTests.cpp
-  # Sphere sculpt .tsculpt persistence at the service level: restore-is-an-edit,
-  # saved-grid load x #632 radius remap, #630 undo-across-load, needs-save lifecycle.
-  SphereSculptPersistenceTests.cpp
 )
 target_link_libraries(TerrainRegionBakeTests PRIVATE Engine Noise GTest::gtest GTest::gtest_main)
 target_include_directories(TerrainRegionBakeTests PRIVATE
@@ -1228,11 +1289,14 @@ target_include_directories(TerrainRegionBakeTests PRIVATE
   ${CMAKE_SOURCE_DIR}/Engine/Include
   ${CMAKE_SOURCE_DIR}/Engine/Modules/CBTTerrainECS/Include
   ${CMAKE_SOURCE_DIR}/Engine/Modules/CBTTerrain/Include
+  # EngineLogCapture.h: the warnings the engine library logs.
+  ${CMAKE_SOURCE_DIR}/Engine/Tests
   # GlslShim.h, and the generated headers the extraction above writes.
   ${CMAKE_SOURCE_DIR}/Engine/Modules/CBTTerrain/Tests
   ${CMAKE_CURRENT_BINARY_DIR}/generated
   # TerrainColorMapCompose.h: the colour map's texel arithmetic the colour map tests hold texels to.
-  # TerrainRowBands.h: the row bands and the parallel threshold the bake and grass tests check.
+  # TerrainRowBands.h: the row bands and the parallel threshold the bake and grass tests check;
+  # TerrainSurface/TerrainSurfaceSessionStore.h: the session folders the session tests read.
   ${CMAKE_SOURCE_DIR}/Engine/Modules/TerrainECS/Source
 )
 ge_set_output_tests(TerrainRegionBakeTests)
@@ -1242,10 +1306,8 @@ set_tests_properties(TerrainRegionBakeTests PROPERTIES
   WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
 )
 
-# PlanetColliderTests: pure-function oracles for the planet collider height source —
-# per-face body frames (valid rotations), HEIGHT-MATCH (collider samples == the CBT
-# render height field), the gnomonic skew budget, the sculpt-edit UV rect -> grid rect
-# mapping, and the TerrainService planet-face slot lifecycle. No device / physics world.
+# PlanetColliderTests: pure-function oracles for the planet page body fill (FillPlanetPageBody):
+# its samples lie on the drawn surface. No device / physics world.
 add_executable(PlanetColliderTests
   PlanetColliderTests.cpp
 )
@@ -1254,7 +1316,9 @@ target_include_directories(PlanetColliderTests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_SOURCE_DIR}/Engine/Include
   ${CMAKE_SOURCE_DIR}/Engine/Modules/TerrainECS/Include
+  ${CMAKE_SOURCE_DIR}/Engine/Modules/TerrainECS/Source
   ${CMAKE_SOURCE_DIR}/Engine/Modules/CBTTerrain/Include
+  ${CMAKE_SOURCE_DIR}/Engine/Modules/PageStreaming/Include
 )
 ge_set_output_tests(PlanetColliderTests)
 ge_stage_runtime_dependencies(PlanetColliderTests)
@@ -1336,10 +1400,14 @@ add_custom_command(
 
 add_executable(TerrainAtlasTests
   TerrainAtlasTests.cpp
+  # The atlas tile resample of the color map and the grass control field, byte for byte.
+  TerrainFieldResampleTests.cpp
   # The paged height source: the level rule, the page cache, the residency, the resolve mirror and
   # the shipped GLSL resolve against it, on the host and on the device.
   TerrainPageResidencyTests.cpp
   TerrainPlanetPageRequesterTests.cpp
+  # The collider charts of a planet: the page-to-chart map, the cap, the frame and the plane cover.
+  TerrainPlanetChartTests.cpp
   TerrainPageResolveGpuTests.cpp
   # The GLSL equal-angle map against the page store's CPU map.
   TerrainEqualAngleMapTests.cpp
@@ -1446,11 +1514,14 @@ set_tests_properties(WorldHookOwnershipTests PROPERTIES
 # reopening a scene does not ratchet.
 add_executable(TerrainWorldHookTests
   TerrainWorldHookTests.cpp
+  TerrainHeightFunctionRegistryTests.cpp
 )
 target_link_libraries(TerrainWorldHookTests PRIVATE Engine GTest::gtest GTest::gtest_main)
 target_include_directories(TerrainWorldHookTests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_SOURCE_DIR}/Engine/Include
+  # The height function registry and instances, private to TerrainECS.
+  ${CMAKE_SOURCE_DIR}/Engine/Modules/TerrainECS/Source
 )
 ge_set_output_tests(TerrainWorldHookTests)
 ge_stage_runtime_dependencies(TerrainWorldHookTests)

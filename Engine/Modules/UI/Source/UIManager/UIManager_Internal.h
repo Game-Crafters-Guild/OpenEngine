@@ -11,6 +11,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <memory_resource>
 #include <span>
 #include <unordered_map>
 #include <unordered_set>
@@ -316,9 +317,9 @@ struct UpdateContext
     GameEngine::UIElement* activeTargetForYoga = nullptr;
 
     // Hover chain scratch: computed by ProcessHoverChain, consumed by DispatchEvents.
-    // References to thread_local vectors that retain capacity across frames.
-    std::vector<GameEngine::UIElement*>& hoverLeft;
-    std::vector<GameEngine::UIElement*>& hoverEntered;
+    // References to vectors on Update's scratch scope.
+    std::pmr::vector<GameEngine::UIElement*>& hoverLeft;
+    std::pmr::vector<GameEngine::UIElement*>& hoverEntered;
 
     // Event dispatch outputs.
     uint64_t treeGenBeforeEvents = 0;
@@ -482,3 +483,7 @@ void TrimTextMeasureCtxPool();
 
 void ConfigureUiFontAtlas(GameEngine::Rendering::Text::FontAtlas& atlas);
 std::chrono::milliseconds ComputeFontRequestBackoff(uint32_t failCount);
+
+// An element as a log line names it: `#id`, else its first class, else
+// "an element", followed by its nearest ancestor that has an id.
+std::string DescribeElementForLog(const GameEngine::UIElement& el);

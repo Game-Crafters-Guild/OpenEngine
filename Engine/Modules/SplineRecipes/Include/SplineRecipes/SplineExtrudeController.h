@@ -5,6 +5,7 @@
 #include "ECS/ECS.h"
 #include "Engine/Rendering/MeshGPURegistry.h"
 #include "Mathematics/Matrix4x4.h"
+#include "SplineRecipes/ConformGroundWatch.h"
 #include "SplineRecipes/Paving/PavingRoadTrim.h"
 #include "SplineRecipes/SplineChunkCommit.h"
 #include "SplineRecipes/SplineFillRebuild.h"
@@ -97,6 +98,8 @@ private:
         ChunkModelHold Models;
         // The meshes under a Scene-conform run, read again only when the scene TLAS changes.
         SceneConformDigest SceneDigest;
+        // The terrain ground in the reach this recipe reads.
+        ConformGroundWatch Ground;
         // Validation lines last logged for this recipe (a retired profile), so
         // they log once per change rather than once per frame.
         std::vector<std::string> LoggedValidation;

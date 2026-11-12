@@ -21,7 +21,7 @@ namespace GameEngine.ManagedBindingTests
         [Test]
         public void MirrorsHaveTheCppSizes()
         {
-            Assert.That(Unsafe.SizeOf<FixtureKinds>(), Is.EqualTo(928));
+            Assert.That(Unsafe.SizeOf<FixtureKinds>(), Is.EqualTo(992));
             Assert.That(Unsafe.SizeOf<FixtureArrays>(), Is.EqualTo(168));
             Assert.That(Unsafe.SizeOf<FixtureClock>(), Is.EqualTo(32));
             Assert.That(Unsafe.SizeOf<FixtureRule>(), Is.EqualTo(8));
@@ -83,7 +83,7 @@ namespace GameEngine.ManagedBindingTests
         {
             byte[] bytes = new byte[Unsafe.SizeOf<FixtureKinds>()];
             ref FixtureKinds kinds = ref MemoryMarshal.AsRef<FixtureKinds>(bytes.AsSpan());
-            int label = 885;
+            int label = 945;
             bytes.AsSpan(label, 16).Fill((byte)'x');
 
             kinds.Label = "Tür";

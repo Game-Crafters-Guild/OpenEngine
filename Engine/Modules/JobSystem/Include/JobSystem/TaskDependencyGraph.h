@@ -192,9 +192,9 @@ private:
 
     // LOCK-ORDER RULES (binding, overhaul spec F10):
     //  - NEVER enqueue into the thread pool while holding m_Mutex.
-    //    EnqueueTask acquires the pool's globalMutex for wake notifies
-    //    (slice 1); nesting that acquisition under the graph mutex is a
-    //    lock-order hazard with any future reverse path.
+    //    EnqueueTask takes a worker's park-slot mutex to wake it; nesting
+    //    that acquisition under the graph mutex is a lock-order hazard with
+    //    any future reverse path.
     //  - NEVER fire TaskHandle/user callbacks while holding m_Mutex. A
     //    callback that Submits re-enters Register and self-deadlocks.
     // All mutations therefore RETURN their side effects (TaskGraphActions)

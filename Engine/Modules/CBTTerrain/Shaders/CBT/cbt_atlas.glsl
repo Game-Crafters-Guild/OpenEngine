@@ -26,17 +26,18 @@
 #ifndef CBT_ATLAS_GLSL
 #define CBT_ATLAS_GLSL
 
-// Mirror kAtlasNoSlot / kAtlasApron / kAtlasMaxTiles in AtlasSlotPool.h / TerrainAtlas.h / CBTLayout.h.
-// CBT_ATLAS_MAX_TILES lives HERE (the file both the compute layout and the surface include) so the
-// indirection ring's rows-per-slot cap is single-sourced across both GPU consumers; the C++<->GLSL
-// value is locked by CBTLayoutTests.GlslAtlasMaxTilesMatchesCpp (parses this line).
+// Mirror kAtlasNoSlot / kAtlasApron / kAtlasWindowTilesPerAxis in AtlasSlotPool.h / TerrainAtlas.h /
+// CBTLayout.h. The window side lives HERE (the file both the compute layout and the surface include);
+// CBTLayoutTests.GlslAtlasWindowMatchesCpp parses this line against the C++ value.
 const uint CBT_ATLAS_NO_SLOT = 0xFFFFFFFFu;
 const uint CBT_ATLAS_APRON = 1u;
-const uint CBT_ATLAS_MAX_TILES = 16384u;
+const uint CBT_ATLAS_WINDOW_TILES_PER_AXIS = 128u;
+const uint CBT_ATLAS_WINDOW_ROWS = CBT_ATLAS_WINDOW_TILES_PER_AXIS * CBT_ATLAS_WINDOW_TILES_PER_AXIS; // rows per ring slot
 
-// std430 indirection row (mirror TileAtlasSlot, 16 B). One per tile in the whole
-// terrain, indexed by tileIndex = tileZ * tilesPerAxisX + tileX. Bound as an
-// SSBO by the consumer; declared here only so the layout is single-sourced.
+// std430 indirection row (mirror TileAtlasSlot, 16 B). The rows are a window of
+// min(tiles, CBT_ATLAS_WINDOW_TILES_PER_AXIS) tiles a side that wraps over the tile grid
+// (CBT_AtlasRowIndex); TileKey names the tile that owns the row. Bound as an SSBO by the
+// consumer; declared here only so the layout is single-sourced.
 struct CBTTileAtlasSlot
 {
     uint Slot;       // atlas slot index, or CBT_ATLAS_NO_SLOT (not resident)
@@ -45,7 +46,7 @@ struct CBTTileAtlasSlot
     // + single-queue serialization (full proof at cbt_layout.glsl binding 17). Kept only so the
     // SSBO layout is final if a future multi-queue path ever needs the check.
     uint Generation;
-    float LodBias;   // coarse tile hint (never a correctness input to the sample)
+    uint TileKey;    // CBT_AtlasTileKey of the tile that owns the row
     // Coarse->slot upgrade crossfade in [0,1]: 0 = show the out-of-window coarse field, 1 = show the
     // resident slot at full detail. Ramped CPU-side by AtlasResidencyController on tile assign; the
     // surface mixes coarse<->slot normal/splat by it so a newly-resident tile fades in instead of
@@ -87,9 +88,20 @@ void CBT_AtlasTile(vec2 terrainUV, CBTAtlasParams p, out ivec2 tile, out vec2 lo
     localUV = clamp(tf - vec2(float(tile.x), float(tile.y)), 0.0, 1.0);
 }
 
-uint CBT_AtlasTileIndex(ivec2 tile, CBTAtlasParams p)
+// The row of the wrapped window that holds `tile`. For a grid of at most
+// CBT_ATLAS_WINDOW_TILES_PER_AXIS tiles a side this is tile.y * TilesPerAxisX + tile.x.
+// The result is below CBT_ATLAS_WINDOW_ROWS for every input, also for empty params.
+uint CBT_AtlasRowIndex(ivec2 tile, CBTAtlasParams p)
 {
-    return uint(tile.y) * p.TilesPerAxisX + uint(tile.x);
+    uint windowX = clamp(p.TilesPerAxisX, 1u, CBT_ATLAS_WINDOW_TILES_PER_AXIS);
+    uint windowZ = clamp(p.TilesPerAxisZ, 1u, CBT_ATLAS_WINDOW_TILES_PER_AXIS);
+    return (uint(tile.y) % windowZ) * windowX + uint(tile.x) % windowX;
+}
+
+// The key a row carries for the tile that owns it (mirror AtlasTileKey).
+uint CBT_AtlasTileKey(ivec2 tile)
+{
+    return (uint(tile.y) << 16u) | uint(tile.x);
 }
 
 // Slot index + tile-local UV -> normalized atlas UV (texel-centered) for a
@@ -130,20 +142,19 @@ struct AtlasResolve
     vec2 SlotUV;
     vec2 LocalUV;
     ivec2 Tile;
-    float LodBias;
     float Fade; // coarse->slot upgrade crossfade [0,1] from the row (1 when not resident / settled)
 };
 
-// terrainUV -> the atlas resolve. rows is the indirection SSBO the consumer
-// binds; CBT_ATLAS_NO_SLOT (or a null-equivalent params) yields Resident=false so
-// the consumer takes the coarse out-of-window fallback (never garbage — Risk 3).
+// terrainUV -> the atlas resolve. row is the window row of the sampled tile
+// (CBT_AtlasRowIndex); CBT_ATLAS_NO_SLOT, a row another tile owns, or a null-equivalent
+// params yields Resident=false so the consumer takes the coarse out-of-window fallback
+// (never garbage — Risk 3).
 AtlasResolve CBT_AtlasResolve(vec2 terrainUV, CBTAtlasParams p, CBTTileAtlasSlot row)
 {
     AtlasResolve r;
     CBT_AtlasTile(terrainUV, p, r.Tile, r.LocalUV);
-    r.LodBias = row.LodBias;
     r.Fade = row.Fade;
-    if (row.Slot == CBT_ATLAS_NO_SLOT || p.AtlasDim == 0u)
+    if (row.Slot == CBT_ATLAS_NO_SLOT || row.TileKey != CBT_AtlasTileKey(r.Tile) || p.AtlasDim == 0u)
     {
         r.Resident = false;
         r.SlotUV = vec2(0.0);

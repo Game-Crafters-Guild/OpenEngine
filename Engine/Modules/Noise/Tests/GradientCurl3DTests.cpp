@@ -1,4 +1,4 @@
-#include "Noise/GradientCurl3D.h"
+#include "Noise/Gradient/GradientCurl3D.h"
 
 #include <gtest/gtest.h>
 

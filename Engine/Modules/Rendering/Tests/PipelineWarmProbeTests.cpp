@@ -11,7 +11,14 @@
 #include "Rendering/Materials/MaterialBuilder.h"
 #include "TestUtils.h"
 
+#include <condition_variable>
+#include <deque>
 #include <functional>
+#include <future>
+#include <memory>
+#include <mutex>
+#include <thread>
+#include <utility>
 #include <vector>
 
 using namespace GameEngine::Rendering;
@@ -89,7 +96,8 @@ struct HeldBuilds
 
     void Install(IDevice& dev)
     {
-        dev.SetPipelineBuildDispatcher([this](std::function<void()> job) { Jobs.push_back(std::move(job)); });
+        dev.SetPipelineBuildDispatcher(
+            {.Dispatch = [this](std::function<void()> job, PipelineBuildPriority) { Jobs.push_back(std::move(job)); }});
     }
     void RunAll()
     {
@@ -98,6 +106,111 @@ struct HeldBuilds
         for (std::function<void()>& job : jobs)
             job();
     }
+};
+
+// Stands in for the engine's job workers: one thread runs each Blocking job as
+// it comes, and Load jobs are held until the test takes them. Every thread but
+// that worker may wait for a build.
+class WorkerBuilds
+{
+  public:
+    explicit WorkerBuilds(IDevice& dev) : m_Device(dev), m_Worker([this] { RunUntilStopped(); })
+    {
+        m_Device.SetPipelineBuildDispatcher(
+            {.Dispatch = [this](std::function<void()> job, PipelineBuildPriority priority)
+             { Push(std::move(job), priority); },
+             .CallerMayWait = [this] { return std::this_thread::get_id() != m_Worker.get_id(); }});
+    }
+    ~WorkerBuilds()
+    {
+        m_Device.SetPipelineBuildDispatcher({});
+        {
+            std::lock_guard lock(m_Mutex);
+            m_Stop = true;
+        }
+        m_Ready.notify_one();
+        m_Worker.join();
+    }
+    uint32_t BlockingJobsRun()
+    {
+        std::lock_guard lock(m_Mutex);
+        return m_BlockingJobsRun;
+    }
+    std::vector<std::function<void()>> TakeLoadJobs()
+    {
+        std::lock_guard lock(m_Mutex);
+        return std::exchange(m_LoadJobs, {});
+    }
+    // Runs `work` as a job on the worker thread and waits for it to end.
+    void RunOnWorker(std::function<void()> work)
+    {
+        auto done = std::make_shared<std::promise<void>>();
+        std::future<void> ended = done->get_future();
+        Push(
+            [work = std::move(work), done]
+            {
+                work();
+                done->set_value();
+            },
+            PipelineBuildPriority::Blocking);
+        ended.wait();
+    }
+    // The next Blocking job runs at once on the thread that dispatches it, and
+    // then `after` runs on that thread.
+    void RunNextBlockingJobOnTheCaller(std::function<void()> after)
+    {
+        std::lock_guard lock(m_Mutex);
+        m_AfterJobOnTheCaller = std::move(after);
+    }
+
+  private:
+    void Push(std::function<void()> job, PipelineBuildPriority priority)
+    {
+        std::unique_lock lock(m_Mutex);
+        if (priority == PipelineBuildPriority::Load)
+        {
+            m_LoadJobs.push_back(std::move(job));
+            return;
+        }
+        if (m_AfterJobOnTheCaller)
+        {
+            std::function<void()> after = std::exchange(m_AfterJobOnTheCaller, nullptr);
+            ++m_BlockingJobsRun;
+            lock.unlock();
+            job();
+            after();
+            return;
+        }
+        m_Queue.push_back(std::move(job));
+        m_Ready.notify_one();
+    }
+    void RunUntilStopped()
+    {
+        std::unique_lock lock(m_Mutex);
+        for (;;)
+        {
+            m_Ready.wait(lock, [this] { return m_Stop || !m_Queue.empty(); });
+            if (m_Queue.empty())
+                return;
+            std::function<void()> job = std::move(m_Queue.front());
+            m_Queue.pop_front();
+            ++m_BlockingJobsRun;
+            lock.unlock();
+            job();
+            job = nullptr;
+            lock.lock();
+        }
+    }
+
+    IDevice& m_Device;
+    std::mutex m_Mutex;
+    std::condition_variable m_Ready;
+    std::deque<std::function<void()>> m_Queue;
+    std::vector<std::function<void()>> m_LoadJobs;
+    std::function<void()> m_AfterJobOnTheCaller;
+    uint32_t m_BlockingJobsRun = 0;
+    bool m_Stop = false;
+    std::thread m_Worker;
 };
 
 PipelineFormatKey MakeFormatKey(TextureFormat color, uint8_t samples)
@@ -195,7 +308,106 @@ TEST(PipelineBuildRequest, RequestedPipelineIsNotBuiltOnTheCallerAndIsWarmOnceIt
     EXPECT_TRUE(held.Jobs.empty());
 }
 
-TEST(PipelineBuildRequest, GetOrCreateTakesAQueuedBuildOverAndTheQueuedJobBuildsNothing)
+TEST(PipelineBuildRequest, FirstUseOnAThreadThatMayWaitIsBuiltByAWorker)
+{
+    DeviceDesc desc{};
+    auto dev = CreateHeadlessDevice(desc);
+    ASSERT_TRUE(dev) << "headless device unavailable";
+    const ComputePipelineId computeId = InternMinimalCompute(*dev);
+    ASSERT_TRUE(computeId.IsValid()) << "minimal_test.comp.spv missing";
+    GraphicsPipelineId graphicsId{};
+    ASSERT_TRUE(InternTriangle(*dev, graphicsId)) << "triangle shaders missing";
+    const PipelineFormatKey fk = MakeFormatKey(TextureFormat::BGRA8_UNORM, 1);
+    WorkerBuilds workers(*dev);
+
+    const PipelineHandle compute = dev->GetOrCreateComputePipeline(computeId);
+    const PipelineHandle graphics = dev->GetOrCreateGraphicsPipeline(graphicsId, fk);
+    ASSERT_TRUE(compute.IsValid());
+    ASSERT_TRUE(graphics.IsValid());
+    EXPECT_EQ(workers.BlockingJobsRun(), 2u) << "a first use built its pipeline on the calling thread";
+    EXPECT_EQ(dev->TryGetWarmComputePipeline(computeId), compute);
+    EXPECT_EQ(dev->TryGetWarmGraphicsPipeline(graphicsId, fk), graphics);
+}
+
+TEST(PipelineBuildRequest, FirstUseWaitsForAQueuedBuildAndDoesNotBuildItInline)
+{
+    DeviceDesc desc{};
+    auto dev = CreateHeadlessDevice(desc);
+    ASSERT_TRUE(dev) << "headless device unavailable";
+    const ComputePipelineId id = InternMinimalCompute(*dev);
+    ASSERT_TRUE(id.IsValid()) << "minimal_test.comp.spv missing";
+    WorkerBuilds workers(*dev);
+
+    // The Load job stays queued behind other load work; the first use must not
+    // wait for it, nor build the pipeline itself.
+    ASSERT_EQ(dev->RequestComputePipeline(id), PipelineBuildState::Pending);
+    const PipelineHandle built = dev->GetOrCreateComputePipeline(id);
+    ASSERT_TRUE(built.IsValid());
+    EXPECT_EQ(workers.BlockingJobsRun(), 1u) << "the first use built the queued pipeline on the calling thread";
+
+    for (std::function<void()>& job : workers.TakeLoadJobs())
+        job();
+    EXPECT_EQ(dev->TryGetWarmComputePipeline(id), built) << "the queued Load job built the pipeline a second time";
+}
+
+TEST(PipelineBuildRequest, FirstUseWaitsOutASlowWorkerBuildWhileOtherBuildsEnd)
+{
+    DeviceDesc desc{};
+    auto dev = CreateHeadlessDevice(desc);
+    ASSERT_TRUE(dev) << "headless device unavailable";
+    const ComputePipelineId id = InternMinimalCompute(*dev);
+    ASSERT_TRUE(id.IsValid()) << "minimal_test.comp.spv missing";
+    GraphicsPipelineId otherId{};
+    ASSERT_TRUE(InternTriangle(*dev, otherId)) << "triangle shaders missing";
+    // The worker is slow: it holds each Blocking job until the test releases it. Load jobs of other keys end at
+    // once. The six other builds can end before the waiting thread enters WaitForBuildEnd, so a pass checks
+    // what the wait returns, not that a wake from another key's build reached the waiting thread.
+    std::mutex mutex;
+    std::vector<std::function<void()>> heldJobs;
+    uint32_t blockingJobs = 0;
+    bool released = false;
+    std::promise<void> firstBlockingJob;
+    std::future<void> blockingJobDispatched = firstBlockingJob.get_future();
+    dev->SetPipelineBuildDispatcher({.Dispatch =
+                                         [&](std::function<void()> job, PipelineBuildPriority priority)
+                                     {
+                                         std::unique_lock lock(mutex);
+                                         if (priority == PipelineBuildPriority::Blocking && ++blockingJobs == 1)
+                                             firstBlockingJob.set_value();
+                                         if (priority == PipelineBuildPriority::Blocking && !released)
+                                         {
+                                             heldJobs.push_back(std::move(job));
+                                             return;
+                                         }
+                                         lock.unlock();
+                                         job();
+                                     },
+                                     .CallerMayWait = [] { return true; }});
+
+    std::future<PipelineHandle> firstUse =
+        std::async(std::launch::async, [&] { return dev->GetOrCreateComputePipeline(id); });
+    blockingJobDispatched.wait();
+    for (TextureFormat color : {TextureFormat::BGRA8_UNORM, TextureFormat::R16G16B16A16_FLOAT})
+        for (uint8_t samples : {uint8_t{1}, uint8_t{2}, uint8_t{4}})
+            dev->RequestGraphicsPipeline(otherId, MakeFormatKey(color, samples));
+    EXPECT_FALSE(dev->TryGetWarmComputePipeline(id).IsValid()) << "the waiting thread built the pipeline itself";
+
+    std::vector<std::function<void()>> jobs;
+    {
+        std::lock_guard lock(mutex);
+        released = true;
+        jobs = std::exchange(heldJobs, {});
+    }
+    for (std::function<void()>& job : jobs)
+        job();
+    const PipelineHandle built = firstUse.get();
+    dev->SetPipelineBuildDispatcher({});
+    ASSERT_TRUE(built.IsValid());
+    EXPECT_EQ(blockingJobs, 1u) << "the waiting thread queued its build again while the worker was slow";
+    EXPECT_EQ(dev->TryGetWarmComputePipeline(id), built);
+}
+
+TEST(PipelineBuildRequest, GetOrCreateOnAThreadThatMayNotWaitTakesAQueuedBuildOver)
 {
     DeviceDesc desc{};
     auto dev = CreateHeadlessDevice(desc);
@@ -213,6 +425,46 @@ TEST(PipelineBuildRequest, GetOrCreateTakesAQueuedBuildOverAndTheQueuedJobBuilds
     // freeing one a frame has bound).
     held.RunAll();
     EXPECT_EQ(dev->TryGetWarmComputePipeline(id), built) << "the queued job built the pipeline a second time";
+}
+
+TEST(PipelineBuildRequest, ALoadBuildQueuedBeforeTheFirstUseWaitsGetsABlockingJob)
+{
+    DeviceDesc desc{};
+    auto dev = CreateHeadlessDevice(desc);
+    ASSERT_TRUE(dev) << "headless device unavailable";
+    const ComputePipelineId id = InternMinimalCompute(*dev);
+    ASSERT_TRUE(id.IsValid()) << "minimal_test.comp.spv missing";
+    WorkerBuilds workers(*dev);
+
+    // Before the first use waits, its build ends, an invalidation drops the
+    // pipeline and another caller queues a Load build of the same key.
+    workers.RunNextBlockingJobOnTheCaller(
+        [&]
+        {
+            dev->GetMutablePipelineCache().ClearConcreteOnly();
+            EXPECT_EQ(dev->RequestComputePipeline(id), PipelineBuildState::Pending);
+        });
+    const PipelineHandle built = dev->GetOrCreateComputePipeline(id);
+    ASSERT_TRUE(built.IsValid());
+    EXPECT_EQ(workers.BlockingJobsRun(), 2u) << "the queued Load build got no Blocking job";
+    EXPECT_EQ(dev->TryGetWarmComputePipeline(id), built);
+}
+
+TEST(PipelineBuildRequest, FirstUseOnAThreadThatRunsTheJobsIsBuiltOnThatThread)
+{
+    DeviceDesc desc{};
+    auto dev = CreateHeadlessDevice(desc);
+    ASSERT_TRUE(dev) << "headless device unavailable";
+    const ComputePipelineId id = InternMinimalCompute(*dev);
+    ASSERT_TRUE(id.IsValid()) << "minimal_test.comp.spv missing";
+    WorkerBuilds workers(*dev);
+
+    // A wait there would hold the worker that its own build needs.
+    PipelineHandle built;
+    workers.RunOnWorker([&] { built = dev->GetOrCreateComputePipeline(id); });
+    ASSERT_TRUE(built.IsValid());
+    EXPECT_EQ(workers.BlockingJobsRun(), 1u) << "the worker dispatched a Blocking job for its own first use";
+    EXPECT_EQ(dev->TryGetWarmComputePipeline(id), built);
 }
 
 TEST(PipelineBuildRequest, FailedBuildIsNotRequestedAgainUntilTheCacheIsInvalidated)
@@ -236,6 +488,30 @@ TEST(PipelineBuildRequest, FailedBuildIsNotRequestedAgainUntilTheCacheIsInvalida
     dev->GetMutablePipelineCache().Clear();
     EXPECT_EQ(dev->RequestComputePipeline(id), PipelineBuildState::Pending);
     EXPECT_EQ(held.Jobs.size(), 1u);
+}
+
+TEST(PipelineBuildRequest, FailedBuildIsNotBuiltAgainByTheNextFirstUseOnAThreadThatMayWait)
+{
+    DeviceDesc desc{};
+    auto dev = CreateHeadlessDevice(desc);
+    ASSERT_TRUE(dev) << "headless device unavailable";
+    GraphicsPipelineId id{};
+    ASSERT_TRUE(InternTriangle(*dev, id)) << "triangle shaders missing";
+    const PipelineFormatKey fk = MakeFormatKey(TextureFormat::BGRA8_UNORM, 1);
+    // A cleared cache frees the unpinned desc behind the id: its build cannot succeed.
+    dev->GetMutablePipelineCache().Clear();
+    WorkerBuilds workers(*dev);
+
+    ASSERT_FALSE(dev->GetOrCreateGraphicsPipeline(id, fk).IsValid());
+    ASSERT_EQ(workers.BlockingJobsRun(), 1u);
+    // Every build attempt of the triangle writes its own failure over this one.
+    ASSERT_FALSE(dev->GetOrCreateGraphicsPipeline(GraphicsPipelineId{}, fk).IsValid());
+    const std::string invalidIdFailure = dev->GetLastGraphicsPipelineFailure();
+
+    EXPECT_FALSE(dev->GetOrCreateGraphicsPipeline(id, fk).IsValid());
+    EXPECT_EQ(workers.BlockingJobsRun(), 1u) << "a worker built the failed pipeline again";
+    EXPECT_EQ(dev->GetLastGraphicsPipelineFailure(), invalidIdFailure)
+        << "the waiting thread built the failed pipeline again";
 }
 
 TEST(PipelineBuildRequest, BuildDroppedWithoutRunningIsRequestedAgain)
@@ -277,6 +553,31 @@ TEST(PipelineBuildRequest, BuildRequestedBeforeAnInvalidationDoesNotPublish)
     EXPECT_EQ(dev->RequestComputePipeline(id), PipelineBuildState::Pending);
     held.RunAll();
     EXPECT_EQ(dev->RequestComputePipeline(id), PipelineBuildState::Warm);
+}
+
+TEST(PipelineBuildRequest, WorkerBuildOvertakenByAnInvalidationIsBuiltAgainForTheWaitingThread)
+{
+    DeviceDesc desc{};
+    auto dev = CreateHeadlessDevice(desc);
+    ASSERT_TRUE(dev) << "headless device unavailable";
+    const ComputePipelineId id = InternMinimalCompute(*dev);
+    ASSERT_TRUE(id.IsValid()) << "minimal_test.comp.spv missing";
+    // The first job starts after an invalidation, so the cache refuses the pipeline it builds.
+    uint32_t jobs = 0;
+    dev->SetPipelineBuildDispatcher({.Dispatch =
+                                         [&](std::function<void()> job, PipelineBuildPriority)
+                                     {
+                                         if (jobs++ == 0)
+                                             dev->GetMutablePipelineCache().ClearConcreteOnly();
+                                         job();
+                                     },
+                                     .CallerMayWait = [] { return true; }});
+
+    const PipelineHandle built = dev->GetOrCreateComputePipeline(id);
+    dev->SetPipelineBuildDispatcher({});
+    ASSERT_TRUE(built.IsValid()) << "the waiting thread got no pipeline after the invalidation";
+    EXPECT_EQ(jobs, 2u);
+    EXPECT_EQ(dev->TryGetWarmComputePipeline(id), built);
 }
 
 TEST(PipelineBuildRequest, DeviceShutdownCancelsQueuedBuilds)

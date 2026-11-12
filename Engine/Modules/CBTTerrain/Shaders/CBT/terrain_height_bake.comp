@@ -18,10 +18,10 @@
 //
 // SPLAT (KERNEL_SPLAT): a third pass over the same rect composites the authored SURFACE RULE rows
 // onto an all-zero base (the GPU mirror of ResetSplatmap) in the same order ApplySplatModifiers
-// walks them, measuring slope and altitude off the baked height — altitude normalized against the
-// committed global height range, passed as SplatMinH/SplatMaxH. The rows are the ONLY thing that
-// places material here. Reads the same height image (shares the post-height memory barrier with the normal
-// pass; the two are independent). Painted splat content (PaintLayer/PaintZone/spline paint) stays
+// walks them, measuring slope and altitude off the baked height (altitude in meters above the
+// terrain's base). The rows are the ONLY thing that places material here. Reads the same height
+// image (shares the post-height memory barrier with the normal pass; the two are independent).
+// Painted splat content (PaintLayer/PaintZone/spline paint) stays
 // CPU: the dispatch is gated OFF for a bake carrying paint, which keeps the last CPU-composited
 // splat until settle.
 //
@@ -53,8 +53,8 @@ layout(push_constant) uniform PushConstants
     float OriginZ;
     float TileSize;  // tile world size (square)
     float HeightScale;
-    float BaseFreq;  // base value-noise fill params (kTileNoise*)
-    float BaseAmp;
+    float BaseFreq;  // the base value noise's stack (Terrain::TerrainNoiseStack)
+    float BaseGain;
     uint  BaseOctaves;
     uint  BaseSeed;
     uint  Slot;      // atlas slot for this tile
@@ -62,13 +62,12 @@ layout(push_constant) uniform PushConstants
     uint  TileRes;   // interior samples per tile axis
     uint  SlotStride;
     uint  SlotsPerRow;
-    float SplatMinH;  // committed global min height — SPLAT kernel only (0 for height/normal)
-    float SplatMaxH;  // committed global max height — SPLAT kernel only
     uint  SurfaceRuleCount; // authored rule rows to composite — SPLAT kernel only
     // The TERRAIN entity's world Y, not the tile's (OriginX/OriginZ are the tile's). A sample is
     // read back as `normalized * HeightScale + TerrainOriginY`, so a world-space flatten target
     // is measured against it. Mirrors NormalizedHeightForWorldY in TerrainModifierSystem.h.
     float TerrainOriginY;
+    float BaseAmplitude; // the base stack's Amplitude (Terrain::TerrainNoiseStack)
 } pc;
 
 // Slot-atlas params from the push (shared by all three kernels; the texel resolve uses only
@@ -188,13 +187,9 @@ void main()
 
     CBTAtlasParams ap = MakeAtlasParams();
 
-    // Altitude normalizes against the committed global range (SplatMinH/SplatMaxH). Mid-stroke
-    // this is the CURRENT committed range — a dab that extends the range makes this a
-    // slightly-stale preview, re-splat CPU-side at settle.
     float spacing = pc.TileSize / float(pc.TileRes - 1u);
     vec3 normal = SplatNormal(ap, sx, sz, spacing);
     float sampleH = LoadH(ap, sx, sz);
-    float heightRange = max(pc.SplatMaxH - pc.SplatMinH, 0.001);
 
     // The unbaked base, mirroring the CPU's ResetSplatmap: ALL ZERO, in byte units. Zero is not
     // "no data" — the surface resolves an all-zero texel to channel 0 — and it is the only base
@@ -212,8 +207,7 @@ void main()
         float worldX = pc.OriginX + float(sx) * spacing;
         float worldZ = pc.OriginZ + float(sz) * spacing;
         GESurfaceRuleSample rs = GE_MakeSurfaceRuleSample(normal.x, normal.y, normal.z, sampleH,
-                                                          pc.HeightScale, pc.SplatMinH, heightRange,
-                                                          worldX, worldZ);
+                                                          pc.HeightScale, worldX, worldZ);
         for (uint r = 0u; r < pc.SurfaceRuleCount; ++r)
             bytes = GE_ApplySurfaceRuleRow(bytes, r, rs);
     }
@@ -310,22 +304,37 @@ float BaseSmoothNoise(float x, float z, uint seed)
     return nx0 + sz * (nx1 - nx0);
 }
 
-float BaseFill(float wx, float wz, float freq0, float amplitude, uint octaves, uint seed)
+// Mirror of Heightfield.cpp SampleWorldSpaceNoise at full detail, in [0, BandTop]: the loop and these
+// constants equal TerrainNoiseStack's.
+const uint kBaseDetailOctaves = 5u;
+const float kBaseLargeOctaveGrowth = 1.41421356;
+
+float BaseFill(float wx, float wz, float freq0, float gain, uint octaves, uint seed, float amplitude)
 {
+    uint largeOctaves = octaves > kBaseDetailOctaves ? octaves - kBaseDetailOctaves : 0u;
+    float amp = 1.0;
+    for (uint o = 0u; o < largeOctaves; ++o)
+        amp *= kBaseLargeOctaveGrowth;
     float value = 0.0;
     float freq = freq0;
-    float amp = 1.0;
-    float totalAmp = 0.0;
+    float detailTotal = 0.0;
     for (uint o = 0u; o < octaves; ++o)
     {
+        if (o == largeOctaves)
+            amp = 1.0;
         float nx = wx * freq;
         float nz = wz * freq;
         value += BaseSmoothNoise(nx, nz, seed + o) * amp;
-        totalAmp += amp;
         freq *= 2.0;
-        amp *= 0.5;
+        if (o < largeOctaves)
+        {
+            amp /= kBaseLargeOctaveGrowth;
+            continue;
+        }
+        detailTotal += amp;
+        amp *= gain;
     }
-    return (value / totalAmp) * amplitude;
+    return value / detailTotal * amplitude;
 }
 
 // ---- Noise modifier: gradient noise (mirror Engine/Modules/Noise) ----
@@ -425,7 +434,7 @@ float EvalHeight(int sx, int sz)
     float wx = pc.OriginX + float(sx) * spacing;
     float wz = pc.OriginZ + float(sz) * spacing;
 
-    float h = BaseFill(wx, wz, pc.BaseFreq, pc.BaseAmp, pc.BaseOctaves, pc.BaseSeed);
+    float h = BaseFill(wx, wz, pc.BaseFreq, pc.BaseGain, pc.BaseOctaves, pc.BaseSeed, pc.BaseAmplitude);
 
     for (uint m = 0u; m < pc.ModifierCount; ++m)
     {

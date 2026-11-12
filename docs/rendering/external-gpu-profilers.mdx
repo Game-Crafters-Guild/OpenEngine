@@ -105,4 +105,4 @@ Numbers come from **Release, both arms, no capture layer attached**. Prove the l
 - RGP AMD verification: nothing in the RGP section has run on AMD hardware.
 - Nsight Perf SDK in-engine metrics HUD (periodic sampler → `DebugMetrics`/Monitors): sketched, its own slice; SDK is a developer-login download and its runtime DLLs engage staging.
 - Deferred-response poll budgets are frames, not seconds. Capture serialization stalls the loop (measured ~28 frames for a ~120 MB capture), so budgets are generous (300) and `get_capture_status` recovers late captures. A time-based budget is a recorded backlog item.
-- Pipeline-statistics and occlusion query pools are implemented but unused by production code. The per-pass timestamp path (`get_gpu_profiler`) is the only in-engine GPU timing consumer today.
+- The occlusion query pool is implemented but unused by production code. In-engine per-pass GPU times and pipeline-statistics counters come from `get_gpu_profiler` ([Per-pass GPU times and pipeline statistics](gpu-debugging-guide.mdx#per-pass-gpu-times-and-pipeline-statistics)).

@@ -24,14 +24,8 @@ void AddTerrainSystemsToSchedule(ECS::SystemScheduleBuilder& b,
     // They still run before terrain extraction so heightfield changes from
     // mouse-driven modifier transforms are uploaded in the same frame.
     //
-    // The same rule binds CBTUpdate, for the sphere sculpt store. CBTUpdate
-    // establishes the store's IDENTITY (TerrainService::ResetPlanetSculpt when the
-    // active planet entity changes, EnsureSphereSculptLoaded for a planet carrying a
-    // saved .tsculpt); the bake below writes its CONTENT (ConfigurePlanetSculpt +
-    // BakePlanetModifierRegions). Identity has to settle first, because
-    // SphereSculptLayer::Reset() drops the store's geometry as well as its content:
-    // a reset landing after a bake discards that bake, and the modifier change gate
-    // keys on a hash the reset does not move, so the lost bake is never re-run.
+    // CBTUpdate runs first: its planet layer reset (ResetPlanetSculpt) after a bake would drop the
+    // bake, and the change gate's hash does not move, so the bake would not run again.
     b.Add<TerrainModifierSystem>("TerrainModifiers", ECS::SystemPhase::Extraction, 1,
                                  {"TransformHierarchy", "SplineExtraction", "CBTUpdate"});
     // TerrainExtraction reads WorldTransform (needs TransformHierarchy) and

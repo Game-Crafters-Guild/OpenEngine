@@ -4,11 +4,15 @@
 #include "ECS/World.h"
 #include "ECS/Query.h"
 #include "ECS/Components.h"
+#include "ECS/SimulationClock.h"
 #include "ECS/SystemWaveTrace.h"
 #include "Logger/Logger.h"
 #include "JobSystem/JobCounter.h"
 #include "JobSystem/WorkStealingThreadPool.h"
 #include "Memory/ScratchScope.h"
+#include <algorithm>
+#include <concepts>
+#include <cstdint>
 #include <span>
 #include <vector>
 #include <memory>
@@ -16,6 +20,42 @@
 
 namespace GameEngine {
 namespace ECS {
+
+// When a system runs. Frame: once per frame with the frame delta. Simulation:
+// once per step of the world's SimulationClock with the fixed delta, so a frame
+// runs it 0, 1 or more times.
+enum class SystemCadence : uint8 {
+    Frame,
+    Simulation,
+};
+
+// The cadence a system type declares with `static constexpr SystemCadence Cadence`;
+// Frame when it declares none.
+template <typename T>
+constexpr SystemCadence CadenceOf() {
+    if constexpr (requires { { T::Cadence } -> std::convertible_to<SystemCadence>; })
+        return T::Cadence;
+    else
+        return SystemCadence::Frame;
+}
+
+// The delta a Frame system gets. Gameplay: the world clock's frame seconds (the frame delta
+// clamped to SimulationClock::kMaxFrameDeltaSeconds, times the time scale), so 0 while paused.
+// Real: the frame delta, for systems that run while the game is paused (editor tools, UI).
+enum class SystemTime : uint8 {
+    Gameplay,
+    Real,
+};
+
+// The time a system type declares with `static constexpr SystemTime Time`;
+// Gameplay when it declares none.
+template <typename T>
+constexpr SystemTime TimeOf() {
+    if constexpr (requires { { T::Time } -> std::convertible_to<SystemTime>; })
+        return T::Time;
+    else
+        return SystemTime::Gameplay;
+}
 
 // Base system interface
 class ISystem {
@@ -34,14 +74,29 @@ protected:
     bool Enabled = true;
 };
 
-// Wave-based execution plan: systems within a wave can run in parallel.
-// Waves are executed sequentially (wave N completes before wave N+1 starts).
+// The systems of one wave can run in parallel; wave N completes before wave N+1 starts.
+// A run of adjacent Simulation waves runs once per clock step; a Frame wave runs once per frame.
 struct SystemExecutionPlan {
     struct Wave {
         std::vector<size_t> SystemIndices; // indices into SystemManager::systems
+        SystemCadence Cadence = SystemCadence::Frame;
     };
     std::vector<Wave> Waves;
     bool IsValid() const { return !Waves.empty(); }
+
+    // Adds a wave that holds only `slot`: for a Frame system after every wave,
+    // for a Simulation system after the last Simulation wave.
+    void AppendWave(size_t slot, SystemCadence cadence) {
+        auto position = Waves.end();
+        if (cadence == SystemCadence::Simulation) {
+            const auto lastSimulation = std::find_if(Waves.rbegin(), Waves.rend(), [](const Wave& wave) {
+                return wave.Cadence == SystemCadence::Simulation;
+            });
+            if (lastSimulation != Waves.rend())
+                position = lastSimulation.base();
+        }
+        Waves.insert(position, Wave{{slot}, cadence});
+    }
 };
 
 // System manager for organizing and running systems
@@ -52,11 +107,15 @@ private:
     JobSystem::WorkStealingThreadPool* jobSystem = nullptr;
     bool m_ParallelWaves = true;
 
-    // Optional per-system update frequency control (Every N frames)
-    std::vector<uint32> seqEveryNFrames;   // 0/1 = every frame; >1 = every N frames
-    std::vector<uint32> seqFrameCounters;  // incremented each Update()
+    // Optional per-system update frequency control: every N runs, which are frames
+    // for a Frame system and clock steps for a Simulation system.
+    std::vector<uint32> seqEveryNFrames;   // 0/1 = every run; >1 = every N runs
+    std::vector<uint32> seqFrameCounters;  // incremented each run
     std::vector<uint32> parEveryNFrames;
     std::vector<uint32> parFrameCounters;
+    std::vector<SystemCadence> seqCadence; // per sequential slot
+    std::vector<SystemTime> seqTime;       // per sequential slot
+    std::vector<SystemTime> parTime;       // per parallel system
 
     // Wave-based execution plan (set by SystemScheduleBuilder::BuildAndRegisterWithWaves)
     SystemExecutionPlan m_ExecutionPlan;
@@ -119,7 +178,7 @@ public:
             }
             if (covered)
                 continue;
-            m_ExecutionPlan.Waves.push_back({{lateIdx}});
+            m_ExecutionPlan.AppendWave(lateIdx, seqCadence[lateIdx]);
             Logger::Log::Info("[ECS] Execution plan replaced without system '{}' — "
                               "re-appended as a trailing wave",
                               systems[lateIdx] ? systems[lateIdx]->GetName() : "<null>");
@@ -153,7 +212,8 @@ public:
     // system a user disabled stays disabled across its module's reload);
     // frequency counters are slot-keyed and persist naturally. Returns the
     // slot index.
-    size_t InstallSystem(std::unique_ptr<ISystem> system, size_t replaceIndex = kAppendSystem) {
+    size_t InstallSystem(std::unique_ptr<ISystem> system, size_t replaceIndex, SystemCadence cadence,
+                         SystemTime time) {
         if (!system)
             return kAppendSystem;
 
@@ -167,6 +227,8 @@ public:
             const char* name = system->GetName();
             systems[replaceIndex] = std::move(system);
             systems[replaceIndex]->SetEnabled(wasEnabled);
+            seqCadence[replaceIndex] = cadence;
+            seqTime[replaceIndex] = time;
             m_WaveTrace.Clear();
             if (replaceIndex < performanceData.size())
                 performanceData[replaceIndex].Name = name;
@@ -181,6 +243,8 @@ public:
         // default: every frame
         seqEveryNFrames.push_back(1u);
         seqFrameCounters.push_back(0u);
+        seqCadence.push_back(cadence);
+        seqTime.push_back(time);
 
         if (trackPerformance) {
             SystemPerformance perf;
@@ -188,14 +252,11 @@ public:
             performanceData.push_back(perf);
         }
 
-        // A frozen dependency-aware plan iterates only its waves, so a system
-        // added after the plan was built would otherwise silently never tick.
-        // Appending it as a trailing single-system wave keeps the existing
-        // wave graph intact and guarantees execution (serially, after all
-        // planned waves — the safe default absent dependency information).
+        // A plan runs only its waves: a system added after the plan was built gets
+        // a wave of its own after the planned waves of its cadence, so it still runs.
         if (m_ExecutionPlan.IsValid())
         {
-            m_ExecutionPlan.Waves.push_back({{systems.size() - 1}});
+            m_ExecutionPlan.AppendWave(systems.size() - 1, cadence);
             m_LateAddedSystems.push_back(systems.size() - 1);
             Logger::Log::Info("[ECS] System '{}' added after the execution plan was built — "
                               "appended as a trailing wave",
@@ -226,53 +287,42 @@ public:
     T* AddSystem(Args&&... args) {
         auto system = std::make_unique<T>(std::forward<Args>(args)...);
         T* ptr = system.get();
-        InstallSystem(std::move(system));
+        InstallSystem(std::move(system), kAppendSystem, CadenceOf<T>(), TimeOf<T>());
         return ptr;
     }
 
-    // Add a system to run in parallel
+    // Add a system to run in parallel, once per frame.
     template<typename T, typename... Args>
     T* AddParallelSystem(Args&&... args) {
+        static_assert(CadenceOf<T>() == SystemCadence::Frame,
+                      "AddParallelSystem runs once per frame; add a Simulation system with AddSystem");
         auto system = std::make_unique<T>(std::forward<Args>(args)...);
         T* ptr = system.get();
         parallelSystems.push_back(std::move(system));
         parEveryNFrames.push_back(1u);
         parFrameCounters.push_back(0u);
+        parTime.push_back(TimeOf<T>());
 
         Logger::Log::Debug("[ECS] Added parallel system: {}", ptr->GetName());
         return ptr;
     }
 
-    // Update all systems. If a wave-based execution plan is set and a JobSystem
-    // is available, systems within each wave run in parallel. Otherwise falls
-    // back to flat sequential execution.
+    // Advances the world's SimulationClock, runs the Simulation systems once per clock step with the
+    // fixed delta and the Frame systems once with the delta of their SystemTime. With no plan, every
+    // step's Simulation systems run first, then the Frame systems, in slot order.
     void Update(World& world, float32 deltaTime) {
+        SimulationClock& clock = world.GetSimulationClock();
+        clock.Advance(deltaTime);
         if (m_ExecutionPlan.IsValid())
         {
             UpdateWaveBased(world, deltaTime);
             return;
         }
 
-        // Legacy flat sequential path (no execution plan)
-        for (size_t i = 0; i < systems.size(); ++i) {
-            auto& system = systems[i];
-            if (!system || !system->IsEnabled()) continue; // null = retired slot
-
-            uint32 n = (i < seqEveryNFrames.size()) ? seqEveryNFrames[i] : 1u;
-            if (n > 1u) {
-                uint32 c = (i < seqFrameCounters.size()) ? seqFrameCounters[i]++ : 0u;
-                if ((c % n) != 0u) continue;
-            }
-
-            auto start = std::chrono::high_resolution_clock::now();
-            system->Update(world, deltaTime);
-            auto end = std::chrono::high_resolution_clock::now();
-
-            if (trackPerformance && i < performanceData.size()) {
-                auto duration = std::chrono::duration<float32, std::milli>(end - start).count();
-                UpdatePerformanceData(i, duration);
-            }
-        }
+        const float32 fixedDelta = static_cast<float32>(clock.GetFixedDeltaSeconds());
+        while (clock.BeginStep())
+            UpdateFlatSequential(world, fixedDelta, SystemCadence::Simulation);
+        UpdateFlatSequential(world, deltaTime, SystemCadence::Frame);
 
         // Legacy parallel systems (separate from wave-based scheduling).
         // Slice 5: joined on a JobCounter instead of vector<TaskHandle>.
@@ -286,32 +336,73 @@ public:
                     uint32 c = (i < parFrameCounters.size()) ? parFrameCounters[i]++ : 0u;
                     if ((c % n) != 0u) continue;
                 }
+                const float32 systemDelta = FrameDelta(parTime[i], world, deltaTime);
                 if (system->RequiresExclusiveUpdate()) {
                     jobSystem->Wait(waveCounter);
-                    system->Update(world, deltaTime);
+                    system->Update(world, systemDelta);
                 } else {
                     ISystem* sys = system.get();
-                    jobSystem->Run([sys, &world, deltaTime]() {
-                        sys->Update(world, deltaTime);
+                    jobSystem->Run([sys, &world, systemDelta]() {
+                        sys->Update(world, systemDelta);
                     }, waveCounter);
                 }
             }
             jobSystem->Wait(waveCounter);
         } else {
-            for (auto& system : parallelSystems) {
+            for (size_t i = 0; i < parallelSystems.size(); ++i) {
+                auto& system = parallelSystems[i];
                 if (system && system->IsEnabled())
-                    system->Update(world, deltaTime);
+                    system->Update(world, FrameDelta(parTime[i], world, deltaTime));
             }
         }
     }
 
 private:
+    // The delta a Frame system of `time` gets from the frame delta. Read after the clock advanced.
+    static float32 FrameDelta(SystemTime time, World& world, float32 frameDelta) {
+        if (time == SystemTime::Real)
+            return frameDelta;
+        return static_cast<float32>(world.GetSimulationClock().m_FrameSeconds);
+    }
+
+    // The delta a sequential system gets: the fixed delta for a Simulation system, as passed.
+    float32 SystemDelta(size_t idx, World& world, float32 deltaTime) const {
+        if (seqCadence[idx] == SystemCadence::Simulation)
+            return deltaTime;
+        return FrameDelta(seqTime[idx], world, deltaTime);
+    }
+
+    // The flat sequential path (no execution plan): the systems of one cadence in slot order.
+    void UpdateFlatSequential(World& world, float32 deltaTime, SystemCadence cadence) {
+        for (size_t i = 0; i < systems.size(); ++i) {
+            auto& system = systems[i];
+            if (!system || !system->IsEnabled()) continue; // null = retired slot
+            if (seqCadence[i] != cadence) continue;
+
+            const uint32 everyN = (i < seqEveryNFrames.size()) ? seqEveryNFrames[i] : 1u;
+            if (everyN > 1u) {
+                const uint32 runCount = (i < seqFrameCounters.size()) ? seqFrameCounters[i]++ : 0u;
+                if ((runCount % everyN) != 0u) continue;
+            }
+
+            auto start = std::chrono::high_resolution_clock::now();
+            system->Update(world, SystemDelta(i, world, deltaTime));
+            auto end = std::chrono::high_resolution_clock::now();
+
+            if (trackPerformance && i < performanceData.size()) {
+                auto duration = std::chrono::duration<float32, std::milli>(end - start).count();
+                UpdatePerformanceData(i, duration);
+            }
+        }
+    }
+
     // Runs one system on the calling thread. With a traced frame it stamps
     // the body into `sample` (written only here, by this thread) and counts
     // the jobs the body publishes.
     void UpdateSequentialSystem(size_t idx, World& world, float32 deltaTime,
                                 SystemWaveTrace::Frame* frame = nullptr,
                                 uint16 sample = SystemWaveTrace::kNoSample) {
+        deltaTime = SystemDelta(idx, world, deltaTime);
         if (frame && sample != SystemWaveTrace::kNoSample) {
             UpdateTracedSystem(idx, world, deltaTime, frame->Systems[sample]);
             return;
@@ -401,11 +492,38 @@ private:
         ++wave.Joins;
     }
 
+    // Each Frame wave once with the frame delta. Each run of adjacent Simulation waves once per
+    // clock step with the fixed delta; every run of the frame steps the same ticks.
     void UpdateWaveBased(World& world, float32 deltaTime) {
         SystemWaveTrace::Frame* frame = nullptr;
         if (m_WaveTrace.IsEnabled())
             frame = &m_WaveTrace.BeginFrame(jobSystem ? jobSystem->GetPublishedJobCount() : 0);
-        for (size_t planWave = 0; planWave < m_ExecutionPlan.Waves.size(); ++planWave) {
+        SimulationClock& clock = world.GetSimulationClock();
+        const float32 fixedDelta = static_cast<float32>(clock.GetFixedDeltaSeconds());
+        const std::vector<SystemExecutionPlan::Wave>& waves = m_ExecutionPlan.Waves;
+        size_t runBegin = 0;
+        while (runBegin < waves.size()) {
+            const SystemCadence cadence = waves[runBegin].Cadence;
+            size_t runEnd = runBegin + 1;
+            while (runEnd < waves.size() && waves[runEnd].Cadence == cadence)
+                ++runEnd;
+            if (cadence == SystemCadence::Frame) {
+                UpdateWaves(world, deltaTime, runBegin, runEnd, frame);
+            } else {
+                clock.RestartSteps();
+                while (clock.BeginStep())
+                    UpdateWaves(world, fixedDelta, runBegin, runEnd, frame);
+            }
+            runBegin = runEnd;
+        }
+        if (frame)
+            m_WaveTrace.EndFrame(*frame, jobSystem ? jobSystem->GetPublishedJobCount() : 0);
+    }
+
+    // Runs the plan waves in [firstWave, endWave).
+    void UpdateWaves(World& world, float32 deltaTime, size_t firstWave, size_t endWave,
+                     SystemWaveTrace::Frame* frame) {
+        for (size_t planWave = firstWave; planWave < endWave; ++planWave) {
             const auto& wave = m_ExecutionPlan.Waves[planWave];
             // Collect enabled systems in this wave. The list lives in the calling
             // thread's scratch until the wave has joined; forked bodies receive
@@ -450,8 +568,6 @@ private:
             if (waveSample)
                 m_WaveTrace.EndWave(*frame, *waveSample);
         }
-        if (frame)
-            m_WaveTrace.EndFrame(*frame, jobSystem ? jobSystem->GetPublishedJobCount() : 0);
     }
 
 public:
@@ -587,6 +703,9 @@ public:
         seqFrameCounters.clear();
         parEveryNFrames.clear();
         parFrameCounters.clear();
+        seqCadence.clear();
+        seqTime.clear();
+        parTime.clear();
         Logger::Log::Debug("[ECS] All systems cleared");
     }
 

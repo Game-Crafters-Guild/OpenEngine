@@ -6,7 +6,6 @@
 #include <filesystem>
 #include <future>
 #include <optional>
-#include <vector>
 
 namespace GameEngine
 {
@@ -34,13 +33,13 @@ public:
 
     /// Waits for the outstanding range and moves its bytes into `out`. False when the read failed
     /// or nothing was requested.
-    bool Take(std::vector<uint8>& out);
+    bool Take(ByteBuffer& out);
 
 private:
     std::filesystem::path m_File;
     AssetIOService* m_Io = nullptr;
     SharedFileReader m_Reader; // the synchronous form
-    std::optional<std::future<std::optional<std::vector<uint8>>>> m_Pending;
+    std::optional<std::future<std::optional<ByteBuffer>>> m_Pending;
 };
 
 } // namespace GameEngine::PageStreaming

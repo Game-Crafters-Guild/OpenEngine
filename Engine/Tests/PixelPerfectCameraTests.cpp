@@ -60,14 +60,15 @@ TEST(PixelPerfectCamera, ActiveCameraSnapsInScreenAxesAndPreservesTransform)
     camera.params.PixelPerfectReferenceHeight = 91;
     for (float angle : {0.0f, 0.7f, 1.5707963f})
     {
-        auto* matrix = camera.worldTransform.Data();
-        matrix[0] = matrix[5] = std::cos(angle);
-        matrix[1] = std::sin(angle);
-        matrix[4] = -std::sin(angle);
+        Mathematics::Matrix4x4 basis;
+        float* rotation = basis.Data();
+        rotation[0] = rotation[5] = std::cos(angle);
+        rotation[1] = std::sin(angle);
+        rotation[4] = -std::sin(angle);
         for (float pan : {-0.17f, -0.04f, 0.0f, 0.04f, 0.17f})
         {
-            matrix[12] = pan;
-            matrix[13] = -pan;
+            camera.SetPose(basis, Mathematics::WorldPosition{pan, -pan, 0.0});
+            const float* matrix = camera.WorldTransform().Data();
             ApplyActiveCameraAspect(services, viewId, cameraId, camera, 483, 273);
             const auto* actual = services.Views().FindCameraData(cameraId);
             ASSERT_NE(actual, nullptr);
@@ -98,7 +99,7 @@ TEST(PixelPerfectCamera, DisabledPixelSnapPreservesProjectionAndZeroCompensation
     camera.params.PixelPerfect = true;
     camera.params.PixelPerfectPixelSnap = false;
     camera.params.PixelPerfectPixelsPerUnit = 10;
-    camera.worldTransform.Data()[12] = 0.037f;
+    camera.SetPose(Mathematics::Matrix4x4{}, Mathematics::WorldPosition{0.037f, 0.0, 0.0});
     ApplyActiveCameraAspect(services, viewId, cameraId, camera, 640, 360);
     const auto state = services.Views().GetViewPixelPerfect(viewId);
     const auto expected = camera.ToCameraData(float(state.PaddedWidth) / state.PaddedHeight,
@@ -110,4 +111,27 @@ TEST(PixelPerfectCamera, DisabledPixelSnapPreservesProjectionAndZeroCompensation
     for (int column = 0; column < 4; ++column)
         for (int row = 0; row < 4; ++row)
             EXPECT_FLOAT_EQ(actual->viewProj[column][row], expected.viewProj[column][row]);
+}
+
+// Past 512 m the vertex stage projects through viewProjRel, so it must carry the snap of viewProj.
+TEST(PixelPerfectCamera, RebasedViewProjectionCarriesTheSnapPastTheFirstSector)
+{
+    RenderServices services;
+    const auto cameraId = services.Views().AllocateCamera("PixelPerfect.Far");
+    const auto viewId = services.Views().AllocateView("PixelPerfect.Far", cameraId);
+    Engine::Renderer::Camera camera;
+    camera.params.Perspective = false;
+    camera.params.PixelPerfect = true;
+    camera.params.PixelPerfectPixelSnap = true;
+    camera.params.PixelPerfectPixelsPerUnit = 10;
+    constexpr float kEyeX = 2000.17f; // sector 2, 0.3 px off the pixel grid
+    camera.SetPose(Mathematics::Matrix4x4{}, Mathematics::WorldPosition{kEyeX, 0.0, 0.0});
+    ApplyActiveCameraAspect(services, viewId, cameraId, camera, 483, 273);
+    const auto* actual = services.Views().FindCameraData(cameraId);
+    ASSERT_NE(actual, nullptr);
+    ASSERT_EQ(actual->renderOriginSector[0], 2);
+    const Mathematics::Matrix4x4 expected = actual->proj * actual->viewRel;
+    for (int column = 0; column < 4; ++column)
+        for (int row = 0; row < 4; ++row)
+            EXPECT_NEAR(actual->viewProjRel[column][row], expected[column][row], 1e-5f);
 }

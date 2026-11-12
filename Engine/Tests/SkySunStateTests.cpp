@@ -12,6 +12,7 @@
 #include "Rendering/Sky/SkySunState.h"
 #include "Rendering/Sky/SkySystem.h"
 #include "SkySunAnchorHarness.h"
+#include "TestCameraEye.h"
 
 using namespace GameEngine;
 
@@ -43,7 +44,7 @@ struct SunStateRig
         const Rendering::CameraId camera = Rig.Services.Views().AllocateCamera(name);
         Rendering::CameraData data{};
         data.cameraPos.y = cameraHeight;
-        Rig.Services.Views().SetCameraData(camera, data);
+        Rig.Services.Views().SetCameraData(camera, ::GameEngine::Tests::TestCameraWithEye(data), Rendering::CameraRanges{});
         Rig.Services.Views().AllocateView(name, camera, purpose);
     }
 

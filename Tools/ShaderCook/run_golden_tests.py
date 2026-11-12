@@ -27,14 +27,14 @@ kGolden = kRoot / "golden"
 kCannotRun = 125
 
 # One per remediation class: plain compute, combined-sampler split (post fx),
-# derivative hoist + uniformity (core lighting), lod-0 LUT taps (sky),
+# derivative hoist + uniformity (ocean reflected caustics), lod-0 LUT taps (sky),
 # constant-bound barrier walk + spec-const pin (skinning), write-only storage
 # buffer cooked read_write (sun glare casters), write-only storage image kept
 # write (depth copy).
 kCases = [
     "auto_exposure_histogram.comp",
     "bloom_blur_h.frag",
-    "forwardplus_lighting.frag",
+    "Ocean/ocean_lightshafts.frag",
     "sky_render.frag",
     "animation_skinning.comp",
     "sun_glare_casters.comp",

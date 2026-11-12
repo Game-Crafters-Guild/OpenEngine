@@ -4,6 +4,7 @@
 #include "Inspectors/DefaultComponentInspector.h"
 #include "Inspectors/InspectorComponent/InspectorComponentRowHelpers.h"
 #include "Inspectors/InspectorComponent/InspectorComponentSection.h"
+#include "Inspectors/InspectorOverrideRows.h"
 #include "Inspectors/InspectorUIHelpers.h"
 #include "UI/Controls/Foldout.h"
 #include "UI/Controls/Toggle.h"
@@ -122,7 +123,7 @@ void AddVergeSection(const InspectorContext& context, const SplineExtrude& shown
     Toggle* toggle = InspectorDrag::AddToggleRow(
         rows.Parent, FieldDisplayName(*vergeField), shown.Verge,
         [context](bool on) { SetVerge(context, on); }, InspectorDrag::ReflectedTooltip(typeId, "Verge"));
-    InspectorDrag::MarkReflectedFieldOverride(context, typeId, InspectorUI::RowOfControl(toggle), "Verge");
+    BindFieldRow(context, typeId, InspectorUI::RowOfControl(toggle), "Verge");
     std::vector<UIElement*> sized = {
         InspectorDrag::AddReflectedLengthSliderRow(rows, "VergeWidth", &SplineExtrude::VergeWidth, shown, kUndoPrefix,
                                                    kVergeSliderMaxMeters),

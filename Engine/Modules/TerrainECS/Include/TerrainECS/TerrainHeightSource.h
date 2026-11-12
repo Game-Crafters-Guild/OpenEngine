@@ -20,6 +20,9 @@ struct TerrainHeightSourceInputs
     /// The terrain's base is a heightmap whose cooked store is open: cooked into the project's cache
     /// in the editor, or the packaged terrain container in the Player (which never cooks on load).
     bool CookedStoreOpen = false;
+    /// The terrain's base is a decoded heightmap that opens no store (HeightPageStoreLoader::NeverOpensStore):
+    /// its CPU pages are evaluated from the decoded samples, as its tiles are. The GPU keeps its texture.
+    bool DecodedHeightmapBase = false;
     /// The terrain's pyramid lies on the tile lattice where the CBT and the modifier overlay need it
     /// (a cooked store on its own grid lies on it too, without an overlay: PageOverlayAllowance).
     bool PagesOnLattice = false;

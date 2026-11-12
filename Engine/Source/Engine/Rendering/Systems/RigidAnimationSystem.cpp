@@ -11,7 +11,6 @@
 #include "Engine/Rendering/AnimationSampling.h"
 
 #include <algorithm>
-#include <cstring>
 
 namespace GameEngine
 {
@@ -62,7 +61,8 @@ void RigidAnimationSystem::Update(ECS::World& world, [[maybe_unused]] float32 de
         if (matrixOffset + 16u > m_NodeWorldMatrices.size())
             return;
 
-        std::memcpy(transform.matrix, m_NodeWorldMatrices.data() + matrixOffset, sizeof(float32) * 16u);
+        transform = Components::Transform::FromMatrix4x4(
+            Mathematics::Matrix4x4::FromColumnMajor(m_NodeWorldMatrices.data() + matrixOffset));
     });
 }
 

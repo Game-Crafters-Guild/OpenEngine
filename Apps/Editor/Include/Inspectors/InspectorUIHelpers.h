@@ -74,29 +74,42 @@ inline UIElement* AddFieldContainer(UIElement* row)
     return raw;
 }
 
-// Shows or hides the marks of a field that differs from the entity's source on `row`: a bold label,
-// and the override edge, which its modifier class moves from the row's left to the Inspector's gutter.
+// The label of `row`: a direct inspector-field-label child, or the inspector-label in its label cell. Null when the
+// row has no label.
+inline UIElement* RowLabel(UIElement* row)
+{
+    if (!row)
+        return nullptr;
+    for (const auto& cell : row->GetChildren())
+    {
+        if (cell->HasClass("inspector-field-label"))
+            return cell.get();
+        if (!cell->HasClass("inspector-label-cell"))
+            continue;
+        for (const auto& label : cell->GetChildren())
+            if (label->HasClass("inspector-label"))
+                return label.get();
+    }
+    return nullptr;
+}
+
+// Shows or hides the override marks on `row`: the bold label (RowLabel) and the override edge in the Inspector's
+// gutter.
 inline void SetRowOverridden(UIElement* row, bool overridden)
 {
     if (!row)
         return;
+    if (UIElement* label = RowLabel(row))
+    {
+        if (overridden)
+            label->AddClass("inspector-label-overridden");
+        else
+            label->RemoveClass("inspector-label-overridden");
+    }
     UIElement* mark = nullptr;
     for (const auto& cell : row->GetChildren())
-    {
         if (cell->HasClass("inspector-override-mark"))
             mark = cell.get();
-        if (!cell->HasClass("inspector-label-cell"))
-            continue;
-        for (const auto& label : cell->GetChildren())
-        {
-            if (!label->HasClass("inspector-label"))
-                continue;
-            if (overridden)
-                label->AddClass("inspector-label-overridden");
-            else
-                label->RemoveClass("inspector-label-overridden");
-        }
-    }
     if (!overridden && mark)
         row->RemoveChild(mark);
     if (!overridden || mark)
@@ -288,6 +301,14 @@ T* AddControl(UIElement* parent, std::unique_ptr<T> control)
     return raw;
 }
 
+// The index of the option of `options` whose value is `value`, or -1 when no option has it.
+inline int OptionIndexOfValue(const std::vector<Dropdown::Option>& options, std::string_view value)
+{
+    const auto found = std::find_if(options.begin(), options.end(),
+                                    [value](const Dropdown::Option& option) { return option.value == value; });
+    return found == options.end() ? -1 : static_cast<int>(found - options.begin());
+}
+
 inline Dropdown* AddDropdownRow(UIElement* parent, const std::string& labelText,
                                 const std::vector<Dropdown::Option>& options, int selectedIndex,
                                 const char* tooltip = nullptr)
@@ -302,6 +323,20 @@ inline Dropdown* AddDropdownRow(UIElement* parent, const std::string& labelText,
     Dropdown* raw = dropdown.get();
     fieldContainer->AddChild(std::move(dropdown));
     return raw;
+}
+
+// A dropdown that runs an action instead of holding a value: nothing is selected, so it reads as
+// `prompt`. The caller wires SetOnValueChanged. Returns the dropdown, or null when `parent` is null.
+inline Dropdown* AddActionDropdown(UIElement* parent, const std::vector<Dropdown::Option>& options,
+                                   const std::string& prompt)
+{
+    // SetOptions selects the first option for an index out of range; the silent call clears it.
+    auto dropdown = std::make_unique<Dropdown>();
+    dropdown->SetOptions(options, -1);
+    dropdown->SetSelectedIndexWithoutNotify(-1);
+    dropdown->SetNoSelectionText(prompt);
+    dropdown->AddClass("inspector-dropdown");
+    return AddControl(parent, std::move(dropdown));
 }
 
 // A row whose value is a set of options, each with its own bit: the label cell and a MaskField. The
@@ -400,10 +435,11 @@ inline std::string AssetPathExtensionText(std::string_view text)
     return "File Extension: " + std::string(text.substr(dot));
 }
 
-inline void AddTextBlock(UIElement* parent, const std::string& text, const char* cssClass = "inspector-text")
+// Returns the label, so a row can set its text again. Returns null when `parent` is null.
+inline Label* AddTextBlock(UIElement* parent, const std::string& text, const char* cssClass = "inspector-text")
 {
     if (!parent)
-        return;
+        return nullptr;
 
     if (cssClass && std::string_view(cssClass) == "inspector-asset-path")
     {
@@ -414,10 +450,11 @@ inline void AddTextBlock(UIElement* parent, const std::string& text, const char*
         auto label = std::make_unique<Label>();
         label->AddClass(cssClass);
         label->SetText(AssetPathExtensionText(text));
+        Label* shown = label.get();
         clip->AddChild(std::move(label));
 
         parent->AddChild(std::move(clip));
-        return;
+        return shown;
     }
 
     auto label = std::make_unique<Label>();
@@ -426,7 +463,9 @@ inline void AddTextBlock(UIElement* parent, const std::string& text, const char*
         label->AddClass(cssClass);
     }
     label->SetText(text);
+    Label* shown = label.get();
     parent->AddChild(std::move(label));
+    return shown;
 }
 
 inline void AddSelectableTextBlock(UIElement* parent, const std::string& text, const char* cssClass = "inspector-text")

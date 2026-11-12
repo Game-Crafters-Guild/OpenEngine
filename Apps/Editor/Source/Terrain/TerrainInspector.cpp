@@ -6,15 +6,19 @@
 #include "AssetCore/GUID.h"
 #include "Assets/AssetManager.h"
 #include "Assets/TerrainMaterialLibraryAsset.h"
+#include "Components/TemplateGroundPlaceholder.h"
 #include "Components/Terrain/Terrain.h"
 #include "Components/Terrain/TerrainGrass.h"
 #include "Components/Terrain/TerrainPlanetRelief.h"
 #include "Core/Engine.h"
 #include "Editor/Entities/EditorComponentTraits.h"
 #include "Editor/Entities/EditorECSHelpers.h"
+#include "Mathematics/Angle.h"
 #include "Mathematics/Interpolation.h"
+#include "PageStreaming/PageStore/PageStoreFormat.h" // kPageStoreMaxSamplesPerAxis
 #include "Terrain/TerrainBrushTool.h"
 #include "Terrain/TerrainBaseSourceSection.h"
+#include "Terrain/Planet/PlanetEditsNotice.h"
 #include "Terrain/TerrainDrawnNotice.h"
 #include "Terrain/TerrainGrass/TerrainGrassPresetRow.h"
 #include "Terrain/TerrainGrass/TerrainGrassVocabulary.h"
@@ -23,11 +27,14 @@
 #include "Terrain/TerrainMaterialLibraryMint.h"
 #include "Terrain/TerrainMaterialRecord.h" // kMaxTerrainMaterials — the slot ID domain
 #include "Terrain/TerrainRoleMaterials.h"
+#include "Terrain/TerrainRule/TerrainRuleConditionVocabulary.h"
+#include "TerrainECS/Planet/PlanetPageRequester.h"
 #include "TerrainECS/TerrainGrass/TerrainGrassAlpha.h"
-#include "TerrainGrass/GrassPlacementModel.h"       // the fit the Range row reports
+#include "TerrainGrass/GrassPlacementModel.h"      // the fit the Range row reports
 #include "TerrainGrass/TerrainGrassRenderFeature.h" // kMaxInstancesPerView
 #include "TerrainGrass/TerrainGrassClamps.h"
 #include "TerrainGrass/TerrainGrassPresets.h"
+#include "TerrainECS/TerrainModifierComponents.h"
 #include "TerrainECS/TerrainService.h"
 #include "TerrainECS/TerrainSizingPlan.h"
 #include "UndoRedo/UndoRedoService.h"
@@ -51,6 +58,7 @@
 #include <functional>
 #include <iterator>
 #include <limits>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -61,27 +69,55 @@ namespace GameEngine
 namespace
 {
 
+constexpr EnumEntry<Components::TerrainBehindCameraDetail> kBehindCameraDetails[] = {
+    {Components::TerrainBehindCameraDetail::AlwaysKeep, "Always Keep"},
+    {Components::TerrainBehindCameraDetail::ReleaseWhenNeeded, "Release When Needed"},
+    {Components::TerrainBehindCameraDetail::AlwaysRelease, "Always Release"},
+};
+
+// The row shows only where the setting acts (TerrainECS::BehindCameraDetailApplies); on a smaller plane the
+// ground behind the camera already goes coarse when the pool fills, and a planet keeps none.
+void AddBehindCameraDetailRow(UIElement* parent, const InspectorContext& ctx, const Components::Terrain& terrain)
+{
+    const auto* terrainService = TerrainECS::TerrainService::TryGet();
+    if (!terrainService || !TerrainECS::BehindCameraDetailApplies(terrain, *terrainService))
+        return;
+    EnumField<Components::TerrainBehindCameraDetail>* field = InspectorUI::AddEnumRow(parent, "Detail Behind Camera",
+        kBehindCameraDetails, terrain.BehindCameraDetail,
+        "Always Keep: a turn shows no change, but after a camera cut the new view refines slowest.\n"
+        "Release When Needed: after a fast turn, the far skyline can change for a few frames.\n"
+        "Always Release: after a fast turn, the near and the far ground are coarser for the first frames.");
+    field->SetOnValueChanged([ctx](Components::TerrainBehindCameraDetail chosen) {
+        InspectorDrag::CommitComponentWithUndo<Components::Terrain>(ctx.World, ctx.Entity, ctx.ChangeNotifications,
+            ctx.Undo, "Change Terrain Detail Behind Camera",
+            [chosen](Components::Terrain& t) { t.BehindCameraDetail = chosen; });
+    });
+}
+
 constexpr float kColorSwatchSize = 20.0f;
 constexpr uint32_t kColorSwatchBorder = 0xFF555555u;
 
-// TerrainGrass::WindDirection, BladeTilt, BladeBend and TuftFan are stored in radians, which is what
-// the shader wants and what nobody authors: the panel drags them in degrees.
-constexpr float kGrassRadToDeg = 57.2957795f;
-constexpr float kGrassDegToRad = 0.0174532925f;
-
-// A planar terrain's side, in metres: at least 1, and at most the extent its sample density can
-// tile (TerrainECS::MaxTerrainExtentMetres), past which tiles never become resident.
+// A planar terrain's side, in metres: at least 1, and at most the extent at its sample density
+// (TerrainECS::MaxTerrainExtentMetres), past which the CBT cannot resolve one sample.
 float ClampTerrainSide(float metres, float samplesPerMeter)
 {
     return std::clamp(metres, 1.0f, TerrainECS::MaxTerrainExtentMetres(samplesPerMeter));
 }
 
 // A planar terrain's density, in samples per metre: at least 0.01, and at most what its longer
-// side can tile (TerrainECS::MaxTerrainSamplesPerMeter), the same limit seen from the other input.
+// side allows (TerrainECS::MaxTerrainSamplesPerMeter), the same limit seen from the other input.
 float ClampTerrainDensity(float samplesPerMeter, const Components::Terrain& terrain)
 {
     const float densest = TerrainECS::MaxTerrainSamplesPerMeter(terrain.SizeX, terrain.SizeZ);
     return std::clamp(samplesPerMeter, 0.01f, std::max(0.01f, densest));
+}
+
+// A scene file can hold a planar size the rows below never set. The notice says that the terrain
+// is not created and gives the limit and the fix.
+void AddPlanarSizeRefusalNotice(UIElement* parent, const std::string& sizeError)
+{
+    if (!sizeError.empty())
+        InspectorUI::AddNotice(parent, "This terrain is not created. " + sizeError, EditorUI::InspectorNotice::Kind::Error);
 }
 
 // One of this component's sections. Titles repeat across the two terrain inspectors and across
@@ -404,6 +440,44 @@ static void AddGrassRootColorRow(UIElement* parent,
                 requestRefresh();
         });
     field->AddChild(std::move(button));
+}
+
+// Sets the Height Range text when the terrain's range differs from `shown`. The format runs only on a change.
+static void RefreshHeightRange(Label& text, const TerrainECS::TerrainService& terrainService, ECS::World& world,
+                               ECS::EntityHandle entity, TerrainECS::TerrainHeightRangeMeters& shown)
+{
+    const Components::Terrain* terrain = world.GetComponent<Components::Terrain>(entity);
+    if (!terrain)
+        return;
+    const TerrainECS::TerrainHeightRangeMeters range =
+        terrainService.GetHeightRangeMeters(*terrain, TerrainECS::ResolveGeneratedNoiseRelief(world));
+    if (range.Min == shown.Min && range.Max == shown.Max)
+        return;
+    shown = range;
+    text.SetText(Editor::TerrainRuleVocabulary::FormatHeightRange({range.Min, range.Max}));
+}
+
+// The read-only height range of a planar terrain, in meters above its base: the unit and the
+// domain of its height rules. Read again each frame: the range changes when the terrain is provisioned again.
+static void AddHeightRangeRow(UIElement* parent, const InspectorContext& ctx, const Components::Terrain& terrain)
+{
+    auto* terrainService = TerrainECS::TerrainService::TryGet();
+    if (!parent || !terrainService || !ctx.World)
+        return;
+    const TerrainECS::TerrainHeightRangeMeters range =
+        terrainService->GetHeightRangeMeters(terrain, TerrainECS::ResolveGeneratedNoiseRelief(*ctx.World));
+
+    UIElement* row = InspectorUI::AddRow(parent);
+    InspectorUI::AddLabel(row, "Height Range",
+                          "The heights this terrain spans, in meters above its base, from its source and "
+                          "the heights loaded so far. Height rules are authored in this unit.");
+    UIElement* field = InspectorUI::AddFieldContainer(row);
+    field->AddClass("inspector-field-readout");
+    Label* shown = InspectorUI::AddTextBlock(field, Editor::TerrainRuleVocabulary::FormatHeightRange({range.Min, range.Max}));
+    if (shown && ctx.FrameRefreshCallbacks)
+        ctx.FrameRefreshCallbacks->push_back(
+            [shown, terrainService, world = ctx.World, entity = ctx.Entity, shownRange = range]() mutable
+            { RefreshHeightRange(*shown, *terrainService, *world, entity, shownRange); });
 }
 
 // What an unbound layer actually looks like on the surface, said out loud rather than left as an
@@ -878,6 +952,12 @@ void RegisterTerrainInspector()
         UIElement* settings = AddSection(ctx.Parent, "Terrain", "Terrain Settings");
         if (terrain->Domain == Components::TerrainDomain::Planar)
         {
+            const std::string sizeError =
+                TerrainECS::PlanarTerrainSizeError(terrain->SizeX, terrain->SizeZ, terrain->SamplesPerMeter);
+            AddPlanarSizeRefusalNotice(settings, sizeError);
+            // A commit can make a refused size valid: the panel then rebuilds without the notice.
+            const std::function<void()> refreshIfRefused =
+                sizeError.empty() ? std::function<void()>{} : ctx.RequestInspectorRefresh;
             AddFloatRowWithDrag(settings, "Size X", terrain->SizeX,
                 [w, e, n](float v) {
                     auto* comp = w->GetComponent<Components::Terrain>(e);
@@ -886,13 +966,15 @@ void RegisterTerrainInspector()
                     updated.SizeX = ClampTerrainSide(v, updated.SamplesPerMeter);
                     Editor::PreviewComponentUpdate(w, e, n, updated);
                 },
-                [w, e, n, invalidateMorphRanges](float v) {
+                [w, e, n, invalidateMorphRanges, refreshIfRefused](float v) {
                     auto* comp = w->GetComponent<Components::Terrain>(e);
                     if (!comp) return;
                     Components::Terrain updated = *comp;
                     updated.SizeX = ClampTerrainSide(v, updated.SamplesPerMeter);
                     Editor::CommitComponentUpdate(w, e, n, updated);
                     invalidateMorphRanges(updated);
+                    if (refreshIfRefused)
+                        refreshIfRefused();
                 },
                 kNoDefault, "World-space width of the heightmap terrain (metres). Planar only.");
 
@@ -904,13 +986,15 @@ void RegisterTerrainInspector()
                     updated.SizeZ = ClampTerrainSide(v, updated.SamplesPerMeter);
                     Editor::PreviewComponentUpdate(w, e, n, updated);
                 },
-                [w, e, n, invalidateMorphRanges](float v) {
+                [w, e, n, invalidateMorphRanges, refreshIfRefused](float v) {
                     auto* comp = w->GetComponent<Components::Terrain>(e);
                     if (!comp) return;
                     Components::Terrain updated = *comp;
                     updated.SizeZ = ClampTerrainSide(v, updated.SamplesPerMeter);
                     Editor::CommitComponentUpdate(w, e, n, updated);
                     invalidateMorphRanges(updated);
+                    if (refreshIfRefused)
+                        refreshIfRefused();
                 },
                 kNoDefault, "World-space depth of the heightmap terrain (metres). Planar only.");
 
@@ -934,6 +1018,10 @@ void RegisterTerrainInspector()
                 "Vertical scale of the heightmap (metres). Planar only — a planet's relief comes "
                 "from the Planet fields.");
 
+            // A flat Function base has no heights to span: the service reports its nominal band.
+            if (!IsFlatFunctionBase(*terrain))
+                AddHeightRangeRow(settings, ctx, *terrain);
+
             AddFloatRowWithDrag(settings, "Samples Per Meter", terrain->SamplesPerMeter,
                 [w, e, n](float v) {
                     auto* comp = w->GetComponent<Components::Terrain>(e);
@@ -942,13 +1030,15 @@ void RegisterTerrainInspector()
                     updated.SamplesPerMeter = ClampTerrainDensity(v, updated);
                     Editor::PreviewComponentUpdate(w, e, n, updated);
                 },
-                [w, e, n, invalidateMorphRanges](float v) {
+                [w, e, n, invalidateMorphRanges, refreshIfRefused](float v) {
                     auto* comp = w->GetComponent<Components::Terrain>(e);
                     if (!comp) return;
                     Components::Terrain updated = *comp;
                     updated.SamplesPerMeter = ClampTerrainDensity(v, updated);
                     Editor::CommitComponentUpdate(w, e, n, updated);
                     invalidateMorphRanges(updated);
+                    if (refreshIfRefused)
+                        refreshIfRefused();
                 },
                 kNoDefault,
                 "Heightmap resolution (samples per metre). Planar only — a planet refines "
@@ -973,10 +1063,7 @@ void RegisterTerrainInspector()
 
             // What the three rows above actually bought. Rendered here, at the rows that decide
             // it, because a summary elsewhere in the panel is hundreds of pixels from the drag.
-            Editor::AddTerrainSizingNotice(settings,
-                                           TerrainECS::DeriveTerrainSizingPlan(
-                                               terrain->SizeX, terrain->SizeZ,
-                                               terrain->SamplesPerMeter));
+            Editor::AddTerrainSizingNotice(settings, terrain->SizeX, terrain->SizeZ, terrain->SamplesPerMeter);
 
             // Water the terrain sits under (Terrain::SeaLevel): one toggle, and the height only
             // while it is set, so an unset level never shows the sentinel as a number.
@@ -1018,12 +1105,52 @@ void RegisterTerrainInspector()
         }
         else
         {
-            AddComponentFloatRowWithDrag<Components::Terrain>(
-                settings, "Planet Radius", terrain->PlanetRadius, w, e, n,
-                [](Components::Terrain& u, float v) { u.PlanetRadius = std::max(1.0f, v); },
-                "Sphere radius in metres, centered at the entity origin. MaxDepth auto-scales with "
-                "it. A planet has no Size or Samples Per Meter — it refines procedurally.",
-                {}, 1.0f, 100000.0f);
+            const float32 texel = terrain->SamplesPerMeter > 0.0f ? 1.0f / terrain->SamplesPerMeter : 0.0f;
+            // The largest planet the page store holds at this texel, rounded down to a float32. A texel
+            // of 0 holds no page, so it sets no maximum.
+            const uint64 largestRadius =
+                TerrainECS::LargestPlanetRadius(PageStreaming::kPageStoreMaxSamplesPerAxis, texel);
+            float32 maxRadius = std::numeric_limits<float32>::infinity();
+            if (largestRadius != 0u)
+                maxRadius = static_cast<float32>(largestRadius);
+            if (largestRadius != 0u && static_cast<uint64>(maxRadius) > largestRadius)
+                maxRadius = std::nextafter(maxRadius, 0.0f);
+            // The commit rebuilds the inspector: the sculpt refusal notice below reads the radius.
+            AddFloatRowWithDrag(settings, "Planet Radius", terrain->PlanetRadius,
+                [w, e, n](float v) {
+                    auto* comp = w->GetComponent<Components::Terrain>(e);
+                    if (!comp) return;
+                    Components::Terrain updated = *comp;
+                    updated.PlanetRadius = std::max(1.0f, v);
+                    Editor::PreviewComponentUpdate(w, e, n, updated);
+                },
+                [w, e, n, requestRefresh = ctx.RequestInspectorRefresh](float v) {
+                    auto* comp = w->GetComponent<Components::Terrain>(e);
+                    if (!comp) return;
+                    Components::Terrain updated = *comp;
+                    updated.PlanetRadius = std::max(1.0f, v);
+                    Editor::CommitComponentUpdate(w, e, n, updated);
+                    if (requestRefresh)
+                        requestRefresh();
+                },
+                kNoDefault,
+                "Sphere radius in meters, centered at the entity origin. A saved sculpt fits a range of "
+                "radii: outside that range the sculpt does not show until the radius is back inside it, "
+                "and a warning below states the range.",
+                1.0f, std::max(1.0f, maxRadius));
+            AddPlanetAtmosphereRows(settings, ctx);
+            AssetField* heightLayer = InspectorUI::AddAssetFieldRow(
+                settings, "Height Layer", terrain->HeightLayerGuid.ToGuid(), {AssetType::TerrainHeightLayer},
+                &EngineCore::GetInstance().GetAssetManager().GetRegistry(), {}, ctx.Thumbnails,
+                "The planet's sculpt: the file that holds the height the brush adds, in the scene's Zones "
+                "folder. Save writes it and sets this row; you cannot change or clear it here.");
+            // Only a save sets the reference, so the field is read-only and has no clear button.
+            heightLayer->SetId("terrain-height-layer");
+            heightLayer->SetClearable(false);
+            heightLayer->SetEnabled(false);
+            Editor::AddPlanetSculptRefusalNotice(settings, e.id,
+                                                 TerrainECS::PlanetFaceSamples(terrain->PlanetRadius, texel), texel);
+            Editor::AddPlanetSurfaceFitNotice(settings, e.id, ctx.FrameRefreshCallbacks);
         }
 
         // ---- Material Layers ----
@@ -1047,6 +1174,7 @@ void RegisterTerrainInspector()
             "Lower = finer distant ground, at about 1/value^2 triangles. Default 11. On a "
             "heightfield terrain, near the camera the triangles stop at the height data's own "
             "spacing; a planet refines procedurally.");
+        AddBehindCameraDetailRow(advanced, ctx, *terrain);
 
         // CBT debug visualization: tints each bisector triangle so the live LEB bisection
         // structure is visible (planar + planet). Not serialized — a transient authoring aid.
@@ -1126,6 +1254,7 @@ void RegisterTerrainInspector()
             InspectorUI::AddLine(ctx.Parent, "(TerrainPlanetRelief missing)");
             return;
         }
+        Editor::AddPlanetEditsNotice(ctx.Parent, ctx.Entity.id);
 
         ECS::World* w = ctx.World;
         ECS::EntityHandle e = ctx.Entity;
@@ -1297,26 +1426,26 @@ void RegisterTerrainInspector()
         // The blade's shape: five physical dials. Angles are stored in radians, as Wind Direction is,
         // and shown in degrees, because nobody pictures a tilt in radians.
         AddComponentFloatRowWithDrag<Components::TerrainGrass>(
-            grassSection, "Blade Tilt (deg)", grass->BladeTilt * kGrassRadToDeg, w, e, n,
+            grassSection, "Blade Tilt (deg)", Mathematics::ToDegrees(grass->BladeTilt), w, e, n,
             [](Components::TerrainGrass& u, float v) {
-                u.BladeTilt = std::clamp(v * kGrassDegToRad, 0.0f, Components::kMaxTerrainGrassBladeTilt);
+                u.BladeTilt = std::clamp(Mathematics::ToRadians(v), 0.0f, Components::kMaxTerrainGrassBladeTilt);
                 TerrainGrass::ReconcileTerrainGrassPreset(u);
             },
             "How far a blade leans from vertical where it leaves the ground. The default 14 suits a "
             "meadow of upright leaves; a lawn is near 6, a loose meadow 17 to 29. Each blade takes "
             "this plus or minus 40%, and tilt and bend together never take the tip past 80 degrees "
             "from vertical, so no tip goes into the ground",
-            {}, 0.0f, Components::kMaxTerrainGrassBladeTilt * kGrassRadToDeg);
+            {}, 0.0f, Mathematics::ToDegrees(Components::kMaxTerrainGrassBladeTilt));
 
         AddComponentFloatRowWithDrag<Components::TerrainGrass>(
-            grassSection, "Blade Bend (deg)", grass->BladeBend * kGrassRadToDeg, w, e, n,
+            grassSection, "Blade Bend (deg)", Mathematics::ToDegrees(grass->BladeBend), w, e, n,
             [](Components::TerrainGrass& u, float v) {
-                u.BladeBend = std::clamp(v * kGrassDegToRad, 0.0f, Components::kMaxTerrainGrassBladeBend);
+                u.BladeBend = std::clamp(Mathematics::ToRadians(v), 0.0f, Components::kMaxTerrainGrassBladeBend);
                 TerrainGrass::ReconcileTerrainGrassPreset(u);
             },
             "How far a blade curves over its length under its own weight; the tip droops by 0.6 of "
             "this again. The wind bends it further. Each blade takes this plus or minus 40%",
-            {}, 0.0f, Components::kMaxTerrainGrassBladeBend * kGrassRadToDeg);
+            {}, 0.0f, Mathematics::ToDegrees(Components::kMaxTerrainGrassBladeBend));
 
         AddComponentFloatRowWithDrag<Components::TerrainGrass>(
             grassSection, "Blade Twist (turns)", grass->BladeTwist, w, e, n,
@@ -1340,15 +1469,15 @@ void RegisterTerrainInspector()
             {}, 0.0f, Components::kMaxTerrainGrassBladeTaperStart);
 
         AddComponentFloatRowWithDrag<Components::TerrainGrass>(
-            grassSection, "Tuft Fan (deg per Clump Size)", grass->TuftFan * kGrassRadToDeg, w, e, n,
+            grassSection, "Tuft Fan (deg per Clump Size)", Mathematics::ToDegrees(grass->TuftFan), w, e, n,
             [](Components::TerrainGrass& u, float v) {
-                u.TuftFan = std::clamp(v * kGrassDegToRad, 0.0f, Components::kMaxTerrainGrassTuftFan);
+                u.TuftFan = std::clamp(Mathematics::ToRadians(v), 0.0f, Components::kMaxTerrainGrassTuftFan);
                 TerrainGrass::ReconcileTerrainGrassPreset(u);
             },
             "How far a blade leans away from the center of its tuft, in degrees for each Clump Size "
             "of distance from it, so a tuft opens like a fan with its outer blades lowest. 0 leaves "
             "no fan. Needs Clump Size above 0",
-            {}, 0.0f, Components::kMaxTerrainGrassTuftFan * kGrassRadToDeg);
+            {}, 0.0f, Mathematics::ToDegrees(Components::kMaxTerrainGrassTuftFan));
 
         AddComponentFloatRowWithDrag<Components::TerrainGrass>(
             grassSection, "Clump Size", grass->ClumpSize, w, e, n,
@@ -1454,8 +1583,8 @@ void RegisterTerrainInspector()
         // Authored in RADIANS on the component; degrees in the panel, because a heading is a
         // compass reading and nobody drags one in radians.
         AddComponentFloatRowWithDrag<Components::TerrainGrass>(
-            grassSection, "Wind Direction (deg)", grass->WindDirection * kGrassRadToDeg, w, e, n,
-            [](Components::TerrainGrass& u, float v) { u.WindDirection = v * kGrassDegToRad; },
+            grassSection, "Wind Direction (deg)", Mathematics::ToDegrees(grass->WindDirection), w, e, n,
+            [](Components::TerrainGrass& u, float v) { u.WindDirection = Mathematics::ToRadians(v); },
             "Wind heading in degrees", {}, -360.0f, 360.0f);
 
         AddComponentFloatRowWithDrag<Components::TerrainGrass>(
@@ -1550,6 +1679,14 @@ void RegisterTerrainInspector()
             [](Components::TerrainGrass& u, float v) { u.DensityFalloff = std::max(0.0f, v); },
             "Falloff exponent: 1 is linear to Range, higher spends more of the budget near the camera",
             {}, 0.0f, 6.0f);
+
+        AddComponentFloatRowWithDrag<Components::TerrainGrass>(
+            advanced, "Far Thinning", grass->FarThinning, w, e, n,
+            [](Components::TerrainGrass& u, float v) { u.FarThinning = Math::Clamp01(v); },
+            "Where far blades are thinner than a pixel, the grass draws fewer, wider blades. 1 saves "
+            "the most frame time; 0 draws every blade. Lower it if the far grass looks thin or washed "
+            "out. With several grass terrains in the scene, the lowest value applies to all.",
+            {}, 0.0f, 1.0f);
 
         AddComponentFloatRowWithDrag<Components::TerrainGrass>(
             advanced, "Placement Seed", grass->PlacementSeed, w, e, n,
@@ -1844,6 +1981,12 @@ void RegisterTerrainInspector()
                                  "costs no placement and no draw.";
     Editor::EditorComponentTraitsRegistry::Get().Register(
         ECS::GetComponentTypeId<Components::TerrainGrass>(), std::move(traits));
+
+    // The marker has no setting. The notice that a new terrain shows tells the user what it does.
+    Editor::EditorComponentTraits placeholderTraits;
+    placeholderTraits.HideInInspector = true;
+    Editor::EditorComponentTraitsRegistry::Get().Register(
+        ECS::GetComponentTypeId<Components::TemplateGroundPlaceholder>(), std::move(placeholderTraits));
 }
 
 } // namespace GameEngine

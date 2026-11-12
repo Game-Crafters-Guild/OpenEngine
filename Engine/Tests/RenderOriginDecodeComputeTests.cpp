@@ -104,15 +104,15 @@ TEST_F(RenderOriginDecodeComputeTest, DeviceDecodeMatchesPack)
 {
     // Cases span sign, the Y split (p0[21..31] / p1[0..9]) with non-zero Y, the
     // 21-bit extremes, and the live editor value (3595,0,3595).
-    const std::array<Components::WorldSectorCoord, 8> cases = {{
+    const std::array<Mathematics::Vector3Int, 8> cases = {{
         {0, 0, 0},
         {3595, 0, 3595},          // the live tagged-sphere value
         {1, 1, 1},
         {-1, -1, -1},
         {12, -2048, 4096},        // exercises the Y split with a non-zero signed Y
         {-3595, 1234, -6221},     // ~Earth radius, all axes signed + Y across the split
-        {Origin::kSectorAxisMax, Origin::kSectorAxisMin, Origin::kSectorAxisMax},
-        {Origin::kSectorAxisMin, Origin::kSectorAxisMax, Origin::kSectorAxisMin},
+        {Rendering::kSectorAxisMax, Rendering::kSectorAxisMin, Rendering::kSectorAxisMax},
+        {Rendering::kSectorAxisMin, Rendering::kSectorAxisMax, Rendering::kSectorAxisMin},
     }};
 
     const uint32_t n = static_cast<uint32_t>(cases.size());
@@ -120,7 +120,7 @@ TEST_F(RenderOriginDecodeComputeTest, DeviceDecodeMatchesPack)
     for (uint32_t i = 0; i < n; ++i)
     {
         instances[i] = GPUInstance{}; // zeroes everything incl. the two packed words
-        Origin::PackSector(cases[i].x, cases[i].y, cases[i].z, instances[i].sectorPacked[0],
+        Rendering::PackSector(cases[i].x, cases[i].y, cases[i].z, instances[i].sectorPacked[0],
                            instances[i].sectorPacked[1]);
     }
 
@@ -169,7 +169,7 @@ TEST_F(RenderOriginDecodeComputeTest, DeviceDecodeMatchesPack)
     {
         // C++ mirror decode of the same bytes (sanity that the pack is what we think).
         int32_t cx, cy, cz;
-        Origin::UnpackSector(instances[i].sectorPacked[0], instances[i].sectorPacked[1], cx, cy, cz);
+        Rendering::UnpackSector(instances[i].sectorPacked[0], instances[i].sectorPacked[1], cx, cy, cz);
         ASSERT_EQ(cx, cases[i].x);
         ASSERT_EQ(cy, cases[i].y);
         ASSERT_EQ(cz, cases[i].z);

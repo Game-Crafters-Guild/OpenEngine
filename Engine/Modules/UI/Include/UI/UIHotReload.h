@@ -18,6 +18,7 @@ class AssetManager;
 class UIElement;
 class UIManager;
 struct Stylesheet;
+struct UITemplateNode;
 
 // UIHotReload listens to AssetManager asset reload events and queues UI-related
 // reload work to be applied on the UI thread during UIManager::Update().
@@ -56,6 +57,11 @@ class UIHotReload final
     // for initial binding/application after registering a binding.
     void ApplyLayoutNow(const GUID& layoutGuid) { ApplyLayoutReload(layoutGuid); }
     void ApplyStyleNow(const GUID& styleGuid) { ApplyStyleReload(styleGuid); }
+
+    // Give the target of a ReconcileChildren binding the layout root's classes and id. This
+    // removes the classes and id that the previous layout of the binding gave it.
+    // A target without a binding gets no change and a warning.
+    void ApplyLayoutRootAttributes(UIElement& target, const UITemplateNode& layoutRoot);
 
     enum class StyleBindMode : uint8_t
     {
@@ -120,7 +126,13 @@ class UIHotReload final
         // (preserving runtime-added ones) instead of accumulating both. Empty for
         // ReconcileSelf, which diffs classes via ReconcileClasses.
         std::vector<std::string> appliedRootClasses;
+        // ReconcileChildren only: the asset-root id this binding gave the target. Each apply
+        // of a root with an id sets it. A swap to a root without an id clears it, unless
+        // code changed the id after the apply.
+        std::string appliedRootId;
     };
+
+    static void ApplyRootAttributes(LayoutBinding& binding, UIElement& target, const UITemplateNode& layoutRoot);
 
     // bindingId 0 is the reserved "unbound / code-added" sentinel: nodes with this id
     // were never stamped by a layout binding, so ReconcileChildren preserves them as

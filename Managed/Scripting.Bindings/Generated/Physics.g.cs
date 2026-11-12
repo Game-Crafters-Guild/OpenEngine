@@ -14,7 +14,7 @@ namespace GameEngine.Scripting
     /// <summary>
     /// Two solid bodies started or stopped touching: the entity you subscribed to (self), the entity it touches (other), and the contact point and normal in world space. The normal points from other into self: a body resting on the ground gets +Y.
     /// </summary>
-    [StructLayout(LayoutKind.Explicit, Size = 32)]
+    [StructLayout(LayoutKind.Explicit, Size = 48)]
     public struct ContactEvent
     {
         /// <summary>
@@ -29,15 +29,15 @@ namespace GameEngine.Scripting
         [FieldOffset(4)]
         public Entity Other = Entity.None;
         [FieldOffset(8)]
-        public Vector3 Point;
-        [FieldOffset(20)]
+        public WorldPosition Point;
+        [FieldOffset(32)]
         public Vector3 Normal = new Vector3(0f, 1f, 0f);
     }
 
     /// <summary>
     /// Where a ray hit a body: the body's entity, the hit point, the surface normal there, and the distance from the ray's origin.
     /// </summary>
-    [StructLayout(LayoutKind.Explicit, Size = 32)]
+    [StructLayout(LayoutKind.Explicit, Size = 48)]
     public struct RayHit
     {
         /// <summary>
@@ -49,11 +49,11 @@ namespace GameEngine.Scripting
 
         [FieldOffset(0)]
         public Entity Entity = Entity.None;
-        [FieldOffset(4)]
-        public Vector3 Point;
-        [FieldOffset(16)]
+        [FieldOffset(8)]
+        public WorldPosition Point;
+        [FieldOffset(32)]
         public Vector3 Normal = new Vector3(0f, 1f, 0f);
-        [FieldOffset(28)]
+        [FieldOffset(44)]
         public float Distance;
     }
 
@@ -95,16 +95,16 @@ namespace GameEngine.Scripting
     {
         public const uint AllLayers = 4294967295u;
 
-        private static readonly BindingTable s_Table = BindingTable.Acquire("Physics", 0xB34B7BEF0B316F86UL, 20);
+        private static readonly BindingTable s_Table = BindingTable.Acquire("Physics", 0xC7BDA1AD6879C3A3UL, 20);
         private static readonly delegate* unmanaged[Cdecl]<uint, Vector3*, int> s_AddImpulse = (delegate* unmanaged[Cdecl]<uint, Vector3*, int>)s_Table[0];
-        private static readonly delegate* unmanaged[Cdecl]<uint, Vector3*, Vector3*, int> s_AddImpulseAtPosition = (delegate* unmanaged[Cdecl]<uint, Vector3*, Vector3*, int>)s_Table[1];
-        private static readonly delegate* unmanaged[Cdecl]<Vector3*, Vector3*, Quaternion*, Entity*, int, uint, byte, int*, int> s_BoxOverlap = (delegate* unmanaged[Cdecl]<Vector3*, Vector3*, Quaternion*, Entity*, int, uint, byte, int*, int>)s_Table[2];
+        private static readonly delegate* unmanaged[Cdecl]<uint, Vector3*, WorldPosition*, int> s_AddImpulseAtPosition = (delegate* unmanaged[Cdecl]<uint, Vector3*, WorldPosition*, int>)s_Table[1];
+        private static readonly delegate* unmanaged[Cdecl]<WorldPosition*, Vector3*, Quaternion*, Entity*, int, uint, byte, int*, int> s_BoxOverlap = (delegate* unmanaged[Cdecl]<WorldPosition*, Vector3*, Quaternion*, Entity*, int, uint, byte, int*, int>)s_Table[2];
         private static readonly delegate* unmanaged[Cdecl]<uint, Vector3*, int> s_GetAngularVelocity = (delegate* unmanaged[Cdecl]<uint, Vector3*, int>)s_Table[3];
         private static readonly delegate* unmanaged[Cdecl]<uint, Vector3*, int> s_GetDesiredVelocity = (delegate* unmanaged[Cdecl]<uint, Vector3*, int>)s_Table[4];
         private static readonly delegate* unmanaged[Cdecl]<uint, Vector3*, int> s_GetLinearVelocity = (delegate* unmanaged[Cdecl]<uint, Vector3*, int>)s_Table[5];
         private static readonly delegate* unmanaged[Cdecl]<uint, byte*, int> s_IsGrounded = (delegate* unmanaged[Cdecl]<uint, byte*, int>)s_Table[6];
-        private static readonly delegate* unmanaged[Cdecl]<Vector3*, Vector3*, RayHit*, float, uint, byte, byte*, int> s_RayCast = (delegate* unmanaged[Cdecl]<Vector3*, Vector3*, RayHit*, float, uint, byte, byte*, int>)s_Table[7];
-        private static readonly delegate* unmanaged[Cdecl]<Vector3*, Vector3*, RayHit*, int, float, uint, byte, int*, int> s_RayCastAll = (delegate* unmanaged[Cdecl]<Vector3*, Vector3*, RayHit*, int, float, uint, byte, int*, int>)s_Table[8];
+        private static readonly delegate* unmanaged[Cdecl]<WorldPosition*, Vector3*, RayHit*, float, uint, byte, byte*, int> s_RayCast = (delegate* unmanaged[Cdecl]<WorldPosition*, Vector3*, RayHit*, float, uint, byte, byte*, int>)s_Table[7];
+        private static readonly delegate* unmanaged[Cdecl]<WorldPosition*, Vector3*, RayHit*, int, float, uint, byte, int*, int> s_RayCastAll = (delegate* unmanaged[Cdecl]<WorldPosition*, Vector3*, RayHit*, int, float, uint, byte, int*, int>)s_Table[8];
         private static readonly delegate* unmanaged[Cdecl]<uint, Vector3*, int> s_SetAngularVelocity = (delegate* unmanaged[Cdecl]<uint, Vector3*, int>)s_Table[9];
         private static readonly delegate* unmanaged[Cdecl]<uint, Vector3*, int> s_SetDesiredVelocity = (delegate* unmanaged[Cdecl]<uint, Vector3*, int>)s_Table[10];
         private static readonly delegate* unmanaged[Cdecl]<uint, Vector3*, int> s_SetLinearVelocity = (delegate* unmanaged[Cdecl]<uint, Vector3*, int>)s_Table[11];
@@ -121,7 +121,7 @@ namespace GameEngine.Scripting
         /// Writes the entity of every body that overlaps a box into bodies, in no fixed order. The box is centered at center, extends halfExtents from it along each of its axes (in meters, each above 0), and is turned by rotation. Returns the number of bodies in the box. When that is more than bodies holds, the ones that fit are written: call again with a larger buffer to get all of them. A buffer of length 0 asks the number only. 0 outside play mode. Only bodies on a layer of layerMask are found; triggers are found unless ignoreTriggers is true.
         /// </summary>
         /// <remarks>Call it on the main thread. A call from any other thread, or from a job, throws EngineCallException.</remarks>
-        public static int BoxOverlap(Vector3 center, Vector3 halfExtents, Quaternion rotation, Span<Entity> bodies, uint layerMask = Physics.AllLayers, bool ignoreTriggers = false)
+        public static int BoxOverlap(WorldPosition center, Vector3 halfExtents, Quaternion rotation, Span<Entity> bodies, uint layerMask = Physics.AllLayers, bool ignoreTriggers = false)
         {
             int result = default;
             int code;
@@ -136,7 +136,7 @@ namespace GameEngine.Scripting
         /// Casts a ray and finds the nearest body it hits within maxDistance. False when it hits nothing, and outside play mode. The direction need not be of length 1. Only bodies on a layer of layerMask are hit; triggers are hit unless ignoreTriggers is true.
         /// </summary>
         /// <remarks>Call it on the main thread. A call from any other thread, or from a job, throws EngineCallException.</remarks>
-        public static bool RayCast(Vector3 origin, Vector3 direction, out RayHit hit, float maxDistance = 1000f, uint layerMask = Physics.AllLayers, bool ignoreTriggers = false)
+        public static bool RayCast(WorldPosition origin, Vector3 direction, out RayHit hit, float maxDistance = 1000f, uint layerMask = Physics.AllLayers, bool ignoreTriggers = false)
         {
             RayHit hitValue = default;
             byte result = default;
@@ -151,7 +151,7 @@ namespace GameEngine.Scripting
         /// Casts a ray and writes every body it hits within maxDistance into hits, nearest first, each body once at its nearest hit. Returns the number of bodies the ray hits. When that is more than hits holds, the nearest ones that fit are written: call again with a larger buffer to get all of them. A buffer of length 0 asks the number only. 0 outside play mode. The direction need not be of length 1. Only bodies on a layer of layerMask are hit; triggers are hit unless ignoreTriggers is true.
         /// </summary>
         /// <remarks>Call it on the main thread. A call from any other thread, or from a job, throws EngineCallException.</remarks>
-        public static int RayCastAll(Vector3 origin, Vector3 direction, Span<RayHit> hits, float maxDistance = 1000f, uint layerMask = Physics.AllLayers, bool ignoreTriggers = false)
+        public static int RayCastAll(WorldPosition origin, Vector3 direction, Span<RayHit> hits, float maxDistance = 1000f, uint layerMask = Physics.AllLayers, bool ignoreTriggers = false)
         {
             int result = default;
             int code;
@@ -370,7 +370,7 @@ namespace GameEngine.Scripting
             /// Applies an impulse at a point in world space, which also spins the body.
             /// </summary>
             /// <remarks>Call it on the main thread. A call from any other thread, or from a job, throws EngineCallException.</remarks>
-            public void AddImpulseAtPosition(Vector3 impulse, Vector3 position)
+            public void AddImpulseAtPosition(Vector3 impulse, WorldPosition position)
             {
                 int code = s_AddImpulseAtPosition(m_Entity.Id, &impulse, &position);
                 if (code != 0 && code != BindingErrors.NotInitialized)

@@ -35,9 +35,6 @@ public:
 
     std::string_view Id() const override { return kId; }
 
-    /// `claude auth status`: the reported authMethod, never the account's email or
-    /// organization.
-    LoginStatus CheckLogin(const CancelToken& cancel) const override;
     /// The sessions under `<CLAUDE_CONFIG_DIR or ~/.claude>/projects/` for the
     /// working directory (CliSessionFiles::ReadClaudeSessions).
     CliSessionList ListSessions(const CancelToken& cancel) const override;
@@ -62,7 +59,14 @@ private:
     static std::string FirstErrorLine(const nlohmann::json& toolResult);
     /// The `result` record: the outcome and the accounting.
     static void ReadResult(const nlohmann::json& record, TurnState& turn);
-    /// `claude --version` at or above kMinimumVersion, then a logged-in CheckLogin().
-    std::string CheckReadiness(const CancelToken& cancel) const override;
+    /// `claude --version` printed a version at or above kMinimumVersion.
+    SetupStep CheckProgram(const CancelToken& cancel, SetupSurface surface) const override;
+    /// `claude auth status`: the reported authMethod, never the account's email or
+    /// organization.
+    SetupStep CheckLogin(const CancelToken& cancel, SetupSurface surface) const override;
+    std::string ProgramToPick() const override;
+    std::string InstallSource() const override;
+    /// The desktop app, for a silent program or one under the app's install folders.
+    std::string DesktopAppHint(bool printedNothing) const override;
 };
 } // namespace GameEngine

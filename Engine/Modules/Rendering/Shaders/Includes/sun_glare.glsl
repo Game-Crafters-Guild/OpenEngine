@@ -334,12 +334,12 @@ struct GE_SunGlareCascadeFrame
 };
 
 GE_SunGlareCascadeFrame GE_SunGlareCascadeFrameAt(sampler2DArrayShadow shadowArray,
-                                                  mat4 cascadeVP, int cascadeIdx, vec3 eyeWS,
+                                                  mat4 cascadeVP, int cascadeIdx, vec3 eyeRel,
                                                   vec3 sunDirWS, float discRadius,
                                                   float depthBias)
 {
     GE_SunGlareCascadeFrame f;
-    f.eyeClip = cascadeVP * vec4(eyeWS, 1.0);
+    f.eyeClip = cascadeVP * vec4(eyeRel, 1.0);
     float eyeDepth = f.eyeClip.z / max(f.eyeClip.w, 1e-6) + depthBias;
     f.covers = f.eyeClip.w > 0.0 && eyeDepth >= 0.0 && eyeDepth <= 1.0;
 
@@ -367,7 +367,7 @@ GE_SunGlareCascadeFrame GE_SunGlareCascadeFrameAt(sampler2DArrayShadow shadowArr
 //
 // A shadow map stores, per column along the light, only how near the light its nearest caster
 // is. The ray from the eye to a point of the disc at a small angle `offset` from the sun's
-// center is, at distance t along the light, the column `eyeWS + offset * t`. So an occluder at
+// center is, at distance t along the light, the column `eyeRel + offset * t`. So an occluder at
 // distance t hides that point of the disc when the column at `offset * t` holds a caster whose
 // light-facing surface lies near t. Every distance bin is tested: the column at the bin's own
 // lateral distance, and a caster surface between the bin's two edges, which is the difference

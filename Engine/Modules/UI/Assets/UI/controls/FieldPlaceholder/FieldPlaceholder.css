@@ -1,0 +1,25 @@
+/* A text field's hint (TextFieldBase::SetPlaceholder). It lies over the editor and takes no pointer.
+ * A host that insets its editor's text sets the same insets: --ui_field_placeholder_left, _right
+ * and _lift (the bottom padding that moves the hint up). The defaults are 0, in defaults.css. */
+.field-placeholder {
+    position: absolute;
+    left: var(--ui_field_placeholder_left);
+    right: var(--ui_field_placeholder_right);
+    top: 0;
+    height: 100%;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    padding-bottom: var(--ui_field_placeholder_lift);
+    color: var(--ui_color_text_placeholder);
+    font-style: italic;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    pointer-events: none;
+    z-index: 1;
+}
+
+.field-placeholder.hidden {
+    display: none;
+}

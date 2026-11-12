@@ -1,6 +1,6 @@
 ---
 title: Spline Paving
-description: Paving a square and the roads that enter it with the Spline Paving component, the splines it touches, its junctions, its curb, a road's verge, and how it lies on the ground.
+description: Paving a square and the roads that enter it with the Spline Paving component, the splines it touches, its junctions, the seams where roads meet, its curb, a road's verge, and how it lies on the ground.
 ---
 
 A **Spline Paving** paves where roads meet. Put it on a closed spline that is an area, and the whole area is paved, with the first stretch of every road that enters it. Put it on a road, and every place where another road crosses it or ends on it is paved. Where the roads go on, the paving stops square across them and the road's own surface takes over at the same height. Where a road turns close to the paving, the paving follows it around the turn and stops on the straight road after it. Every other edge of the paving gets a curb.
@@ -53,6 +53,30 @@ Where a road enters an area, **Shape** under **Road Mouths** sets the shape of t
 
 An arc that does not fit is made smaller. Where two roads enter less than two radii apart, their arcs meet halfway between the roads. A road that enters along the edge gets no arc. A road that enters at a shallow angle gets a smaller arc on its sharp side, so the arc ends at most three road widths, or one radius if that is more, past the corner. The setting applies to every road that enters the area. A Spline Paving on a road (the one that paves the road's junctions) gets no mouth: only an area has an edge to flare. The paving's material stops on a straight line across the road, where the road's own surface starts.
 
+## The seam
+
+At a junction, one road gives way to the other paving: a road that ends on another road gives way to it, the lower-ranked road gives way at a crossing, and a road gives way to a square's own pattern on the square's edge. On the road that gives way, the paving continues the road's pattern up to a seam. **Seam** under **Road Mouths** sets how the road's pattern meets the other pattern there: pick one of the four pictures.
+
+| Seam | What it draws |
+|---|---|
+| Hard Cut | The two patterns meet on a bare line. |
+| Blend | The road's pattern turns into the other pattern over a band on the road's side of the seam. **Blend Width (tiles)** sets how deep the band is, in tiles of the road's pattern. |
+| Joint Line | A thin joint along the seam. |
+| Stone Course | A row of stones along the seam. |
+
+A Blend has two forms, and the paving picks one for each seam. Where the two patterns can line up, the road's tile lines bend across the whole band until they meet the other pattern's lines, so no line ends at the seam. Elsewhere, the road's pattern fades into the other pattern across half the band: 1 tile at the default of 2. While Blend is chosen, a notice under the pictures says which form the seam takes. When one paving's material draws the seams, the notice's **Open Material** button opens that material. The lines can line up when all of these are true:
+
+- The material says that its pattern looks the same after a quarter turn: set **Pattern Symmetry** to **Square** under **Render State** in the material's inspector (`"patternSymmetry": "Square"` in its `.material` file). **Rectangular** says that it looks the same after a half turn only. With **None**, the material always takes the fade. The engine's Ground Grid material is set to **Square**.
+- The two patterns have the same number of tiles per meter.
+- The two patterns are turned less than 30 degrees from each other, after a quarter turn where the symmetry allows one.
+- The lines stay less than half a tile apart along the whole seam.
+
+A running bond, planks and herringbone do not look the same after a quarter turn, so they always take the fade.
+
+A Joint Line and a Stone Course are drawn in a band of the road's paving along the seam, **Course Width (m)** wide. They are drawn with **Course Material**: one texture tile is as wide as the course and repeats along the seam. An empty **Course Material** draws the paving's material at the paving's tile size. A Joint Line draws it darker. A Stone Course draws the paving's stones a quarter turn around, so their long side runs across the seam, and a little brighter than the paving.
+
+The band, the joint and the row of stones stay inside the paving. They do not touch the verge or the curb. The setting comes from the Spline Paving on the road that gives way; a road with no Spline Paving of its own takes the setting of the paving that paves the junction. On a square, the Seam settings apply to each road that enters it and has no Spline Paving of its own. A road whose strip stops on a square's edge has no paving of its own across the mouth, so a Blend there draws as a Hard Cut on the edge of its strip, and the junction's row under **Junctions** reads **Hard Cut: the road's paving ends on the seam**. A Joint Line and a Stone Course still draw their course along that edge.
+
 ## Splines It Touches
 
 The **Splines It Touches** section lists every closed spline that overlaps the paving and every road that meets it, by name. A row's switch is on when the paving covers that spline, and the words beside the switch say what happens. Switch a row off to leave the spline out:
@@ -92,7 +116,7 @@ The defaults match the paving's curb, so the curb runs into the verge at one siz
 
 ## Settings
 
-The inspector shows its sections in this order: **Surface**, **Curb**, **Road Mouths**, **Placement**, **Splines It Touches**, **Junctions** and **Shadows**. **Corner**, **Shape** and **Conform Target** show a picture of each choice. **Width**, **Height** and **Radius** are sliders with a number box; a typed value outside the slider's range is set to the nearest end, except for the curb's **Width** and **Height**, whose sliders run to 1 m and whose typed values can be up to 10 m.
+The inspector shows its sections in this order: **Surface**, **Curb**, **Road Mouths**, **Placement**, **Splines It Touches**, **Junctions** and **Shadows**. **Corner**, **Shape** and **Conform Target** show a picture of each choice. **Width**, **Height**, **Radius** and **Band** are sliders with a number box; a typed value outside the slider's range is set to the nearest end, except for the curb's **Width** and **Height**, whose sliders run to 1 m and whose typed values can be up to 10 m.
 
 | Section | Setting | Default | What it does |
 |---|---|---|---|
@@ -101,16 +125,20 @@ The inspector shows its sections in this order: **Surface**, **Curb**, **Road Mo
 | Curb | Width (m) | 0.3 m | How wide the curb is, from 0 m to 10 m. 0 builds no curb. |
 | Curb | Height (m) | 0.12 m | How high the curb stands above the paving, from 0.01 m to 10 m. |
 | Curb | Corner | Miter | How the curb turns where the edge turns. **Miter** turns on one sharp edge. **Round** sweeps the outside in an arc. |
-| Curb | Material | Empty (uses the Surface material) | The surface drawn on the curb. |
+| Curb | Material | Empty (the paving's material) | The surface drawn on the curb. |
 | Road Mouths | Shape | Flared | How the paving meets a road that enters it. See [The mouth](#the-mouth). |
 | Road Mouths | Radius (m) | 1.5 m | The radius of the arc at each side of a **Flared** mouth, from 0.1 m to 10 m. Inactive with a **Straight** mouth. |
+| Road Mouths | Seam | Blend | How this road's pattern meets the paving it gives way to. See [The seam](#the-seam). |
+| Road Mouths | Blend Width (tiles) | 2 | How deep a **Blend** reaches into the road, from 0.5 to 8 tiles of its pattern. Where the patterns line up, the tile lines bend over the whole band; elsewhere the pattern fades over half of it. Inactive with another seam. |
+| Road Mouths | Course Width (m) | 0 (Auto) | How wide a **Joint Line** or a **Stone Course** is, from 0 m to 2 m. 0 reads **Auto**: 3 cm for a Joint Line and half a tile of the other pattern for a Stone Course. The number box's tooltip says which. Inactive with another seam. |
+| Road Mouths | Course Material | Empty (the paving's material) | The surface drawn on a **Joint Line** or a **Stone Course**. One texture tile is as wide as the course and repeats along the seam. Empty draws the paving's material at the paving's tile size and reads **Paving, darker** for a Joint Line and **Paving, as stones** for a Stone Course. Inactive with another seam. |
 | Placement | Ground Authority | Auto (Owns) | What a paving on a closed spline does to the terrain under it. **Owns** grades and claims the ground, clears the grass and paints the ground. **Grades** grades the ground and does not claim it. **None** leaves the terrain as it is; the paving lies on the ground as the roads graded it. See [The ground](#the-ground). A paving on a road has no Ground Authority: the road's own Ground Authority shapes that ground. |
 | Placement | Conform Target | Terrain Only | What the paving lies on. **Terrain Only** lays it on the terrain, so props on the square never lift it. **Scene** lays it on any surface, such as a bridge deck. |
 | Shadows | Cast Shadows, Receive Shadows | On | Shadowing, as on any mesh. |
 
-Scripts and scene files use the field names: `Material`, `Seed`, `BorderWidth`, `BorderHeight`, `BorderCorner`, `BorderMaterial`, `Mouth`, `MouthRadius`, `GroundAuthority`, `ConformTarget`, `CastShadows` and `ReceiveShadows`.
+Scripts and scene files use the field names: `Material`, `Seed`, `BorderWidth`, `BorderHeight`, `BorderCorner`, `BorderMaterial`, `Mouth`, `MouthRadius`, `Seam` (`HardCut`, `Blend`, `JointLine`, `StoneCourse`), `SeamBandTiles`, `SeamCourseWidth`, `SeamCourseMaterial`, `GroundAuthority`, `ConformTarget`, `CastShadows` and `ReceiveShadows`.
 
-Edits rebuild the paving a quarter of a second after you stop dragging. A change of material or shadows changes the paving in place with no rebuild.
+Edits rebuild the paving a quarter of a second after you stop dragging. A change of material or shadows changes the paving in place with no rebuild, except what the seams read: a material with another `patternSymmetry` or albedo tiling, and a change of **Course Material**, rebuild the paving.
 
 ## The ground
 

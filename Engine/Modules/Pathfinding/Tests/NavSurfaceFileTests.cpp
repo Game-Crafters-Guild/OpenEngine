@@ -18,7 +18,7 @@ NavSurfaceData MakeSurface()
 {
     NavMeshSettings settings;
     NavMeshChart chart;
-    chart.Origin = ChartOrigin::AtWorld(102400.5, 12.0, -2048.25);
+    chart.Origin = Mathematics::WorldPosition{102400.5, 12.0, -2048.25};
     chart.Span = static_cast<float32>(kNavChartTilesPerSide) * DetourNavMap::GetTileSize(settings);
     const std::vector<float32> vertices = {-8.0f, 0.0f, -8.0f, 72.0f, 0.0f, -8.0f, -8.0f, 0.0f, 72.0f, 72.0f, 0.0f, 72.0f};
     const std::vector<uint32> indices = {0, 2, 1, 1, 2, 3};
@@ -163,6 +163,21 @@ TEST(NavSurfaceFileTests, RoundTripRestoresEveryTileAndTheTables)
     EXPECT_EQ(map.GetTileCount(), 4u);
 }
 
+// The round trip compares charts with ==, so == must see a move of the origin on each axis.
+TEST(NavSurfaceFileTests, AChartMovedOnOneAxisIsAnotherChart)
+{
+    const NavMeshChart chart = MakeSurface().Profiles[0].Charts[0].Chart;
+    NavMeshChart movedX = chart;
+    NavMeshChart movedY = chart;
+    NavMeshChart movedZ = chart;
+    movedX.Origin.X += 1.0;
+    movedY.Origin.Y += 1.0;
+    movedZ.Origin.Z += 1.0;
+    EXPECT_NE(movedX, chart);
+    EXPECT_NE(movedY, chart);
+    EXPECT_NE(movedZ, chart);
+}
+
 TEST(NavSurfaceFileTests, AnotherFormatVersionIsRefused)
 {
     std::vector<uint8> bytes;
@@ -173,7 +188,7 @@ TEST(NavSurfaceFileTests, AnotherFormatVersionIsRefused)
     NavSurfaceData read;
     std::string error;
     EXPECT_FALSE(ReadNavSurface(bytes, read, error));
-    EXPECT_EQ(error, "the file is format version 2 and this engine reads version 1: bake the surface again");
+    EXPECT_EQ(error, "the file is format version 3 and this engine reads version 2: bake the surface again");
     EXPECT_TRUE(read.Profiles.empty());
 }
 

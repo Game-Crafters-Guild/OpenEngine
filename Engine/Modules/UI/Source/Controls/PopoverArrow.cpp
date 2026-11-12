@@ -73,7 +73,7 @@ void PopoverArrow::OnGeneratePrimitives(UI::PrimitiveEmitContext& ctx, const Res
     arrow.FillColor = UI::PackFromARGB(bubbleStyle.Visual.BackgroundColor);
     if (bubbleStyle.Visual.BorderStyle != BorderStyle::None)
     {
-        arrow.BorderColor = UI::PackFromARGB(DrawnBorderColor(bubbleStyle));
+        arrow.BorderColor = UI::PackFromARGB(BorderSideColor(bubbleStyle.Visual.BorderColor, UI::ArrowEdge(arrow.Direction)));
         arrow.BorderWidth = border * cs;
     }
 

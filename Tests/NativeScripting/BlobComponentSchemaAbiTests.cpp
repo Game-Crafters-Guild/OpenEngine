@@ -171,8 +171,9 @@ TEST_F(BlobComponentSchemaAbiTests, SceneRoundTripThroughAbiSchema)
 
     {
         World world;
-        ASSERT_TRUE(GameEngine::Scene::ReadSceneInto(world, scenePath))
-            << "load error: " << GameEngine::Scene::GetLastSceneIOError().message;
+        const auto readResult = GameEngine::Scene::ReadSceneInto(world, scenePath);
+        ASSERT_TRUE(readResult)
+            << "load error: " << readResult.Error->message;
 
         const auto handle = FindByName(world, "Subject");
         ASSERT_TRUE(handle.IsValid());
@@ -466,8 +467,9 @@ TEST_F(BlobComponentSchemaAbiTests, UnregisteredBlobRoundTripsAndRevivesOnReRegi
     // Session 2: load + save with the type unregistered — preserved, not dropped.
     {
         World world;
-        ASSERT_TRUE(GameEngine::Scene::ReadSceneInto(world, pathA))
-            << GameEngine::Scene::GetLastSceneIOError().message;
+        const auto readResult = GameEngine::Scene::ReadSceneInto(world, pathA);
+        ASSERT_TRUE(readResult)
+            << readResult.Error->message;
         const auto h = FindByName(world, "Subject");
         ASSERT_TRUE(h.IsValid());
         const auto* store = world.TryGetUnresolvedComponents();
@@ -575,8 +577,9 @@ TEST_F(BlobComponentSchemaAbiTests, QualifiedNameBlobLinesRegroupOnReRegister)
     ASSERT_NE(id, 0u);
     {
         World world;
-        ASSERT_TRUE(GameEngine::Scene::ReadSceneInto(world, pathB))
-            << GameEngine::Scene::GetLastSceneIOError().message;
+        const auto readResult = GameEngine::Scene::ReadSceneInto(world, pathB);
+        ASSERT_TRUE(readResult)
+            << readResult.Error->message;
         const auto h = FindByName(world, "QSubject");
         ASSERT_TRUE(h.IsValid());
         QTagBlob loaded{};

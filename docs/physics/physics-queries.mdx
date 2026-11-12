@@ -7,11 +7,15 @@ Gameplay code asks the physics world what lies along a ray or inside a box throu
 
 A C# script casts a ray with `Physics.RayCast`, and finds every body along a ray or inside a box with `Physics.RayCastAll` and `Physics.BoxOverlap`, which take the same filter. [Physics from scripts](../scripting/physics-from-scripts.mdx#find-every-body-along-a-ray-or-in-a-box) shows the calls.
 
+To find entities that have no physics body, such as the units near a point or in a cone, use the [spatial grid](../ai/spatial-grid.mdx).
+
 ```cpp title="Physics/PhysicsWorld.h"
 bool RayCast(const RayCastQuery& query, RayCastResult& outResult) const;
 bool RayCastAll(const RayCastQuery& query, std::vector<RayCastResult>& outResults, uint32 maxResults = 64) const;
 bool BoxOverlap(const BoxOverlapQuery& query, std::vector<OverlapResult>& outResults, uint32 maxResults = 64) const;
 ```
+
+A query takes its origin or its center as a `Mathematics::WorldPosition` (three doubles), and a hit returns its point as one. A query 300 km from the world origin is as exact as a query at the origin: its point is within 0.1 mm. `a - b` of two world positions is the `Vector3` offset from `b` to `a`, subtracted in double. `p + offset` moves a world position by a `Vector3`.
 
 ## The filter
 
@@ -21,15 +25,15 @@ Every query carries a `CollisionFilter`. `layerMask` names the collision layers 
 using namespace GameEngine::Physics;
 
 RayCastQuery query;
-query.ray.origin = {x, 500.0f, z};
-query.ray.direction = {0.0f, -1.0f, 0.0f};
+query.origin = point + Mathematics::Vector3(0.0f, 500.0f, 0.0f);
+query.direction = {0.0f, -1.0f, 0.0f};
 query.maxDistance = 1000.0f;
 query.filter.layerMask = 1u << Layers::Static;
 query.filter.ignoreSensors = true;
 
 RayCastResult ground;
 if (world.RayCast(query, ground))
-    height = ground.hitPoint.y;
+    height = ground.hitPoint.Y;
 ```
 
 ## One hit or every hit

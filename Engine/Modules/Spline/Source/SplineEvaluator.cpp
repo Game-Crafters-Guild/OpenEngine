@@ -3,6 +3,7 @@
 #include "Mathematics/BezierCurve.h"
 #include "Mathematics/Geometry.h"
 #include "Mathematics/Interpolation.h"
+#include "Mathematics/Transcendental.h"
 #include "Mathematics/Vector2.h"
 #include "Mathematics/VectorOps.h"
 
@@ -208,8 +209,9 @@ SplineFrame BuildFrame(const V3& position,
     // Apply roll (rotate right and up around forward).
     if (std::abs(roll) > 0.001f)
     {
-        float32 c = std::cos(roll);
-        float32 s = std::sin(roll);
+        const Math::SinAndCos rollSinCos = Math::SinCos(roll);
+        float32 c = rollSinCos.Cos;
+        float32 s = rollSinCos.Sin;
         V3 newRight = right * c + up * s;
         V3 newUp = up * c - right * s;
         right = newRight;

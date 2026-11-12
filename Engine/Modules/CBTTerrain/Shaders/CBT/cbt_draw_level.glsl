@@ -11,6 +11,7 @@ struct CBTDrawLevelParamsData
     vec4 height;  // x = height scale, y = origin Y
     uvec4 lattice; // x = the level-0 samples (x | z << 16) the chain must have been built from;
                    // y = the normal chain's mips, 0 = the surface keeps the level-0 normal map
+    vec4 surfaceExtent; // xy = the authored size in terrain uv: the draw clips past it (GE_CLIP_DISTANCE)
 };
 layout(std140, set = 2, binding = 14) uniform CBTDrawLevelBuffer
 {

@@ -1,0 +1,34 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+#include "Ocean/ocean_ring_layout.glsl"
+
+layout(local_size_x = 64) in;
+
+struct OceanRingProbeCase
+{
+    vec4 gridData; // the ring mesh vertex (OceanRingMesh)
+    vec4 camera;   // xyz = camera position, w = sea level
+    vec4 rings;    // x = patch extent, y = cells per tile
+};
+
+layout(std430, set = 0, binding = 0) readonly buffer OceanRingProbeCases
+{
+    OceanRingProbeCase cases[];
+};
+
+layout(std430, set = 0, binding = 1) writeonly buffer OceanRingProbeResults
+{
+    vec4 results[]; // xy = world XZ, z = footprint, w = grid width
+};
+
+void main()
+{
+    uint index = gl_GlobalInvocationID.x;
+    if (index >= uint(cases.length()))
+        return;
+    OceanRingProbeCase probe = cases[index];
+    OceanRingVertex vertex = OceanPlaceRingVertex(probe.gridData, probe.camera.xyz, probe.camera.w,
+                                                  probe.rings.x, probe.rings.y);
+    results[index] = vec4(vertex.worldXZ, vertex.footprint, vertex.gridWidth);
+}

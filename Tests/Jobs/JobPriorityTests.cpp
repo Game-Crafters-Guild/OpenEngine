@@ -1,10 +1,13 @@
-// Two-class priority (Normal/Background) coverage. Background rides one
+// Class priority (Awaited/Normal/Background) coverage. Background rides one
 // dedicated global lane that every consumer polls LAST, so an idle lane costs
 // a single relaxed load per scan and Background can never preempt Normal.
+// Awaited rides one that every consumer polls FIRST.
 //
 // Layers:
-//  - JobPriorityTest: background executes when the pool is idle (through the
-//    shared wake protocol, spin=on and spin=off), never enters worker-local
+//  - JobPriorityTest: each class lane executes when the pool is idle (through the
+//    shared wake protocol, spin=on and spin=off), an Awaited job starts before a
+//    queued flood and before the worker's local queue, an Awaited body's forks
+//    stay Awaited; background never enters worker-local
 //    queues or the steal ring (census pin), F12 cancellation over the
 //    background arm, and mixed-class conservation under an MPMC mix.
 //  - JobPriorityShutdownTest: the shutdown contract decision — queued BARE
@@ -26,10 +29,13 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <functional>
 #include <memory>
 #include <random>
 #include <span>
+#include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -98,37 +104,42 @@ struct GateGuard
 } // namespace
 
 /**
- * @brief An idle pool consumes background work promptly through the SHARED
- * wake protocol (m_QueuedTasks counts both classes, so sleepers wake and
- * spinners cover background publishes) — in both the shipping spin config and
- * with the spin path disabled. Submit(bg) handles complete and Wait returns.
+ * @brief An idle pool consumes Background and Awaited work promptly through
+ * the SHARED wake protocol (m_Counters.QueuedTasks counts every class, so sleepers wake
+ * and spinners cover class-lane publishes) — in both the shipping spin config
+ * and with the spin path disabled. Submit(lane) handles complete and Wait returns.
  */
-TEST(JobPriorityTest, BackgroundExecutesWhenPoolIdle)
+TEST(JobPriorityTest, ClassLaneExecutesWhenPoolIdle)
 {
+    // Declared before the pool: a queued job can still use them when an ASSERT returns early.
+    std::atomic<uint64_t> ran{0};
+    std::atomic<uint64_t> batchRan{0};
     WorkStealingThreadPool pool(4);
 
+    for (const JobPriority lane : {JobPriority::Background, JobPriority::Awaited})
     for (const bool spinOn : {true, false}) {
         pool.SetSpinConfigForTest(spinOn ? 100 : 0, spinOn ? 2 : 0);
+        SCOPED_TRACE(lane == JobPriority::Awaited ? "Awaited lane" : "Background lane");
 
-        std::atomic<uint64_t> ran{0};
+        ran.store(0);
         for (int i = 0; i < 64; ++i) {
-            pool.EnqueueWork(CountingFn{&ran}, JobPriority::Background);
+            pool.EnqueueWork(CountingFn{&ran}, lane);
         }
         EXPECT_TRUE(WaitUntil([&] { return ran.load() == 64; }, std::chrono::seconds(10)))
-            << "idle pool never consumed background singles (spin=" << spinOn << ")";
+            << "idle pool never consumed the lane's singles (spin=" << spinOn << ")";
 
-        // Bulk path (>= kBulkPublishThreshold) into the background lane.
-        std::atomic<uint64_t> batchRan{0};
+        // Bulk path (>= kBulkPublishThreshold) into the lane under test.
+        batchRan.store(0);
         CountingFn batch[200];
         for (auto& fn : batch) {
             fn = CountingFn{&batchRan};
         }
-        pool.EnqueueWorkBatch(std::span<CountingFn>(batch, 200), JobPriority::Background);
+        pool.EnqueueWorkBatch(std::span<CountingFn>(batch, 200), lane);
         EXPECT_TRUE(WaitUntil([&] { return batchRan.load() == 200; }, std::chrono::seconds(10)))
-            << "idle pool never consumed the background batch (spin=" << spinOn << ")";
+            << "idle pool never consumed the lane's batch (spin=" << spinOn << ")";
 
         // Handle path: identical TaskHandle semantics to Normal.
-        TaskHandle handle = pool.Submit([] { return 7; }, JobPriority::Background);
+        TaskHandle handle = pool.Submit([] { return 7; }, lane);
         ASSERT_TRUE(handle.IsValid());
         handle.Wait();
         EXPECT_TRUE(handle.IsCompleted());
@@ -137,7 +148,7 @@ TEST(JobPriorityTest, BackgroundExecutesWhenPoolIdle)
     EXPECT_TRUE(WaitUntil(
         [&] {
             return pool.GetPendingTasksApprox() == 0 && pool.GetApproximateQueueSize() == 0 &&
-                   pool.GetBackgroundQueuedForTests() == 0;
+                   pool.GetBackgroundQueuedForTests() == 0 && pool.GetStatistics().Awaited.Queued == 0;
         },
         std::chrono::seconds(10)));
     pool.Shutdown();
@@ -151,13 +162,14 @@ TEST(JobPriorityTest, BackgroundExecutesWhenPoolIdle)
  */
 TEST(JobPriorityTest, BackgroundNeverEntersLocalQueuesOrStealRing)
 {
+    // Declared before the pool: a queued job can still use them when an ASSERT returns early.
+    std::atomic<uint64_t> ran{0};
+    std::atomic<bool> published{false};
     WorkStealingThreadPool pool(2);
     constexpr uint64_t kBackgroundTasks = 256;
 
     const auto before = pool.GetStatistics();
 
-    std::atomic<uint64_t> ran{0};
-    std::atomic<bool> published{false};
     // The wrapper is a NORMAL task so the background publishes below happen
     // on a worker thread of this pool (s_CurrentWorker set).
     pool.EnqueueWork([&pool, &ran, &published] {
@@ -189,20 +201,42 @@ TEST(JobPriorityTest, BackgroundNeverEntersLocalQueuesOrStealRing)
     pool.Shutdown();
 }
 
+// The contracts that every class lane keeps, run for the Background and the Awaited lane.
+class JobPriorityLaneTest : public ::testing::TestWithParam<JobPriority>
+{
+};
+
+std::string LaneName(const ::testing::TestParamInfo<JobPriority>& info)
+{
+    return info.param == JobPriority::Awaited ? "Awaited" : "Background";
+}
+
+uint32_t LaneQueued(const WorkStealingThreadPool& pool, JobPriority lane)
+{
+    const JobSystemStatistics stats = pool.GetStatistics();
+    return lane == JobPriority::Awaited ? stats.Awaited.Queued : stats.Background.Queued;
+}
+
+INSTANTIATE_TEST_SUITE_P(ClassLanes, JobPriorityLaneTest,
+                         ::testing::Values(JobPriority::Background, JobPriority::Awaited), LaneName);
+
 /**
- * @brief F12 over the background arm: a queued background Submit task is
+ * @brief F12 over a class lane: a queued Submit task on the lane is
  * cancellable exactly like a Normal one — the canceller wins the CAS, the
  * body never executes, Cancelled callbacks fire exactly once, and the losing
  * workers drop the envelopes conserving both counters (Debug tripwire silent).
  */
-TEST(JobPriorityTest, CancelQueuedBackgroundSubmitNeverExecutes)
+TEST_P(JobPriorityLaneTest, CancelQueuedSubmitNeverExecutes)
 {
+    const JobPriority lane = GetParam();
+    // Declared before the pool: a blocker can still read `gate` after the guard opens it, and can
+    // still write `blockersRunning` when an ASSERT returns early.
+    std::atomic<bool> gate{false};
+    std::atomic<size_t> blockersRunning{0};
     WorkStealingThreadPool pool(2);
 
     // Occupy every worker so the victims stay queued (Pending).
-    std::atomic<bool> gate{false};
     GateGuard gateGuard{gate};
-    std::atomic<size_t> blockersRunning{0};
     for (int i = 0; i < 2; ++i) {
         pool.EnqueueWork([&gate, &blockersRunning] {
             blockersRunning.fetch_add(1, std::memory_order_acq_rel);
@@ -220,7 +254,7 @@ TEST(JobPriorityTest, CancelQueuedBackgroundSubmitNeverExecutes)
     handles.reserve(kTasks);
     for (int i = 0; i < kTasks; ++i) {
         handles.push_back(
-            pool.Submit([&executed] { executed.fetch_add(1); }, JobPriority::Background));
+            pool.Submit([&executed] { executed.fetch_add(1); }, lane));
     }
     for (int i = 0; i < kTasks; ++i) {
         handles[static_cast<size_t>(i)].OnFailure([&failureFires, i](const String&) {
@@ -229,7 +263,7 @@ TEST(JobPriorityTest, CancelQueuedBackgroundSubmitNeverExecutes)
     }
 
     for (auto& handle : handles) {
-        EXPECT_TRUE(handle.Cancel()) << "Cancel refused a queued background Submit task";
+        EXPECT_TRUE(handle.Cancel()) << "Cancel refused a queued Submit task on the lane";
     }
     for (auto& handle : handles) {
         EXPECT_FALSE(handle.Cancel()); // single-fire: arbitration already decided
@@ -238,18 +272,18 @@ TEST(JobPriorityTest, CancelQueuedBackgroundSubmitNeverExecutes)
         EXPECT_FALSE(handle.IsCompleted());
     }
 
-    // Release the workers; they dequeue the cancelled background envelopes,
+    // Release the workers; they dequeue the cancelled envelopes,
     // lose the arbitration, and drop them (F14) — conserving all counters.
     gate.store(true, std::memory_order_release);
     EXPECT_TRUE(WaitUntil(
         [&] {
             return pool.GetPendingTasksApprox() == 0 && pool.GetApproximateQueueSize() == 0 &&
-                   pool.GetBackgroundQueuedForTests() == 0;
+                   LaneQueued(pool, lane) == 0;
         },
         std::chrono::seconds(10)))
-        << "cancelled background envelopes did not drain";
+        << "cancelled envelopes did not drain";
 
-    EXPECT_EQ(executed.load(), 0) << "a cancelled queued background task executed anyway";
+    EXPECT_EQ(executed.load(), 0) << "a cancelled queued task executed anyway";
     for (int i = 0; i < kTasks; ++i) {
         EXPECT_EQ(failureFires[static_cast<size_t>(i)].load(), 1);
     }
@@ -339,12 +373,15 @@ TEST(JobPriorityTest, MixedClassConservationUnderMpmcMix)
  */
 TEST(JobPriorityTest, BackpressureSignalsIgnoreBackgroundBacklog)
 {
+    // Declared before the pool: a blocker can still read `gate` after the guard opens it, and a
+    // queued job can still use the counters when an ASSERT returns early.
+    std::atomic<bool> gate{false};
+    std::atomic<size_t> blockersRunning{0};
+    std::atomic<uint64_t> ran{0};
     WorkStealingThreadPool pool(2);
 
     // Occupy both workers so the background flood below stays queued.
-    std::atomic<bool> gate{false};
     GateGuard gateGuard{gate};
-    std::atomic<size_t> blockersRunning{0};
     for (int i = 0; i < 2; ++i) {
         pool.EnqueueWork([&gate, &blockersRunning] {
             blockersRunning.fetch_add(1, std::memory_order_acq_rel);
@@ -356,7 +393,6 @@ TEST(JobPriorityTest, BackpressureSignalsIgnoreBackgroundBacklog)
     ASSERT_TRUE(WaitUntil([&] { return blockersRunning.load() >= 2; }, std::chrono::seconds(10)));
 
     constexpr uint64_t kFlood = 4096;
-    std::atomic<uint64_t> ran{0};
     std::vector<CountingFn> flood(kFlood, CountingFn{&ran});
     pool.EnqueueWorkBatch(flood.data(), flood.size(), JobPriority::Background);
     ASSERT_EQ(pool.GetBackgroundQueuedForTests(), kFlood);
@@ -378,16 +414,18 @@ TEST(JobPriorityTest, BackpressureSignalsIgnoreBackgroundBacklog)
 }
 
 /**
- * @brief Background-arm lost-wakeup stress with the 1ms backstop rescue
+ * @brief Class-lane lost-wakeup stress (Background and Awaited) with the 1ms backstop rescue
  * DISABLED (raised to 500ms, the slice-1 pattern): if any wake decision or
- * spinner-retire path failed to cover a background-only publish, the task
+ * spinner-retire path failed to cover a publish to that lane alone, the task
  * would sit until the raised backstop — an unmissable 100ms+ sample. Pins the
  * A1/A2 audit surfaces (the shared protocol covers background on every arm)
  * empirically, in both spin configs, with 0-200us gaps straddling spin expiry.
  */
-TEST(JobPriorityTest, BackgroundLostWakeupStressRescueDisabled)
+TEST(JobPriorityTest, ClassLaneLostWakeupStressRescueDisabled)
 {
+    for (const JobPriority lane : {JobPriority::Background, JobPriority::Awaited})
     for (const bool spinOn : {true, false}) {
+        SCOPED_TRACE(lane == JobPriority::Awaited ? "Awaited lane" : "Background lane");
         WorkStealingThreadPool pool(4);
         pool.SetSpinConfigForTest(spinOn ? 100 : 0, spinOn ? 2 : 0);
         pool.SetSleepBackstopForTest(kStressBackstopUs);
@@ -402,8 +440,7 @@ TEST(JobPriorityTest, BackgroundLostWakeupStressRescueDisabled)
         for (int i = 0; i < kRounds; ++i) {
             std::atomic<bool> done{false};
             const auto t0 = SteadyClock::now();
-            pool.EnqueueWork([&done] { done.store(true, std::memory_order_release); },
-                             JobPriority::Background);
+            pool.EnqueueWork([&done] { done.store(true, std::memory_order_release); }, lane);
             while (!done.load(std::memory_order_acquire)) {
                 std::this_thread::yield();
             }
@@ -414,32 +451,171 @@ TEST(JobPriorityTest, BackgroundLostWakeupStressRescueDisabled)
             }
             BusyWaitUs(gapUs(rng));
         }
-        std::printf("[BackgroundLostWakeup] spin=%d rounds=%d worst=%.1fus over100ms=%d\n",
-                    spinOn ? 1 : 0, kRounds, worstUs, over100ms);
+        std::printf("[ClassLaneLostWakeup] lane=%d spin=%d rounds=%d worst=%.1fus over100ms=%d\n",
+                    static_cast<int>(lane), spinOn ? 1 : 0, kRounds, worstUs, over100ms);
         EXPECT_LT(worstUs, kLostWakeupLineUs)
-            << "a background-only publish was not covered by the wake protocol (spin=" << spinOn
+            << "a publish to the lane alone was not covered by the wake protocol (spin=" << spinOn
             << ")";
-        ExpectWithinBudget(worstUs, kStressLatencyLineUs, budget, "BackgroundLostWakeup worst round");
+        ExpectWithinBudget(worstUs, kStressLatencyLineUs, budget, "ClassLaneLostWakeup worst round");
         pool.Shutdown();
     }
 }
 
 /**
- * @brief The shutdown-contract decision, pinned (design doc §3): priority
- * changes scheduling, never lifetime.
- *  - Queued BARE background tasks EXECUTE in the F13 post-join drain (a
- *    silent drop of a handle-less task is the B7 hang class).
- *  - Queued background SUBMIT tasks are CANCELLED — body never runs, blocked
- *    waiters wake with Cancelled.
- *  - After Shutdown() returns, EnqueueWork(bg) runs synchronously.
+ * @brief An Awaited job published behind a queued Normal and Background flood
+ * is the next job a worker takes: on a one-worker pool it starts before any
+ * job of the flood.
  */
-TEST(JobPriorityShutdownTest, DrainExecutesBareBackgroundAndCancelsHandles)
+TEST(JobPriorityTest, AwaitedJobStartsBeforeAQueuedFlood)
 {
+    constexpr uint64_t kFlood = 256;
+    // Declared before the pool: its jobs read them until the pool has drained.
+    std::atomic<bool> gate{false};
+    std::atomic<bool> holding{false};
+    std::atomic<uint64_t> floodRan{0};
+    std::atomic<int64_t> floodRanBeforeAwaited{-1};
+    std::vector<CountingFn> normalFlood(kFlood, CountingFn{&floodRan});
+    WorkStealingThreadPool pool(1);
+    GateGuard gateGuard{gate};
+
+    pool.EnqueueWork([&gate, &holding] {
+        holding.store(true, std::memory_order_release);
+        while (!gate.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+        }
+    });
+    ASSERT_TRUE(WaitUntil([&] { return holding.load(std::memory_order_acquire); }, std::chrono::seconds(10)));
+
+    pool.EnqueueWorkBatch(std::span<CountingFn>(normalFlood), JobPriority::Normal);
+    for (uint64_t i = 0; i < kFlood; ++i) {
+        pool.EnqueueWork(CountingFn{&floodRan}, JobPriority::Background);
+    }
+    pool.EnqueueWork([&floodRan, &floodRanBeforeAwaited] { floodRanBeforeAwaited.store(floodRan.load()); },
+                     JobPriority::Awaited);
+    gate.store(true, std::memory_order_release);
+
+    ASSERT_TRUE(WaitUntil([&] { return floodRanBeforeAwaited.load() >= 0 && floodRan.load() == 2 * kFlood; },
+                          std::chrono::seconds(10)));
+    EXPECT_EQ(floodRanBeforeAwaited.load(), 0) << "flood jobs ran before the Awaited job";
+    const JobSystemStatistics stats = pool.GetStatistics();
+    EXPECT_EQ(stats.AwaitedPushes, 1u);
+    EXPECT_EQ(stats.AwaitedPops, 1u);
+    EXPECT_EQ(stats.Awaited.Queued, 0u);
+    pool.Shutdown();
+}
+
+/**
+ * @brief The Awaited lane comes before the worker's own local queue: graph
+ * tasks published on the worker, then an Awaited job, and the worker takes the
+ * Awaited job first.
+ */
+TEST(JobPriorityTest, AwaitedJobStartsBeforeTheWorkersLocalQueue)
+{
+    constexpr uint64_t kLocalTasks = 64;
+    std::atomic<uint64_t> localRan{0};
+    std::atomic<int64_t> localRanBeforeAwaited{-1};
+    WorkStealingThreadPool pool(1);
+
+    pool.EnqueueWork([&pool, &localRan, &localRanBeforeAwaited] {
+        for (uint64_t i = 0; i < kLocalTasks; ++i) {
+            pool.Submit(CountingFn{&localRan}, std::span<const TaskHandle>());
+        }
+        pool.EnqueueWork([&localRan, &localRanBeforeAwaited] { localRanBeforeAwaited.store(localRan.load()); },
+                         JobPriority::Awaited);
+    });
+
+    ASSERT_TRUE(WaitUntil([&] { return localRanBeforeAwaited.load() >= 0 && localRan.load() == kLocalTasks; },
+                          std::chrono::seconds(10)));
+    EXPECT_EQ(localRanBeforeAwaited.load(), 0) << "the worker ran its local graph tasks before the Awaited job";
+    EXPECT_EQ(pool.GetStatistics().LocalPushes, kLocalTasks) << "the graph tasks did not reach the local queue";
+    pool.Shutdown();
+}
+
+/**
+ * @brief A spinning worker polls the Awaited lane before the Normal lane: the
+ * sole worker spins, an Awaited job and then a Normal job are queued, and the
+ * Awaited job starts first.
+ */
+TEST(JobPriorityTest, SpinningWorkerStartsTheAwaitedJobFirst)
+{
+    std::atomic<int> started{0};
+    std::atomic<int> awaitedStartIndex{-1};
+    std::atomic<bool> warmUpRan{false};
+    WorkStealingThreadPool pool(1);
+    // A spin window far longer than the test keeps the worker in the spin poll.
+    pool.SetSpinConfigForTest(2'000'000, 1);
+    pool.EnqueueWork([&warmUpRan] { warmUpRan.store(true); });
+    ASSERT_TRUE(WaitUntil([&] { return warmUpRan.load() && pool.GetSpinningCountForTests() == 1; },
+                          std::chrono::seconds(10)));
+
+    pool.EnqueueWork([&started, &awaitedStartIndex] { awaitedStartIndex.store(started.fetch_add(1)); },
+                     JobPriority::Awaited);
+    // The gap lets the spinner reach the Awaited job before the Normal job exists.
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    pool.EnqueueWork([&started] { started.fetch_add(1); });
+
+    ASSERT_TRUE(WaitUntil([&] { return started.load() == 2; }, std::chrono::seconds(10)));
+    EXPECT_EQ(awaitedStartIndex.load(), 0) << "the spinning worker started the Normal job first";
+    pool.Shutdown();
+}
+
+/**
+ * @brief A fork inside an Awaited body stays on the Awaited lane: the
+ * ParallelFor units that helpers run report the Awaited class.
+ */
+TEST(JobPriorityTest, AwaitedBodyForksStayAwaited)
+{
+    constexpr size_t kUnits = 8;
+    std::atomic<size_t> helperUnits{0};
+    std::atomic<size_t> helperUnitsNotAwaited{0};
+    std::atomic<bool> done{false};
+    WorkStealingThreadPool pool(4);
+
+    pool.EnqueueWork(
+        [&pool, &helperUnits, &helperUnitsNotAwaited, &done] {
+            const std::thread::id caller = std::this_thread::get_id();
+            ParallelFor(&pool, kUnits, [&](size_t) {
+                if (std::this_thread::get_id() == caller) {
+                    // Hold the caller's units until a helper has run one.
+                    WaitUntil([&] { return helperUnits.load() > 0; }, std::chrono::seconds(10));
+                    return;
+                }
+                if (std::string_view(WorkStealingThreadPool::GetCurrentJobForTests()) != "Awaited") {
+                    helperUnitsNotAwaited.fetch_add(1);
+                }
+                helperUnits.fetch_add(1);
+            });
+            done.store(true, std::memory_order_release);
+        },
+        JobPriority::Awaited);
+
+    ASSERT_TRUE(WaitUntil([&] { return done.load(std::memory_order_acquire); }, std::chrono::seconds(30)));
+    EXPECT_GT(helperUnits.load(), 0u);
+    EXPECT_EQ(helperUnitsNotAwaited.load(), 0u) << "a helper of an Awaited body ran in another class";
+    pool.Shutdown();
+}
+
+/**
+ * @brief The shutdown-contract decision, pinned for a class lane (design doc
+ * §3): priority changes scheduling, never lifetime.
+ *  - Queued BARE tasks on the lane EXECUTE in the F13 post-join drain (a
+ *    silent drop of a handle-less task is the B7 hang class).
+ *  - Queued SUBMIT tasks on the lane are CANCELLED — body never runs, blocked
+ *    waiters wake with Cancelled.
+ *  - After Shutdown() returns, EnqueueWork(lane) runs synchronously.
+ */
+TEST_P(JobPriorityLaneTest, DrainExecutesBareJobsAndCancelsHandles)
+{
+    const JobPriority lane = GetParam();
+    // Declared before the pool: the drain can still run a job that uses them when an ASSERT returns early.
+    std::atomic<size_t> blockersRunning{0};
+    std::atomic<uint64_t> bareRan{0};
+    std::atomic<bool> barrierReleased{false};
+    std::atomic<bool> victimRan{false};
     WorkStealingThreadPool pool(2);
 
     // Pin both workers until shutdown so every victim below deterministically
     // reaches the post-join drain.
-    std::atomic<size_t> blockersRunning{0};
     for (int i = 0; i < 2; ++i) {
         pool.EnqueueWork([&pool, &blockersRunning] {
             blockersRunning.fetch_add(1, std::memory_order_acq_rel);
@@ -450,27 +626,24 @@ TEST(JobPriorityShutdownTest, DrainExecutesBareBackgroundAndCancelsHandles)
     }
     ASSERT_TRUE(WaitUntil([&] { return blockersRunning.load() >= 2; }, std::chrono::seconds(10)));
 
-    // Bare background: singles + a bulk batch. All must EXECUTE in the drain.
-    std::atomic<uint64_t> bareRan{0};
+    // Bare jobs on the lane: singles + a bulk batch. All must EXECUTE in the drain.
     for (int i = 0; i < 8; ++i) {
-        pool.EnqueueWork(CountingFn{&bareRan}, JobPriority::Background);
+        pool.EnqueueWork(CountingFn{&bareRan}, lane);
     }
     CountingFn batch[16];
     for (auto& fn : batch) {
         fn = CountingFn{&bareRan};
     }
-    pool.EnqueueWorkBatch(batch, 16, JobPriority::Background);
+    pool.EnqueueWorkBatch(batch, 16, lane);
 
     // The barrier shape (why bare tasks may never be dropped): a hand-rolled
     // completion flag another thread waits on.
-    std::atomic<bool> barrierReleased{false};
     pool.EnqueueWork([&barrierReleased] { barrierReleased.store(true, std::memory_order_release); },
-                     JobPriority::Background);
+                     lane);
 
-    // Background Submit: must be CANCELLED, not executed; its waiter must wake.
-    std::atomic<bool> victimRan{false};
+    // Submit on the lane: must be CANCELLED, not executed; its waiter must wake.
     TaskHandle victimHandle =
-        pool.Submit([&victimRan] { victimRan.store(true); }, JobPriority::Background);
+        pool.Submit([&victimRan] { victimRan.store(true); }, lane);
     ASSERT_TRUE(victimHandle.IsValid());
     std::atomic<bool> waiterReturned{false};
     std::thread waiter([handle = victimHandle, &waiterReturned]() mutable {
@@ -479,28 +652,38 @@ TEST(JobPriorityShutdownTest, DrainExecutesBareBackgroundAndCancelsHandles)
     });
     std::this_thread::sleep_for(std::chrono::milliseconds(50)); // let the waiter park
 
+    // A drain that skips the lane never sees its queues empty: abort, do not hang the suite.
+    std::atomic<bool> shutdownReturned{false};
+    std::thread drainWatchdog([&shutdownReturned] {
+        if (!WaitUntil([&] { return shutdownReturned.load(); }, std::chrono::seconds(60))) {
+            std::fprintf(stderr, "Shutdown did not return in 60 s: its drain left the lane's jobs queued\n");
+            std::abort();
+        }
+    });
     pool.Shutdown(); // drain runs on this thread
+    shutdownReturned.store(true);
+    drainWatchdog.join();
 
     EXPECT_EQ(bareRan.load(), 8u + 16u)
-        << "queued bare background tasks were dropped by the shutdown drain";
+        << "queued bare tasks on the lane were dropped by the shutdown drain";
     EXPECT_TRUE(barrierReleased.load(std::memory_order_acquire))
-        << "a background caller-barrier was dropped across Shutdown (B7 shape)";
+        << "a caller-barrier on the lane was dropped across Shutdown (B7 shape)";
     EXPECT_TRUE(WaitUntil([&] { return waiterReturned.load(std::memory_order_acquire); },
                           std::chrono::seconds(10)))
-        << "the background Submit waiter is still blocked after Shutdown";
+        << "the Submit waiter is still blocked after Shutdown";
     waiter.join();
-    EXPECT_FALSE(victimRan.load()) << "a background Submit task executed during shutdown";
+    EXPECT_FALSE(victimRan.load()) << "a Submit task on the lane executed during shutdown";
     EXPECT_TRUE(victimHandle.IsDone());
     EXPECT_TRUE(victimHandle.HasFailed());    // Cancelled reads as failed
     EXPECT_FALSE(victimHandle.IsCompleted()); // ...and never as completed
 
-    // Post-shutdown: background fire-and-forget runs synchronously on the
+    // Post-shutdown: fire-and-forget on the lane runs synchronously on the
     // caller (same terminal behavior as Normal).
     std::atomic<bool> postRan{false};
     pool.EnqueueWork([&postRan] { postRan.store(true, std::memory_order_release); },
-                     JobPriority::Background);
+                     lane);
     EXPECT_TRUE(postRan.load(std::memory_order_acquire))
-        << "post-Shutdown EnqueueWork(Background) did not run synchronously";
+        << "post-Shutdown EnqueueWork(lane) did not run synchronously";
 }
 
 /**

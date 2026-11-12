@@ -64,10 +64,14 @@ void PlayModeChangeReviewModal::Show(const std::vector<std::string>& changeNames
 {
     RebuildList(changeNames);
     AddClass("visible");
-    if (auto* manager = GetOwnerManager())
+    if (GetOwnerManager() && m_Backdrop)
     {
         UIElement* backdrop = m_Backdrop;
-        manager->PostToUI([manager, backdrop]() { manager->FocusElement(backdrop); });
+        backdrop->PostSafeAction([backdrop]()
+        {
+            if (UIManager* manager = backdrop->GetOwnerManager())
+                manager->FocusElement(backdrop);
+        });
     }
 }
 

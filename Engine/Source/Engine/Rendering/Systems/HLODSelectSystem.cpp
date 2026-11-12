@@ -166,6 +166,9 @@ void HLODSelectSystem::Update(ECS::World& world, float32 /*deltaTime*/) {
     bool anyEdit = false;
     {
         const uint64 probeVersion = world.GetGlobalSystemVersion();
+        const std::size_t structuralVersion = world.GetStructuralChangeVersion();
+        anyEdit = structuralVersion != m_StructuralVersion;
+        m_StructuralVersion = structuralVersion;
         auto probe = [&](auto tag, ECS::ChangeGate& gate) {
             using C = decltype(tag);
             auto q = world.Query<ECS::Read<C>>();

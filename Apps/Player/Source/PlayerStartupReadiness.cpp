@@ -1,23 +1,32 @@
 #include "PlayerStartupReadiness.h"
 
+#include "Engine/Loading/SceneLoadRequest.h"
+
+#include <utility>
+
 namespace GameEngine
 {
 
-void PlayerStartupReadiness::Begin(bool waitForSplineRecipes)
+SceneLoadRequest MakeStartupSceneLoadRequest(std::filesystem::path scene,
+                                             std::function<void(SceneLoadInstantiated&)> onInstantiated)
+{
+    return {.Scene = std::move(scene), .OnInstantiated = std::move(onInstantiated), .PauseWorldDrawing = true};
+}
+
+void PlayerStartupReadiness::Begin()
 {
     m_Pending = true;
-    m_WaitForSplineRecipes = waitForSplineRecipes;
     m_Frames = 0;
     m_Seconds = 0.0;
 }
 
-bool PlayerStartupReadiness::Update(bool batchComplete, bool recipesSettled, float64 deltaSeconds)
+bool PlayerStartupReadiness::Update(bool revealed, bool recipesSettled, float64 deltaSeconds)
 {
     if (!m_Pending)
         return false;
     ++m_Frames;
     m_Seconds += deltaSeconds;
-    if (!batchComplete || (m_WaitForSplineRecipes && !recipesSettled))
+    if (!revealed || !recipesSettled)
         return false;
     m_Pending = false;
     return true;

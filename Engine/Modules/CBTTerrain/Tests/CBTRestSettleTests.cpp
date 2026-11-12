@@ -16,19 +16,22 @@
 // A test turns them off or stays below where they engage, so the rest rule alone is under test, or it puts the
 // pool under the one controller it tests (AContendedPoolGoesQuietAtRest, APoolUnderTheKeepStepGoesQuietAtRest).
 //
-// The screen-space edge rule, which decides the planar terrains without a height pyramid, keeps its motion
-// band at rest; the TheEdgeRule tests bind the relief through the atlas source and assert that it goes
+// The projected-area metric, which decides the planar terrains without a height pyramid, keeps its motion
+// band at rest; the TheAreaMetric tests bind the relief through the atlas source and assert that it goes
 // quiet and that the band holds under a small move.
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <bit>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <limits>
 #include <optional>
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -37,10 +40,13 @@
 #include "CBTTerrain/CBTKernelSet.h"
 #include "CBTTerrain/CBTLayout.h"
 #include "CBTTerrain/CBTNearBias.h"
+#include "CBTTerrain/CBTPoolCensus.h"
 #include "CBTTerrain/CBTTreeAudit.h"
+#include "CBTTerrain/CBTUpdateRestGate.h"
 #include "CBTDiamond.h"
 #include "CBTReliefHeightSource.h"
 #include "CBTTestHarness.h"
+#include "Logger/Logger.h"
 #include "Mathematics/MatrixOps.h"
 #include "Mathematics/Vector3.h"
 #include "Rendering/Core/CommandList.h"
@@ -81,14 +87,23 @@ constexpr int32_t kArrivalPressureStep = 2;
 // The contention ramp's lower bound (cbt_layout.glsl CBT_NEAR_BIAS_CONTENTION_LO): below it the
 // near-bias is exactly 1.
 constexpr float kContentionFreeOccupancy = 0.50f;
-// The rest updates the edge rule may take to go quiet after a converged motion tree. At rest the edge
-// rule keeps the motion thresholds, so a converged motion tree is already a rest tree; the bound catches
+// The rest updates the area metric may take to go quiet after a converged motion tree. At rest the area
+// metric keeps the motion thresholds, so a converged motion tree is already a rest tree; the bound catches
 // a rest rule that keeps changing the tree.
-constexpr uint32_t kEdgeRuleRestUpdates = 24u;
+constexpr uint32_t kAreaMetricRestUpdates = 24u;
 // A camera that moves 1 cm and back on alternate updates: far inside the motion band of every facet.
 constexpr float kJiggleM = 0.01f;
 constexpr uint32_t kJiggleUpdates = 48u;
 constexpr uint32_t kJiggleCounted = 32u;
+// The water plane the render feature sends for an authored opaque surface: the margin under the surface where
+// the seabed still refines (CBTRenderFeature.cpp kOpaqueWaterMarginM) and the coarsen factor of a facet under it
+// (kSubmergedCoarsen).
+constexpr float kWaterMarginM = 2.0f;
+constexpr float kSubmergedCoarsen = 8.0f;
+// Water surfaces (world Y, m) under the shore poses' eye, 72.8 m. The ground on their eye planes spans 4.2 m to
+// 49.9 m, so each surface puts shorelines on the eye plane beside the eye.
+constexpr float kShoreWaterY[] = {26.0f, 30.0f, 34.0f, 38.0f};
+constexpr float kShoreYawsDeg[] = {0.0f, 45.0f, 90.0f, 135.0f, 180.0f, 225.0f, 270.0f, 315.0f};
 
 struct Pose
 {
@@ -125,6 +140,12 @@ const Arrival kArrivals[] = {
      Above(256.0f, 302.0f, 64.0f, 0.0f, -4.0f)},
 };
 
+// A view along the ground from 30 m above the middle of the terrain, turned to `yawDeg`.
+Pose ShorePose(float yawDeg)
+{
+    return Above(256.0f, 30.0f, 256.0f, yawDeg, -4.0f);
+}
+
 // The demand shaping a test runs with. The default is the shipped set at kSplitPx; the pool-pressure tests
 // turn single controllers off so the one under test is the only reader of the pool's occupancy.
 struct Shaping
@@ -133,7 +154,8 @@ struct Shaping
     bool NearBias = true;               // the near-bias contention ramp
     float KeepOcc = kOffFrustumKeepOcc; // 0 leaves the planar off-frustum field ungated (no keep step)
     uint32_t PoolPressure = 1u;         // 0 holds the pool-pressure scale at 1x
-    bool EdgeRule = false;              // the relief through the atlas source, which keeps the edge rule
+    bool AreaMetric = false;            // the relief through the atlas source, where the area metric decides
+    std::optional<float> WaterY;        // the water surface's world Y; empty sends no water plane
 };
 
 void BuildParams(CBTFrameParams& p, const Pose& pose, const Shaping& shaping = {})
@@ -172,16 +194,22 @@ void BuildParams(CBTFrameParams& p, const Pose& pose, const Shaping& shaping = {
     p.DemandTuning[1] = shaping.KeepOcc;
     p.DemandTuning[2] = kEdgeRescueTpeMul * shaping.SplitPx;
     p.DemandTuning[3] = kEdgeRescueOcc;
+    if (shaping.WaterY)
+    {
+        p.WaterPlane[0] = *shaping.WaterY;
+        p.WaterPlane[1] = kWaterMarginM;
+        p.WaterPlane[2] = kSubmergedCoarsen;
+    }
 }
 
 // The relief a test runs on: the unified height texture, where the planar criterion decides, or with
-// Shaping::EdgeRule the same relief through the atlas source, where the screen-space edge rule decides.
+// Shaping::AreaMetric the same relief through the atlas source, where the projected-area metric decides.
 class ShapedRelief
 {
   public:
     ShapedRelief(IDevice& device, CBTInstance& instance, const Shaping& shaping)
     {
-        if (shaping.EdgeRule)
+        if (shaping.AreaMetric)
             m_Atlas.emplace(device, instance, kReliefDim + 1u);
         else
             m_Unified.emplace(device, instance, kHeightScale, kReliefDim);
@@ -315,7 +343,7 @@ class CBTRestSettle : public ::testing::Test
         uint32_t quiet = 0;
         for (uint32_t i = 0; i < updates; ++i)
         {
-            c.Settle = i == 0u ? 0u : 1u;
+            c.Settle = i == 0u ? kSettleMoved : kSettleLasted;
             RunUpdate(inst, c, p);
             const CBTTessellationStats s = inst.ReadTessellationStats();
             quiet = (s.SplitServed == 0 && s.MergeServed == 0) ? quiet + 1u : 0u;
@@ -387,7 +415,7 @@ class CBTRestSettle : public ::testing::Test
         }
         t.MotionLive = inst.ReadTessellationStats().LiveCount;
         t.RestLiveMin = t.MotionLive;
-        c.Settle = 1u;
+        c.Settle = kSettleLasted;
         uint32_t quiet = 0;
         for (uint32_t i = 0; i < kStageUpdates; ++i)
         {
@@ -426,7 +454,7 @@ class CBTRestSettle : public ::testing::Test
         for (uint32_t i = 0; i < kStageUpdates; ++i)
         {
             const bool moving = i == 0u;
-            c.Settle = moving ? 0u : 1u;
+            c.Settle = moving ? kSettleMoved : kSettleLasted;
             RunUpdate(inst, c, p);
             const CBTTessellationStats s = inst.ReadTessellationStats();
             splitRuns += (s.SplitServed != 0 && !splitting) ? 1u : 0u;
@@ -858,37 +886,486 @@ TEST_F(CBTRestSettle, AKeepStepStepsDownOnlyAtPressureStepZero)
     EXPECT_EQ(rest.DownStepsAbovePressureZero, 0u) << "the keep step stepped down above pressure step 0";
 }
 
-// #4823: the screen-space edge rule (here the atlas source) comes to rest at a still camera within a bounded
+// #4823: the projected-area metric (here the atlas source) comes to rest at a still camera within a bounded
 // number of updates. Its near-field merge measures the child's own edge, so one threshold for the split and
 // the merge would flip the facets that straddle it.
-TEST_F(CBTRestSettle, TheEdgeRuleSettlesAtRest)
+TEST_F(CBTRestSettle, TheAreaMetricSettlesAtRest)
 {
-    Shaping edge;
-    edge.EdgeRule = true;
+    Shaping areaMetric;
+    areaMetric.AreaMetric = true;
     for (const Arrival& a : kArrivals)
     {
         SCOPED_TRACE(a.Label);
-        const RestTrace t = MotionThenRest(a.Rest, edge);
-        std::printf("[edge-rest:%s] motion live %u, rest minimum %u, rest end %u, rest updates changing %u, quiet %d\n",
-                    a.Label, t.MotionLive, t.RestLiveMin, t.RestLiveEnd, t.RestUpdatesChanging, t.Quiet ? 1 : 0);
+        const RestTrace t = MotionThenRest(a.Rest, areaMetric);
+        Logger::Log::Info("[area-rest:{}] motion live {}, rest minimum {}, rest end {}, rest updates changing {}, quiet {}",
+                          a.Label, t.MotionLive, t.RestLiveMin, t.RestLiveEnd, t.RestUpdatesChanging, t.Quiet ? 1 : 0);
         ASSERT_GT(t.MotionLive, 10000u) << "the pose barely refined; the test would prove nothing";
         EXPECT_TRUE(t.Quiet) << "the tree must stop changing at rest";
-        EXPECT_LE(t.RestUpdatesChanging, kEdgeRuleRestUpdates) << "the rest must settle within a bound";
+        EXPECT_LE(t.RestUpdatesChanging, kAreaMetricRestUpdates) << "the rest must settle within a bound";
     }
 }
 
-// The edge rule's motion band: while the camera moves, a facet splits well above the threshold its
+// A shoreline across the eye plane. The water plane coarsens a facet whose corners all lie more than the margin
+// under it, and a near-field pair merges into its parent. A pair under the water can have a parent with one corner
+// above it, so the area metric must still come to rest when the parent does not take the pair's coarse threshold.
+TEST_F(CBTRestSettle, TheAreaMetricSettlesAtRestOnAShore)
+{
+    for (float yawDeg : kShoreYawsDeg)
+    {
+        for (float waterY : kShoreWaterY)
+        {
+            // No off-frustum keep band: the off-view children of a diamond merge, as they do once the band has
+            // narrowed at a busy pool, so the shore's near-field pairs alone decide whether the diamond merges.
+            Shaping shore;
+            shore.AreaMetric = true;
+            shore.KeepOcc = 0.0f;
+            shore.WaterY = waterY;
+            SCOPED_TRACE(::testing::Message() << "yaw " << yawDeg << ", water at " << waterY << " m");
+            const RestTrace t = MotionThenRest(ShorePose(yawDeg), shore);
+            Logger::Log::Info("[area-shore:yaw {}, water at {} m] motion live {}, rest end {}, rest updates changing {}, "
+                              "quiet {}",
+                              yawDeg, waterY, t.MotionLive, t.RestLiveEnd, t.RestUpdatesChanging, t.Quiet ? 1 : 0);
+            ASSERT_GT(t.MotionLive, 10000u) << "the pose barely refined; the test would prove nothing";
+            EXPECT_TRUE(t.Quiet) << "the tree must stop changing at rest on a shore";
+            EXPECT_LE(t.RestUpdatesChanging, kAreaMetricRestUpdates) << "the rest must settle within a bound";
+        }
+    }
+}
+
+// The area metric's motion band: while the camera moves, a facet splits well above the threshold its
 // children merge below, so a camera that moves a centimeter and back does not split and merge the same
 // facets on every update. The walk pose holds the near field under the eye, where the split and the merge
 // measure different edges. (At the overview a centimeter moves a few facets across the eye plane, from the
-// near-field rule to the screen-space rule and back, which splits and merges them whatever the band.)
-TEST_F(CBTRestSettle, TheEdgeRuleDoesNotChurnUnderASmallMove)
+// near-field rule to the area metric and back, which splits and merges them whatever the band.)
+TEST_F(CBTRestSettle, TheAreaMetricDoesNotChurnUnderASmallMove)
 {
-    Shaping edge;
-    edge.EdgeRule = true;
+    Shaping areaMetric;
+    areaMetric.AreaMetric = true;
     const Arrival& walk = kArrivals[1];
-    const uint64_t served = JiggleServed(walk.Rest, edge);
-    std::printf("[edge-jiggle:%s] splits and merges served over the last %u updates: %llu\n", walk.Label,
-                kJiggleCounted, static_cast<unsigned long long>(served));
+    const uint64_t served = JiggleServed(walk.Rest, areaMetric);
+    Logger::Log::Info("[area-jiggle:{}] splits and merges served over the last {} updates: {}", walk.Label,
+                      kJiggleCounted, served);
     EXPECT_EQ(served, 0u) << "a centimeter of camera motion must not churn the mesh";
+}
+
+// A census update at rest counts each live leaf once by level, in view or off view, and each off-view leaf in one
+// class. It serves nothing, so it counts the rest tree, and a second census update gives the same counts.
+TEST_F(CBTRestSettle, TheCensusCountsTheRestTreeAndLeavesItAsItIs)
+{
+    Shaping pressured;
+    pressured.SplitPx = kFullPoolSplitPx;
+    CBTInstance inst;
+    ASSERT_TRUE(inst.Initialize(*m_Device, m_KernelSet));
+    ASSERT_TRUE(inst.InitializeRoots(kDomainPlanar));
+    const ShapedRelief relief(*m_Device, inst, pressured);
+    ASSERT_TRUE(relief.IsArmed());
+    CBTClassifyDesc c = ScreenClassify(pressured);
+    CBTFrameParams p;
+    BuildParams(p, Above(256.0f, 2.0f, 256.0f, 0.0f, -4.0f), pressured);
+    relief.Apply(p);
+    for (uint32_t i = 0; i < 2u * kStageUpdates; ++i)
+    {
+        c.Settle = i < kStageUpdates ? kSettleMoved : kSettleLasted;
+        RunUpdate(inst, c, p);
+    }
+    const uint64_t restSignature = TreeSignature(ReadTreeSnapshot(inst, false));
+
+    c.Census = 1u;
+    RunUpdate(inst, c, p);
+    const CBTTessellationStats stats = inst.ReadTessellationStats();
+    const CBTPoolCensus census = inst.ReadPoolCensus();
+    const CBTTreeSnapshot snapshot = ReadTreeSnapshot(inst, false);
+    ASSERT_GT(stats.OffFrustumKeepStep, 0) << "the pool must come under the keep step for the test to say anything";
+    EXPECT_EQ(stats.SplitServed, 0);
+    EXPECT_EQ(stats.MergeServed, 0);
+    EXPECT_EQ(TreeSignature(snapshot), restSignature) << "the census update must leave the rest tree as it is";
+
+    CBTPoolCensus expected;
+    uint32_t mergeWanted = 0;
+    for (uint32_t s = 0; s < snapshot.PoolSize; ++s)
+    {
+        const uint64_t h = snapshot.HeapIds[s];
+        if (h == 0u)
+            continue;
+        const uint32_t level = static_cast<uint32_t>(std::bit_width(h)) - 1u;
+        const bool inView = (snapshot.Bisectors[s].Flags & kFlagVisible) != 0u;
+        ++(inView ? expected.InViewByLevel : expected.OffViewByLevel)[level];
+        mergeWanted += !inView && snapshot.Bisectors[s].BisectorState == kStateSimplify ? 1u : 0u;
+    }
+    EXPECT_EQ(census.InViewByLevel, expected.InViewByLevel);
+    EXPECT_EQ(census.OffViewByLevel, expected.OffViewByLevel);
+    EXPECT_EQ(census.OffViewByClass[static_cast<uint32_t>(CBTCensusClass::MergeWanted)], mergeWanted);
+
+    uint32_t offView = 0;
+    for (uint32_t count : census.OffViewByLevel)
+        offView += count;
+    uint32_t classified = 0;
+    for (uint32_t count : census.OffViewByClass)
+        classified += count;
+    std::printf("[census] live %u, off view %u: merge %u, behind %u, beside %u, across %u, margin %u, horizon %u\n",
+                stats.LiveCount, offView, census.OffViewByClass[0], census.OffViewByClass[1], census.OffViewByClass[2],
+                census.OffViewByClass[3], census.OffViewByClass[4], census.OffViewByClass[5]);
+    EXPECT_GT(offView, stats.LiveCount / 4u) << "the ground behind the eye must be live and off view";
+    EXPECT_EQ(classified, offView) << "every off-view leaf takes exactly one class";
+    EXPECT_GT(census.OffViewByClass[static_cast<uint32_t>(CBTCensusClass::BehindEye)], 0u);
+    EXPECT_EQ(census.OffViewByClass[static_cast<uint32_t>(CBTCensusClass::BehindHorizon)], 0u)
+        << "a planar terrain has no horizon class";
+
+    RunUpdate(inst, c, p);
+    const CBTPoolCensus again = inst.ReadPoolCensus();
+    EXPECT_EQ(again.InViewByLevel, census.InViewByLevel) << "each census update must count from zero";
+    EXPECT_EQ(again.OffViewByLevel, census.OffViewByLevel);
+    EXPECT_EQ(again.OffViewByClass, census.OffViewByClass);
+    inst.Shutdown();
+}
+
+namespace
+{
+
+// The rest tree of one behind-eye release arm (CBTClassifyDesc::BehindEye).
+struct ReleaseArm
+{
+    CBTTessellationStats Stats;
+    CBTPoolCensus Census;
+    CBTPoolCensus SecondCensus;
+    std::vector<uint64_t> InView; // the heap ids of the leaves in view, sorted
+};
+
+// A split threshold under which the area metric's rest tree at kReleasePose goes over the keep ceiling.
+constexpr float kReleaseSplitPx = 1.75f;
+
+// The area metric at a pose that fills the pool, with the pool-pressure scale held at 1x so that both arms ask
+// the view for the same tree.
+Shaping ReleaseShaping()
+{
+    Shaping s;
+    s.SplitPx = kReleaseSplitPx;
+    s.AreaMetric = true;
+    s.PoolPressure = 0u;
+    return s;
+}
+
+const Pose kReleasePose = Above(256.0f, 2.0f, 256.0f, 0.0f, -4.0f);
+
+uint32_t CensusClass(const CBTPoolCensus& census, CBTCensusClass c)
+{
+    return census.OffViewByClass[static_cast<uint32_t>(c)];
+}
+
+// The leaves of `finer` (sorted heap ids) that have a strict ancestor among the leaves of `coarser`.
+size_t CountCoarsened(const std::vector<uint64_t>& finer, const std::vector<uint64_t>& coarser)
+{
+    size_t coarsened = 0;
+    for (uint64_t id : finer)
+        for (uint64_t parent = id >> 1u; parent != 0u; parent >>= 1u)
+            if (std::binary_search(coarser.begin(), coarser.end(), parent))
+            {
+                ++coarsened;
+                break;
+            }
+    return coarsened;
+}
+
+// The legs of `series` longer than `amplitude`: a leg runs from one turning point to the next.
+uint32_t CountSwings(const std::vector<float>& series, float amplitude)
+{
+    uint32_t swings = 0;
+    int direction = 0; // +1 on a rise, -1 on a fall, 0 before the first leg
+    float low = series.empty() ? 0.0f : series.front();
+    float high = low;
+    for (float value : series)
+    {
+        low = direction > 0 ? low : std::min(low, value);
+        high = direction < 0 ? high : std::max(high, value);
+        if (direction <= 0 && value - low > amplitude)
+        {
+            ++swings;
+            direction = 1;
+            high = value;
+        }
+        else if (direction >= 0 && high - value > amplitude)
+        {
+            ++swings;
+            direction = -1;
+            low = value;
+        }
+    }
+    return swings;
+}
+
+} // namespace
+
+class CBTBehindEyeRelease : public CBTRestSettle
+{
+  protected:
+    // Moves to `pose` and holds it: kStageUpdates in motion, then kStageUpdates at rest.
+    void HoldShaped(CBTInstance& inst, const ShapedRelief& relief, CBTClassifyDesc& c, const Pose& pose)
+    {
+        CBTFrameParams p;
+        BuildParams(p, pose, ReleaseShaping());
+        relief.Apply(p);
+        for (uint32_t i = 0; i < 2u * kStageUpdates; ++i)
+        {
+            c.Settle = i < kStageUpdates ? kSettleMoved : kSettleLasted;
+            RunUpdate(inst, c, p);
+        }
+    }
+
+    // A camera that moves in kStrokes strokes along +Z from `eyeZ`, `aboveM` over the ground, with `restUpdates` at
+    // rest after each. The rest gate sets each update's Settle from a clock at 60 updates per second. Returns how
+    // often the keep step left `restStep` and came back to it.
+    uint32_t StopAndGo(CBTInstance& inst, const ShapedRelief& relief, CBTClassifyDesc& c, CBTUpdateRestGate& gate,
+                       float& eyeZ, float aboveM, int32_t restStep, uint32_t restUpdates)
+    {
+        constexpr float kWalkStepM = 0.125f; // per moving update
+        uint32_t returns = 0;
+        bool offRest = false;
+        for (uint32_t stroke = 0; stroke < kStrokes; ++stroke)
+            for (uint32_t i = 0; i < kStrokeUpdates + restUpdates; ++i)
+            {
+                eyeZ += i < kStrokeUpdates ? kWalkStepM : 0.0f;
+                const bool atRestStep = RunGated(inst, relief, c, gate, Above(kReleasePose.EyeX, aboveM, eyeZ, 0.0f, -4.0f),
+                                                 ReleaseShaping())
+                                            .OffFrustumKeepStep == restStep;
+                returns += offRest && atRestStep ? 1u : 0u;
+                offRest = !atRestStep;
+            }
+        return returns;
+    }
+
+    // One update at `pose` with the Settle the rest gate gives one 60 Hz tick later.
+    CBTTessellationStats RunGated(CBTInstance& inst, const ShapedRelief& relief, CBTClassifyDesc& c,
+                                  CBTUpdateRestGate& gate, const Pose& pose, const Shaping& shaping)
+    {
+        m_Clock += kUpdatePeriod;
+        gate.CanSkip(std::span(reinterpret_cast<const uint8_t*>(&pose), sizeof(pose)), m_Clock);
+        c.Settle = gate.Settle();
+        CBTFrameParams p;
+        BuildParams(p, pose, shaping);
+        relief.Apply(p);
+        RunUpdate(inst, c, p);
+        return inst.ReadTessellationStats();
+    }
+
+    static constexpr uint32_t kStrokes = 12u;
+    static constexpr uint32_t kStrokeUpdates = 8u;
+    static constexpr std::chrono::microseconds kUpdatePeriod{16667};
+    std::chrono::steady_clock::time_point m_Clock{};
+
+    // The rest tree at kReleasePose, read with two census updates.
+    ReleaseArm Settle(BehindEyeRelease release)
+    {
+        ReleaseArm arm;
+        CBTInstance inst;
+        EXPECT_TRUE(inst.Initialize(*m_Device, m_KernelSet));
+        EXPECT_TRUE(inst.InitializeRoots(kDomainPlanar));
+        const ShapedRelief relief(*m_Device, inst, ReleaseShaping());
+        EXPECT_TRUE(relief.IsArmed());
+        CBTClassifyDesc c = ScreenClassify(ReleaseShaping());
+        c.BehindEye = release;
+        HoldShaped(inst, relief, c, kReleasePose);
+        const CBTTreeSnapshot snapshot = ReadTreeSnapshot(inst, false);
+        for (uint32_t s = 0; s < snapshot.PoolSize; ++s)
+            if (snapshot.HeapIds[s] != 0u && (snapshot.Bisectors[s].Flags & kFlagVisible) != 0u)
+                arm.InView.push_back(snapshot.HeapIds[s]);
+        std::sort(arm.InView.begin(), arm.InView.end());
+
+        CBTFrameParams p;
+        BuildParams(p, kReleasePose, ReleaseShaping());
+        relief.Apply(p);
+        c.Census = 1u;
+        RunUpdate(inst, c, p);
+        arm.Stats = inst.ReadTessellationStats();
+        arm.Census = inst.ReadPoolCensus();
+        RunUpdate(inst, c, p);
+        arm.SecondCensus = inst.ReadPoolCensus();
+        std::printf("[release:%u] live %u, keep step %d, pressure %d, in view %zu: merge %u, behind %u, beside %u, "
+                    "across %u, margin %u\n",
+                    static_cast<uint32_t>(release), arm.Stats.LiveCount, arm.Stats.OffFrustumKeepStep, arm.Stats.PressureStep,
+                    arm.InView.size(), CensusClass(arm.Census, CBTCensusClass::MergeWanted),
+                    CensusClass(arm.Census, CBTCensusClass::BehindEye),
+                    CensusClass(arm.Census, CBTCensusClass::BesideFrustum),
+                    CensusClass(arm.Census, CBTCensusClass::AcrossEyePlane),
+                    CensusClass(arm.Census, CBTCensusClass::InMarginFrustum));
+        inst.Shutdown();
+        return arm;
+    }
+};
+
+// At rest the keep band releases the area metric's ground wholly behind the eye from the farthest octave in, only as
+// far as the pool needs: the tree rests under the keep ceiling with fewer leaves, and no leaf in view goes coarser.
+// Always Release lets the ground behind the eye merge down to the leaves whose parent reaches across the eye plane.
+TEST_F(CBTBehindEyeRelease, TheGroundBehindTheEyeIsReleasedUnderTheKeepCeiling)
+{
+    const ReleaseArm keep = Settle(BehindEyeRelease::AlwaysKeep);
+    const ReleaseArm band = Settle(BehindEyeRelease::ReleaseWhenNeeded);
+    const ReleaseArm always = Settle(BehindEyeRelease::AlwaysRelease);
+    ASSERT_EQ(keep.Stats.OffFrustumKeepStep, int32_t(kOffFrustumKeepSteps))
+        << "the pose must rest at the last keep step for the test to say anything";
+    ASSERT_GT(CensusClass(keep.Census, CBTCensusClass::BehindEye), 0u);
+    EXPECT_LT(static_cast<double>(band.Stats.LiveCount) / kDefaultBisectorPoolSize, double(kOffFrustumKeepOcc));
+    EXPECT_LT(band.Stats.LiveCount, keep.Stats.LiveCount);
+    // A leaf wholly behind the eye keeps its level only where its parent reaches across the eye plane.
+    EXPECT_LT(100u * CensusClass(always.Census, CBTCensusClass::BehindEye),
+              CensusClass(keep.Census, CBTCensusClass::BehindEye))
+        << "Always Release must let the ground behind the eye merge";
+    EXPECT_LE(always.Stats.LiveCount, band.Stats.LiveCount);
+    for (const ReleaseArm* arm : {&band, &always})
+    {
+        EXPECT_EQ(arm->Stats.SplitServed, 0);
+        EXPECT_EQ(arm->Stats.MergeServed, 0);
+        // The freed pool can let the view refine; no leaf in view may go coarser.
+        EXPECT_EQ(CountCoarsened(keep.InView, arm->InView), 0u) << "the release must not merge a leaf in view";
+        EXPECT_GE(arm->InView.size(), keep.InView.size());
+    }
+    for (const ReleaseArm* arm : {&keep, &band, &always})
+    {
+        EXPECT_EQ(arm->SecondCensus.InViewByLevel, arm->Census.InViewByLevel) << "a census at rest must repeat";
+        EXPECT_EQ(arm->SecondCensus.OffViewByLevel, arm->Census.OffViewByLevel);
+        EXPECT_EQ(arm->SecondCensus.OffViewByClass, arm->Census.OffViewByClass);
+    }
+}
+
+// A walk at the pose that fills the pool. One keep step moves the release by one octave of distance, less than the
+// keep step's hold band, so the step settles inside the band and the occupancy does not swing. A release that frees
+// the whole class at one step moves more than the band and cycles: the pool fills, empties and refills.
+TEST_F(CBTBehindEyeRelease, AWalkDoesNotCycleThePool)
+{
+    constexpr float kWalkStepM = 0.125f;       // per update, along the view (+Z)
+    constexpr float kSwingOccupancy = 0.20f;   // the registered rule's swing
+    CBTInstance inst;
+    ASSERT_TRUE(inst.Initialize(*m_Device, m_KernelSet));
+    ASSERT_TRUE(inst.InitializeRoots(kDomainPlanar));
+    const ShapedRelief relief(*m_Device, inst, ReleaseShaping());
+    ASSERT_TRUE(relief.IsArmed());
+    CBTClassifyDesc c = ScreenClassify(ReleaseShaping());
+    c.BehindEye = BehindEyeRelease::ReleaseWhenNeeded;
+    c.Settle = 0u;
+    std::vector<float> occupancy;
+    int32_t keepStepMax = 0;
+    for (uint32_t i = 0; i < 3u * kStageUpdates; ++i)
+    {
+        CBTFrameParams p;
+        BuildParams(p, Above(kReleasePose.EyeX, 2.0f, 200.0f + kWalkStepM * float(i), 0.0f, -4.0f),
+                    ReleaseShaping());
+        relief.Apply(p);
+        RunUpdate(inst, c, p);
+        const CBTTessellationStats s = inst.ReadTessellationStats();
+        keepStepMax = std::max(keepStepMax, s.OffFrustumKeepStep);
+        if (i >= kStageUpdates)
+            occupancy.push_back(static_cast<float>(s.LiveCount) / static_cast<float>(kDefaultBisectorPoolSize));
+    }
+    const auto [low, high] = std::minmax_element(occupancy.begin(), occupancy.end());
+    std::printf("[walk] keep step max %d, occupancy %.3f to %.3f, swings %u\n", keepStepMax, *low, *high,
+                CountSwings(occupancy, kSwingOccupancy));
+    ASSERT_GT(keepStepMax, 0) << "the walk must reach the keep ceiling for the test to say anything";
+    EXPECT_EQ(CountSwings(occupancy, kSwingOccupancy), 0u) << "the release must not cycle the pool";
+    inst.Shutdown();
+}
+
+// A camera that moves in strokes with short rests between them. A rest shorter than the probe's settle must leave
+// the keep step at its rest value; a probe that the next stroke undoes is work that the move throws away.
+TEST_F(CBTBehindEyeRelease, AShortRestDoesNotProbeTheKeepStep)
+{
+    constexpr uint32_t kRestUpdates[] = {2u, 6u, 11u};
+    for (uint32_t restUpdates : kRestUpdates)
+    {
+        CBTInstance inst;
+        ASSERT_TRUE(inst.Initialize(*m_Device, m_KernelSet));
+        ASSERT_TRUE(inst.InitializeRoots(kDomainPlanar));
+        const ShapedRelief relief(*m_Device, inst, ReleaseShaping());
+        ASSERT_TRUE(relief.IsArmed());
+        CBTClassifyDesc c = ScreenClassify(ReleaseShaping());
+        c.BehindEye = BehindEyeRelease::ReleaseWhenNeeded;
+        float eyeZ = kReleasePose.EyeZ;
+        HoldShaped(inst, relief, c, Above(kReleasePose.EyeX, 2.0f, eyeZ, 0.0f, -4.0f));
+        const int32_t restStep = inst.ReadTessellationStats().OffFrustumKeepStep;
+        ASSERT_GT(restStep, 0) << "the walk must rest above keep step 0 for a probe to exist";
+        ASSERT_LT(restStep, int32_t(kOffFrustumKeepSteps)) << "the walk must rest under the keep ceiling";
+        ASSERT_LT(kUpdatePeriod * (restUpdates - 1u), CBTUpdateRestGate::kKeepProbeSettle);
+        CBTUpdateRestGate gate;
+        const uint32_t returns = StopAndGo(inst, relief, c, gate, eyeZ, 2.0f, restStep, restUpdates);
+        std::printf("[stop-and-go] rest %u updates: rest step %d, returns to it %u\n", restUpdates, restStep, returns);
+        EXPECT_EQ(returns, 0u) << "a rest of " << restUpdates << " updates must not probe the keep step";
+        inst.Shutdown();
+    }
+}
+
+// The same walk with rests longer than the settle, over like ground. Each rest searches; a probe of the step under the
+// rest step that went over the ceiling is not repeated while the headroom is what it was, so the step stays put.
+TEST_F(CBTBehindEyeRelease, ALongRestDoesNotRepeatAFailedProbe)
+{
+    constexpr uint32_t kMaxReturns = 2u; // the registered rule's limit
+    constexpr uint32_t kRestUpdates[] = {30u, 60u};
+    for (uint32_t restUpdates : kRestUpdates)
+    {
+        CBTInstance inst;
+        ASSERT_TRUE(inst.Initialize(*m_Device, m_KernelSet));
+        ASSERT_TRUE(inst.InitializeRoots(kDomainPlanar));
+        const ShapedRelief relief(*m_Device, inst, ReleaseShaping());
+        ASSERT_TRUE(relief.IsArmed());
+        CBTClassifyDesc c = ScreenClassify(ReleaseShaping());
+        c.BehindEye = BehindEyeRelease::ReleaseWhenNeeded;
+        float eyeZ = kReleasePose.EyeZ;
+        HoldShaped(inst, relief, c, Above(kReleasePose.EyeX, 2.0f, eyeZ, 0.0f, -4.0f));
+        const int32_t restStep = inst.ReadTessellationStats().OffFrustumKeepStep;
+        ASSERT_GT(restStep, 0) << "the walk must rest above keep step 0 for a probe to exist";
+        ASSERT_LT(restStep, int32_t(kOffFrustumKeepSteps)) << "the walk must rest under the keep ceiling";
+        ASSERT_GE(kUpdatePeriod * (restUpdates - 1u), CBTUpdateRestGate::kKeepProbeSettle);
+        CBTUpdateRestGate gate;
+        const uint32_t returns = StopAndGo(inst, relief, c, gate, eyeZ, 2.0f, restStep, restUpdates);
+        std::printf("[stop-and-go] rest %u updates: rest step %d, returns to it %u\n", restUpdates, restStep, returns);
+        EXPECT_LE(returns, kMaxReturns) << "a rest of " << restUpdates << " updates must not repeat a failed probe";
+        inst.Shutdown();
+    }
+}
+
+// The walk over like ground, then on toward the far edge, where the view holds less ground and a lower keep step fits.
+// The search must probe again and rest on the step a fresh tree rests on there: a failed probe must not hold it above.
+TEST_F(CBTBehindEyeRelease, AFailedProbeIsTriedAgainWhereTheLowerStepFits)
+{
+    constexpr uint32_t kRestUpdates = 60u;
+    constexpr float kSparseZ = 400.0f;
+    constexpr uint32_t kApproachUpdates = 8u;
+    CBTInstance inst;
+    ASSERT_TRUE(inst.Initialize(*m_Device, m_KernelSet));
+    ASSERT_TRUE(inst.InitializeRoots(kDomainPlanar));
+    const ShapedRelief relief(*m_Device, inst, ReleaseShaping());
+    ASSERT_TRUE(relief.IsArmed());
+    CBTClassifyDesc c = ScreenClassify(ReleaseShaping());
+    c.BehindEye = BehindEyeRelease::ReleaseWhenNeeded;
+    float eyeZ = kReleasePose.EyeZ;
+    HoldShaped(inst, relief, c, Above(kReleasePose.EyeX, 2.0f, eyeZ, 0.0f, -4.0f));
+    const int32_t restStep = inst.ReadTessellationStats().OffFrustumKeepStep;
+    CBTUpdateRestGate gate;
+    StopAndGo(inst, relief, c, gate, eyeZ, 2.0f, restStep, kRestUpdates);
+    ASSERT_NE(inst.DebugReadWords(CBTBinding::WorkQueue, 1u, kWQKeepFailedStep).at(0), 0u)
+        << "the walk over like ground must leave a failed probe for the test to say anything";
+    const float walkedZ = eyeZ;
+    for (uint32_t i = 1; i <= kApproachUpdates + 2u * kStageUpdates; ++i)
+    {
+        const float z = walkedZ + (kSparseZ - walkedZ) * float(std::min(i, kApproachUpdates)) / float(kApproachUpdates);
+        RunGated(inst, relief, c, gate, Above(kReleasePose.EyeX, 2.0f, z, 0.0f, -4.0f), ReleaseShaping());
+    }
+    EXPECT_EQ(inst.DebugReadWords(CBTBinding::WorkQueue, 1u, kWQKeepFailedStep).at(0), 0u)
+        << "a quiet tree under the ceiling at the failed step must clear the failed probe";
+    const CBTTessellationStats walked = inst.ReadTessellationStats();
+    inst.Shutdown();
+
+    CBTInstance fresh;
+    ASSERT_TRUE(fresh.Initialize(*m_Device, m_KernelSet));
+    ASSERT_TRUE(fresh.InitializeRoots(kDomainPlanar));
+    const ShapedRelief freshRelief(*m_Device, fresh, ReleaseShaping());
+    ASSERT_TRUE(freshRelief.IsArmed());
+    CBTClassifyDesc freshClassify = ScreenClassify(ReleaseShaping());
+    freshClassify.BehindEye = BehindEyeRelease::ReleaseWhenNeeded;
+    HoldShaped(fresh, freshRelief, freshClassify, Above(kReleasePose.EyeX, 2.0f, kSparseZ, 0.0f, -4.0f));
+    const CBTTessellationStats rested = fresh.ReadTessellationStats();
+    fresh.Shutdown();
+    std::printf("[sparse] like ground step %d; at z %.0f m: walked step %d (occ %.3f), fresh step %d (occ %.3f)\n",
+                restStep, kSparseZ, walked.OffFrustumKeepStep,
+                double(walked.LiveCount) / kDefaultBisectorPoolSize, rested.OffFrustumKeepStep,
+                double(rested.LiveCount) / kDefaultBisectorPoolSize);
+    ASSERT_LT(rested.OffFrustumKeepStep, restStep) << "the sparse pose must fit a lower step for the test to say anything";
+    EXPECT_EQ(walked.OffFrustumKeepStep, rested.OffFrustumKeepStep) << "a failed probe must not hold the step above";
 }

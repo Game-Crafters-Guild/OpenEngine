@@ -138,7 +138,7 @@ TEST_F(PrefabPropagationTests, AFileChangeTellsThePanelsThatTheWorldChanged)
 {
     // The registration keeps the channel for the rest of the process.
     static Editor::EditorChangeNotifications notifications;
-    Editor::RegisterPrefabEditor(notifications, nullptr, {}, {});
+    Editor::RegisterPrefabEditor(notifications, nullptr, nullptr, {}, {});
     ECS::World world;
     ASSERT_TRUE(Place(world).IsValid());
     int changes = 0;
@@ -161,7 +161,7 @@ TEST_F(PrefabPropagationTests, AFileChangeLeavesTheSceneClean)
 {
     // The registration keeps the channel for the rest of the process.
     static Editor::EditorChangeNotifications notifications;
-    Editor::RegisterPrefabEditor(notifications, nullptr, {}, {});
+    Editor::RegisterPrefabEditor(notifications, nullptr, nullptr, {}, {});
     ECS::World world;
     ASSERT_TRUE(Place(world).IsValid());
     Editor::SceneDocumentManager document;

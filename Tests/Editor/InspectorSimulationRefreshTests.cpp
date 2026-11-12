@@ -184,14 +184,14 @@ TEST_F(InspectorSimulationRefreshTests, RefreshCallback_ReadsLiveTransformData)
     // Create an entity with a Transform
     GameEngine::ECS::Entity entity = world->Create<GameEngine::Components::Transform>(
         GameEngine::Components::Transform::FromTRS(
-            GameEngine::Mathematics::Vector3(1.0f, 2.0f, 3.0f),
+            GameEngine::Mathematics::WorldPosition{1.0, 2.0, 3.0},
             GameEngine::Mathematics::Quaternion(),
             GameEngine::Mathematics::Vector3(1.0f, 1.0f, 1.0f)));
     GameEngine::ECS::EntityHandle handle = entity.GetHandle();
 
     // Set up the callback mechanism (simulating what InspectorPanel + TransformInspector do)
     std::vector<std::function<void()>> callbacks;
-    GameEngine::Mathematics::Vector3 lastReadPosition{};
+    GameEngine::Mathematics::WorldPosition lastReadPosition{};
 
     callbacks.push_back([world, handle, &lastReadPosition]()
     {
@@ -203,24 +203,24 @@ TEST_F(InspectorSimulationRefreshTests, RefreshCallback_ReadsLiveTransformData)
     // First refresh: reads initial position
     for (auto& cb : callbacks)
         cb();
-    EXPECT_FLOAT_EQ(lastReadPosition.x, 1.0f);
-    EXPECT_FLOAT_EQ(lastReadPosition.y, 2.0f);
-    EXPECT_FLOAT_EQ(lastReadPosition.z, 3.0f);
+    EXPECT_DOUBLE_EQ(lastReadPosition.X, 1.0);
+    EXPECT_DOUBLE_EQ(lastReadPosition.Y, 2.0);
+    EXPECT_DOUBLE_EQ(lastReadPosition.Z, 3.0);
 
     // Simulate physics moving the entity (direct ECS write, no notifications)
     auto* t = world->GetComponentForWrite<GameEngine::Components::Transform>(handle);
     ASSERT_NE(t, nullptr);
     *t = GameEngine::Components::Transform::FromTRS(
-        GameEngine::Mathematics::Vector3(10.0f, 20.0f, 30.0f),
+        GameEngine::Mathematics::WorldPosition{10.0, 20.0, 30.0},
         GameEngine::Mathematics::Quaternion(),
         GameEngine::Mathematics::Vector3(1.0f, 1.0f, 1.0f));
 
     // Second refresh: reads updated position without any notification
     for (auto& cb : callbacks)
         cb();
-    EXPECT_FLOAT_EQ(lastReadPosition.x, 10.0f);
-    EXPECT_FLOAT_EQ(lastReadPosition.y, 20.0f);
-    EXPECT_FLOAT_EQ(lastReadPosition.z, 30.0f);
+    EXPECT_DOUBLE_EQ(lastReadPosition.X, 10.0);
+    EXPECT_DOUBLE_EQ(lastReadPosition.Y, 20.0);
+    EXPECT_DOUBLE_EQ(lastReadPosition.Z, 30.0);
 }
 
 TEST_F(InspectorSimulationRefreshTests, RefreshCallback_SkippedAfterEntityDestroyed)
@@ -229,7 +229,7 @@ TEST_F(InspectorSimulationRefreshTests, RefreshCallback_SkippedAfterEntityDestro
 
     GameEngine::ECS::Entity entity = world->Create<GameEngine::Components::Transform>(
         GameEngine::Components::Transform::FromTRS(
-            GameEngine::Mathematics::Vector3(1.0f, 2.0f, 3.0f),
+            GameEngine::Mathematics::WorldPosition{1.0, 2.0, 3.0},
             GameEngine::Mathematics::Quaternion(),
             GameEngine::Mathematics::Vector3(1.0f, 1.0f, 1.0f)));
     GameEngine::ECS::EntityHandle handle = entity.GetHandle();

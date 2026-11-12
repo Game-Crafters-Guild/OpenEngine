@@ -61,8 +61,8 @@ When a value is shared across panels, add or reuse a token. When a value is loca
 
 - Prefer classes and theme tokens over inline style overrides.
 - Use `UIElement::Style()` from C++ for dynamic values, measured sizes, live textures, or state that cannot be expressed cleanly in CSS.
-- Use `RequestSubtreeStyleAssetPath("UI/controls/<Control>.css")` when a native control owns reusable child structure and local styling.
-- Put reusable control styles in `Apps/Editor/Assets/UI/controls`.
+- Use `RequestSubtreeStyleAssetPath("UI/controls/<Control>.css")` when a native control owns reusable child structure and local styling. A sheet in `Engine/Modules/UI/Assets/UI` is a control sheet: a host rule of equal specificity wins over it.
+- Put the editor's control styles in `Apps/Editor/Assets/UI/controls`, and the UI module's control styles in `Engine/Modules/UI/Assets/UI/controls`. Both stage to `Assets/UI/controls`, and an export ships the UI module's files.
 - Put global theme-wide editor styles in `Apps/Editor/Assets/UI/theme`.
 - Put panel-specific styles in `Apps/Editor/Assets/UI/panels`.
 - Use `hidden` for complete removal from layout. The theme intentionally raises specificity with `.hidden.hidden`.

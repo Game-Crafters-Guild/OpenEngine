@@ -20,8 +20,8 @@ constexpr uint32 kBvhBuilderVersion  = 1u;
 // Persist a BVH for the given asset+submesh under cacheRoot, keyed by `geometryHash`
 // (ComputeGeometryHash of the mesh it was built from). Path layout:
 //   <cacheRoot>/MeshBvh/<guidCompact>/sm<submesh>_v<builderVer>.meshbvh
-// Atomic temp+rename. Best-effort: returns false on I/O failure but never
-// throws - picking falls back to in-memory builds.
+// Each writer stages its own temporary file and renames it into place; the call removes the temporary
+// files of stopped writers. Best-effort: false on I/O failure, never throws (picking builds in memory).
 bool PersistBvh(const std::filesystem::path& cacheRoot,
                 const GUID& modelGuid,
                 uint32 submesh,

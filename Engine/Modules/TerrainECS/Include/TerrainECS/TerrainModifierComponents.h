@@ -4,9 +4,11 @@
 #include "Components/Terrain/TerrainModifierVolume.h"
 #include "Components/Terrain/TerrainModifiers.h"
 #include "ECS/ECS.h"
+#include "TerrainECS/GeneratedNoiseRelief.h"
 #include "TerrainECS/TerrainZonePayload.h"
 
 #include <cstddef>
+#include <optional>
 #include <span>
 #include <string_view>
 
@@ -250,5 +252,14 @@ bool AddTerrainEffectDefault(ECS::World& world, ECS::EntityHandle entity,
 // marks the effect's column, which is what the modifier change gate scans.
 bool SetTerrainEffectStackOrder(ECS::World& world, ECS::EntityHandle entity,
                                 ECS::ComponentTypeId typeId, int32 stackOrder);
+
+// The volume of the scene's Generated noise: an enabled Shape::Global volume with Weight above 0 that holds
+// an enabled TerrainNoiseEffect in Generated mode; the highest volume Priority wins (ties: the lowest entity
+// index). Invalid when there is none.
+ECS::EntityHandle FindGeneratedNoiseVolume(ECS::World& world);
+
+// The preset of the FindGeneratedNoiseVolume effect and the volume's Weight; null when there is none.
+// A Flat base evaluates it as its relief (TerrainService::BuildTiledTerrainConfig).
+std::optional<GeneratedNoiseRelief> ResolveGeneratedNoiseRelief(ECS::World& world);
 
 } // namespace GameEngine::TerrainECS

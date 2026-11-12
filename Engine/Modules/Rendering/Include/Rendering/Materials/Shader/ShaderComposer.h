@@ -166,6 +166,19 @@ class ShaderComposer
     // with raw-ordinal access — see TextureSlotResolution::Rejected.
     static TextureSlotResolution ResolveTextureSlots(const std::string& surfaceSource);
 
+    // ResolveTextureSlots of the surface file at `surfacePath`, parsed once from the bytes the
+    // shader source cache holds and shared until the next announced edit (NotifyShaderSourcesChanged).
+    // A held result touches no file. Thread-safe. Null when the file cannot be read.
+    static std::shared_ptr<const TextureSlotResolution> ResolveTextureSlotsOfFile(
+        const std::filesystem::path& surfacePath);
+
+    // True when ResolveTextureSlotsOfFile(surfacePath) touches no file.
+    static bool HoldsTextureSlotsOfFile(const std::filesystem::path& surfacePath);
+
+    // Copies the bytes the shader source cache holds for `path` into `out`, reading the file on the
+    // first request. A held file touches no disk. Thread-safe. False when the file cannot be read.
+    static bool ReadSourceFileText(const std::filesystem::path& path, std::string& out);
+
     // One diagnostic line per material keyword the surface never reads, with a
     // nearest-match suggestion when the keyword looks like a typo of one it does
     // read. A misspelled keyword is otherwise a silent no-op: the preamble emits

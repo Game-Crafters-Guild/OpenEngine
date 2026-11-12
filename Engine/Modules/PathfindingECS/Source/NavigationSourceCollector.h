@@ -132,16 +132,23 @@ const Rendering::MeshGPURegistry* FindEngineMeshRegistry();
 // each once. Primitives and generated meshes have no asset behind them and are never listed.
 std::vector<GUID> FindUnloadedNavigationModels(ECS::World& world);
 
-// The terrain a surface bakes: the planar terrain under the surface's origin, as TerrainECS resolves it.
+// The terrain a surface bakes: the terrain under the surface's origin, as TerrainECS resolves it.
 struct NavigationTerrainSource
 {
+    // The planar query, or the planet's spherical query (IsSpherical) when the planet is streamed.
     TerrainECS::SurfaceHeightQuery Query;
-    // The first terrain is a planet: there is no planar heightfield to read.
+    // The terrain under the surface's origin is a planet. A planet covers every point but its center.
     bool Spherical = false;
-    // The first terrain is planar but its heightfield has not been built yet.
+    // The planet's relief shell from its center (the world origin), TerrainECS::PlanetReliefShellOf.
+    TerrainECS::PlanetReliefShell PlanetRelief;
+    // There is no query and no planet under the origin, and the first terrain is planar: its
+    // heightfield has not been built yet.
     bool Loading = false;
 
     bool OverlapsXZ(float32 minX, float32 minZ, float32 maxX, float32 maxZ) const;
+    // True when the terrain is a planet and `bounds` holds a point of its relief: the bake refuses
+    // such a surface. Bounds away from the relief read the static geometry only.
+    bool ReachesPlanetRelief(const NavigationBounds& bounds) const;
 };
 
 // `surfaceTransform` is the navigation surface's transform; null reads the terrain under the world origin.

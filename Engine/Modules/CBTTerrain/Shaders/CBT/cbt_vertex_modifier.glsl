@@ -21,11 +21,25 @@
 //
 // Set 2 (the DrawBindings route terrain uses): CBT_DESCRIPTOR_SET=2 puts the draw's
 // buffers on set 2, resolved by the MaterialBinder from DrawBindings by instance
-// name (gIdxVis / gVertex, and gCbtChain / gCbtDrawLevel outside the compat profile). CBT_GRAPHICS_INCLUDE keeps the include int64-free and
-// strips every compute-only write/atomic helper (plan §9 silent-null-variant trap).
+// name (gIdxVis / gVertex / TerrainParamsBuffer for the flags, and gCbtChain / gCbtDrawLevel
+// outside the compat profile). CBT_GRAPHICS_INCLUDE keeps the include int64-free and
+// strips every compute-only write/atomic helper.
 #define CBT_GRAPHICS_INCLUDE
 #define CBT_DESCRIPTOR_SET 2
 #include "cbt_layout.glsl"
+#include "cbt_terrain_params.glsl"
+
+// GE_SHARED_CBT_INSTANCE_FLAGS_BEGIN
+// The terrain params flags set bit 0 for receive shadows (Terrain/TerrainTypes.h). The instance
+// flags set bit 1 for receive shadows (the fragment gate reads it).
+// The other bits have different meanings in the two words.
+const uint kCBTTerrainFlagReceiveShadows = 1u;
+const uint kCBTInstanceFlagReceiveShadows = 2u;
+uint CBT_InstanceFlags(uint terrainFlags)
+{
+    return (terrainFlags & kCBTTerrainFlagReceiveShadows) != 0u ? kCBTInstanceFlagReceiveShadows : 0u;
+}
+// GE_SHARED_CBT_INSTANCE_FLAGS_END
 
 #if defined(CBT_DRAW_HEIGHT_CHAIN)
 // The height a planar corner at world `pos` and terrain `uv` draws at: the chain level of its distance
@@ -45,8 +59,12 @@ float CBT_DrawnCornerHeight(vec3 pos, vec2 uv)
 }
 #endif
 
-void ModifyVertex(inout VertexOutput v, InstanceData inst)
+// inst is inout: the draw has no instance record, so the terrain's own row sets the flags the
+// fragment reads.
+void ModifyVertex(inout VertexOutput v, inout InstanceData inst)
 {
+    inst.flags = CBT_InstanceFlags(terrains[0].Flags);
+
     uint vid = uint(gl_VertexIndex);
     uint triangle = vid / 3u;
     uint corner = vid - triangle * 3u;
@@ -83,4 +101,10 @@ void ModifyVertex(inout VertexOutput v, InstanceData inst)
     v.normal = vec3(0.0, 1.0, 0.0);              // placeholder; the surface samples the normalmap
     v.uv0 = uv;                                  // terrain UV: normalmap + future splat lookups
     v.custom0 = vec4(float(slot), 0.0, 0.0, vd.meta.w); // .x = slot (debug), .w = normalmap index
+#if defined(GE_CLIP_DISTANCE) && defined(CBT_DRAW_HEIGHT_CHAIN)
+    // The terrain ends at its authored size. uv is linear in world X and Z, so the clip is exact;
+    // the rasterizer keeps a distance >= 0 (uv at or inside the extent).
+    gl_ClipDistance[0] = gCbtDrawLevel.Params.surfaceExtent.x - uv.x;
+    gl_ClipDistance[1] = gCbtDrawLevel.Params.surfaceExtent.y - uv.y;
+#endif
 }

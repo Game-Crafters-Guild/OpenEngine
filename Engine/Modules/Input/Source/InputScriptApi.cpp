@@ -70,6 +70,11 @@ PointerLockState GetPointerLockState(InputSystem& input)
     return input.GetPointerLockState();
 }
 
+GamepadRuntimeState GetGamepadRuntimeState(InputSystem& input)
+{
+    return input.GetGamepadRuntimeState();
+}
+
 ActionState GetActionState(InputSystem& input, StringId action)
 {
     return input.GetActionState(action);

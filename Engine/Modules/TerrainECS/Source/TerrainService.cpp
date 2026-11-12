@@ -1,22 +1,30 @@
 #include "TerrainECS/TerrainService.h"
 
-#include "CBTTerrain/CBTPlanetShading.h" // SampleSphereSculptByDir (brush cursor sculpt sample)
-#include "CBTTerrain/SphereSculptSerialization.h" // .tsculpt blob codec (persistence)
 #include "Mathematics/Interpolation.h"
 #include "PhysicsECS/HeightFieldDataProvider.h"
 #include "Physics/PhysicsShapes.h"
 #include "Terrain/CDLODSelection.h"
+#include "TerrainECS/Planet/PlanetPageRequester.h"
+#include "TerrainECS/Planet/PlanetSculptDab.h"
+#include "TerrainECS/BakeWarningLatch.h"
+#include "TerrainECS/TerrainHeightFunction/RevocableTerrainHeightFunction.h"
+#include "TerrainHeightFunction/TerrainHeightFunctionInstances.h"
+#include "TerrainHeightFunction/TerrainHeightFunctionRegistry.h"
+#include "PageStreaming/Height/HeightLayerStore.h"
+#include "PageStreaming/PageStore/PageStoreFormat.h"
 #include "TerrainECS/RawHeightmap.h"
 #include "TerrainECS/TerrainSizingPlan.h"
 #include "TerrainECS/TerrainPages.h"
 #include "TerrainECS/HeightPageStoreLoader.h"
 #include "Components/Terrain/Terrain.h"
+#include "Components/Terrain/TerrainModifierEffects.h"
 #include "Components/Transform.h"
 #include "Core/Engine.h"
 #include "Assets/AssetManager.h"
 #include "Assets/BinaryAsset.h"
-#include "JobSystem/JobChannel.h"
 #include "Logger/Logger.h"
+#include "Types/Fnv1a.h"
+#include "Types/StringUtils.h"
 
 #include <algorithm>
 #include <cassert>
@@ -25,15 +33,13 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <format>
+#include <limits>
 #include <string>
 #include <utility>
 
 namespace GameEngine::TerrainECS
 {
-
-// Default planet radius the sculpt page store is configured to at Initialize (the canonical
-// PlanetColliderParams / demo default) until the render/modifier path pushes the real radius.
-static constexpr float32 kDefaultPlanetSculptRadius = 2000.0f;
 
 void ResetSplatmap(
     const Terrain::HeightfieldData& heightfield,
@@ -199,17 +205,32 @@ UpsampleTap ComputeUpsampleTap(uint32 dstIndex, uint32 srcDim, uint32 dstDim)
     const uint32 hi = std::min(lo + 1u, srcDim - 1u);
     return {lo, hi, pos - static_cast<float32>(lo)};
 }
+// The lattice samples on one axis that lie on the footprint: those at or before its far edge. A
+// tiled terrain's lattice reaches past its authored size; those samples carry no ground.
+uint64 FootprintSamples(float32 footprintSize, float32 spacing, uint32 latticeSamples)
+{
+    constexpr float32 kEdgeTolerance = 1.0e-3f; // in lattice spacings: an edge on a sample keeps it
+    if (!(spacing > 0.0f))
+        return 0u;
+    const uint64 inside = static_cast<uint64>(std::floor(footprintSize / spacing + kEdgeTolerance)) + 1u;
+    return std::min<uint64>(inside, latticeSamples);
+}
+
 // Reads finest page (pageX, pageZ)'s body samples (SurfaceHeightQuery::FillFinestPage) into `out`,
-// kFinestPageGridSamples squared, the samples past the field's last sample holes: no ground past the
-// edge. False, `out` unspecified, when the page is not on the CPU at level 0.
+// kFinestPageGridSamples squared, the samples past the footprint's last sample holes: no ground past
+// the edge. False, `out` unspecified, when the page is not on the CPU at level 0.
 bool ReadPageColliderSamples(const SurfaceHeightQuery& query, uint32 pageX, uint32 pageZ, std::span<float32> out)
 {
     if (!query.FillFinestPage(pageX, pageZ, out))
         return false;
     const uint64 firstX = static_cast<uint64>(pageX) * PageStreaming::kPageOwnedSamples;
     const uint64 firstZ = static_cast<uint64>(pageZ) * PageStreaming::kPageOwnedSamples;
-    const uint64 insideX = std::min<uint64>(kFinestPageGridSamples, query.LatticeSamplesX() - firstX);
-    const uint64 insideZ = std::min<uint64>(kFinestPageGridSamples, query.LatticeSamplesZ() - firstZ);
+    const uint64 samplesX =
+        FootprintSamples(query.FootprintSizeX(), query.LatticeSpacingX(), query.LatticeSamplesX());
+    const uint64 samplesZ =
+        FootprintSamples(query.FootprintSizeZ(), query.LatticeSpacingZ(), query.LatticeSamplesZ());
+    const uint64 insideX = firstX < samplesX ? std::min<uint64>(kFinestPageGridSamples, samplesX - firstX) : 0u;
+    const uint64 insideZ = firstZ < samplesZ ? std::min<uint64>(kFinestPageGridSamples, samplesZ - firstZ) : 0u;
     for (uint64 z = 0; z < kFinestPageGridSamples; ++z)
         for (uint64 x = z < insideZ ? insideX : 0u; x < kFinestPageGridSamples; ++x)
             out[z * kFinestPageGridSamples + x] = Physics::kHeightFieldNoCollision;
@@ -320,13 +341,19 @@ CoarsePatchRect ComputeCoarsePatchRect(uint32 regionDim, const CoarsePatchNeighb
     return r;
 }
 
+void WidenToNominalHeightBand(float32& minH, float32& maxH, float32 bandTop)
+{
+    // Normalized heights: 0 is the terrain's origin, 1 is HeightScale above it.
+    constexpr float32 kNominalBandBottom = 0.0f;
+    minH = std::min(minH, kNominalBandBottom);
+    maxH = std::max(maxH, bandTop);
+}
+
 void TerrainData::ResetSplatmapAndCommitRange()
 {
-    // The range is still computed here even though the reset does not read it:
-    // it is the domain the HeightNormalized rule conditions normalize against,
-    // and region regens are only exact while it is unchanged.
-    float32 minH = 1e30f;
-    float32 maxH = -1e30f;
+    // The reset does not read the range: GetHeightRangeMeters reports it.
+    float32 minH = std::numeric_limits<float32>::max();
+    float32 maxH = std::numeric_limits<float32>::lowest();
     const uint32 w = Heightfield.GetWidth();
     const uint32 h = Heightfield.GetHeight();
     for (uint32 z = 0; z < h; ++z)
@@ -336,19 +363,14 @@ void TerrainData::ResetSplatmapAndCommitRange()
             minH = std::min(minH, s);
             maxH = std::max(maxH, s);
         }
-    if (w == 0 || h == 0)
-    {
-        minH = 0.0f;
-        maxH = 0.0f;
-    }
+    WidenToNominalHeightBand(minH, maxH, kNominalHeightBandTop);
 
     ResetSplatmap(Heightfield, Splatmap, SplatmapWidth, SplatmapHeight);
-    SplatBakeMinH = minH;
-    SplatBakeMaxH = maxH;
-    SplatBakeRangeValid = true;
+    HeightRangeMinH = minH;
+    HeightRangeMaxH = maxH;
+    HeightRangeValid = true;
     MarkSplatChanged();
-    // Every texel was reset against the (possibly new) global range — the GPU
-    // upload must be full-texture, never a height-rect band.
+    // Every texel was reset, so the GPU upload must be full-texture, never a height-rect band.
     SplatmapFullDirty = true;
 }
 
@@ -358,23 +380,36 @@ uint64 TerrainService::s_Generation = 0;
 TerrainService::TerrainService() = default;
 TerrainService::~TerrainService() = default;
 
-JobSystem::JobChannel& TerrainService::BakeStoreChannel(JobSystem::WorkStealingThreadPool& jobSystem)
+TerrainHeightRangeMeters TerrainService::GetHeightRangeMeters(
+    const Components::Terrain& terrain, std::optional<GeneratedNoiseRelief> generatedNoise) const
 {
-    if (!m_BakeStoreChannel)
+    float32 minH = 0.0f;
+    float32 maxH = kNominalHeightBandTop;
+    float32 bandTop = kNominalHeightBandTop;
+    if (const TiledTerrainData* tiled =
+            GetTiledTerrainData(TiledTerrainHandle{terrain.TiledTerrainHandle, terrain.TiledTerrainGeneration}))
     {
-        m_BakeStoreJobSystem = &jobSystem;
-        m_BakeStoreChannel = std::make_unique<JobSystem::JobChannel>(
-            jobSystem, JobSystem::JobChannelDesc{.Name = "Terrain bake store", .MaxRunning = 1});
+        minH = tiled->CachedGlobalMinH;
+        maxH = tiled->CachedGlobalMaxH;
+        bandTop = NominalHeightBandTop(tiled->Config);
     }
-    assert(m_BakeStoreJobSystem == &jobSystem &&
-           "TerrainService: the bake store channel serves one job system; a second one passed it");
-    return *m_BakeStoreChannel;
+    else if (const TerrainData* data =
+                 GetTerrainData(TerrainHandle{terrain.TerrainDataHandle, terrain.TerrainDataGeneration});
+             data && data->HeightRangeValid)
+    {
+        minH = data->HeightRangeMinH;
+        maxH = data->HeightRangeMaxH;
+    }
+    else if (terrain.BaseSource == Components::TerrainBaseSource::Flat && generatedNoise)
+        bandTop = GeneratedNoiseStackOf(terrain, *generatedNoise).RealizedTop(); // the tiles do not exist yet
+    WidenToNominalHeightBand(minH, maxH, bandTop);
+    return {minH * terrain.HeightScale, maxH * terrain.HeightScale};
 }
 
 SurfaceHeightQuery TerrainService::SurfaceQuery(const Components::Terrain& terrain,
                                                 const Components::WorldTransform& transform)
 {
-    const float32 originY = transform.matrix[13];
+    const float32 originY = (transform.GetPosition() - Mathematics::WorldPosition{}).y;
     if (const TiledTerrainData* tiled =
             GetTiledTerrainData(TiledTerrainHandle{terrain.TiledTerrainHandle, terrain.TiledTerrainGeneration}))
     {
@@ -383,10 +418,14 @@ SurfaceHeightQuery TerrainService::SurfaceQuery(const Components::Terrain& terra
             SurfaceHeightQuery paged = m_TerrainPages->SurfaceQuery(
                 TerrainHandle{tiled->GlobalGpuHandleIndex, tiled->GlobalGpuHandleGeneration});
             if (paged.IsValid())
+            {
+                // The tile lattice covers whole tiles; the terrain ends at its authored size.
+                paged.ClipFootprint(tiled->Config.WorldSizeX, tiled->Config.WorldSizeZ);
                 return paged;
+            }
         }
-        // No page source yet (a height store still cooking, or before its first request): the
-        // footprint on the tile lattice, every sample unsampled.
+        // No page source yet (a height store still cooking, or before its first request): the tile
+        // lattice clipped to the authored size, every sample unsampled.
         const TiledRenderExtent extent = ComputeTiledRenderExtent(tiled->Config);
         if (extent.UnifiedWidth < 2u || extent.UnifiedHeight < 2u)
             return {};
@@ -399,7 +438,9 @@ SurfaceHeightQuery TerrainService::SurfaceQuery(const Components::Terrain& terra
         shape.SamplesZ = extent.UnifiedHeight;
         shape.MinHeight = std::min(originY, originY + terrain.HeightScale);
         shape.MaxHeight = std::max(originY, originY + terrain.HeightScale);
-        return SurfaceHeightQuery(shape, originY, terrain.HeightScale);
+        SurfaceHeightQuery unsourced(shape, originY, terrain.HeightScale);
+        unsourced.ClipFootprint(tiled->Config.WorldSizeX, tiled->Config.WorldSizeZ);
+        return unsourced;
     }
     const TerrainHandle handle{terrain.TerrainDataHandle, terrain.TerrainDataGeneration};
     const TerrainData* data = GetTerrainData(handle);
@@ -409,8 +450,9 @@ SurfaceHeightQuery TerrainService::SurfaceQuery(const Components::Terrain& terra
         return {};
     // The terrain's transform is a translation for this purpose: the footprint is centered on it.
     PageRequestTerrain shape;
-    shape.OriginX = transform.matrix[12] - terrain.SizeX * 0.5f;
-    shape.OriginZ = transform.matrix[14] - terrain.SizeZ * 0.5f;
+    const Mathematics::Vector3 position = transform.GetPosition() - Mathematics::WorldPosition{};
+    shape.OriginX = position.x - terrain.SizeX * 0.5f;
+    shape.OriginZ = position.z - terrain.SizeZ * 0.5f;
     shape.Level0TexelX = terrain.SizeX / static_cast<float32>(data->Heightfield.GetWidth() - 1u);
     shape.Level0TexelZ = terrain.SizeZ / static_cast<float32>(data->Heightfield.GetHeight() - 1u);
     shape.SamplesX = data->Heightfield.GetWidth();
@@ -439,6 +481,11 @@ std::span<const PageStreaming::PageAddress> TerrainService::FinestWindowPages(co
     return m_TerrainPages->CpuWindowPages(TerrainHandle{tiled->GlobalGpuHandleIndex, tiled->GlobalGpuHandleGeneration});
 }
 
+const TerrainPages* TerrainService::FindTerrainPages() const
+{
+    return m_TerrainPages.get();
+}
+
 TerrainPages& TerrainService::GetTerrainPages()
 {
     if (!m_TerrainPages)
@@ -452,6 +499,24 @@ TerrainPages& TerrainService::GetTerrainPages()
                                                         PlatformSurfacePageProfile());
     }
     return *m_TerrainPages;
+}
+
+TerrainHeightFunctionInstances& TerrainService::GetHeightFunctionInstances()
+{
+    if (!m_HeightFunctions)
+    {
+        EngineCore& engine = EngineCore::GetInstance();
+        m_HeightFunctions =
+            std::make_unique<TerrainHeightFunctionInstances>(engine.IsInitialized() ? &engine.GetJobSystem() : nullptr);
+    }
+    return *m_HeightFunctions;
+}
+
+void TerrainService::RevokeHeightFunctions(std::string_view moduleId, uint64 firstGeneration, uint64 endGeneration)
+{
+    if (TerrainService* terrain = TryGet())
+        terrain->GetHeightFunctionInstances().RevokeModuleGenerations(moduleId, firstGeneration, endGeneration);
+    TerrainHeightFunctionRegistry::Get().RemoveModuleGenerations(moduleId, firstGeneration, endGeneration);
 }
 
 HeightPageStoreLoader& TerrainService::GetHeightPageStores()
@@ -472,21 +537,15 @@ void TerrainService::Initialize()
     s_Instance = std::make_unique<TerrainService>();
     ++s_Generation;
 
-    // Configure the sculpt page store to the default planet radius so a direct dab (tests, or an
-    // edit before the render/modifier path pushes the real radius) has a working virtual grid. The
-    // render + modifier paths call ConfigurePlanetSculpt(actualRadius) before their first edit, which
-    // reconfigures the dim (frozen once content exists).
-    s_Instance->ConfigurePlanetSculpt(kDefaultPlanetSculptRadius);
-
     // Hot-reload lane for stamp masks and base heightmaps. Initialize runs
     // from EnableRenderingLoop, after the AssetManager exists; standalone
     // (test) construction leaves the lane inactive.
     s_Instance->InstallAssetReloadInvalidators();
 
     // Register as the heightfield data provider for PhysicsInitSystem. The handle is a
-    // single-terrain slot index, a page body handle (kPagePhysicsHandleBit) or a planet-face
-    // handle (kPlanetFacePhysicsHandleBit); each resolves to samples + version + dirty-region log,
-    // so the region-scoped in-place collider path is the same for all three.
+    // single-terrain slot index or a page body handle (kPagePhysicsHandleBit, planar or planet);
+    // each resolves to samples + version + dirty-region log, so the region-scoped in-place collider
+    // path is the same for both.
     PhysicsECS::SetHeightFieldDataProvider([](uint32 handle, uint32 generation, uint64 sinceVersion) -> PhysicsECS::HeightFieldData
     {
         auto* svc = TerrainService::TryGet();
@@ -494,8 +553,8 @@ void TerrainService::Initialize()
             return {};
 
         // Resolve the raw sample grid + version + dirty log for whichever addressing
-        // scheme the handle carries: a per-page collider buffer, a per-face planet collider
-        // buffer, or a single-terrain heightfield. All feed the same region tail.
+        // scheme the handle carries: a page body buffer or a single-terrain heightfield. Both
+        // feed the same region tail.
         const float32* samples = nullptr;
         uint32 sampleCount = 0;
         uint64 version = 0;
@@ -508,16 +567,6 @@ void TerrainService::Initialize()
                 sampleCount = kFinestPageGridSamples;
                 version = page->Version;
                 dirtyLog = &page->DirtyLog;
-            }
-        }
-        else if (handle & TerrainService::kPlanetFacePhysicsHandleBit)
-        {
-            if (const auto* face = svc->ResolvePlanetFaceCollider(handle, generation))
-            {
-                samples = face->Samples.data();
-                sampleCount = face->Dim;
-                version = face->Version;
-                dirtyLog = &face->DirtyLog;
             }
         }
         else if (TerrainData* data = svc->GetTerrainData(TerrainHandle{handle, generation});
@@ -751,6 +800,48 @@ void TerrainService::SeedDecodedHeightmapForTests(const GUID& guid, Terrain::Hei
     m_HeightmapCache[guid] = std::move(entry);
 }
 
+namespace
+{
+
+// The terrain's height function name, without the buffer's trailing zeros.
+std::string_view HeightFunctionNameOf(const Components::Terrain& terrain)
+{
+    return {terrain.HeightFunction, strnlen(terrain.HeightFunction, sizeof(terrain.HeightFunction))};
+}
+
+// What a Function terrain's height function is built for now: its name's id, the name's registration
+// (0 when no module registers it), its seed and its footprint.
+TerrainHeightFunctionKey HeightFunctionKeyOf(const Components::Terrain& terrain)
+{
+    TerrainHeightFunctionKey key;
+    key.Name = HashStringId(HeightFunctionNameOf(terrain));
+    if (const auto registration = TerrainHeightFunctionRegistry::Get().Find(key.Name))
+        key.Generation = registration->Generation;
+    key.Context = {terrain.BaseSeed, terrain.SizeX, terrain.SizeZ};
+    return key;
+}
+
+// A Function base's whole-field height range, from the function's range over the footprint, so level
+// selection and the height rules have it before any tile streams. Other bases keep their seed.
+void SeedFunctionHeightRange(TiledTerrainData& tiled)
+{
+    const TiledTerrainConfig& config = tiled.Config;
+    const float32 band = FunctionBaseHeightBand(config);
+    if (config.Base.Source != Components::TerrainBaseSource::Function || !config.Base.HeightFunction || !(band > 0.0f))
+        return;
+    const std::optional<TerrainHeightRange> range =
+        config.Base.HeightFunction->HeightRange(0.0f, 0.0f, config.WorldSizeX, config.WorldSizeZ, 0.0f);
+    if (!range)
+        return;
+    float32 minH = range->Min / band;
+    float32 maxH = range->Max / band;
+    WidenToNominalHeightBand(minH, maxH, kNominalHeightBandTop);
+    tiled.CachedGlobalMinH = minH;
+    tiled.CachedGlobalMaxH = maxH;
+}
+
+} // namespace
+
 TiledTerrainBase TerrainService::ResolveTiledTerrainBase(Components::TerrainBaseSource source,
                                                          const GUID& heightmapGuid)
 {
@@ -776,7 +867,23 @@ bool TerrainService::IsTiledTerrainBaseCurrent(const TiledTerrainBase& base,
            base.HeightmapContentVersion == GetHeightmapContentVersion(heightmapGuid);
 }
 
-TiledTerrainConfig TerrainService::BuildTiledTerrainConfig(const Components::Terrain& terrain)
+namespace
+{
+
+// The stack a Flat `terrain` evaluates under `generatedNoise`; null for every other base.
+std::optional<Terrain::TerrainNoiseStack> GeneratedNoiseOf(const Components::Terrain& terrain,
+                                                         std::optional<GeneratedNoiseRelief> generatedNoise)
+{
+    if (terrain.BaseSource != Components::TerrainBaseSource::Flat || !generatedNoise)
+        return std::nullopt;
+    return GeneratedNoiseStackOf(terrain, *generatedNoise);
+}
+
+} // namespace
+
+TiledTerrainConfig TerrainService::BuildTiledTerrainConfig(const Components::Terrain& terrain,
+                                                           std::string_view terrainName,
+                                                           std::optional<GeneratedNoiseRelief> generatedNoise)
 {
     TiledTerrainConfig config{};
     config.WorldSizeX = terrain.SizeX;
@@ -787,17 +894,60 @@ TiledTerrainConfig TerrainService::BuildTiledTerrainConfig(const Components::Ter
     config.LODRangeScale = Terrain::kDefaultLODRangeScale;
     config.StreamingRadius = terrain.StreamingRadius;
     config.Base = ResolveTiledTerrainBase(terrain.BaseSource, terrain.TerrainAssetGuid.ToGuid());
+    config.Base.Noise = GeneratedNoiseOf(terrain, generatedNoise);
+    if (terrain.BaseSource != Components::TerrainBaseSource::Function)
+        return config;
+    config.Base.HeightFunctionKey = HeightFunctionKeyOf(terrain);
+    config.Base.Names = {std::string(terrainName), std::string(HeightFunctionNameOf(terrain))};
+    const auto registration = TerrainHeightFunctionRegistry::Get().Find(config.Base.HeightFunctionKey.Name);
+    if (!registration)
+    {
+        LOG_WARNING("Terrain '{}': no loaded module registers the height function '{}'. The terrain is flat. "
+                    "Build the game module that registers it, or set the terrain's Base Source.",
+                    config.Base.Names.Terrain, config.Base.Names.Function);
+        return config;
+    }
+    config.Base.HeightFunction =
+        GetHeightFunctionInstances().Request(config.Base.HeightFunctionKey, *registration);
     return config;
 }
 
+bool TerrainService::IsTiledTerrainBaseReady(const Components::Terrain& terrain)
+{
+    if (terrain.BaseSource != Components::TerrainBaseSource::Function)
+        return true;
+    const TerrainHeightFunctionKey key = HeightFunctionKeyOf(terrain);
+    const auto registration = TerrainHeightFunctionRegistry::Get().Find(key.Name);
+    return !registration || GetHeightFunctionInstances().Request(key, *registration) != nullptr;
+}
+
+std::vector<std::string> TerrainService::GetHeightFunctionNames()
+{
+    return TerrainHeightFunctionRegistry::Get().Names();
+}
+
+bool TerrainService::IsHeightFunctionRegistered(std::string_view name)
+{
+    return TerrainHeightFunctionRegistry::Get().Find(HashStringId(name)).has_value();
+}
+
 TiledTerrainEdit TerrainService::CompareTiledTerrainConfig(const TiledTerrainConfig& config,
-                                                           const Components::Terrain& terrain) const
+                                                           const Components::Terrain& terrain,
+                                                           std::optional<GeneratedNoiseRelief> generatedNoise)
 {
     TiledTerrainEdit edit;
     edit.ResolutionChanged = config.SamplesPerMeter != terrain.SamplesPerMeter;
     edit.SizeChanged = config.WorldSizeX != terrain.SizeX || config.WorldSizeZ != terrain.SizeZ;
     edit.BaseChanged =
-        !IsTiledTerrainBaseCurrent(config.Base, terrain.BaseSource, terrain.TerrainAssetGuid.ToGuid());
+        !IsTiledTerrainBaseCurrent(config.Base, terrain.BaseSource, terrain.TerrainAssetGuid.ToGuid()) ||
+        config.Base.Noise != GeneratedNoiseOf(terrain, generatedNoise);
+    if (terrain.BaseSource != Components::TerrainBaseSource::Function)
+        return edit;
+    // The old world stays drawn until the function instance for the new seed, name and size is built.
+    if (!IsTiledTerrainBaseReady(terrain))
+        return {};
+    edit.BaseChanged = edit.BaseChanged || config.Base.HeightFunctionKey != HeightFunctionKeyOf(terrain) ||
+                       config.HeightScale != terrain.HeightScale;
     return edit;
 }
 
@@ -941,6 +1091,48 @@ TiledRenderExtent ComputeTiledRenderExtent(const TiledTerrainConfig& config)
     return e;
 }
 
+bool TiledRenderExtentUsesAtlas(const TiledRenderExtent& extent)
+{
+    return extent.UnifiedWidth > kMaxUnifiedTiledResolution || extent.UnifiedHeight > kMaxUnifiedTiledResolution;
+}
+
+bool BehindCameraDetailApplies(const Components::Terrain& terrain, const TerrainService& service)
+{
+    if (terrain.Domain != Components::TerrainDomain::Planar)
+        return false;
+    const TiledTerrainData* tiled =
+        service.GetTiledTerrainData(TiledTerrainHandle{terrain.TiledTerrainHandle, terrain.TiledTerrainGeneration});
+    return tiled && TiledRenderExtentUsesAtlas(ComputeTiledRenderExtent(tiled->Config));
+}
+
+namespace
+{
+
+// The samples [minX, maxX] x [minZ, maxZ] of a field laid from (fieldOriginX, fieldOriginZ) at the given
+// spacing, from a Function base, one FillFunctionBaseRow a row. A position is the tile fill's world
+// expression minus the terrain's corner, so the page provider's level 0 forms the same bits.
+void FillFunctionBaseRegion(Terrain::HeightfieldData& field, const RevocableTerrainHeightFunction& function,
+                            const FunctionBaseNames& names, float32 terrainOriginX, float32 terrainOriginZ, float32 fieldOriginX,
+                            float32 fieldOriginZ, float32 spacingX, float32 spacingZ, int32 minX, int32 minZ,
+                            int32 maxX, int32 maxZ, float32 minResolvedWavelength, float32 heightBand)
+{
+    const std::size_t count = static_cast<std::size_t>(maxX - minX + 1);
+    std::vector<float32> localX(count);
+    std::vector<float32> row(count);
+    for (int32 x = minX; x <= maxX; ++x)
+        localX[static_cast<std::size_t>(x - minX)] =
+            (fieldOriginX + static_cast<float32>(x) * spacingX) - terrainOriginX;
+    for (int32 z = minZ; z <= maxZ; ++z)
+    {
+        const float32 localZ = (fieldOriginZ + static_cast<float32>(z) * spacingZ) - terrainOriginZ;
+        FillFunctionBaseRow(function, names, localZ, localX, minResolvedWavelength, heightBand, row);
+        for (int32 x = minX; x <= maxX; ++x)
+            field.SetSample(static_cast<uint32>(x), static_cast<uint32>(z), row[static_cast<std::size_t>(x - minX)]);
+    }
+}
+
+} // namespace
+
 void FillHeightfieldBaseRegion(Terrain::HeightfieldData& heightfield,
                                Components::TerrainBaseSource source,
                                const Terrain::HeightfieldData* heightmap,
@@ -960,12 +1152,6 @@ void FillHeightfieldBaseRegion(Terrain::HeightfieldData& heightfield,
 
     switch (source)
     {
-    case Components::TerrainBaseSource::ProceduralNoise:
-        heightfield.FillRegionWithNoise(kBaseNoiseFrequency, kBaseNoiseAmplitude,
-                                        minX, minZ, maxX, maxZ,
-                                        kBaseNoiseOctaves, kBaseNoiseSeed);
-        return;
-
     case Components::TerrainBaseSource::HeightmapAsset:
         if (heightmap != nullptr && !heightmap->IsEmpty())
         {
@@ -993,11 +1179,34 @@ void FillHeightfieldBaseRegion(Terrain::HeightfieldData& heightfield,
     }
 }
 
+Terrain::TerrainNoiseStack GeneratedNoiseStackOf(const Components::Terrain& terrain, const GeneratedNoiseRelief& relief)
+{
+    float32 gain = Terrain::TerrainNoiseStack::kRollingGain;
+    switch (relief.Preset)
+    {
+    case Components::TerrainNoisePreset::Smooth: gain = Terrain::TerrainNoiseStack::kSmoothGain; break;
+    case Components::TerrainNoisePreset::Rugged: gain = Terrain::TerrainNoiseStack::kRuggedGain; break;
+    case Components::TerrainNoisePreset::Rolling:
+    default: break;
+    }
+    Terrain::TerrainNoiseStack stack =
+        Terrain::TerrainNoiseStack::ForTerrainSize(std::max(terrain.SizeX, terrain.SizeZ), gain);
+    stack.Amplitude = relief.Weight;
+    return stack;
+}
+
+float32 NominalHeightBandTop(const TiledTerrainConfig& config)
+{
+    if (!config.Base.Noise)
+        return kNominalHeightBandTop;
+    return config.Base.Noise->RealizedTop();
+}
+
 void FillTiledBaseRegion(Terrain::HeightfieldData& field, const TiledTerrainConfig& config,
                          float32 terrainOriginX, float32 terrainOriginZ,
                          float32 fieldOriginX, float32 fieldOriginZ,
                          float32 fieldSizeX, float32 fieldSizeZ,
-                         int32 minX, int32 minZ, int32 maxX, int32 maxZ)
+                         int32 minX, int32 minZ, int32 maxX, int32 maxZ, float32 minResolvedCellMeters)
 {
     const uint32 w = field.GetWidth();
     const uint32 h = field.GetHeight();
@@ -1012,15 +1221,14 @@ void FillTiledBaseRegion(Terrain::HeightfieldData& field, const TiledTerrainConf
         return;
 
     const TiledTerrainBase& base = config.Base;
+    if (base.Noise)
+    {
+        field.FillRegionWithNoiseWorldSpace(*base.Noise, fieldOriginX, fieldOriginZ, fieldSizeX, fieldSizeZ,
+                                            minX, minZ, maxX, maxZ, minResolvedCellMeters);
+        return;
+    }
     switch (base.Source)
     {
-    case Components::TerrainBaseSource::ProceduralNoise:
-        field.FillRegionWithNoiseWorldSpace(kTileNoiseFrequency, kTileNoiseAmplitude,
-                                            fieldOriginX, fieldOriginZ, fieldSizeX, fieldSizeZ,
-                                            minX, minZ, maxX, maxZ,
-                                            kTileNoiseOctaves, kTileNoiseSeed);
-        return;
-
     case Components::TerrainBaseSource::HeightmapAsset:
         if (base.Heightmap != nullptr && !base.Heightmap->IsEmpty() && config.WorldSizeX > 0.0f &&
             config.WorldSizeZ > 0.0f)
@@ -1050,6 +1258,18 @@ void FillTiledBaseRegion(Terrain::HeightfieldData& field, const TiledTerrainConf
         // Missing or undecodable source: flat, so the problem is visible.
         [[fallthrough]];
 
+    case Components::TerrainBaseSource::Function:
+        if (base.Source == Components::TerrainBaseSource::Function && base.HeightFunction != nullptr)
+        {
+            const float32 spacingX = fieldSizeX / static_cast<float32>(w - 1);
+            const float32 spacingZ = fieldSizeZ / static_cast<float32>(h - 1);
+            FillFunctionBaseRegion(field, *base.HeightFunction, base.Names, terrainOriginX, terrainOriginZ, fieldOriginX,
+                                   fieldOriginZ, spacingX, spacingZ, minX, minZ, maxX, maxZ, minResolvedCellMeters,
+                                   FunctionBaseHeightBand(config));
+            return;
+        }
+        [[fallthrough]];
+
     case Components::TerrainBaseSource::Flat:
     default:
         for (int32 z = minZ; z <= maxZ; ++z)
@@ -1059,13 +1279,69 @@ void FillTiledBaseRegion(Terrain::HeightfieldData& field, const TiledTerrainConf
     }
 }
 
+float32 FunctionBaseHeightBand(const TiledTerrainConfig& config)
+{
+    return config.HeightScale;
+}
+
+namespace
+{
+
+// One warning per terrain and function for the process's life, at the row's first non-finite sample.
+void WarnNonFiniteFunctionHeight(const FunctionBaseNames& names, float32 localX, float32 localZ)
+{
+    static BakeWarningLatch warned;
+    if (!warned.First(Hashing::HashCombine(HashStringId(names.Terrain), HashStringId(names.Function))))
+        return;
+    LOG_WARNING("Terrain '{}': height function '{}' returned a height that is not finite at ({}, {}) m from the "
+                "terrain's corner. The page with that sample stays empty. Return finite meters from HeightRow.",
+                names.Terrain, names.Function, localX, localZ);
+}
+
+} // namespace
+
+FunctionBaseRowFill FillFunctionBaseRow(const RevocableTerrainHeightFunction& function, const FunctionBaseNames& names,
+                                        float32 localZ, std::span<const float32> localX,
+                                        float32 minResolvedWavelength, float32 heightBand,
+                                        std::span<float32> outNormalized)
+{
+    assert(localX.size() == outNormalized.size());
+    FunctionBaseRowFill fill = FunctionBaseRowFill::Filled;
+    if (!function.HeightRow(localZ, localX, minResolvedWavelength, outNormalized))
+        fill = FunctionBaseRowFill::Revoked;
+    else if (!(heightBand > 0.0f))
+        fill = FunctionBaseRowFill::NoHeightBand;
+    else if (const auto bad = std::ranges::find_if_not(outNormalized, [](float32 h) { return std::isfinite(h); });
+             bad != outNormalized.end())
+    {
+        fill = FunctionBaseRowFill::NonFinite;
+        WarnNonFiniteFunctionHeight(names, localX[static_cast<std::size_t>(bad - outNormalized.begin())], localZ);
+    }
+    if (fill != FunctionBaseRowFill::Filled)
+    {
+        std::ranges::fill(outNormalized, 0.0f);
+        return fill;
+    }
+    for (float32& sample : outNormalized)
+        sample /= heightBand;
+    return fill;
+}
+
 void FillAtlasCoarseBaseField(Terrain::HeightfieldData& field, const TiledTerrainData& tiled)
 {
     const TiledRenderExtent extent = ComputeTiledRenderExtent(tiled.Config);
-    FillTiledBaseRegion(field, tiled.Config, tiled.WorldOriginX, tiled.WorldOriginZ,
-                        tiled.WorldOriginX, tiled.WorldOriginZ, extent.WorldSizeX, extent.WorldSizeZ,
-                        0, 0, static_cast<int32>(field.GetWidth()) - 1,
-                        static_cast<int32>(field.GetHeight()) - 1);
+    const uint32 width = field.GetWidth();
+    const uint32 height = field.GetHeight();
+    if (width < 2 || height < 2)
+        return;
+    // The field carries no relief under two of its texels, the page provider's rule: a finer octave
+    // sampled at the field's spacing shows relief that the ground does not have at that scale.
+    const float32 spacingX = extent.WorldSizeX / static_cast<float32>(width - 1);
+    const float32 spacingZ = extent.WorldSizeZ / static_cast<float32>(height - 1);
+    const float32 minResolvedCellMeters = 2.0f * std::max(spacingX, spacingZ);
+    FillTiledBaseRegion(field, tiled.Config, tiled.WorldOriginX, tiled.WorldOriginZ, tiled.WorldOriginX,
+                        tiled.WorldOriginZ, extent.WorldSizeX, extent.WorldSizeZ, 0, 0, static_cast<int32>(width) - 1,
+                        static_cast<int32>(height) - 1, minResolvedCellMeters);
 }
 
 TerrainHandle TerrainService::CreateTerrain(Terrain::TerrainConfig config)
@@ -1114,6 +1390,26 @@ TerrainHandle TerrainService::CreateTerrain(Terrain::TerrainConfig config)
     slot.Data->MarkFullDirty();
 
     return TerrainHandle{index, slot.Generation};
+}
+
+TerrainHandle TerrainService::CreateTerrainFromBase(const Terrain::TerrainConfig& config,
+                                                   const Components::Terrain& terrain)
+{
+    const TerrainHandle handle = CreateTerrain(config);
+    TerrainData* data = GetTerrainData(handle);
+    if (!data)
+        return handle;
+
+    std::shared_ptr<const Terrain::HeightfieldData> heightmap;
+    if (terrain.BaseSource == Components::TerrainBaseSource::HeightmapAsset && !terrain.TerrainAssetGuid.IsNull())
+        heightmap = ResolveHeightmapAsset(terrain.TerrainAssetGuid.ToGuid());
+
+    Terrain::HeightfieldData& field = data->Heightfield;
+    FillHeightfieldBaseRegion(field, terrain.BaseSource, heightmap.get(), 0, 0,
+                              static_cast<int32>(field.GetWidth()) - 1, static_cast<int32>(field.GetHeight()) - 1);
+    data->MarkFullDirty();
+    RebuildQuadtree(handle);
+    return handle;
 }
 
 void TerrainService::DestroyTerrain(TerrainHandle handle)
@@ -1324,6 +1620,8 @@ TiledTerrainHandle TerrainService::CreateTiledTerrain(TiledTerrainConfig config)
     slot.Active = true;
     slot.Data = std::make_unique<TiledTerrainData>();
     slot.Data->Config = config;
+    slot.Data->CachedGlobalMaxH = NominalHeightBandTop(config);
+    SeedFunctionHeightRange(*slot.Data);
 
     return TiledTerrainHandle{index, slot.Generation};
 }
@@ -1373,16 +1671,30 @@ TiledTerrainData* TerrainService::GetTiledTerrainData(TiledTerrainHandle handle)
     return slot.Data.get();
 }
 
+const TiledTerrainData* TerrainService::GetTiledTerrainData(TiledTerrainHandle handle) const
+{
+    std::lock_guard<std::mutex> lock(m_Mutex);
+
+    if (handle.Index >= m_TiledSlots.size())
+        return nullptr;
+    const auto& slot = m_TiledSlots[handle.Index];
+    if (!slot.Active || slot.Generation != handle.Generation)
+        return nullptr;
+
+    return slot.Data.get();
+}
+
 // ---- Per-page collider registry (design page-streaming D3) ----
 
 TerrainService::PagePhysicsHandle TerrainService::AcquirePagePhysicsHandle(const SurfaceHeightQuery& query,
                                                                            uint32 pageX, uint32 pageZ)
 {
     // Grid sample i of page p is lattice sample p x kPageOwnedSamples + i. A page whose first
-    // sample is the field's last owns no cell.
+    // sample is the footprint's last, or lies past it, owns no cell.
     const uint64 firstX = static_cast<uint64>(pageX) * PageStreaming::kPageOwnedSamples;
     const uint64 firstZ = static_cast<uint64>(pageZ) * PageStreaming::kPageOwnedSamples;
-    if (firstX + 1u >= query.LatticeSamplesX() || firstZ + 1u >= query.LatticeSamplesZ())
+    if (firstX + 1u >= FootprintSamples(query.FootprintSizeX(), query.LatticeSpacingX(), query.LatticeSamplesX()) ||
+        firstZ + 1u >= FootprintSamples(query.FootprintSizeZ(), query.LatticeSpacingZ(), query.LatticeSamplesZ()))
         return {};
     PageColliderData data;
     data.Samples.resize(static_cast<std::size_t>(kFinestPageGridSamples) * kFinestPageGridSamples);
@@ -1468,144 +1780,34 @@ const TerrainService::PageColliderData* TerrainService::ResolvePageCollider(uint
     return m_PagePhysicsSlots.Get(GenerationalVector::Handle(handleIndex & ~kPagePhysicsHandleBit, generation));
 }
 
-// ---- Per-face planet collider registry (planet-collider slice) ----
-
-TerrainService::PlanetFacePhysicsHandle TerrainService::AcquirePlanetFacePhysicsHandle()
+TerrainService::PagePhysicsHandle TerrainService::AcquirePlanetPagePhysicsHandle(std::vector<float32>&& meters)
 {
+    assert(meters.size() == static_cast<std::size_t>(kFinestPageGridSamples) * kFinestPageGridSamples);
+    PageColliderData data;
+    data.Samples = std::move(meters);
+    data.Version = 1;
+    constexpr int32 kGrid = static_cast<int32>(kFinestPageGridSamples);
+    data.DirtyLog.Append(data.Version, DirtyRegionLog::Region{0, 0, kGrid, kGrid});
+
     std::lock_guard<std::mutex> lock(m_Mutex);
-
-    uint32 index;
-    if (!m_PlanetFacePhysicsFreeList.empty())
-    {
-        index = m_PlanetFacePhysicsFreeList.back();
-        m_PlanetFacePhysicsFreeList.pop_back();
-    }
-    else
-    {
-        index = static_cast<uint32>(m_PlanetFacePhysicsSlots.size());
-        m_PlanetFacePhysicsSlots.emplace_back();
-    }
-
-    auto& slot = m_PlanetFacePhysicsSlots[index];
-    slot.Data = PlanetFaceColliderData{}; // fresh buffer + version 0
-    slot.Active = true;
-    ++slot.Generation; // distinct from any prior handle into this slot
-
-    return PlanetFacePhysicsHandle{index | kPlanetFacePhysicsHandleBit, slot.Generation};
+    const GenerationalVector::Handle slot = m_PagePhysicsSlots.Create(std::move(data));
+    assert(slot.Index() < kPagePhysicsHandleBit && "page physics slots overflow the handle's index bits");
+    return PagePhysicsHandle{slot.Index() | kPagePhysicsHandleBit, slot.Generation()};
 }
 
-void TerrainService::ReleasePlanetFacePhysicsHandle(uint32 handleIndex, uint32 generation)
+void TerrainService::RefillPlanetPagePhysicsHandle(PagePhysicsHandle handle, std::span<const float32> meters)
 {
-    if ((handleIndex & kPlanetFacePhysicsHandleBit) == 0)
+    if ((handle.Index & kPagePhysicsHandleBit) == 0)
         return;
-    const uint32 index = handleIndex & ~kPlanetFacePhysicsHandleBit;
-
     std::lock_guard<std::mutex> lock(m_Mutex);
-    if (index >= m_PlanetFacePhysicsSlots.size())
+    PageColliderData* data =
+        m_PagePhysicsSlots.Get(GenerationalVector::Handle(handle.Index & ~kPagePhysicsHandleBit, handle.Generation));
+    if (!data || data->Samples.size() != meters.size())
         return;
-    auto& slot = m_PlanetFacePhysicsSlots[index];
-    if (!slot.Active)
-        return;
-    if (slot.Generation != generation)
-    {
-        // Stale handle: the slot was released and re-acquired by a different face.
-        // Releasing on the index alone would silently free the current owner (the
-        // material-binder silent-unbind class). Refuse and make it loud.
-        Logger::Log::Warning(
-            "TerrainService::ReleasePlanetFacePhysicsHandle stale handle ignored "
-            "(index={}, expected gen={}, got gen={})",
-            index, slot.Generation, generation);
-        return;
-    }
-    slot.Active = false;
-    slot.Data = PlanetFaceColliderData{}; // free the buffer immediately
-    ++slot.Generation; // stale handles resolving against this slot now fail
-    m_PlanetFacePhysicsFreeList.push_back(index);
-}
-
-void TerrainService::ReleaseAllPlanetFacePhysicsHandles()
-{
-    std::lock_guard<std::mutex> lock(m_Mutex);
-    m_PlanetFacePhysicsSlots.clear();
-    m_PlanetFacePhysicsFreeList.clear();
-}
-
-TerrainService::PlanetFaceColliderData*
-TerrainService::ResolvePlanetFaceColliderForWrite(uint32 handleIndex, uint32 generation, uint32 dim)
-{
-    if ((handleIndex & kPlanetFacePhysicsHandleBit) == 0)
-        return nullptr;
-    const uint32 index = handleIndex & ~kPlanetFacePhysicsHandleBit;
-
-    std::lock_guard<std::mutex> lock(m_Mutex);
-    if (index >= m_PlanetFacePhysicsSlots.size())
-        return nullptr;
-    auto& slot = m_PlanetFacePhysicsSlots[index];
-    if (!slot.Active || slot.Generation != generation)
-        return nullptr;
-
-    if (slot.Data.Dim != dim || slot.Data.Samples.size() != static_cast<size_t>(dim) * dim)
-    {
-        slot.Data.Samples.assign(static_cast<size_t>(dim) * dim, 0.0f);
-        slot.Data.Dim = dim;
-    }
-    return &slot.Data;
-}
-
-const TerrainService::PlanetFaceColliderData*
-TerrainService::ResolvePlanetFaceCollider(uint32 handleIndex, uint32 generation) const
-{
-    if ((handleIndex & kPlanetFacePhysicsHandleBit) == 0)
-        return nullptr;
-    const uint32 index = handleIndex & ~kPlanetFacePhysicsHandleBit;
-
-    std::lock_guard<std::mutex> lock(m_Mutex);
-    if (index >= m_PlanetFacePhysicsSlots.size())
-        return nullptr;
-    const auto& slot = m_PlanetFacePhysicsSlots[index];
-    if (!slot.Active || slot.Generation != generation || slot.Data.Samples.empty())
-        return nullptr;
-    return &slot.Data;
-}
-
-void TerrainService::CommitPlanetFaceFull(uint32 handleIndex, uint32 generation)
-{
-    if ((handleIndex & kPlanetFacePhysicsHandleBit) == 0)
-        return;
-    const uint32 index = handleIndex & ~kPlanetFacePhysicsHandleBit;
-
-    std::lock_guard<std::mutex> lock(m_Mutex);
-    if (index >= m_PlanetFacePhysicsSlots.size())
-        return;
-    auto& slot = m_PlanetFacePhysicsSlots[index];
-    if (!slot.Active || slot.Generation != generation)
-        return;
-    ++slot.Data.Version;
-    const int32 n = static_cast<int32>(slot.Data.Dim);
-    slot.Data.DirtyLog.Append(slot.Data.Version, DirtyRegionLog::Region{0, 0, n, n});
-}
-
-void TerrainService::CommitPlanetFaceRegion(uint32 handleIndex, uint32 generation, int32 minX,
-                                            int32 minZ, int32 maxX, int32 maxZ)
-{
-    if ((handleIndex & kPlanetFacePhysicsHandleBit) == 0)
-        return;
-    const uint32 index = handleIndex & ~kPlanetFacePhysicsHandleBit;
-
-    std::lock_guard<std::mutex> lock(m_Mutex);
-    if (index >= m_PlanetFacePhysicsSlots.size())
-        return;
-    auto& slot = m_PlanetFacePhysicsSlots[index];
-    if (!slot.Active || slot.Generation != generation)
-        return;
-    ++slot.Data.Version;
-    slot.Data.DirtyLog.Append(slot.Data.Version, DirtyRegionLog::Region{minX, minZ, maxX, maxZ});
-}
-
-uint32 TerrainService::GetPlanetFacePhysicsSlotCountForTests() const
-{
-    std::lock_guard<std::mutex> lock(m_Mutex);
-    return static_cast<uint32>(m_PlanetFacePhysicsSlots.size());
+    std::copy(meters.begin(), meters.end(), data->Samples.begin());
+    ++data->Version;
+    constexpr int32 kGrid = static_cast<int32>(kFinestPageGridSamples);
+    data->DirtyLog.Append(data->Version, DirtyRegionLog::Region{0, 0, kGrid, kGrid});
 }
 
 // ---- Editable spherical sculpt (planet editing) ----
@@ -1626,310 +1828,242 @@ void UnionPlanetSculptFaceRect(TerrainService::PlanetSculptFaceRect& acc, float3
     acc.MaxU = std::max(acc.MaxU, maxU);
     acc.MaxV = std::max(acc.MaxV, maxV);
 }
+
+// True when the layer holds pages and was made for another pyramid than `levels`.
+bool HoldsPagesOfAnotherPyramid(const TerrainService::PlanetPageOverlay& overlay,
+                                std::span<const PageStreaming::PageStoreLevel> levels)
+{
+    return overlay.Layer && overlay.Layer->Bytes() != 0u && !overlay.Layer->FitsLevels(levels);
+}
+
+// True when a write must not change or replace the sculpt `overlay` holds: its height layer asset did
+// not load, or its pages are of another pyramid. A save never writes over the file it came from.
+bool SculptIsLocked(const TerrainService::PlanetPageOverlay* overlay,
+                    std::span<const PageStreaming::PageStoreLevel> levels)
+{
+    return overlay && (!overlay->LayerLoadFailed.IsNull() || HoldsPagesOfAnotherPyramid(*overlay, levels));
+}
+
+// The whole-meter Planet Radius range whose PlanetFaceSamples at `level0Texel` is `faceSamples`: the
+// layer stores its face samples, and LargestPlanetRadius finds each end of the range. False when no
+// whole meter fits.
+bool PlanetRadiusRangeFor(uint32 faceSamples, float32 level0Texel, uint64& outLow, uint64& outHigh)
+{
+    if (faceSamples < 2u)
+        return false;
+    outLow = LargestPlanetRadius(faceSamples - 1u, level0Texel) + 1u;
+    outHigh = LargestPlanetRadius(faceSamples, level0Texel);
+    return outLow <= outHigh && PlanetFaceSamples(static_cast<float64>(outLow), level0Texel) == faceSamples &&
+           PlanetFaceSamples(static_cast<float64>(outHigh), level0Texel) == faceSamples;
+}
+
+// A no-break space keeps a number and its unit on one line.
+constexpr const char* kNumberUnitSpace = "\xC2\xA0";
+
+std::string DescribeLayerOfAnotherPyramid(uint32 layerSamples, float32 level0Texel)
+{
+    uint64 low = 0;
+    uint64 high = 0;
+    if (!PlanetRadiusRangeFor(layerSamples, level0Texel, low, high))
+        return "The planet's sculpt does not fit this Planet Radius. The sculpt is kept on disk. Set Planet Radius "
+               "back to the value the sculpt was saved with to show and edit it.";
+    return std::format("The planet's sculpt was saved for a Planet Radius from {}{}m to {}{}m. The sculpt is kept on "
+                       "disk. Set Planet Radius to a value in that range to show and edit the sculpt.",
+                       FormatGroupedInteger(low), kNumberUnitSpace, FormatGroupedInteger(high), kNumberUnitSpace);
+}
 } // namespace
-
-void TerrainService::AccumulateSphereSculptDirtyFaces(const CBTTerrain::SphereEditRegions& regions)
-{
-    // Caller holds m_SphereSculptMutex. Every edit feeds BOTH per-face unions — physics (drained
-    // face-by-face) and render (drained whole, clear-on-read) — so neither consumer can miss a dab
-    // the other already consumed, and multiple dabs between a consumer's reads accumulate.
-    for (uint32 i = 0; i < regions.Count; ++i)
-    {
-        const uint32 face = regions.Rects[i].Face;
-        if (face >= kPlanetSculptFaceCount)
-            continue;
-        UnionPlanetSculptFaceRect(m_PlanetSculptFaces[face], regions.Rects[i].MinU,
-                                  regions.Rects[i].MinV, regions.Rects[i].MaxU, regions.Rects[i].MaxV);
-        UnionPlanetSculptFaceRect(m_RenderSculptFaces[face], regions.Rects[i].MinU,
-                                  regions.Rects[i].MinV, regions.Rects[i].MaxU, regions.Rects[i].MaxV);
-    }
-}
-
-float32 TerrainService::SphereSculptDabFootprintTexels(float32 angularRadius, uint32 virtualDim)
-{
-    constexpr float32 kHalfPi = 1.57079632679489661923f; // a cube face spans pi/2 rad across virtualDim texels
-    const float32 diameter = 2.0f * std::max(angularRadius, 0.0f);
-    return diameter / kHalfPi * static_cast<float32>(virtualDim);
-}
-
-void TerrainService::ConfigurePlanetSculpt(float32 planetRadius)
-{
-    std::lock_guard<std::mutex> lock(m_SphereSculptMutex);
-    m_PlanetSculptRadius = planetRadius;
-    const CBTTerrain::SphereEditRegions remapped = m_SphereSculpt.Configure(
-        CBTTerrain::MakeSphereSculptGeometry(planetRadius, CBTTerrain::ResolveSculptPagePoolCount()));
-    // A radius change on a sculpted planet REMAPS the store (Configure resamples the authored
-    // content onto the new radius-scaled grid). A remap IS an edit: feed its covering regions into
-    // the same per-face dirty unions a dab feeds, so Classify re-tessellates the remapped footprint
-    // and the physics colliders re-sample it. The version advance inside Configure re-arms the GPU
-    // upload gate and the editing-frames forced VertexEval exactly like any other edit.
-    if (remapped.Count > 0u)
-    {
-        AccumulateSphereSculptDirtyFaces(remapped);
-        // Un-stick the one-shot sub-texel warning too: the dim just changed, so the old verdict
-        // (brush footprint vs texel size) no longer applies at the new resolution.
-        m_SphereSculptSubTexelWarned = false;
-    }
-}
 
 void TerrainService::ResetPlanetSculpt()
 {
-    std::lock_guard<std::mutex> lock(m_SphereSculptMutex);
-    m_SphereSculpt.Reset();
-    m_PlanetSculptFaces = {};
+    std::lock_guard<std::mutex> lock(m_RenderSculptFacesMutex);
     m_RenderSculptFaces = {};
-    m_SphereSculptSubTexelWarned = false;
-    m_PlanetSculptRadius = 0.0f; // the next ConfigurePlanetSculpt re-derives for the new planet
-    m_PlanetPageOverlays.Clear(); // a planet's height page overlays are its layers too
-    // The analytic set is derived per-planet state too. Keep its version counter monotonic (a
-    // non-empty set clearing IS a change the render/physics gates must see).
-    if (m_SphereAnalyticCount > 0u)
+    m_PlanetPageOverlays.Clear();
+}
+
+TerrainService::PlanetPageOverlay& TerrainService::PlanetLayerFor(
+    uint32 planet, std::span<const PageStreaming::PageStoreLevel> levels, bool& derived)
+{
+    PlanetPageOverlay& overlay = m_PlanetPageOverlays.GetOrInsert(planet);
+    derived = overlay.Layer && overlay.Layer->FitsLevels(levels);
+    if (!derived)
+        overlay.Layer = std::make_shared<PageStreaming::HeightPageLayer>(PageStreaming::kPageStoreMaxFaces, levels);
+    return overlay;
+}
+
+void TerrainService::RecordPlanetLayerChange(uint32 planet, PlanetPageOverlay& overlay, bool derived,
+                                             std::span<const PageStreaming::PageFaceRect> rects)
+{
+    // The changes gather from the version the pages hold, so several writes between two page
+    // requests rewrite each face's pages once.
+    if (!derived)
     {
-        m_SphereAnalytic = {};
-        m_SphereAnalyticCount = 0u;
-        ++m_SphereAnalyticVersion;
+        overlay.Changed = {};
+        overlay.ChangedSince = 0;
     }
-    // A mid-stroke transient dies with its planet (the queued dabs would target the wrong store).
-    if (m_SphereTransientDabCount > 0u || !m_SphereStrokeQueue.empty())
+    else if (m_TerrainPages && m_TerrainPages->PlanetOverlayVersion(planet) == overlay.Version)
     {
-        m_SphereStrokeQueue.clear();
-        m_SphereTransientDabs = {};
-        m_SphereTransientQueueEnd = {};
-        m_SphereTransientDabCount = 0u;
-        ++m_SphereAnalyticVersion;
+        overlay.Changed = {};
+        overlay.ChangedSince = overlay.Version;
     }
-    // Persistence bookkeeping resets with the content: the next EnsureSphereSculptLoaded for
-    // a (re)created planet re-restores its payload, and a content-free store needs no save.
-    m_SphereSculptLoadedGuid = GUID{};
-    m_SphereSculptSavedVersion = 0;
-    m_SphereSculptLoadFailedGuid = GUID{};
-    m_SphereSculptDabDirty = false;
+    for (const PageStreaming::PageFaceRect& rect : rects)
+        PageStreaming::IncludePageFaceRect(overlay.Changed, rect.Face, rect.Level0Rect);
+    overlay.Version = ++m_PlanetPageOverlayVersion;
 }
 
-CBTTerrain::SphereEditRegions TerrainService::ApplySphereSculptDab(float32 cx, float32 cy, float32 cz,
-                                                                   float32 angularRadius,
-                                                                   float32 strength, bool lower)
+void TerrainService::RecordPlanetSculptChange(uint32 planet, PlanetPageOverlay& overlay, bool derived,
+                                              std::span<const PageStreaming::PageFaceRect> rects)
 {
-    std::lock_guard<std::mutex> lock(m_SphereSculptMutex);
-    return ApplySphereSculptDabLocked(cx, cy, cz, angularRadius, strength, lower);
-}
-
-CBTTerrain::SphereEditRegions TerrainService::ApplySphereSculptDabLocked(float32 cx, float32 cy,
-                                                                         float32 cz,
-                                                                         float32 angularRadius,
-                                                                         float32 strength,
-                                                                         bool lower)
-{
-    CBTTerrain::SphereEditRegions regions =
-        m_SphereSculpt.ApplyDab(cx, cy, cz, angularRadius, strength, lower);
-    AccumulateSphereSculptDirtyFaces(regions);
-    if (regions.Count > 0u)
-        m_SphereSculptDabDirty = true; // freehand strokes are the unrecoverable content
-
-    // Honest gate: a dab smaller than one texel EVEN AT MAX ESCALATION writes nothing visible
-    // (the S4 adaptive levels make sub-BASE-texel brushes storable up to 2^maxLevel x density;
-    // beyond that — the few-metre-at-Earth regime under the page-table cap — the store still
-    // cannot hold the shape, and escalation deliberately does not fire).
-    const uint32 virtualDim = m_SphereSculpt.Geometry().VirtualDim;
-    const float32 escalatedFootprint =
-        SphereSculptDabFootprintTexels(angularRadius, virtualDim) *
-        static_cast<float32>(1u << m_SphereSculpt.MaxPageLevel());
-    if (!m_SphereSculptSubTexelWarned && strength != 0.0f && escalatedFootprint < 1.0f)
-    {
-        m_SphereSculptSubTexelWarned = true;
-        Logger::Log::Warning(
-            "Planet sculpt dab is sub-texel even at max page escalation (footprint ~{:.2f} texels "
-            "at 2^{}x the base grid; page-table dim is {}/face). The brush writes less than one "
-            "texel and is invisible — use a larger brush or a smaller radius.",
-            escalatedFootprint, m_SphereSculpt.MaxPageLevel(), virtualDim);
-    }
-    return regions;
-}
-
-bool TerrainService::AnalyticModifiersEnabled()
-{
-    // Read fresh (not static-once) deliberately: the flag folds into the terrain-state hash, so a
-    // mid-session flip is a state change (TerrainModifierSystem forces the clearing full re-bake)
-    // — and the in-process A/B is what the dark-ship oracles toggle.
-    const char* v = std::getenv("GE_TERRAIN_ANALYTIC_MODIFIERS");
-    return v != nullptr && v[0] != '\0' && v[0] != '0';
-}
-
-CBTTerrain::SphereEditRegions TerrainService::ApplySphereSculptDabStroked(
-    float32 cx, float32 cy, float32 cz, float32 angularRadius, float32 strength, bool lower)
-{
-    std::lock_guard<std::mutex> lock(m_SphereSculptMutex);
-    if (!AnalyticModifiersEnabled())
-        return ApplySphereSculptDabLocked(cx, cy, cz, angularRadius, strength, lower);
-
-    // Degenerate inputs mirror ApplyDab's no-op exactly (no queue entry, no version bump). An
-    // unconfigured radius (no ConfigurePlanetSculpt yet) falls back to the store path — the
-    // transient's tangent-plane frame needs metres.
-    const float32 len = std::sqrt(cx * cx + cy * cy + cz * cz);
-    if (m_SphereSculpt.Geometry().PoolPageCount == 0u || len <= 0.0f || angularRadius <= 0.0f)
-        return CBTTerrain::SphereEditRegions{};
-    if (m_PlanetSculptRadius <= 0.0f)
-        return ApplySphereSculptDabLocked(cx, cy, cz, angularRadius, strength, lower);
-
-    // The modifier placements own their slots first; the stroke folds into the remainder. A
-    // 16-flatten planet leaves no transient budget — the dab goes straight to the store (the
-    // same honest overflow fallback the S2 modifier publish uses).
-    const uint32 budget = CBTTerrain::kMaxSphereAnalyticModifiers - m_SphereAnalyticCount;
-    if (budget == 0u)
-        return ApplySphereSculptDabLocked(cx, cy, cz, angularRadius, strength, lower);
-
-    const float32 amplitude = (lower ? -1.0f : 1.0f) * strength;
-    const float32 nx = cx / len, ny = cy / len, nz = cz / len;
-    CBTTerrain::SphereAnalyticDab dab = CBTTerrain::MakeSphereAnalyticDab(
-        nx, ny, nz, angularRadius, amplitude, m_PlanetSculptRadius);
-    if (!dab.Valid)
-        return ApplySphereSculptDabLocked(cx, cy, cz, angularRadius, strength, lower);
-
-    // Merge a bitwise-identical centre/radius into the newest transient: k held dabs at one spot
-    // are EXACTLY one dab of k-fold amplitude (the falloff is a pure function of angle), so a
-    // press-and-hold never consumes budget. Different centres append; overflow commits the
-    // oldest half to the store (commit-as-you-go — FIFO order preserved, so the final store
-    // content matches an immediate-write stroke byte for byte).
-    CBTTerrain::SphereAnalyticDab* last =
-        m_SphereTransientDabCount > 0u ? &m_SphereTransientDabs[m_SphereTransientDabCount - 1u]
-                                       : nullptr;
-    if (last != nullptr && last->N == dab.N && last->AngularRadius == dab.AngularRadius)
-    {
-        last->Amplitude += amplitude;
-    }
-    else
-    {
-        if (m_SphereTransientDabCount >= budget)
-            FlushSphereStrokePrefixLocked((m_SphereTransientDabCount + 1u) / 2u);
-        m_SphereTransientDabs[m_SphereTransientDabCount] = dab;
-        ++m_SphereTransientDabCount;
-    }
-    m_SphereStrokeQueue.push_back({cx, cy, cz, angularRadius, strength, lower});
-    m_SphereTransientQueueEnd[m_SphereTransientDabCount - 1u] =
-        static_cast<uint32>(m_SphereStrokeQueue.size());
-
-    // A transient edit IS an edit: the dab's cap regions feed the same render + physics dirty
-    // unions a store write feeds (Classify re-tess + collider refresh track the held stroke),
-    // and the analytic version re-arms the upload gates.
-    CBTTerrain::SphereEditRegions regions =
-        CBTTerrain::ClassifySphereCapEdit(nx, ny, nz, angularRadius);
-    AccumulateSphereSculptDirtyFaces(regions);
-    ++m_SphereAnalyticVersion;
-    return regions;
-}
-
-void TerrainService::FlushSphereStrokePrefixLocked(uint32 entries)
-{
-    entries = std::min(entries, m_SphereTransientDabCount);
-    if (entries == 0u)
-        return;
-    const uint32 queueEnd = m_SphereTransientQueueEnd[entries - 1u];
-    for (uint32 i = 0; i < queueEnd; ++i)
-    {
-        const PendingSphereDab& d = m_SphereStrokeQueue[i];
-        ApplySphereSculptDabLocked(d.Cx, d.Cy, d.Cz, d.AngularRadius, d.Strength, d.Lower);
-    }
-    m_SphereStrokeQueue.erase(m_SphereStrokeQueue.begin(),
-                              m_SphereStrokeQueue.begin() + queueEnd);
-    const uint32 remaining = m_SphereTransientDabCount - entries;
-    for (uint32 i = 0; i < remaining; ++i)
-    {
-        m_SphereTransientDabs[i] = m_SphereTransientDabs[i + entries];
-        m_SphereTransientQueueEnd[i] = m_SphereTransientQueueEnd[i + entries] - queueEnd;
-    }
-    for (uint32 i = remaining; i < m_SphereTransientDabCount; ++i)
-    {
-        m_SphereTransientDabs[i] = CBTTerrain::SphereAnalyticDab{};
-        m_SphereTransientQueueEnd[i] = 0u;
-    }
-    m_SphereTransientDabCount = remaining;
-    ++m_SphereAnalyticVersion; // the transient set shrank — re-arm the upload/sample gates
-}
-
-void TerrainService::CommitSphereSculptStroke()
-{
-    std::lock_guard<std::mutex> lock(m_SphereSculptMutex);
-    if (m_SphereStrokeQueue.empty() && m_SphereTransientDabCount == 0u)
-        return;
-    // Replay the whole remaining queue through the normal dab path, in order: the store receives
-    // the SAME ApplyDab calls (arguments and sequence) an immediate-write stroke would have
-    // issued, so content, page allocation order and the lazily-captured stroke pre-images are
-    // byte-identical to pre-S3 — and #630's undo entry is built from exactly these writes.
-    for (const PendingSphereDab& d : m_SphereStrokeQueue)
-        ApplySphereSculptDabLocked(d.Cx, d.Cy, d.Cz, d.AngularRadius, d.Strength, d.Lower);
-    m_SphereStrokeQueue.clear();
-    if (m_SphereTransientDabCount > 0u)
-    {
-        for (uint32 i = 0; i < m_SphereTransientDabCount; ++i)
-        {
-            m_SphereTransientDabs[i] = CBTTerrain::SphereAnalyticDab{};
-            m_SphereTransientQueueEnd[i] = 0u;
-        }
-        m_SphereTransientDabCount = 0u;
-        ++m_SphereAnalyticVersion; // the preview hand-off to the store is itself an edit
-    }
-}
-
-uint32 TerrainService::CopyPlanetTransientDabs(
-    std::array<CBTTerrain::SphereAnalyticDab, CBTTerrain::kMaxSphereAnalyticModifiers>& out) const
-{
-    std::lock_guard<std::mutex> lock(m_SphereSculptMutex);
-    out = m_SphereTransientDabs;
-    return m_SphereTransientDabCount;
-}
-
-uint64 TerrainService::CopySphereSculptUpload(std::vector<float32>& pool,
-                                              std::vector<uint32>& pageTable,
-                                              CBTTerrain::SphereSculptGeometry& geom) const
-{
-    std::lock_guard<std::mutex> lock(m_SphereSculptMutex);
-    pool = m_SphereSculpt.Pool();
-    pageTable = m_SphereSculpt.PageTable();
-    geom = m_SphereSculpt.Geometry();
-    return m_SphereSculpt.Version() + m_SphereAnalyticVersion; // combined (S2) — matches SphereSculptVersion
-}
-
-uint64 TerrainService::SphereSculptVersion() const
-{
-    std::lock_guard<std::mutex> lock(m_SphereSculptMutex);
-    // Combined: store-layer edits + analytic placement-set changes. Both are monotonic, so the sum
-    // is — every gate keyed on this (GPU upload ring, Classify drive, physics refresh) re-arms on
-    // an analytic edit exactly like a store write (an edit IS an edit).
-    return m_SphereSculpt.Version() + m_SphereAnalyticVersion;
-}
-
-bool TerrainService::HasSphereSculptEdits() const
-{
-    std::lock_guard<std::mutex> lock(m_SphereSculptMutex);
-    return m_SphereSculpt.HasEdits() || m_SphereAnalyticCount > 0u ||
-           m_SphereTransientDabCount > 0u;
-}
-
-uint32 TerrainService::SphereSculptAllocatedPages() const
-{
-    std::lock_guard<std::mutex> lock(m_SphereSculptMutex);
-    return m_SphereSculpt.AllocatedPageCount();
-}
-
-uint32 TerrainService::SphereSculptEscalatedPages() const
-{
-    std::lock_guard<std::mutex> lock(m_SphereSculptMutex);
-    return m_SphereSculpt.EscalatedPageCount();
+    RecordPlanetLayerChange(planet, overlay, derived, rects);
+    overlay.SculptVersion = overlay.Version;
 }
 
 void TerrainService::WritePlanetPageLayer(uint32 planet, std::span<const PageStreaming::PageStoreLevel> levels,
                                           uint8 face, const PageStreaming::PageSampleRect& rect,
                                           std::span<const float32> deltas)
 {
-    PlanetPageOverlay& overlay = m_PlanetPageOverlays.GetOrInsert(planet);
-    const bool derived = overlay.Layer && overlay.Layer->FitsLevels(levels);
+    if (SculptIsLocked(m_PlanetPageOverlays.Find(planet), levels))
+        return;
+    bool derived = false;
+    PlanetPageOverlay& overlay = PlanetLayerFor(planet, levels, derived);
+    // The sculpt layer holds samples on the saved layer's lattice only, so a save keeps them bit for bit.
+    std::vector<float32> onLattice(deltas.begin(), deltas.end());
+    for (float32& delta : onLattice)
+        delta = PageStreaming::QuantizeHeight(delta, PageStreaming::kHeightLayerStep);
+    overlay.Layer->WriteLevel0(face, rect, onLattice);
+    const PageStreaming::PageFaceRect changed{face, rect};
+    RecordPlanetSculptChange(planet, overlay, derived, std::span(&changed, 1));
+}
+
+void TerrainService::ApplyPlanetSculptDab(uint32 planet, uint32 faceSamples, const PlanetSculptDab& dab)
+{
+    if (faceSamples == 0u)
+        return;
+    const std::vector<PageStreaming::PageStoreLevel> levels = PageStreaming::BuildPageStoreLevels(faceSamples, faceSamples);
+    if (SculptIsLocked(m_PlanetPageOverlays.Find(planet), levels))
+        return;
+    bool derived = false;
+    PlanetPageOverlay& overlay = PlanetLayerFor(planet, levels, derived);
+    m_PlanetLayerRects.clear();
+    dab.AddTo(*overlay.Layer, m_PlanetLayerRects);
+    if (!m_PlanetLayerRects.empty() || !derived)
+        RecordPlanetSculptChange(planet, overlay, derived, m_PlanetLayerRects);
+}
+
+void TerrainService::BeginPlanetSculptStroke(uint32 planet, uint32 faceSamples)
+{
+    if (faceSamples == 0u)
+        return;
+    const std::vector<PageStreaming::PageStoreLevel> levels = PageStreaming::BuildPageStoreLevels(faceSamples, faceSamples);
+    if (SculptIsLocked(m_PlanetPageOverlays.Find(planet), levels))
+        return;
+    bool derived = false;
+    PlanetPageOverlay& overlay = PlanetLayerFor(planet, levels, derived);
     if (!derived)
-        overlay.Layer = std::make_shared<PageStreaming::HeightPageLayer>(PageStreaming::kPageStoreMaxFaces, levels);
-    overlay.Layer->WriteLevel0(face, rect, deltas);
-    overlay.ChangedSince = derived ? overlay.Version : 0;
-    overlay.Version = ++m_PlanetPageOverlayVersion;
-    overlay.ChangedFace = face;
-    overlay.Changed = rect;
+        RecordPlanetLayerChange(planet, overlay, false, {});
+    overlay.Layer->BeginCapture();
+}
+
+std::string TerrainService::PlanetSculptRefusal(uint32 planet, uint32 faceSamples, float32 level0Texel) const
+{
+    const PlanetPageOverlay* overlay = m_PlanetPageOverlays.Find(planet);
+    if (!overlay || faceSamples == 0u)
+        return {};
+    if (!overlay->LayerLoadFailed.IsNull())
+        return overlay->LayerRefusal;
+    if (!HoldsPagesOfAnotherPyramid(*overlay, PageStreaming::BuildPageStoreLevels(faceSamples, faceSamples)))
+        return {};
+    return DescribeLayerOfAnotherPyramid(overlay->Layer->Levels()[0].SamplesX, level0Texel);
+}
+
+std::vector<PageStreaming::HeightPageLayerPage> TerrainService::TakePlanetSculptStroke(uint32 planet)
+{
+    PlanetPageOverlay* overlay = m_PlanetPageOverlays.Find(planet);
+    if (!overlay || !overlay->Layer)
+        return {};
+    return overlay->Layer->TakeCapture();
+}
+
+std::vector<PageStreaming::HeightPageLayerPage> TerrainService::CopyPlanetSculptPages(
+    uint32 planet, std::span<const PageStreaming::HeightPageLayerPage> keys) const
+{
+    const PlanetPageOverlay* overlay = m_PlanetPageOverlays.Find(planet);
+    return overlay && overlay->Layer ? overlay->Layer->CopyPages(keys) : std::vector<PageStreaming::HeightPageLayerPage>();
+}
+
+void TerrainService::RestorePlanetSculptPages(uint32 planet, std::span<const PageStreaming::HeightPageLayerPage> pages)
+{
+    PlanetPageOverlay* overlay = m_PlanetPageOverlays.Find(planet);
+    if (!overlay || !overlay->Layer || pages.empty())
+        return;
+    m_PlanetLayerRects.clear();
+    overlay->Layer->RestorePages(pages, m_PlanetLayerRects);
+    RecordPlanetSculptChange(planet, *overlay, true, m_PlanetLayerRects);
+}
+
+bool TerrainService::PlanetHeightLayerNeedsSave(uint32 planet) const
+{
+    const PlanetPageOverlay* overlay = m_PlanetPageOverlays.Find(planet);
+    return overlay && overlay->SculptVersion != overlay->SavedSculptVersion;
+}
+
+bool TerrainService::AnyPlanetHeightLayerNeedsSave() const
+{
+    for (const auto& [planet, overlay] : m_PlanetPageOverlays)
+        if (overlay.SculptVersion != overlay.SavedSculptVersion)
+            return true;
+    return false;
+}
+
+void TerrainService::MarkPlanetHeightLayerSaved(uint32 planet, const GUID& asset, uint64 sculptVersion)
+{
+    PlanetPageOverlay& overlay = m_PlanetPageOverlays.GetOrInsert(planet);
+    overlay.LayerAsset = asset;
+    overlay.LayerLoadFailed = GUID::Null();
+    overlay.LayerRefusal.clear();
+    overlay.SavedSculptVersion = sculptVersion;
+}
+
+void TerrainService::EnsurePlanetHeightLayerLoaded(uint32 planet, uint32 faceSamples, const GUID& asset)
+{
+    if (asset.IsNull())
+        return;
+    if (const PlanetPageOverlay* overlay = m_PlanetPageOverlays.Find(planet);
+        overlay && (overlay->LayerAsset == asset || overlay->LayerLoadFailed == asset))
+        return;
+    auto& engine = EngineCore::GetInstance();
+    if (!engine.IsInitialized())
+        return;
+    AssetMetadata meta{};
+    if (!engine.GetAssetManager().GetRegistry().TryGetAssetMetadata(asset, meta) || meta.Path.empty())
+        return; // the registry may not know a new file yet
+
+    std::shared_ptr<PageStreaming::HeightPageLayer> layer;
+    std::string reason = PageStreaming::LoadHeightLayer(meta.Path, layer);
+    if (reason.empty() && layer->FaceCount() != PageStreaming::kPageStoreMaxFaces)
+        reason = std::format("{} is a height layer with a face count of {} and a planet's sculpt has a face count "
+                             "of {}: the file is not a planet's sculpt. Restore the planet's own sculpt file.",
+                             meta.Path.string(), layer->FaceCount(), PageStreaming::kPageStoreMaxFaces);
+    PlanetPageOverlay& overlay = m_PlanetPageOverlays.GetOrInsert(planet);
+    if (!reason.empty())
+    {
+        // The brush and the save do not change a sculpt whose file did not load (SculptIsLocked).
+        overlay.LayerRefusal = "The planet's sculpt did not load, so the planet shows no sculpt and the brush "
+                               "does not edit it: " + reason;
+        Logger::Log::Warning("{}", overlay.LayerRefusal);
+        overlay.LayerLoadFailed = asset;
+        return;
+    }
+    overlay.Layer = std::move(layer);
+    RecordPlanetLayerChange(planet, overlay, false, {});
+    overlay.LayerAsset = asset;
+    overlay.LayerLoadFailed = GUID::Null();
+    overlay.LayerRefusal.clear();
+    if (faceSamples != 0u &&
+        HoldsPagesOfAnotherPyramid(overlay, PageStreaming::BuildPageStoreLevels(faceSamples, faceSamples)))
+        Logger::Log::Warning("{}",
+                             DescribeLayerOfAnotherPyramid(overlay.Layer->Levels()[0].SamplesX, 0.0f));
+    overlay.SculptVersion = overlay.Version;
+    overlay.SavedSculptVersion = overlay.Version;
 }
 
 void TerrainService::ClearPlanetPageLayer(uint32 planet)
@@ -1937,7 +2071,26 @@ void TerrainService::ClearPlanetPageLayer(uint32 planet)
     PlanetPageOverlay* overlay = m_PlanetPageOverlays.Find(planet);
     if (!overlay || !overlay->Layer)
         return;
-    *overlay = PlanetPageOverlay{nullptr, ++m_PlanetPageOverlayVersion};
+    overlay->Layer.reset();
+    RecordPlanetSculptChange(planet, *overlay, false, {});
+}
+
+void TerrainService::WritePlanetModifierLayer(
+    uint32 planet, uint32 faceSamples, bool fresh,
+    FunctionRef<void(PageStreaming::HeightPageLayer&, std::vector<PageStreaming::PageFaceRect>&)> write)
+{
+    if (faceSamples == 0u)
+        return;
+    const std::vector<PageStreaming::PageStoreLevel> levels = PageStreaming::BuildPageStoreLevels(faceSamples, faceSamples);
+    PlanetPageOverlay& overlay = m_PlanetPageOverlays.GetOrInsert(planet);
+    const bool derived = !fresh && overlay.Modifiers && overlay.Modifiers->FitsLevels(levels);
+    const bool replacesPages = !derived && overlay.Modifiers && overlay.Modifiers->Bytes() != 0u;
+    if (!derived)
+        overlay.Modifiers = std::make_shared<PageStreaming::HeightPageLayer>(PageStreaming::kPageStoreMaxFaces, levels);
+    m_PlanetLayerRects.clear();
+    write(*overlay.Modifiers, m_PlanetLayerRects);
+    if (!m_PlanetLayerRects.empty() || replacesPages)
+        RecordPlanetLayerChange(planet, overlay, derived, m_PlanetLayerRects);
 }
 
 const TerrainService::PlanetPageOverlay* TerrainService::FindPlanetPageOverlay(uint32 planet) const
@@ -1945,51 +2098,9 @@ const TerrainService::PlanetPageOverlay* TerrainService::FindPlanetPageOverlay(u
     return m_PlanetPageOverlays.Find(planet);
 }
 
-void TerrainService::SetPlanetAnalyticModifiers(const CBTTerrain::SphereAnalyticFlatten* items,
-                                                uint32 count)
-{
-    std::lock_guard<std::mutex> lock(m_SphereSculptMutex);
-    count = std::min(count, CBTTerrain::kMaxSphereAnalyticModifiers);
-    // Field-wise compare (not memcmp — the struct carries padding whose bytes copies need not
-    // preserve): an unchanged publish (every bake republishes the current set) is a no-op, so idle
-    // bakes never churn the version.
-    auto sameFlatten = [](const CBTTerrain::SphereAnalyticFlatten& a,
-                          const CBTTerrain::SphereAnalyticFlatten& b) {
-        return a.N == b.N && a.E1 == b.E1 && a.E2 == b.E2 && a.Radius == b.Radius &&
-               a.Falloff == b.Falloff && a.TargetRadius == b.TargetRadius &&
-               a.PlanetRadius == b.PlanetRadius && a.Valid == b.Valid;
-    };
-    bool same = count == m_SphereAnalyticCount;
-    for (uint32 i = 0; same && i < count; ++i)
-        same = sameFlatten(m_SphereAnalytic[i], items[i]);
-    if (same)
-        return;
-    for (uint32 i = 0; i < count; ++i)
-        m_SphereAnalytic[i] = items[i];
-    for (uint32 i = count; i < m_SphereAnalyticCount; ++i)
-        m_SphereAnalytic[i] = CBTTerrain::SphereAnalyticFlatten{};
-    m_SphereAnalyticCount = count;
-    ++m_SphereAnalyticVersion;
-}
-
-uint32 TerrainService::CopyPlanetAnalyticModifiers(
-    std::array<CBTTerrain::SphereAnalyticFlatten, CBTTerrain::kMaxSphereAnalyticModifiers>& out)
-    const
-{
-    std::lock_guard<std::mutex> lock(m_SphereSculptMutex);
-    out = m_SphereAnalytic;
-    return m_SphereAnalyticCount;
-}
-
-CBTTerrain::SphereSculptGeometry TerrainService::GetPlanetSculptGeometry() const
-{
-    std::lock_guard<std::mutex> lock(m_SphereSculptMutex);
-    return m_SphereSculpt.Geometry();
-}
-
 void TerrainService::AccumulatePlanetPageDirtyRegions(const CBTTerrain::SphereEditRegions& regions)
 {
-    std::lock_guard<std::mutex> lock(m_SphereSculptMutex);
+    std::lock_guard<std::mutex> lock(m_RenderSculptFacesMutex);
     for (uint32 i = 0; i < regions.Count; ++i)
     {
         const CBTTerrain::SphereFaceUVRect& rect = regions.Rects[i];
@@ -1998,9 +2109,9 @@ void TerrainService::AccumulatePlanetPageDirtyRegions(const CBTTerrain::SphereEd
     }
 }
 
-bool TerrainService::ConsumeSphereSculptDirtyRegions(CBTTerrain::SphereEditRegions& out)
+bool TerrainService::ConsumePlanetLayerDirtyRegions(CBTTerrain::SphereEditRegions& out)
 {
-    std::lock_guard<std::mutex> lock(m_SphereSculptMutex);
+    std::lock_guard<std::mutex> lock(m_RenderSculptFacesMutex);
     CBTTerrain::SphereEditRegions drained{};
     for (uint32 face = 0; face < kPlanetSculptFaceCount; ++face)
     {
@@ -2015,185 +2126,6 @@ bool TerrainService::ConsumeSphereSculptDirtyRegions(CBTTerrain::SphereEditRegio
         return false;
     out = drained;
     return true;
-}
-
-float32 TerrainService::SampleSphereSculptHeight(float32 dx, float32 dy, float32 dz,
-                                                 float32 reliefAtDir) const
-{
-    std::lock_guard<std::mutex> lock(m_SphereSculptMutex);
-    if (!m_SphereSculpt.HasEdits() && m_SphereAnalyticCount == 0u &&
-        m_SphereTransientDabCount == 0u)
-        return 0.0f;
-    const CBTTerrain::SphereAnalyticModifierSet set{m_SphereAnalytic.data(), m_SphereAnalyticCount,
-                                                    m_SphereTransientDabs.data(),
-                                                    m_SphereTransientDabCount};
-    return CBTTerrain::SampleSphereSculptComposed(m_SphereSculpt.MakeSampler(), set, dx, dy, dz,
-                                                  reliefAtDir);
-}
-
-TerrainService::PlanetSculptMirror TerrainService::GetPlanetSculptMirror() const
-{
-    std::lock_guard<std::mutex> lock(m_SphereSculptMutex);
-    PlanetSculptMirror out;
-    // The sampler view points into service-owned page storage; safe because the mirror is read only
-    // by TerrainPhysicsSystem, which runs after the edit systems in the same extraction wave on the
-    // same thread (no concurrent mutation). The render-thread upload only READS the store under the
-    // same mutex, so no writer tears it while physics holds the view.
-    if (m_SphereSculpt.HasEdits())
-        out.Sampler = m_SphereSculpt.MakeSampler();
-    out.Version = m_SphereSculpt.Version() + m_SphereAnalyticVersion; // combined (S2) — matches SphereSculptVersion
-    out.Faces = m_PlanetSculptFaces;
-    out.Analytic = m_SphereAnalytic;
-    out.AnalyticCount = m_SphereAnalyticCount;
-    out.TransientDabs = m_SphereTransientDabs;
-    out.TransientDabCount = m_SphereTransientDabCount;
-    return out;
-}
-
-void TerrainService::ClearPlanetSculptDirtyFace(uint32 face)
-{
-    std::lock_guard<std::mutex> lock(m_SphereSculptMutex);
-    if (face < kPlanetSculptFaceCount)
-        m_PlanetSculptFaces[face] = PlanetSculptFaceRect{};
-}
-
-void TerrainService::BeginSphereSculptStrokeCapture()
-{
-    std::lock_guard<std::mutex> lock(m_SphereSculptMutex);
-    m_SphereSculpt.BeginStrokeCapture();
-}
-
-std::vector<CBTTerrain::SphereSculptPageState> TerrainService::TakeSphereSculptStrokeCapture()
-{
-    std::lock_guard<std::mutex> lock(m_SphereSculptMutex);
-    return m_SphereSculpt.TakeStrokeCapture();
-}
-
-std::vector<CBTTerrain::SphereSculptPageState> TerrainService::SnapshotSphereSculptPages(
-    const std::vector<CBTTerrain::SphereSculptPageState>& keys) const
-{
-    std::lock_guard<std::mutex> lock(m_SphereSculptMutex);
-    return m_SphereSculpt.SnapshotPages(keys);
-}
-
-void TerrainService::RestoreSphereSculptPages(
-    const std::vector<CBTTerrain::SphereSculptPageState>& pages)
-{
-    std::lock_guard<std::mutex> lock(m_SphereSculptMutex);
-    const CBTTerrain::SphereEditRegions regions = m_SphereSculpt.RestoreDabPages(pages);
-    AccumulateSphereSculptDirtyFaces(regions);
-    if (regions.Count > 0u)
-        m_SphereSculptDabDirty = true; // a stroke undo/redo mutates the dab layer too
-}
-
-void TerrainService::SeedPlanetSculptMirrorForTests(float32 cx, float32 cy, float32 cz,
-                                                    float32 angularRadius, float32 strength,
-                                                    bool lower)
-{
-    std::lock_guard<std::mutex> lock(m_SphereSculptMutex);
-    CBTTerrain::SphereEditRegions regions =
-        m_SphereSculpt.ApplyDab(cx, cy, cz, angularRadius, strength, lower);
-    AccumulateSphereSculptDirtyFaces(regions);
-}
-
-// ---- Sphere sculpt persistence (.tsculpt save/load) ----
-
-bool TerrainService::SphereSculptNeedsSave() const
-{
-    std::lock_guard<std::mutex> lock(m_SphereSculptMutex);
-    return m_SphereSculptDabDirty;
-}
-
-std::vector<uint8> TerrainService::EncodeSphereSculptBlob(uint64& outVersion) const
-{
-    std::lock_guard<std::mutex> lock(m_SphereSculptMutex);
-    outVersion = m_SphereSculpt.Version();
-    return CBTTerrain::EncodeSphereSculpt(m_SphereSculpt.Geometry(), m_SphereSculpt.ExportPages());
-}
-
-void TerrainService::MarkSphereSculptSaved(const GUID& guid, uint64 version)
-{
-    std::lock_guard<std::mutex> lock(m_SphereSculptMutex);
-    m_SphereSculptLoadedGuid = guid;
-    m_SphereSculptSavedVersion = version;
-    m_SphereSculptLoadFailedGuid = GUID{};
-    // Clear the dab-dirty flag only when no dab landed since the encoded snapshot (all main
-    // thread today, so the versions match; the guard keeps a future mid-save edit dirty).
-    if (m_SphereSculpt.Version() == version)
-        m_SphereSculptDabDirty = false;
-}
-
-bool TerrainService::RestoreSphereSculptFromBlob(const uint8* data, std::size_t size,
-                                                 const GUID& guid)
-{
-    CBTTerrain::SphereSculptGeometry savedGeom{};
-    std::vector<CBTTerrain::SphereSculptPageContent> pages;
-    if (!CBTTerrain::DecodeSphereSculpt(data, size, savedGeom, pages))
-        return false;
-
-    std::lock_guard<std::mutex> lock(m_SphereSculptMutex);
-    // Restore at the SAVED grid with the LIVE pool count (the GPU pool ring is sized from the
-    // live resolve, not the saving machine's). On the load path the store is empty (the planet
-    // identity reset preceded us) so Configure adopts the grid freely; if an early modifier
-    // bake already wrote content, Configure carries it across via the normal remap and the
-    // import overwrites the saved pages wholesale — the next bake re-derives the modifier
-    // layer either way (SET semantics). When the live component's radius derives a DIFFERENT
-    // grid, the per-frame ConfigurePlanetSculpt afterwards remaps the restored content through
-    // the same resize path a live radius edit takes — load composes with resize, no third path.
-    CBTTerrain::SphereSculptGeometry geom = savedGeom;
-    geom.PoolPageCount = CBTTerrain::ResolveSculptPagePoolCount();
-    const CBTTerrain::SphereEditRegions remapped = m_SphereSculpt.Configure(geom);
-    if (remapped.Count > 0u)
-        AccumulateSphereSculptDirtyFaces(remapped);
-
-    const CBTTerrain::SphereEditRegions imported = m_SphereSculpt.ImportPages(pages);
-    AccumulateSphereSculptDirtyFaces(imported);
-
-    m_SphereSculptLoadedGuid = guid;
-    m_SphereSculptSavedVersion = m_SphereSculpt.Version();
-    m_SphereSculptLoadFailedGuid = GUID{};
-    m_SphereSculptDabDirty = false; // freshly loaded content carries no unsaved strokes
-    Logger::Log::Info(
-        "Sphere sculpt: restored {} authored page(s) at saved grid {}/face (pool {}) — load "
-        "re-enters the edit path (re-tess + physics).",
-        pages.size(), savedGeom.VirtualDim, geom.PoolPageCount);
-    return true;
-}
-
-void TerrainService::EnsureSphereSculptLoaded(const GUID& guid)
-{
-    if (guid.IsNull())
-        return;
-    {
-        std::lock_guard<std::mutex> lock(m_SphereSculptMutex);
-        if (m_SphereSculptLoadedGuid == guid)
-            return;
-        if (m_SphereSculptLoadFailedGuid == guid)
-            return; // warned once already; a different guid re-arms the warning
-    }
-
-    auto& engine = EngineCore::GetInstance();
-    if (!engine.IsInitialized())
-        return;
-
-    // A resolve miss retries silently (a cheap registry lookup): at startup the scene can open
-    // before the asset scan has registered the sidecar, and hard-caching that transient miss
-    // would strand the planet unsculpted for the session. Only a real load/decode failure
-    // (corrupt or unreadable file — it won't fix itself) negative-caches, warn-once.
-    AssetMetadata meta{};
-    if (!engine.GetAssetManager().GetRegistry().TryGetAssetMetadata(guid, meta) || meta.Path.empty())
-        return;
-
-    BinaryAsset blob(guid, meta.Path, AssetType::TerrainSphereSculptData);
-    if (blob.Load() && RestoreSphereSculptFromBlob(blob.GetData(), blob.GetDataSize(), guid))
-        return;
-
-    std::lock_guard<std::mutex> lock(m_SphereSculptMutex);
-    m_SphereSculptLoadFailedGuid = guid;
-    Logger::Log::Warning(
-        "Sphere sculpt payload {} ({}) failed to load/decode — the planet loads without its "
-        "sculpted heights (the scene keeps the reference; re-saving the scene rewrites it)",
-        guid.ToString(), meta.Path.string());
 }
 
 TerrainTileData* TerrainService::LoadTile(TiledTerrainHandle handle, TileCoord coord)
@@ -2233,7 +2165,7 @@ TerrainTileData* TerrainService::LoadTile(TiledTerrainHandle handle, TileCoord c
     FillTiledBaseRegion(tile->Heightfield, tiled.Config, tiled.WorldOriginX, tiled.WorldOriginZ,
                         tile->WorldOriginX, tile->WorldOriginZ, tileWorld, tileWorld, 0, 0,
                         static_cast<int32>(tile->Config.HeightmapWidth) - 1,
-                        static_cast<int32>(tile->Config.HeightmapHeight) - 1);
+                        static_cast<int32>(tile->Config.HeightmapHeight) - 1, 0.0f);
 
     tile->MarkFullDirty();
 

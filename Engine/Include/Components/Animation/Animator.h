@@ -96,6 +96,8 @@ struct Animator
     char assignedAnimation[kAnimationNameCapacity] = {};
     char rootNode[kNodePathCapacity] = {};
     char rootMotionTrack[kNodePathCapacity] = {};
+    // Playback rate. Clip, timeline and graph sources read it each tick, so a change
+    // applies on the next tick.
     float32 speedScale = 1.0f;
     float32 blendSeconds = 0.0f;
     float32 seekTimeSeconds = 0.0f;
@@ -189,7 +191,9 @@ struct Animator
     }
 
     // Hard-cut to a named embedded clip (or first embedded clip if the name
-    // is empty). Consumed for Clip source by ProcessClipAnimatorCommands.
+    // is empty). The clip starts from 0, also when it already plays, so call it once when the
+    // state changes: a call each frame holds the clip at its first frame.
+    // Consumed for Clip source by ProcessClipAnimatorCommands.
     void PlayState(std::string_view animationName)
     {
         ClearClipSource();

@@ -37,6 +37,9 @@ public:
     ~OceanFFT();
 
     bool Initialize(::GameEngine::Rendering::IDevice* device);
+    // Asks the device for the pipelines that the next RecordDispatch binds. The builds run off the
+    // calling thread.
+    void RequestPipelines(::GameEngine::Rendering::IDevice& device) const;
     bool IsReady() const { return m_Ready; }
 
     // Per-frame parameters (filled by OceanExtractionSystem). spectrumDirty forces

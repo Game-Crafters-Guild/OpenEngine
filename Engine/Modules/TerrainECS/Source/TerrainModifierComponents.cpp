@@ -151,4 +151,35 @@ bool SetTerrainEffectStackOrder(ECS::World& world, ECS::EntityHandle entity,
     return SetEffectStackOrder(world, entity, typeId, stackOrder, ModifierEffectComponents{});
 }
 
+ECS::EntityHandle FindGeneratedNoiseVolume(ECS::World& world)
+{
+    // The query skips a disabled volume, a disabled effect component and an inactive entity.
+    // A NaN Weight fails `Weight > 0` and turns the volume off, like Weight 0.
+    ECS::EntityHandle best;
+    float32 bestPriority = 0.0f;
+    world.Query<ECS::Read<Components::TerrainModifierVolume>, ECS::Read<Components::TerrainNoiseEffect>>().Each(
+        [&](ECS::EntityHandle entity, const Components::TerrainModifierVolume& volume,
+            const Components::TerrainNoiseEffect& noise) {
+            if (volume.Shape != Components::TerrainVolumeShape::Global || !(volume.Weight > 0.0f) || !noise.Enabled ||
+                noise.Mode != Components::TerrainNoiseMode::Generated)
+                return;
+            const bool better = !best.IsValid() || volume.Priority > bestPriority ||
+                                (volume.Priority == bestPriority && entity.index < best.index);
+            if (!better)
+                return;
+            best = entity;
+            bestPriority = volume.Priority;
+        });
+    return best;
+}
+
+std::optional<GeneratedNoiseRelief> ResolveGeneratedNoiseRelief(ECS::World& world)
+{
+    const ECS::EntityHandle volume = FindGeneratedNoiseVolume(world);
+    if (!volume.IsValid())
+        return std::nullopt;
+    return GeneratedNoiseRelief{world.GetComponent<Components::TerrainNoiseEffect>(volume)->Preset,
+                                world.GetComponent<Components::TerrainModifierVolume>(volume)->Weight};
+}
+
 } // namespace GameEngine::TerrainECS

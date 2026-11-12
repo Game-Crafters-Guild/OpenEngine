@@ -12,6 +12,7 @@
 #include <cmath>
 #include <limits>
 #include <span>
+#include <utility>
 
 namespace GameEngine::TerrainECS
 {
@@ -50,8 +51,8 @@ std::vector<RoutePolyline> RunsNear(const RoutePolyline& route, float32 fade, fl
                                     float32 maxX, float32 maxZ)
 {
     std::vector<RoutePolyline> runs;
+    std::vector<RouteStation> run;
     const std::vector<RouteStation>& stations = route.Stations;
-    bool open = false;
     for (std::size_t segment = 0; segment + 1 < stations.size(); ++segment)
     {
         const RouteStation& a = stations[segment];
@@ -61,16 +62,16 @@ std::vector<RoutePolyline> RunsNear(const RoutePolyline& route, float32 fade, fl
                           && std::min(a.Z, b.Z) - reach <= maxZ && std::max(a.Z, b.Z) + reach >= minZ;
         if (!near)
         {
-            open = false;
+            if (!run.empty())
+                BuildRoutePolyline(std::exchange(run, {}), fade, runs.emplace_back());
             continue;
         }
-        if (!open)
-        {
-            runs.emplace_back().Stations.push_back(a);
-            open = true;
-        }
-        runs.back().Stations.push_back(b);
+        if (run.empty())
+            run.push_back(a);
+        run.push_back(b);
     }
+    if (!run.empty())
+        BuildRoutePolyline(std::move(run), fade, runs.emplace_back());
     return runs;
 }
 
@@ -142,7 +143,7 @@ void AreaReferenceSurfaceCache::Resolve(const ECS::World& world, std::vector<Res
         if (!GradesToItsRim(area) || !HasFiniteBounds(area))
             continue;
         AreaSurfaceInputs inputs{};
-        BuildRoutePolyline(*area.ResolvedSpline, area.StationSpacing, inputs.Rim);
+        BuildRoutePolyline(*area.ResolvedSpline, area.StationSpacing, area.Falloff, inputs.Rim);
         if (inputs.Rim.Stations.size() < 4)
             continue; // Fewer than three distinct rim points enclose nothing to fill.
         inputs.Openings = OpeningsOf(world, area, inputs.Rim, modifiers);

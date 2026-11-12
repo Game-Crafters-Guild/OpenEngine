@@ -178,9 +178,11 @@ std::vector<PavingRoadUV> RegionRoadUVs(const PavingPlan& plan, uint32 region,
             *spline->Strip, spline->Spline.WorldMatrix, road.CapHalfLeft, road.CapHalfRight, road.RoadLoopMeters);
         if (!cap)
             continue;
+        const uint32 entity = road.Road;
         PavingRoadUV uv = CenterlineOf(std::move(road));
         if (uv.Points.size() < 2u)
             continue;
+        uv.Entity = entity;
         uv.TilesPerMeterU = cap->TilesPerMeterU;
         uv.TilesPerMeterV = cap->TilesPerMeterV;
         uv.LeftV = cap->LeftV;

@@ -2,9 +2,10 @@
 #include "Core/Engine.h"
 #include "Logger/Logger.h"
 #include "Logger/FileSink.h"
+#include "Input/Gamepad/GamepadBackend.h"
 #include "Input/GamepadEdgeTracker.h"
 #include "Input/GamepadFrame.h"
-#include "Input/GamepadPoller.h"
+#include "Input/Gamepad/GamepadPoller.h"
 #include "Input/InputSystem.h"
 #include "Platform/ApplicationScriptApi.h"
 #include "Platform/Thread.h"
@@ -73,7 +74,6 @@ Application::Application(const ApplicationConfig& config)
         s_Instance = this;
 
     m_ApplicationInputChain.getInput = [this]() { return m_InputSystem.get(); };
-    m_GamepadPoller = std::make_unique<Input::GamepadPoller>();
     m_GamepadEdgeTracker = std::make_unique<Input::GamepadEdgeTracker>();
 }
 
@@ -128,6 +128,11 @@ bool Application::Initialize() {
 	    // applications (Editor, games) can configure actions/contexts via
 	    // GetInputSystem(), while the main loop handles per-frame pumping.
 	    m_InputSystem = std::make_unique<Input::InputSystem>();
+	    // Gamepad discovery starts on a blocking job; frames read no pad until it returns.
+	    // A headless application reads no gamepad, so it starts no backend.
+	    if (!m_Config.Headless)
+	        m_GamepadPoller = std::make_unique<Input::GamepadPoller>(EngineCore::GetInstance().GetJobSystem(),
+	                                                                 Input::CreatePlatformGamepadBackend());
 	    // Expose input to Engine-level services (e.g. ScriptingABI) via a non-owning pointer.
 	    EngineCore::GetInstance().SetInputSystem(m_InputSystem.get());
 
@@ -197,6 +202,9 @@ void Application::Shutdown() {
     // The frame loop stops here, so the pool's threads may exit with the memory of the last frames.
     Memory::Detail::StopFrameLoop();
 #endif
+
+    // The poller's start channel must go before the engine's job system.
+    m_GamepadPoller.reset();
 
     // Clear the Engine-level non-owning pointer to application-owned input.
     EngineCore::GetInstance().SetInputSystem(nullptr);
@@ -302,7 +310,7 @@ bool Application::Tick() {
 	        //    This ensures that input for the current frame is visible to
 	        //    both application logic and engine systems in the same frame.
 	        const auto tPoll0 = std::chrono::high_resolution_clock::now();
-	        if (!m_Config.Headless)
+	        if (m_GamepadPoller)
 	            RouteGamepadPoll();
 	        const auto tPoll1 = std::chrono::high_resolution_clock::now();
 	        phases.PollEventsMs = MsBetween(tPoll0, tPoll1);

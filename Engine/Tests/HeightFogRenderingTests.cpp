@@ -14,6 +14,7 @@
 // Skips ONLY without a Vulkan device. A missing shader FAILS: the same target builds it.
 #include <gtest/gtest.h>
 
+#include "Engine/Rendering/CameraUtils.h"
 #include "Engine/Rendering/ExposureReadbackFeature.h"
 #include "Engine/Rendering/HeightFogParamsUBO.h"
 #include "Mathematics/MatrixOps.h"
@@ -143,8 +144,13 @@ protected:
             view.ge_view[i * 5] = 1.0f;
             view.ge_invView[i * 5] = 1.0f;
         }
-        view.ge_nearFar[0] = kNear;
-        view.ge_nearFar[1] = kFar;
+        const auto depthTerms = GameEngine::Engine::Renderer::ProjectionDepthTerms::Of(proj);
+        view.ge_depthTerms[0] = depthTerms.M22;
+        view.ge_depthTerms[1] = depthTerms.M32;
+        view.ge_depthTerms[2] = depthTerms.M23;
+        view.ge_depthTerms[3] = depthTerms.M33;
+        view.ge_viewRanges[0] = kNear;
+        view.ge_viewRanges[1] = kFar;
         view.ge_cameraPosWS[3] = 1.0f;
         for (float& f : view.ge_screenSize)
             f = 1.0f;

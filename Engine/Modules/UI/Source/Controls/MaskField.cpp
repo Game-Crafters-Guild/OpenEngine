@@ -32,6 +32,17 @@ std::vector<const std::string*> LabelsWhere(const std::vector<MaskOption>& optio
     }
     return labels;
 }
+
+// Checkbox draws its text in its child with the class checkbox-label. MaskField.css styles an option's text
+// through the class this adds, so no other checkbox changes.
+void AddOptionLabelClass(Checkbox& row)
+{
+    for (const auto& child : row.GetChildren())
+    {
+        if (child->HasClass("checkbox-label"))
+            child->AddClass("mask-field-option-label");
+    }
+}
 } // namespace
 
 MaskField::MaskField()
@@ -162,6 +173,8 @@ UIElement* MaskField::AddActionRow(const char* text, bool on)
     auto row = std::make_unique<Label>();
     row->AddClass("dropdown-item");
     row->AddClass("mask-field-action");
+    // The popup is always sized to its entries, so its text rows stay on one line (theme/widgets.css).
+    row->AddClass("dropdown-item-fit-content");
     row->SetText(text);
     row->SetFocusProxy(this);
     row->RegisterEventHandler(kEventMouseDown, [this, on](UIEvent& event)
@@ -229,6 +242,7 @@ void MaskField::RebuildOptionRows()
         // Build returns null only when the Checkbox registration is missing; the log names the fix.
         if (!row)
             return;
+        AddOptionLabelClass(*row);
         row->SetOnValueChanged([this, index](const bool& on) { OnOptionRowChanged(index, on); });
         m_OptionRows.push_back(row.get());
         m_OptionList->AddContent(std::move(row));

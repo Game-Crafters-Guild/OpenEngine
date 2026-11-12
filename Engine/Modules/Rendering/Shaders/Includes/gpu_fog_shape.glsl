@@ -264,7 +264,7 @@ float GPUFogCameraFade(float particleEyeDepth, vec4 p8)
     if (cameraDepthFadeRange > 1e-4)
     {
         float cameraDepthFadeOffset = p8.y;
-        float nearPlane = ge_nearFar.x;
+        float nearPlane = ge_viewRanges.x;
         float cameraDepth = (particleEyeDepth - nearPlane - cameraDepthFadeOffset) / cameraDepthFadeRange;
         cameraFade = clamp(cameraDepth, 0.0, 1.0);
     }

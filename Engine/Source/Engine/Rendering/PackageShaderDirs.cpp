@@ -83,4 +83,15 @@ std::filesystem::path ResolveAdapterShaderDir(const AssetManager& assetManager)
                                                          AssetPathKind::Directory);
 }
 
+void FillMaterialSourceRoots(const AssetManager& assetManager, Rendering::MaterialBuildContext& context)
+{
+    context.AdapterShaderDir = ResolveAdapterShaderDir(assetManager);
+    context.IncludeDirs = {assetManager.GetAssetRoot()};
+    context.ProjectRoots = CollectProjectRoots(assetManager);
+    context.AssetSourceRoots = CollectAssetSourceRoots(assetManager);
+    context.PackageShaderDirs = CollectPackageShaderDirs(assetManager);
+    // After AdapterShaderDir: the staged module folders lie under it.
+    AppendStagedModuleShaderDirs(context.AdapterShaderDir, context.PackageShaderDirs);
+}
+
 } // namespace GameEngine

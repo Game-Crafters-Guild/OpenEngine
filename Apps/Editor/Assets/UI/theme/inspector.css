@@ -394,8 +394,7 @@
 	margin-right: 20px;
 }
 
-.inspector-header-history .icon-button.inspector-header-history-icon,
-.inspector-header-history button.icon-button.inspector-header-history-icon {
+.inspector-header-history .icon-button.inspector-header-history-icon {
 	flex-shrink: 0;
 	width: 36px;
 	height: 36px;
@@ -427,8 +426,7 @@
 	background-image: url("editor:Icons/left-arrow.svg");
 }
 
-.inspector-header-history .icon-button.inspector-header-history-icon:hover,
-.inspector-header-history button.icon-button.inspector-header-history-icon:hover {
+.inspector-header-history .icon-button.inspector-header-history-icon:hover {
 	background-image-tint: var(--ui_icon_tint_hover);
 	opacity: 1;
 	background-color: transparent;
@@ -437,9 +435,7 @@
 }
 
 .inspector-header-history .icon-button.inspector-header-history-icon:active,
-.inspector-header-history button.icon-button.inspector-header-history-icon:active,
-.inspector-header-history .icon-button.inspector-header-history-icon.pressed,
-.inspector-header-history button.icon-button.inspector-header-history-icon.pressed {
+.inspector-header-history .icon-button.inspector-header-history-icon.pressed {
 	background-image-tint: var(--ui_icon_tint_hover);
 	opacity: 1;
 	background-color: transparent;
@@ -448,9 +444,7 @@
 }
 
 .inspector-header-history .icon-button.inspector-header-history-icon:focus,
-.inspector-header-history button.icon-button.inspector-header-history-icon:focus,
-.inspector-header-history .icon-button.inspector-header-history-icon:focus-visible,
-.inspector-header-history button.icon-button.inspector-header-history-icon:focus-visible {
+.inspector-header-history .icon-button.inspector-header-history-icon:focus-visible {
 	outline: none;
 	outline-offset: 0;
 	background-color: transparent;
@@ -471,9 +465,7 @@
 }
 
 .inspector-header-history .icon-button.inspector-header-history-icon:disabled:hover,
-.inspector-header-history button.icon-button.inspector-header-history-icon:disabled:hover,
-.inspector-header-history .icon-button.inspector-header-history-icon:disabled:active,
-.inspector-header-history button.icon-button.inspector-header-history-icon:disabled:active {
+.inspector-header-history .icon-button.inspector-header-history-icon:disabled:active {
 	opacity: 0;
 	pointer-events: none;
 }
@@ -593,36 +585,6 @@
 .inspector-section.inspector-section-transform .inspector-transform-trs-row .inspector-vector3.vector3-field > .vector3-label-y,
 .inspector-section.inspector-section-transform .inspector-transform-trs-row .inspector-vector3.vector3-field > .vector3-label-z {
 	margin-left: 12px;
-}
-
-/* Earth-scale authoring: read-only Sector + composed-world rows appended to the
-   Transform section for entities tagged with WorldSectorCoord. Self-contained
-   label+value row (auto-width label so long labels like "World (sector-composed)"
-   never overlap the value); value muted so it reads as display, not an editable
-   field. Independent of the trs-row's narrow/wide field layout. */
-.inspector-transform-info-row {
-	display: flex;
-	flex-direction: row;
-	align-items: baseline;
-	width: 100%;
-	min-width: 0;
-	gap: 8px;
-	margin-bottom: var(--inspector-row-gap);
-}
-
-.inspector-transform-info-row > .inspector-transform-info-label {
-	flex: 0 0 auto;
-	font-size: 13px;
-	white-space: nowrap;
-	cursor: default;
-}
-
-.inspector-transform-info-row > .inspector-transform-readonly-value {
-	flex: 1 1 auto;
-	min-width: 0;
-	opacity: 0.7;
-	white-space: nowrap;
-	overflow: hidden;
 }
 
 /* X/Y/Z inputs: match .inspector-field TextInput elsewhere in this file (Transform rows omit the .inspector-field wrapper). */
@@ -816,7 +778,6 @@
 
 /* Compact per-element action menu at the far right of each flare foldout. */
 button.flare-element-header-menu,
-.button.flare-element-header-menu,
 .flare-element-header-menu {
 	width: 22px;
 	height: 22px;
@@ -843,17 +804,11 @@ button.flare-element-header-menu,
 	outline-offset: 0;
 }
 
-button.flare-element-header-menu:hover,
-.button.flare-element-header-menu:hover,
 .flare-element-header-menu:hover {
 	background-image-tint: rgba(255, 255, 255, 1.0);
 	border-color: transparent;
 }
 
-button.flare-element-header-menu:active,
-button.flare-element-header-menu.pressed,
-.button.flare-element-header-menu:active,
-.button.flare-element-header-menu.pressed,
 .flare-element-header-menu:active,
 .flare-element-header-menu.pressed {
 	background-image-tint: rgba(255, 255, 255, 0.87);
@@ -861,8 +816,6 @@ button.flare-element-header-menu.pressed,
 	border-color: transparent;
 }
 
-button.flare-element-header-menu:focus,
-.button.flare-element-header-menu:focus,
 .flare-element-header-menu:focus {
 	outline: none;
 	outline-offset: 0;
@@ -1233,6 +1186,14 @@ button.flare-element-header-menu:focus,
 	padding-right: 0px;
 }
 
+/* A section title with a status badge takes the label column's 37 %, so the header's 8 px gap puts the
+   badge at the left edge of the value column, as the rows below place their fields. */
+.inspector-component-section-title.foldout-title-badged {
+	flex: 0 0 37%;
+	width: 37%;
+	max-width: 37%;
+}
+
 /* A section nested inside a section indents instead of pulling out, the way the material inspector
    nests its blocks: the child's bar starts where its parent's title does, so the two levels read as
    parent and child while both still run out to the right edge. Rounded where it starts and square
@@ -1517,6 +1478,21 @@ button.flare-element-header-menu:focus,
 	width: auto;
 	max-width: none;
 }
+/* The Inspector's columns for a host outside an Inspector section: each label cell has the same width and the
+   field fills the rest. */
+.inspector-columns .inspector-row .inspector-label-cell {
+	flex: 0 0 37%;
+	width: 37%;
+	min-width: 0;
+	max-width: 37%;
+}
+.inspector-columns .inspector-row .inspector-field {
+	flex: 1 1 0%;
+	min-width: 0;
+	width: auto;
+	max-width: none;
+	margin-right: 0;
+}
 /* Toggle-only value column: flex container for optional left/center/right alignment. */
 .inspector-section:not(.inspector-section-transform) .inspector-section-body .inspector-row .inspector-field.inspector-field-toggle {
 	display: flex;
@@ -1778,6 +1754,12 @@ button.flare-element-header-menu:focus,
 	word-wrap: break-word;
 	word-break: break-word;
 	min-width: 0;
+}
+
+/* A read-only value in a field column starts where the field inputs' text starts:
+   their 12 px padding plus their 1 px border. */
+.inspector-field.inspector-field-readout > .inspector-text {
+	padding-left: 13px;
 }
 
 .sky-day-key-label {
@@ -2364,17 +2346,10 @@ button.flare-element-header-menu:focus,
 
 /* Note: Smart Folder styles moved to smartfolders.css */
 
+/* Size and spacing only: the fill, border and states come from the Button control's sheet. */
 .inspector-button {
 	padding: 6px 12px;
 	margin-top: 8px;
-	background-color: rgba(255, 255, 255, 0.28);
-	border: 1px solid rgba(255, 255, 255, 0.42);
-	border-radius: 4px;
-	color: var(--ui_color_text);
-}
-
-.inspector-button:hover {
-	background-color: rgba(255, 255, 255, 0.36);
 }
 
 .inspector-field.spline-point-nav-field {
@@ -3178,8 +3153,8 @@ button.inspector-button.inspector-new-material-button,
 }
 
 .inspector-section-header-badge-neutral {
-	color: var(--ui_color_text_on_light);
-	background-color: var(--ui_color_markup_unknown_status);
+	color: var(--ui_color_badge_neutral_text);
+	background-color: var(--ui_color_badge_neutral);
 }
 
 /* An override pill draws its text in the color of its row's override edge on a tint of the prefab color,
@@ -3187,6 +3162,37 @@ button.inspector-button.inspector-new-material-button,
 .inspector-section-header-badge-override {
 	color: var(--inspector-override-edge-color, var(--ui_color_prefab));
 	background-color: var(--inspector-override-badge-fill, var(--ui_color_prefab_background));
+}
+
+/* A button that holds one badge Label: the badge draws the box and the fill, so the button has none.
+   This host rule wins the tie with the Button sheet's .button. */
+.badge-button {
+	padding: 0px;
+	min-height: 0px;
+	border-width: 0px;
+	background-color: transparent;
+}
+
+/* The button sets the fill its badge reads: lighter on hover, darker while pressed, as the editor's
+   other buttons do. The button itself stays transparent in every state. The owner sets .hovered on
+   pointer enter and leave (Prefabs/PrefabBar.cpp); Button sets .pressed. */
+.badge-button:hover {
+	background-color: transparent;
+}
+
+.badge-button.hovered {
+	--inspector-badge-fill: var(--ui_color_warning_badge_hover);
+	--inspector-override-badge-fill: var(--ui_color_prefab_background_hover);
+}
+
+.badge-button:active {
+	background-color: transparent;
+}
+
+.badge-button.pressed {
+	background-color: transparent;
+	--inspector-badge-fill: var(--ui_color_warning_badge_pressed);
+	--inspector-override-badge-fill: var(--ui_color_prefab_background_pressed);
 }
 
 /* A title with a badge after it (InspectorSection::SetHeaderBadge sets the class) takes its text's

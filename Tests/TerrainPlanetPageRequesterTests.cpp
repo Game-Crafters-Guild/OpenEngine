@@ -1,12 +1,13 @@
 // The level rule of a planet's height pages as pure oracles: the horizon against rays from the
 // camera, and the requester's counts against the model of design page-streaming-planets 3.8.
 
-#include "TerrainECS/PlanetPageRequester.h"
+#include "TerrainECS/Planet/PlanetPageRequester.h"
 
 #include "CBTTerrain/CBTPlanetShading.h"
 #include "Components/Terrain/TerrainPlanetRelief.h"
 #include "PageStreaming/GeneratedHeightPageProvider.h"
 #include "PageStreaming/PageStore/PageStoreFormat.h"
+#include "TerrainECS/TerrainSurface/TerrainSurfacePages.h"
 
 #include <gtest/gtest.h>
 
@@ -27,6 +28,8 @@ namespace
 {
 
 constexpr uint32 kDesktopSlots = 512u;
+// The surface slots design 3.8 counts at: 2,048 pin L11 up at P600 and L15 up at Earth.
+constexpr uint32 kSurfaceSlots = 2048u;
 
 // The model's view: 1080 rows, 60 degree vertical field, the default TargetPixelError of 11.
 PageLevelView ModelView()
@@ -47,9 +50,10 @@ PlanetPageRequestTerrain Planet(float64 radius, float32 texel, const Components:
     PageStreaming::GeneratedPlanetLattice lattice;
     lattice.ReferenceRadius = radius;
     lattice.FaceSamples = PlanetFaceSamples(radius, texel);
-    lattice.Height = [relief](const Mathematics::Vector3& direction, float32 minResolvedArc) {
-        return CBTTerrain::PlanetRelief(direction.x, direction.y, direction.z, relief.Amplitude, relief.Frequency,
-                                        relief.Octaves, minResolvedArc);
+    lattice.HeightRow = [relief](std::span<const Mathematics::Vector3> directions, float32 minResolvedArc,
+                                 std::span<float32> outHeights) {
+        CBTTerrain::PlanetReliefRow(directions, relief.Amplitude, relief.Frequency, relief.Octaves, minResolvedArc,
+                                    outHeights);
     };
     lattice.HeightRange = [relief](const Mathematics::Vector3& direction, float32 chord, float32 minResolvedArc) {
         const CBTTerrain::PlanetReliefRange range = CBTTerrain::PlanetReliefRangeNear(
@@ -74,6 +78,12 @@ Mathematics::Vector3 At(const Mathematics::Vector3& direction, float64 radius)
 {
     const float32 r = static_cast<float32>(radius);
     return Mathematics::Vector3(direction.x * r, direction.y * r, direction.z * r);
+}
+
+// A camera that looks every way: the geometry's request.
+PageRequestCamera DiscCamera(const Mathematics::Vector3& position)
+{
+    return PageRequestCamera{position, {}, 0.0f, false};
 }
 
 std::set<std::tuple<uint8, uint8, uint32, uint32>> Keys(const std::vector<PageStreaming::PageWant>& wants)
@@ -120,6 +130,33 @@ bool RayClearsFloor(const Mathematics::Vector3& camera, const Mathematics::Vecto
     return std::sqrt(x * x + y * y + z * z) > floor;
 }
 
+// The editor's scene view in the live readback: 3,067 x 893 pixels.
+constexpr float32 kEditorViewAspect = 3067.0f / 893.0f;
+
+// The driver's surface view: 1,080 rows, a 60 degree vertical field, one texel a pixel.
+PageLevelView SurfaceView()
+{
+    return MakePageLevelView(kPageLevelReferenceRows, std::numbers::pi_v<float32> / 3.0f, kSurfacePageTargetPixels);
+}
+
+// The P-600 scene's planet over a surface field of `slots` slots.
+PlanetPageRequestTerrain P600(uint32 slots, const Components::TerrainPlanetRelief& relief)
+{
+    PlanetPageRequestTerrain planet = Planet(600000.0, 0.5f, relief);
+    planet.CacheSlots = slots;
+    return planet;
+}
+
+// The P-600 scene's landing eye: 1.7 m over the relief at the +Y pole, looking along +Z, in a view of
+// `aspect` columns a row.
+PageRequestCamera P600LandingEye(float32 aspect, const Components::TerrainPlanetRelief& relief)
+{
+    const Mathematics::Vector3 up(0, 1, 0);
+    const float32 halfFov = std::atan(aspect * std::tan(std::numbers::pi_v<float32> / 6.0f));
+    return PageRequestCamera{At(up, 600000.0 + ReliefAt(up, relief) + 1.7), Mathematics::Vector3(0, 0, 1), halfFov,
+                             true};
+}
+
 } // namespace
 
 TEST(PlanetPageRequester, FaceSamplesAreTheFewestThatHalveToOnePageAtTheTexel)
@@ -132,6 +169,14 @@ TEST(PlanetPageRequester, FaceSamplesAreTheFewestThatHalveToOnePageAtTheTexel)
     EXPECT_EQ(PlanetFaceSamples(1.0e12, 0.5f), 0u) << "past the store's samples per axis";
 }
 
+TEST(PlanetPageRequester, TheLargestPlanetRadiusIsTheLastWholeMeterThePageStoreHolds)
+{
+    const uint64 largest = LargestPlanetRadius(PageStreaming::kPageStoreMaxSamplesPerAxis, 0.5f);
+    ASSERT_GT(largest, 600000u);
+    EXPECT_NE(PlanetFaceSamples(static_cast<float64>(largest), 0.5f), 0u);
+    EXPECT_EQ(PlanetFaceSamples(static_cast<float64>(largest + 1u), 0.5f), 0u) << "one meter past the largest";
+}
+
 TEST(PlanetPageRequester, TheHorizonNeverDropsAPageARayFromTheCameraReaches)
 {
     // P-2's relief on a 2 km planet, a fine view, so the pages past the floor sphere's horizon need
@@ -139,7 +184,7 @@ TEST(PlanetPageRequester, TheHorizonNeverDropsAPageARayFromTheCameraReaches)
     const Components::TerrainPlanetRelief relief{50.0f, 6.0f, 4u};
     const PlanetPageRequestTerrain planet = Planet(2000.0, 0.5f, relief);
     PlanetPageRequester requester;
-    requester.Configure(planet);
+    requester.Configure(planet, PageRequestArea::Disc);
     const PageLevelView view = MakePageLevelView(1080, std::numbers::pi_v<float32> / 3.0f, 1.0f);
     const uint32 samples = planet.FaceSamples;
     const float64 floor = planet.ReferenceRadius - CBTTerrain::kReliefEnvelope * relief.Amplitude;
@@ -151,8 +196,8 @@ TEST(PlanetPageRequester, TheHorizonNeverDropsAPageARayFromTheCameraReaches)
     for (const Mathematics::Vector3& direction : {Unit(1, 0, 0), Unit(1, 1, 0), Unit(1, 1, 1), Unit(0.3f, -1, 0.6f)})
         for (float64 altitude : {2.0, 80.0, 500.0, 3000.0})
         {
-            const Mathematics::Vector3 camera =
-                At(direction, planet.ReferenceRadius + ReliefAt(direction, relief) + altitude);
+            const PageRequestCamera camera =
+                DiscCamera(At(direction, planet.ReferenceRadius + ReliefAt(direction, relief) + altitude));
             std::vector<PageStreaming::PageWant> wants;
             requester.Build(std::span(&camera, 1), view, wants);
             const auto keys = Keys(wants);
@@ -163,9 +208,9 @@ TEST(PlanetPageRequester, TheHorizonNeverDropsAPageARayFromTheCameraReaches)
                     {
                         const Mathematics::Vector3 unit = PageStreaming::EqualAngleSampleDirection(face, x, z, samples);
                         const Mathematics::Vector3 point = At(unit, planet.ReferenceRadius + ReliefAt(unit, relief));
-                        if (!RayClearsFloor(camera, point, floor))
+                        if (!RayClearsFloor(camera.Position, point, floor))
                             continue;
-                        const float32 distance = (point - camera).Length();
+                        const float32 distance = (point - camera.Position).Length();
                         const float32 needed = GeometryPageLevel(distance, smallestTexel, view);
                         const uint32 coarsest = static_cast<uint32>(std::max(std::floor(needed), 0.0f));
                         if (coarsest >= pinned)
@@ -220,9 +265,9 @@ TEST(PlanetPageRequester, CountsAreTheDesktopRowsAndWithinATenthAboveTheModelAtT
         const Components::TerrainPlanetRelief relief{pose.Radius < 100000.0 ? 1300.0f : 4000.0f, 6.0f, 4u};
         const PlanetPageRequestTerrain planet = Planet(pose.Radius, 0.5f, relief);
         PlanetPageRequester requester;
-        requester.Configure(planet);
-        const Mathematics::Vector3 camera =
-            At(pose.Direction, pose.Radius + ReliefAt(pose.Direction, relief) + pose.Altitude);
+        requester.Configure(planet, PageRequestArea::Disc);
+        const PageRequestCamera camera =
+            DiscCamera(At(pose.Direction, pose.Radius + ReliefAt(pose.Direction, relief) + pose.Altitude));
         std::vector<PageStreaming::PageWant> wants;
         requester.Build(std::span(&camera, 1), ModelView(), wants);
         ASSERT_EQ(requester.FirstPinnedLevel() + 3u, requester.Levels().size()) << "the model pins three levels";
@@ -237,20 +282,114 @@ TEST(PlanetPageRequester, CountsAreTheDesktopRowsAndWithinATenthAboveTheModelAtT
     }
 }
 
+TEST(PlanetPageRequester, TheShadingWedgeRequestsWithinAQuarterOfTheModelAtTheEyes)
+{
+    // The shading wedge at the note's view (900 rows, a 60 degree vertical field, 3,067 columns, one
+    // level-0 texel a pixel), the pinned pages apart; the driver ships 1080 rows at kSurfacePageTargetPixels.
+    // Model, per unpinned level (2,048 slots pin L11 up at P600, L15 up at Earth): a page is wanted within
+    // r = 2^(L+1) x focal x texel of the eye (the level rule), r capped at the horizon over the floor
+    // sphere (radius - 1.5 x amplitude) from the eye and from the envelope's top. In page sides p
+    // (128 x 2^L texels, the equal-angle cell's area at the eye), the wedge of angle w (the horizontal
+    // field plus twice the margin) holds w/2 (r/p)^2 + (2 + w)(2/pi)(r/p) + 1 pages, and the two-page
+    // foot outside it 4 pi (1 - w/(2 pi)). Design is 3.8's figure, kept as a record.
+    struct Pose
+    {
+        const char* Name;
+        float64 Radius;
+        Mathematics::Vector3 Direction;
+        uint32 Model;
+        uint32 Design;
+    };
+    const Pose poses[] = {
+        {"P600_eye_center", 600000.0, Unit(1, 0, 0), 2338u, 1883u},
+        {"P600_eye_edge", 600000.0, Unit(1, 1, 0), 3180u, 2445u},
+        {"P600_eye_corner", 600000.0, Unit(1, 1, 1), 2657u, 2133u},
+        {"Earth_eye_center", 6371000.0, Unit(1, 0, 0), 2776u, 2332u},
+    };
+    constexpr float32 kNoteFocalPixels = 450.0f / 0.57735027f; // 450 / tan(30 degrees)
+    const float32 halfFov = std::atan(1533.5f / kNoteFocalPixels);
+    const PageLevelView view = MakePageLevelView(900, std::numbers::pi_v<float32> / 3.0f, 1080.0f / 900.0f);
+    const Components::TerrainPlanetRelief relief{4000.0f, 6.0f, 4u};
+    for (const Pose& pose : poses)
+    {
+        PlanetPageRequestTerrain planet = Planet(pose.Radius, 0.5f, relief);
+        planet.CacheSlots = kSurfaceSlots;
+        PlanetPageRequester requester;
+        requester.Configure(planet, PageRequestArea::Wedge);
+        const Mathematics::Vector3 across = Mathematics::Vector3::Cross(pose.Direction, Mathematics::Vector3(0, 1, 0));
+        const PageRequestCamera camera{At(pose.Direction, pose.Radius + ReliefAt(pose.Direction, relief) + 1.7),
+                                       across.Normalize(), halfFov, true};
+        std::vector<PageStreaming::PageWant> wants;
+        requester.Build(std::span(&camera, 1), view, wants);
+        const uint32 count = Unpinned(wants);
+        RecordProperty(std::string(pose.Name) + "_requested", static_cast<int>(count));
+        RecordProperty(std::string(pose.Name) + "_model", static_cast<int>(pose.Model));
+        RecordProperty(std::string(pose.Name) + "_design38", static_cast<int>(pose.Design));
+        EXPECT_LE(std::abs(static_cast<float64>(count) - pose.Model), 0.25 * pose.Model)
+            << pose.Name << ": requested " << count << ", model " << pose.Model;
+    }
+}
+
+TEST(PlanetPageRequester, AWedgePastTheSlotsIsRequestedALevelCoarserEverywhereUntilItFits)
+{
+    // The P-600 landing wedge in the editor's view passes the Steam Deck's slots: the fewest passes
+    // that fit, each doubling the pixel error.
+    const Components::TerrainPlanetRelief relief{4000.0f, 6.0f, 4u};
+    const uint32 slots = kSteamDeckSurfacePages.Slots;
+    PlanetPageRequester requester;
+    requester.Configure(P600(slots, relief), PageRequestArea::Wedge);
+    const PageRequestCamera camera = P600LandingEye(kEditorViewAspect, relief);
+    std::vector<PageStreaming::PageWant> wants;
+    const PageSlotFit fit = requester.BuildWithinSlots(std::span(&camera, 1), SurfaceView(), slots, wants);
+    const uint32 passes = fit.Passes;
+    RecordProperty("passes", static_cast<int>(passes));
+    RecordProperty("requested", static_cast<int>(wants.size()));
+    ASSERT_GE(passes, 1u);
+    EXPECT_LE(wants.size(), slots);
+    std::vector<PageStreaming::PageWant> fullDetail;
+    requester.Build(std::span(&camera, 1), SurfaceView(), fullDetail);
+    EXPECT_EQ(fit.FullDetailPages, fullDetail.size()) << "the pages the view wants before the fit";
+    PageLevelView fewer = SurfaceView();
+    fewer.TargetPixels *= static_cast<float32>(1u << (passes - 1u));
+    requester.Build(std::span(&camera, 1), fewer, wants);
+    EXPECT_GT(wants.size(), slots) << "one pass fewer fits too";
+}
+
+TEST(PlanetPageRequester, TheDesktopSurfaceSlotsHoldTheP600LandingWedge)
+{
+    // A 16:9 view at one texel a pixel fits whole; the editor's wider view takes at most one pass.
+    const Components::TerrainPlanetRelief relief{4000.0f, 6.0f, 4u};
+    const uint32 slots = DesktopSurfacePageProfile().PlanetSlots;
+    PlanetPageRequester requester;
+    requester.Configure(P600(slots, relief), PageRequestArea::Wedge);
+    const PageRequestCamera wide = P600LandingEye(16.0f / 9.0f, relief);
+    std::vector<PageStreaming::PageWant> wants;
+    requester.Build(std::span(&wide, 1), SurfaceView(), wants);
+    RecordProperty("slots", static_cast<int>(slots));
+    RecordProperty("requested_16x9", static_cast<int>(wants.size()));
+    EXPECT_LE(wants.size(), slots);
+    const PageRequestCamera editor = P600LandingEye(kEditorViewAspect, relief);
+    const uint32 passes = requester.BuildWithinSlots(std::span(&editor, 1), SurfaceView(), slots, wants).Passes;
+    RecordProperty("requested_editor", static_cast<int>(wants.size()));
+    RecordProperty("passes_editor", static_cast<int>(passes));
+    EXPECT_LE(passes, 1u);
+}
+
 TEST(PlanetPageRequester, ARequesterThatWalkedElsewhereRequestsWhatAFreshOneRequests)
 {
     // The page shapes a requester keeps from earlier frames give the request a fresh one gives.
     const Components::TerrainPlanetRelief relief{4000.0f, 6.0f, 4u};
     const PlanetPageRequestTerrain planet = Planet(600000.0, 0.5f, relief);
     PlanetPageRequester walked;
-    walked.Configure(planet);
+    walked.Configure(planet, PageRequestArea::Disc);
     std::vector<PageStreaming::PageWant> wants;
     for (const Mathematics::Vector3& direction : {Unit(1, 0, 0), Unit(1, 1, 0), Unit(1, 1, 1), Unit(1, 0, 0)})
     {
-        const Mathematics::Vector3 camera = At(direction, planet.ReferenceRadius + ReliefAt(direction, relief) + 1.7);
+        const PageRequestCamera camera =
+            DiscCamera(At(direction, planet.ReferenceRadius + ReliefAt(direction, relief) + 1.7));
         walked.Build(std::span(&camera, 1), ModelView(), wants);
         PlanetPageRequester fresh;
-        fresh.Configure(planet);
+        fresh.Configure(planet, PageRequestArea::Disc);
         std::vector<PageStreaming::PageWant> expected;
         fresh.Build(std::span(&camera, 1), ModelView(), expected);
         ASSERT_EQ(wants.size(), expected.size());
@@ -268,15 +407,16 @@ TEST(PlanetPageRequester, AReconfiguredRequesterRequestsWhatAFreshOneRequests)
     // Configure drops the page shapes of the earlier relief.
     const Components::TerrainPlanetRelief relief{4000.0f, 6.0f, 4u};
     const PlanetPageRequestTerrain planet = Planet(600000.0, 0.5f, relief);
-    const Mathematics::Vector3 camera = At(Unit(1, 1, 0), planet.ReferenceRadius + ReliefAt(Unit(1, 1, 0), relief) + 1.7);
+    const PageRequestCamera camera =
+        DiscCamera(At(Unit(1, 1, 0), planet.ReferenceRadius + ReliefAt(Unit(1, 1, 0), relief) + 1.7));
     PlanetPageRequester reconfigured;
-    reconfigured.Configure(Planet(600000.0, 0.5f, Components::TerrainPlanetRelief{1000.0f, 6.0f, 4u}));
+    reconfigured.Configure(Planet(600000.0, 0.5f, Components::TerrainPlanetRelief{1000.0f, 6.0f, 4u}), PageRequestArea::Disc);
     std::vector<PageStreaming::PageWant> wants;
     reconfigured.Build(std::span(&camera, 1), ModelView(), wants);
-    reconfigured.Configure(planet);
+    reconfigured.Configure(planet, PageRequestArea::Disc);
     reconfigured.Build(std::span(&camera, 1), ModelView(), wants);
     PlanetPageRequester fresh;
-    fresh.Configure(planet);
+    fresh.Configure(planet, PageRequestArea::Disc);
     std::vector<PageStreaming::PageWant> expected;
     fresh.Build(std::span(&camera, 1), ModelView(), expected);
     ASSERT_EQ(wants.size(), expected.size());

@@ -10,7 +10,10 @@
 
 #include <chrono>
 
-namespace GameEngine { namespace Engine::Renderer {
+namespace GameEngine {
+struct SceneLoaderTestAccess;
+
+namespace Engine::Renderer {
 
 class RenderServices;
 
@@ -50,11 +53,19 @@ public:
     // MeshRenderer of the world this loop updates goes through it. A host
     // hands it a freshly loaded scene (EnqueueWorld) and reads its batch.
     SceneResolveService& GetSceneResolveService() { return m_SceneResolves; }
+    /// The resolve service's main-thread slice per frame: kResolveFrameSlice, or what the
+    /// SceneLoader sets from its frame budget while a load runs.
+    void SetResolveSlice(std::chrono::microseconds slice) { m_ResolveSlice = slice; }
+    /// The main-thread time the resolve service took in the last Update.
+    std::chrono::microseconds LastResolveStepTime() const { return m_LastResolveStepTime; }
 
     // Convenience: configure frequency by system name (Every N frames)
     bool SetEveryNFramesByName(const std::string& systemName, uint32 n);
 
 private:
+    // The SceneLoader tests read m_ResolveSlice through SceneLoaderTestAccess.
+    friend struct ::GameEngine::SceneLoaderTestAccess;
+
     std::unique_ptr<ECS::SystemManager> m_Systems;
     std::unique_ptr<ECS::SystemScheduleBuilder> m_Schedule;
     RenderServices* m_RenderServices = nullptr; // non-owning, for per-frame setup
@@ -74,6 +85,8 @@ private:
     // RegisterAndPrewarmMaterial asserts the owner thread.
     ECS::ChangeGate m_MeshBindGate{};
     SceneResolveService m_SceneResolves;
+    std::chrono::microseconds m_ResolveSlice = kResolveFrameSlice;
+    std::chrono::microseconds m_LastResolveStepTime{0};
     SkeletonResolveState m_SkeletonResolveState{};
 };
 

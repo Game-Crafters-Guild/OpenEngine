@@ -504,8 +504,8 @@ void RGFrame::BeginFrame(uint64_t frameIndex)
     }
 
     // Resolve the returning device slot's pass timings FIRST (contract: the
-    // caller has already run IDevice::BeginFrame, which fence-waited the slot
-    // and cached its completed timestamps). Must precede the graph reset.
+    // caller has already run IDevice::BeginFrame; the slot's GPU work is then
+    // complete and its timestamps cached). Must precede the graph reset.
     ResolveProfiling();
 
     m_FrameIndex = frameIndex;
@@ -891,6 +891,7 @@ void RGFrame::Execute()
 
         const auto scheduleBegin = RGClock::now();
         m_Graph.Schedule();
+        m_Graph.PlaceQueues(m_PhysicalQueueOf);
         m_Stats.ScheduleMs = elapsedMs(scheduleBegin);
 
         const auto barriersBegin = RGClock::now();
@@ -954,8 +955,10 @@ void RGFrame::Execute()
     // free, idle entries — incl. a hidden view's persistents — age out.
     m_TransientPool->ReleaseFrame(m_FrameIndex);
     m_TransientPool->EvictIdle(m_FrameIndex, kTransientMaxIdleFrames);
+    // The frame that retires a physical can still read it, and that frame is complete only after the
+    // device's BeginFrame GetFramesInFlight() frames later. So the retire window is the device's pacing.
     m_PersistentPool->TickPoolElements(m_FrameIndex, kPersistentMaxIdleFrames,
-                                       m_UploadRing->SlotCount());
+                                       m_Device->GetFramesInFlight());
 }
 
 } // namespace GameEngine::Rendering::RenderGraph

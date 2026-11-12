@@ -225,6 +225,35 @@ Result Services::DeleteFile(std::string_view slot, std::string_view name)
     return MapResult(m_Provider->DeleteFile(ToStr(slot), ToStr(name)));
 }
 
+Result Services::DeleteSlot(std::string_view slot)
+{
+    if (!m_Initialized)
+        return Result::NotInitialized;
+    if (!ValidSlotName(slot))
+        return Result::InvalidArgument;
+    if (m_Provider->DeleteSlot == nullptr)
+        return Result::Unsupported;
+    return MapResult(m_Provider->DeleteSlot(ToStr(slot)));
+}
+
+Result Services::GetFileInfo(std::string_view slot, std::string_view name, SaveFileInfo& outInfo) const
+{
+    outInfo = {};
+    if (!m_Initialized)
+        return Result::NotInitialized;
+    if (!ValidSlotName(slot) || !ValidFileName(name))
+        return Result::InvalidArgument;
+    if (m_Provider->GetFileInfo == nullptr)
+        return Result::Unsupported;
+    GE_PS_FileInfoV1 info{};
+    const Result result = MapResult(m_Provider->GetFileInfo(ToStr(slot), ToStr(name), &info));
+    if (result != Result::Ok)
+        return result;
+    outInfo.SizeBytes = info.sizeBytes;
+    outInfo.LastWriteTime = std::chrono::system_clock::time_point(std::chrono::milliseconds(info.lastWriteUnixMs));
+    return Result::Ok;
+}
+
 Result Services::Commit(std::string_view slot)
 {
     if (!m_Initialized)

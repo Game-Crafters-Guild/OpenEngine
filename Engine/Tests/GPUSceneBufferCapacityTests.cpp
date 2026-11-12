@@ -2,7 +2,8 @@
 // UpdateBuffer bounds guard: the table is sized from the capacity declared to
 // Initialize, uploads never write past a buffer's allocation, an oversized
 // device-level update is rejected wholesale, and a clamped upload reports the
-// rows it dropped exactly once.
+// rows it dropped exactly once. The instance buffers start small and grow with
+// the scene up to the declared capacity.
 
 #include <gtest/gtest.h>
 
@@ -14,11 +15,14 @@
 
 #include "TestDeviceHelper.h"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <initializer_list>
 #include <memory>
+#include <string_view>
 #include <vector>
 
 using namespace GameEngine;
@@ -46,6 +50,35 @@ template <typename Row>
     std::memcpy(out, rows + firstRow, rowCount * sizeof(Row));
     device.UnmapBuffer(buffer);
     return true;
+}
+
+// Sums the allocation bytes of the live buffers whose debug name starts with one of `prefixes`,
+// and reports the largest one.
+struct BufferBytes
+{
+    uint64_t Total = 0;
+    uint64_t Largest = 0;
+};
+
+BufferBytes SumBuffersNamed(const IDevice& device, std::initializer_list<std::string_view> prefixes)
+{
+    BufferBytes out;
+    device.DebugEnumerateResources(
+        [&](const DebugResourceInfo& info)
+        {
+            if (info.Type != DebugResourceInfo::Kind::Buffer)
+                return;
+            for (const std::string_view prefix : prefixes)
+            {
+                if (std::string_view(info.Name).starts_with(prefix))
+                {
+                    out.Total += info.Bytes;
+                    out.Largest = std::max(out.Largest, info.Bytes);
+                    return;
+                }
+            }
+        });
+    return out;
 }
 
 class GPUSceneBufferCapacityTest : public ::testing::Test
@@ -419,4 +452,92 @@ TEST_F(GPUSceneBufferCapacityTest, InstanceCapacityClampPreservesValidSparseWrit
     Logger::Log::Flush();
     EXPECT_EQ(errorCount->load(), 1) << "instance capacity overflow must be reported exactly once";
     sinkPtr->UnregisterCallback(callbackId);
+}
+
+// The default ceiling (1M instances) is a limit, not an allocation: a small scene gets small
+// instance-sized buffers. The mesh tables are sized from maxMeshes and are not counted here.
+TEST_F(GPUSceneBufferCapacityTest, SmallSceneAllocatesInstanceBuffersFromItsSize)
+{
+    m_Scene = std::make_unique<GPUScene>(m_Device.get());
+    ASSERT_TRUE(m_Scene->Initialize());
+    GPUInstance instance{};
+    instance.meshIndex = 0u;
+    instance.materialIndex = 0u;
+    for (uint32_t i = 0; i < 100u; ++i)
+        m_Scene->AddInstance(instance);
+    m_Scene->FlushGPUBuffers();
+
+    constexpr uint64_t kBound = 32ull * 1024ull * 1024ull;
+    const BufferBytes bytes = SumBuffersNamed(
+        *m_Device, {"GPUScene_InstanceBuffer", "GPUScene_ScatterHotBuffer"});
+    EXPECT_GT(bytes.Total, 0u);
+    EXPECT_LT(bytes.Total, kBound) << "a 100-instance scene allocated " << bytes.Total
+                                   << " bytes of instance-sized GPU buffers";
+}
+
+// 40,000 instances grow each frame slot in one step from the first capacity, 16,384 to 65,536:
+// every slot grows on its own turn and every row reaches each slot's buffer.
+TEST_F(GPUSceneBufferCapacityTest, InstanceBuffersGrowToHoldTheScene)
+{
+    constexpr uint32_t kCount = 40000u;
+    constexpr uint64_t kGrownBytes = 65536ull * sizeof(GPUInstance);
+    m_Scene = std::make_unique<GPUScene>(m_Device.get());
+    ASSERT_TRUE(m_Scene->Initialize());
+    std::vector<GPUInstance> expected(kCount);
+    for (uint32_t i = 0; i < kCount; ++i)
+    {
+        expected[i].meshIndex = 0u;
+        expected[i].materialIndex = 0u;
+        expected[i].boundingRadius = static_cast<float>(i + 1u);
+        m_Scene->AddInstance(expected[i]);
+    }
+
+    const uint32_t slots = m_Device->GetFramesInFlight();
+    std::vector<GPUInstance> actual(kCount);
+    for (uint32_t frame = 0; frame < slots * 2u; ++frame)
+    {
+        ASSERT_TRUE(m_Device->BeginFrame());
+        m_Scene->BeginFrame();
+        const bool read = ReadRows(*m_Device, m_Scene->GetInstanceBuffer(), 0u, kCount, actual.data());
+        m_Scene->EndFrame();
+        m_Device->Present();
+        ASSERT_TRUE(read) << "frame " << frame;
+        ASSERT_EQ(std::memcmp(actual.data(), expected.data(), kCount * sizeof(GPUInstance)), 0)
+            << "frame " << frame << ": a row did not reach the GPU";
+    }
+    m_Device->WaitForIdle();
+
+    const BufferBytes bytes = SumBuffersNamed(*m_Device, {"GPUScene_InstanceBuffer"});
+    EXPECT_EQ(bytes.Largest, kGrownBytes) << "the instance buffer did not grow to the next power of two";
+}
+
+// One row past the first capacity of 16,384 grows every frame slot, and the last row reaches each slot.
+TEST_F(GPUSceneBufferCapacityTest, OneRowPastTheFirstCapacityGrowsEverySlot)
+{
+    constexpr uint32_t kCount = 16385u;
+    m_Scene = std::make_unique<GPUScene>(m_Device.get());
+    ASSERT_TRUE(m_Scene->Initialize());
+    GPUInstance last{};
+    for (uint32_t i = 0; i < kCount; ++i)
+    {
+        last.boundingRadius = static_cast<float>(i + 1u);
+        m_Scene->AddInstance(last);
+    }
+
+    const uint32_t slots = m_Device->GetFramesInFlight();
+    for (uint32_t frame = 0; frame < slots; ++frame)
+    {
+        ASSERT_TRUE(m_Device->BeginFrame());
+        m_Scene->BeginFrame();
+        const uint32_t capacity = m_Scene->GetInstanceCapacity();
+        GPUInstance actual{};
+        const bool read = capacity >= kCount &&
+                          ReadRows(*m_Device, m_Scene->GetInstanceBuffer(), kCount - 1u, 1u, &actual);
+        m_Scene->EndFrame();
+        m_Device->Present();
+        ASSERT_GE(capacity, kCount) << "frame " << frame;
+        ASSERT_TRUE(read) << "frame " << frame;
+        EXPECT_EQ(std::memcmp(&actual, &last, sizeof(GPUInstance)), 0) << "frame " << frame;
+    }
+    m_Device->WaitForIdle();
 }

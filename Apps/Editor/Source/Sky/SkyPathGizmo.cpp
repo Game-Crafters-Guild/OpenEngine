@@ -103,7 +103,7 @@ Dome DomeFor(const GizmoRenderContext& context, const ECS::World& world, ECS::En
 {
     Dome dome;
     if (const auto* xf = world.GetComponent<Components::WorldTransform>(entity))
-        dome.Center = Vector3(xf->matrix[12], xf->matrix[13], xf->matrix[14]);
+        dome.Center = xf->GetPosition() - Mathematics::WorldPosition{};
     if (const Vector3* camera = context.GetCameraWorldPosition())
     {
         dome.Camera = *camera;

@@ -1,20 +1,47 @@
 #include "Assets/Parsers/UIStyleAssetParser.h"
 #include "Assets/Parsers/ParserExtractionHelpers.h"
 
+#include "Assets/AssetManager.h"
+#include "Assets/AssetRegistry.h"
 #include "AssetCore/DepEdge.h"
 #include "AssetCore/GUID.h"
+#include "Logger/Logger.h"
+#include "Types/StringUtils.h"
+#include "UI/Assets/CssImports.h"
+#include "UI/ControlAssetPaths.h"
 
+#include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <filesystem>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace GameEngine
 {
 
 namespace
 {
+
+// The source that ships the UI module's assets is the editor mount when one is registered,
+// else the project (AssetCollector::CollectUIControlAssets uses the same rule). A sheet at a
+// kControlAssetPaths path in that source is a control sheet.
+StyleOrigin CascadeOriginForSheet(const std::filesystem::path& path, const AssetManager& assets)
+{
+    std::filesystem::path root = assets.GetSourceRoot(kAssetSourceAliasEditor);
+    if (root.empty())
+        root = assets.GetAssetRoot();
+    std::string relative;
+    if (!AssetRegistry::TryComputeCanonicalRelativePath(root, path, relative))
+        return StyleOrigin::Author;
+    // The registry folds the path's case on Windows.
+    const bool controlSheet =
+        std::any_of(UI::kControlAssetPaths.begin(), UI::kControlAssetPaths.end(),
+                    [&relative](std::string_view controlPath) { return EqualsIgnoreCase(controlPath, relative); });
+    return controlSheet ? StyleOrigin::Control : StyleOrigin::Author;
+}
 
 // Strip a CSS mount-prefix like "editor:" / "project:" / "@editor/" — any
 // registered source alias, including package mounts ("water-core:..."), not
@@ -131,6 +158,12 @@ void ScanUrls(std::string_view body, Emit emit)
 
 } // namespace
 
+AssetParseResult UIStyleAssetParser::Parse(const AssetMetadata& metadata, AssetManager& assetManager)
+{
+    return AssetParseResult(std::make_shared<UIStyleAsset>(metadata.Guid, metadata.Path,
+                                                           CascadeOriginForSheet(metadata.Path, assetManager)));
+}
+
 bool UIStyleAssetParser::ExtractDependencies(const GUID& referrer,
                                              const AssetMetadata& metadata,
                                              DepEdgeSink& sink) const
@@ -139,8 +172,15 @@ bool UIStyleAssetParser::ExtractDependencies(const GUID& referrer,
     if (body.empty())
         return false;
 
+    // The url() of an @import names a style sheet, not an image, so the url() scan reads a copy
+    // with each @import statement blanked.
+    const std::vector<UI::CssImportStatement> imports = UI::FindTopLevelCssImports(body);
+    std::string urlText = body;
+    for (const UI::CssImportStatement& statement : imports)
+        std::fill(urlText.begin() + statement.Begin, urlText.begin() + statement.End, ' ');
+
     uint32_t ordinal = 0;
-    ScanUrls(body, [&](std::string_view rawUrl)
+    ScanUrls(urlText, [&](std::string_view rawUrl)
     {
         if (rawUrl.empty())
             return;
@@ -169,6 +209,26 @@ bool UIStyleAssetParser::ExtractDependencies(const GUID& referrer,
         if (IsValidDepEdge(e))
             sink.Emit(std::move(e));
     });
+
+    // The edge names the file the runtime @import loads, so it resolves by the runtime's rule.
+    for (const UI::CssImportStatement& statement : imports)
+    {
+        const std::filesystem::path imported =
+            UI::ResolveCssImportPath(metadata.Path, statement.Target, AssetManager::GetThreadCurrent());
+        if (imported.empty())
+        {
+            Logger::Log::Debug("UIStyleAssetParser: the @import '{}' of '{}' resolves to no file", statement.Target,
+                               metadata.Path.generic_string());
+            continue;
+        }
+        DepEdge e;
+        e.Referrer = referrer;
+        e.Kind = DepEdgeKind::UIStyleImport;
+        e.FieldLocator = "import[" + std::to_string(ordinal) + "]";
+        e.Ordinal = ordinal++;
+        e.TargetPath = imported.generic_string();
+        sink.Emit(std::move(e));
+    }
 
     return true;
 }

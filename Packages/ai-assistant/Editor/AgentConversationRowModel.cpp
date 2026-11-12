@@ -25,7 +25,7 @@ static_assert(Conversation::kMaxMessageBytes == 64 * 1024, "kTruncatedStatus nam
 
 std::string ProviderLabel(const std::string& providerId)
 {
-    for (const AiAssistantSettings::Choice& choice : AiAssistantSettings::ProviderChoices())
+    for (const AiAssistantSettings::ProviderChoice& choice : AiAssistantSettings::ProviderChoices())
         if (choice.Id == providerId)
             return std::string(choice.Label);
     return providerId;
@@ -128,7 +128,10 @@ AgentConversationRowModel AgentConversationRowModel::From(const ConversationMess
     row.Header = ReplyHeader(message);
     row.Calls = AgentCallRowModel::For(message.ToolCalls, actions, turn, history);
     row.Asks = std::any_of(row.Calls.begin(), row.Calls.end(), [](const AgentCallRowModel& call) { return call.Asks; });
-    row.Status = JoinSentences(ReplyStatus(message), AgentCallRowModel::Counts(message.ToolCalls, actions, turn));
+    if (message.NotReady)
+        row.SetupRefusal = message.Notice;
+    row.Status = JoinSentences(message.NotReady ? std::string() : ReplyStatus(message),
+                               AgentCallRowModel::Counts(message.ToolCalls, actions, turn));
     if (message.Truncated)
         row.Status = JoinSentences(kTruncatedStatus, row.Status);
     row.CanStop = message.Status == MessageStatus::InProgress;

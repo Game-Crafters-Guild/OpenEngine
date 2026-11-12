@@ -703,12 +703,12 @@ TEST_F(TexturePackageCookTest, RejectsMismatchedStagedIdentityAndBakesTheCookByt
         /*encodeWorkers=*/nullptr, /*manifestParsePool=*/nullptr, {}, Stats, Error)) << Error;
     const auto name = TextureCookArtifactName(Id, ComputeTextureCookSourceHash(bytes.data(), bytes.size()),
                                               Inputs(Meta), TextureCookOutput::BC7);
-    Vector<uint8> actual;
+    ByteBuffer actual;
     ASSERT_TRUE(ReadFileBytesShared(MountRoot / "Tex" / name, actual));
     std::vector<uint8> expected;
     ASSERT_TRUE(CookTexture(bytes.data(), bytes.size(), "fixture.tga", ".tga", Inputs(Meta), TextureCookOutput::BC7,
                            expected, Error)) << Error;
-    EXPECT_EQ(actual, expected); // The export bakes the editor cook's bytes under the editor cook's name.
+    EXPECT_EQ(std::vector<uint8>(actual.begin(), actual.end()), expected); // The export bakes the editor cook's bytes under the editor cook's name.
 }
 
 // A package texture loads only through its packaged payload. One without payload
@@ -851,7 +851,7 @@ TEST_P(TexturePackageCoverageTest, StagedCoverageKeepsExactCutoffAndLoadsBakedMi
     ASSERT_TRUE(Bake()) << Error;
     const auto artifact = Artifact(TextureCookOutput::Uncompressed);
     EXPECT_NE(artifact.filename().string(), ordinaryName);
-    Vector<uint8> baked;
+    ByteBuffer baked;
     ASSERT_TRUE(ReadFileBytesShared(artifact, baked));
     const auto modified = fs::last_write_time(artifact);
     Mount();

@@ -81,7 +81,7 @@ GE_TEST_SCENE_EXPORT int GE_TestScene_AddBox(float x, float y, float z, float ha
     box.halfExtents = Physics::Vector3(halfX, halfY, halfZ);
     Physics::BodySettings settings{};
     settings.shape = physics->CreateShape(box);
-    settings.position = Physics::Vector3(x, y, z);
+    settings.position = Physics::WorldPosition{x, y, z};
     const bool dynamic = kind == 1;
     settings.motionType = dynamic ? Physics::MotionType::Dynamic : Physics::MotionType::Static;
     settings.layer = dynamic ? Physics::Layers::Dynamic : Physics::Layers::Static;
@@ -244,12 +244,10 @@ GE_TEST_SCENE_EXPORT int GE_TestScene_AddNavigationAgent(std::uint32_t surface, 
     agent.Surface = ECS::EntityHandle(surface);
     world->AddComponentImmediate(entity, agent);
     Components::Transform transform{};
-    transform.matrix[12] = x;
-    transform.matrix[14] = z;
+    transform.Position = Mathematics::WorldPosition{x, 0.0, z};
     world->AddComponentImmediate(entity, transform);
     Components::WorldTransform worldTransform{};
-    worldTransform.matrix[12] = x;
-    worldTransform.matrix[14] = z;
+    worldTransform.Position = transform.Position;
     world->AddComponentImmediate(entity, worldTransform);
     *outAgent = entity.id;
     return 0;

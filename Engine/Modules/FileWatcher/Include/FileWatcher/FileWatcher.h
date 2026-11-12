@@ -6,7 +6,9 @@
 #include <atomic>
 #include <condition_variable>
 #include <filesystem>
+#include <memory>
 #include <mutex>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -16,6 +18,10 @@ struct _OVERLAPPED;
 
 namespace GameEngine
 {
+#ifndef PLATFORM_WINDOWS
+class DirectoryTreeWalk;
+#endif
+
 /**
  * @brief File change event types
  */
@@ -129,7 +135,7 @@ class FileWatcher
     void WatchingThread();
 
     /**
-     * @brief Check if file extension should be watched
+     * @brief Check the name rules and the excluded-directory rules for a path that the platform reported
      */
     bool ShouldWatchFile(const std::filesystem::path& path) const;
 
@@ -207,17 +213,35 @@ class FileWatcher
     void RetryOwedLostEventsRescan();
 
     /**
+     * @brief Check the name rules of a watched file: the engine's own files, build
+     *        artifacts, hidden files and the extension filters.
+     */
+    bool IsWatchedFileName(std::string_view fileName) const;
+
+    /**
      * @brief Visits every regular file under the watch directory that passes
-     *        the extension and excluded-directory filters.
+     *        the extension and excluded-directory filters, with its last write time.
      * @return false when the watcher was asked to stop before the walk finished.
      */
-    bool ForEachWatchedFile(FunctionRef<void(const std::filesystem::directory_entry&)> visit);
+    bool ForEachWatchedFile(
+        FunctionRef<void(const std::filesystem::path&, std::filesystem::file_time_type)> visit);
 
     /**
      * @brief One polling scan: diffs the tree against the previous scan and
      *        reports Created / Modified / Deleted / Renamed.
      */
     void PollOnce();
+
+    /**
+     * @brief Compare one file that the scan found with the snapshot. Record a change
+     *        for ReportScanChanges and change no snapshot entry.
+     */
+    void RecordScannedFile(const std::filesystem::path& path, std::filesystem::file_time_type lastWrite);
+
+    /**
+     * @brief Report the changes of a complete scan and apply them to the snapshot.
+     */
+    void ReportScanChanges();
 
     /**
      * @brief Sleep until the next poll is due, the watcher is stopping, or the
@@ -289,8 +313,38 @@ class FileWatcher
     {
         std::filesystem::file_time_type LastWrite;
         FileIdentity Identity;
+        // The number of the last scan that found the file.
+        uint64 LastScan;
     };
-    FastHashMap<std::filesystem::path, PolledFile> m_PolledFiles;
+    using PolledFileMap = FastHashMap<std::filesystem::path, PolledFile>;
+    PolledFileMap m_PolledFiles;
+
+    // The state of one scan, kept from scan to scan so that a scan of a tree
+    // that did not change allocates nothing. Watcher thread only.
+    struct ModifiedFile
+    {
+        // The snapshot entry. It stays valid until the snapshot gets or loses an entry.
+        PolledFileMap::value_type* Entry;
+        PolledFile Scanned;
+    };
+    struct AppearedFile
+    {
+        std::filesystem::path Path;
+        PolledFile Scanned;
+        bool IsRenameTarget;
+    };
+    uint64 m_ScanNumber = 0;
+    std::vector<ModifiedFile> m_ScanModified;
+    // Files that are not in the snapshot, in walk order. Their Created events wait
+    // until the scan is complete: a file with the identity of a file that went in
+    // the same scan is that file's new name, not a new file.
+    std::vector<AppearedFile> m_ScanAppeared;
+    FastHashMap<FileIdentity, size_t> m_ScanAppearedByIdentity;
+#ifndef PLATFORM_WINDOWS
+    std::unique_ptr<DirectoryTreeWalk> m_Walk;
+    // The relative path that the excluded-directory rules read.
+    String m_ExclusionScratch;
+#endif
     // Whether the watch root was absent on the previous poll, so its going and
     // coming back are each logged once instead of every poll. A missing root is
     // a state (an asset mount mid-restage), not an error. Watcher thread only.

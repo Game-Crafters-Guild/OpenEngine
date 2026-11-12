@@ -1,6 +1,7 @@
 #include "AssistantAttachment.h"
 
 #include "AssistantTools.h"
+#include "Providers/CliSessionProvider.h"
 
 #include "Core/ApplicationPaths.h"
 #include "Editor/Registries/DebugRequestGateRegistry.h"
@@ -52,6 +53,15 @@ std::string AssistantAttachment::Unavailable()
     if (!std::filesystem::exists(StagedServerScript(), error))
         return "The editor's MCP server is not staged beside the editor: build the McpServer target.";
     return {};
+}
+
+std::string AssistantAttachment::ActingRefusal(CliSessionProvider& provider, const std::string& node, uint16_t port,
+                                               SetupSurface surface, const CancelToken& cancel)
+{
+    std::string unavailable = Unavailable();
+    if (!unavailable.empty())
+        return unavailable;
+    return provider.ToolsRefusal(node, port, surface, cancel);
 }
 
 std::optional<AgentToolAttachment> AssistantAttachment::Write(std::string node, uint16_t port, std::string_view token,

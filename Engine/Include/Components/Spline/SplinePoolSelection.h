@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Components/AssetRef.h"
+#include "Types/Fnv1a.h"
 #include "Types/Types.h"
 
 #include <cstddef>
@@ -54,29 +55,15 @@ inline bool PoolHasHole(const ModelRef (&pool)[kCapacity])
     return false;
 }
 
-// splitmix64 finalizer: the fixed, implementation-independent integer mix the
-// selection hash is built from. NOT std::hash — scenes must pick identically
-// on every platform and toolchain, so the mix is pinned here (and by golden
-// tests) rather than delegated to an unspecified library hash.
-constexpr uint64 SplineSelectionMix(uint64 x)
-{
-    x += 0x9E3779B97F4A7C15ull;
-    x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ull;
-    x = (x ^ (x >> 27)) * 0x94D049BB133111EBull;
-    return x ^ (x >> 31);
-}
-
-// The per-station pool pick: a pure function of (Seed, role, stationIndex) and
-// nothing else — no iteration order, no entity id, no running RNG — so every
-// rebuild reproduces the same picks and nudging knot N leaves stations before
-// it byte-identical. stationIndex is the global tile ordinal along the spline.
+// The pool pick for one station: a pure function of (seed, role, stationIndex), so every rebuild
+// on every platform makes the same picks. stationIndex is the global tile ordinal along the spline.
 // Returns an index in [0, activeCount); activeCount must be >= 1.
 constexpr uint32 SplinePoolSelect(uint32 seed, SplinePoolRole role, uint32 stationIndex,
                                   uint32 activeCount)
 {
-    uint64 h = SplineSelectionMix(seed);
-    h = SplineSelectionMix(h ^ static_cast<uint64>(role));
-    h = SplineSelectionMix(h ^ static_cast<uint64>(stationIndex));
+    uint64 h = Hashing::SplitMix64(seed);
+    h = Hashing::SplitMix64(h ^ static_cast<uint64>(role));
+    h = Hashing::SplitMix64(h ^ static_cast<uint64>(stationIndex));
     return static_cast<uint32>(h % static_cast<uint64>(activeCount));
 }
 

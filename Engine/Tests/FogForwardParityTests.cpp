@@ -17,6 +17,7 @@
 // Skips only without a Vulkan device; a missing shader fails.
 #include <gtest/gtest.h>
 
+#include "Engine/Rendering/CameraUtils.h"
 #include "Engine/Rendering/ExposureReadbackFeature.h"
 #include "Engine/Rendering/HeightFogParamsUBO.h"
 #include "Rendering/Common/Utils.h"
@@ -132,8 +133,14 @@ ViewParamsUBO View(const Pose& pose)
     invProj[11] = 1.0f / kNear;
     std::memcpy(v.ge_proj, proj, sizeof(proj));
     std::memcpy(v.ge_invProj, invProj, sizeof(invProj));
-    v.ge_nearFar[0] = kNear;
-    v.ge_nearFar[1] = kFar;
+    const auto depthTerms = GameEngine::Engine::Renderer::ProjectionDepthTerms::Of(
+        GameEngine::Mathematics::Matrix4x4::FromColumnMajor(proj));
+    v.ge_depthTerms[0] = depthTerms.M22;
+    v.ge_depthTerms[1] = depthTerms.M32;
+    v.ge_depthTerms[2] = depthTerms.M23;
+    v.ge_depthTerms[3] = depthTerms.M33;
+    v.ge_viewRanges[0] = kNear;
+    v.ge_viewRanges[1] = kFar;
     for (int i = 0; i < 3; ++i)
         v.ge_cameraPosWS[i] = pose.Camera[i];
     v.ge_cameraPosWS[3] = 1;

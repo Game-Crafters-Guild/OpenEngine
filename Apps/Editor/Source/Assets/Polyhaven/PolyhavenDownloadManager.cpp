@@ -48,7 +48,7 @@ int HDRIResolutionRank(std::string_view resolution)
     return 0;
 }
 
-// The world every placeholder and assignment target belongs to. Record and
+// The world of the placeholder and skybox targets. Record and
 // spend sites must read the reset generation from the same world, or the
 // comparison that detects a scene swap is meaningless.
 ECS::World* TargetWorld()
@@ -189,9 +189,10 @@ uint32_t PolyhavenDownloadManager::StartDownloadForPlaceholder(const std::string
     {
         if (auto* xf = world->GetComponent<Components::Transform>(entity))
         {
-            savedTransform[0] = xf->matrix[12]; // posX
-            savedTransform[1] = xf->matrix[13]; // posY
-            savedTransform[2] = xf->matrix[14]; // posZ
+            const Mathematics::Vector3 position = xf->GetPosition() - Mathematics::WorldPosition{};
+            savedTransform[0] = position.x;
+            savedTransform[1] = position.y;
+            savedTransform[2] = position.z;
             savedTransform[3] = 0.0f; // rotX
             savedTransform[4] = 0.0f; // rotY
             savedTransform[5] = 0.0f; // rotZ
@@ -402,9 +403,10 @@ void PolyhavenDownloadManager::ReplacePlaceholder(const CompletedDownload& dl)
     {
         if (auto* xf = world->GetComponent<Components::Transform>(placeholder))
         {
-            posX = xf->matrix[12];
-            posY = xf->matrix[13];
-            posZ = xf->matrix[14];
+            const Mathematics::Vector3 position = xf->GetPosition() - Mathematics::WorldPosition{};
+            posX = position.x;
+            posY = position.y;
+            posZ = position.z;
         }
         if (auto* p = world->GetComponent<Components::Parent>(placeholder))
             parentEntity = p->Entity;
@@ -596,9 +598,7 @@ void PolyhavenDownloadManager::ReplacePlaceholder(const CompletedDownload& dl)
         if (auto* xf = world->GetComponentForWrite<Components::Transform>(result.rootEntity))
         {
             xf->SetIdentity();
-            xf->matrix[12] = posX;
-            xf->matrix[13] = posY;
-            xf->matrix[14] = posZ;
+            xf->Position = Mathematics::WorldPosition{posX, posY, posZ};
         }
         if (parentEntity.IsValid() && world->IsValid(parentEntity))
         {
@@ -821,9 +821,10 @@ void PolyhavenDownloadManager::AssignPlaceholder(const std::string& slug,
     {
         if (auto* xf = world->GetComponent<Components::Transform>(entity))
         {
-            savedTransform[0] = xf->matrix[12];
-            savedTransform[1] = xf->matrix[13];
-            savedTransform[2] = xf->matrix[14];
+            const Mathematics::Vector3 position = xf->GetPosition() - Mathematics::WorldPosition{};
+            savedTransform[0] = position.x;
+            savedTransform[1] = position.y;
+            savedTransform[2] = position.z;
             savedTransform[3] = 0.0f;
             savedTransform[4] = 0.0f;
             savedTransform[5] = 0.0f;
@@ -1066,6 +1067,7 @@ void PolyhavenDownloadManager::ProcessHDRISkyboxAssignment(const CompletedDownlo
 
 bool PolyhavenDownloadManager::DownloadAllTextureMaps(const std::string& slug,
                                                          const std::filesystem::path& destDir,
+                                                         ECS::World& world,
                                                          ECS::EntityHandle entity,
                                                          Editor::UndoRedoService* undoRedo,
                                                          Editor::EditorChangeNotifications* notifications)
@@ -1081,7 +1083,8 @@ bool PolyhavenDownloadManager::DownloadAllTextureMaps(const std::string& slug,
             return false;
 
         MultiTextureAssignment& multiAssign = m_Shared->MultiTextureAssignments[slug];
-        multiAssign.Target = ScopedEntity::Capture(entity, TargetWorld());
+        multiAssign.World = &world;
+        multiAssign.Target = ScopedEntity::Capture(entity, &world);
         multiAssign.undoRedo = undoRedo;
         multiAssign.notifications = notifications;
 
@@ -1120,7 +1123,7 @@ void PolyhavenDownloadManager::ProcessMultiTextureAssignment(const CompletedDown
         return;
     }
 
-    ECS::World* world = TargetWorld();
+    ECS::World* world = multiAssign.World;
     const ECS::EntityHandle target = multiAssign.Target.Resolve(world);
     if (!target.IsValid())
     {

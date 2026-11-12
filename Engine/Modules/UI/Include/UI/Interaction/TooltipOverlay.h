@@ -65,6 +65,10 @@ public:
     // converts the arrow's logical px (PlaceArrow) to physical px.
     void EmitArrowPrimitives(std::vector<UI::UIPrimitive>& prims, float opacity, float contentScale) const;
 
+    // True once after the arrow moved, turned or appeared. A bubble that stays in place asks for
+    // no layout, so the caller asks for the primitive regen that emits the arrow.
+    bool ConsumeArrowChange();
+
 private:
     void EnsureElements(UIElement* root);
     void ResetIfDetached();
@@ -147,6 +151,7 @@ private:
     bool                 m_HasArrow = false;
     UI::ArrowDirection   m_ArrowDirection{}; // Up
     Mathematics::Vector2 m_ArrowTip;
+    bool                 m_ArrowChanged = false; // read by ConsumeArrowChange
 
     // Hover delay tracking
     uint64_t    m_HoveredId                = 0;

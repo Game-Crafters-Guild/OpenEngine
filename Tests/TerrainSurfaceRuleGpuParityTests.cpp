@@ -168,8 +168,7 @@ Glsl::GESurfaceRuleSample ToGlsl(const TerrainRuleSample& s)
     Glsl::GESurfaceRuleSample g;
     g.SlopeNormalized = s.SlopeNormalized;
     g.SlopeDegrees = s.SlopeDegrees;
-    g.HeightMetres = s.HeightMetres;
-    g.HeightNormalized = s.HeightNormalized;
+    g.HeightMeters = s.HeightMeters;
     g.WorldX = s.WorldX;
     g.WorldZ = s.WorldZ;
     return g;
@@ -190,8 +189,7 @@ std::vector<TerrainRuleSample> SweepSamples()
                 TerrainRuleSample s{};
                 s.SlopeNormalized = sn;
                 s.SlopeDegrees = sn * 90.0f;
-                s.HeightMetres = hn * 800.0f - 100.0f;
-                s.HeightNormalized = hn;
+                s.HeightMeters = hn * 800.0f - 100.0f;
                 s.WorldX = w;
                 s.WorldZ = -w * 0.5f + 13.0f;
                 out.push_back(s);
@@ -250,40 +248,37 @@ TEST(TerrainSurfaceRuleGpuParity, NoiseFieldIsNotConstant)
 
 TEST(TerrainSurfaceRuleGpuParity, SampleConstructionMatchesExactly)
 {
-    struct Case { float32 nx, ny, nz, h, scale, minH, range, wx, wz; };
+    struct Case { float32 nx, ny, nz, h, scale, wx, wz; };
     const Case cases[] = {
-        {0.0f, 1.0f, 0.0f, 0.5f, 100.0f, 0.0f, 1.0f, 0.0f, 0.0f},          // flat
-        {-0.6f, 0.7f, -0.39f, 0.25f, 64.0f, -0.1f, 1.2f, 512.0f, -128.0f}, // steep
-        {0.3f, 0.95f, -0.1f, 0.9f, 800.0f, 0.2f, 0.7f, -4000.0f, 900.0f},  // high + gentle
-        {0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.001f, 1.0f, 1.0f},          // degenerate range
+        {0.0f, 1.0f, 0.0f, 0.5f, 100.0f, 0.0f, 0.0f},          // flat
+        {-0.6f, 0.7f, -0.39f, 0.25f, 64.0f, 512.0f, -128.0f}, // steep
+        {0.3f, 0.95f, -0.1f, 0.9f, 800.0f, -4000.0f, 900.0f},  // high + gentle
+        {0.0f, 1.0f, 0.0f, 2.5f, 1.0f, 1.0f, 1.0f},            // past the band, Height Scale 1
     };
     for (const Case& c : cases)
     {
-        const TerrainRuleSample cpu = MakeTerrainRuleSample(c.nx, c.ny, c.nz, c.h, c.scale,
-                                                            c.minH, c.range, c.wx, c.wz);
-        const Glsl::GESurfaceRuleSample gpu = Glsl::GE_MakeSurfaceRuleSample(
-            c.nx, c.ny, c.nz, c.h, c.scale, c.minH, c.range, c.wx, c.wz);
+        const TerrainRuleSample cpu = MakeTerrainRuleSample(c.nx, c.ny, c.nz, c.h, c.scale, c.wx, c.wz);
+        const Glsl::GESurfaceRuleSample gpu =
+            Glsl::GE_MakeSurfaceRuleSample(c.nx, c.ny, c.nz, c.h, c.scale, c.wx, c.wz);
         EXPECT_EQ(cpu.SlopeNormalized, gpu.SlopeNormalized);
         EXPECT_EQ(cpu.SlopeDegrees, gpu.SlopeDegrees);
-        EXPECT_EQ(cpu.HeightMetres, gpu.HeightMetres);
-        EXPECT_EQ(cpu.HeightNormalized, gpu.HeightNormalized);
+        EXPECT_EQ(cpu.HeightMeters, gpu.HeightMeters);
         EXPECT_EQ(cpu.WorldX, gpu.WorldX);
         EXPECT_EQ(cpu.WorldZ, gpu.WorldZ);
     }
 }
 
-TEST(TerrainSurfaceRuleGpuParity, HeightMetresIsTerrainLocalNotWorldY)
+TEST(TerrainSurfaceRuleGpuParity, HeightMetersIsTerrainLocalNotWorldY)
 {
-    // The convention both arms state in comments, asserted rather than trusted: HeightMetres is
+    // The convention both arms state in comments, asserted rather than trusted: HeightMeters is
     // the normalized sample times HeightScale, with no terrain translation folded in. A mirror
     // that quietly added a world Y would still pass every parity sweep above, because both arms
     // would be handed the same numbers — this is the case that pins WHICH numbers.
     const float32 heightScale = 250.0f;
     const Glsl::GESurfaceRuleSample gpu =
-        Glsl::GE_MakeSurfaceRuleSample(0.0f, 1.0f, 0.0f, 0.4f, heightScale, 0.0f, 1.0f,
-                                       0.0f, 0.0f);
-    EXPECT_FLOAT_EQ(gpu.HeightMetres, 0.4f * heightScale);
-    EXPECT_FLOAT_EQ(gpu.HeightMetres, 100.0f);
+        Glsl::GE_MakeSurfaceRuleSample(0.0f, 1.0f, 0.0f, 0.4f, heightScale, 0.0f, 0.0f);
+    EXPECT_FLOAT_EQ(gpu.HeightMeters, 0.4f * heightScale);
+    EXPECT_FLOAT_EQ(gpu.HeightMeters, 100.0f);
 }
 
 // ---------------------------------------------------------------------------
@@ -299,17 +294,17 @@ TEST(TerrainSurfaceRuleGpuParity, RowWeightMatchesExactlyAcrossTheConditionVocab
         {Band(TerrainRuleConditionKind::SlopeNormalized, 0.0f, 0.333f, 0.0f)},       // hard edge
         {Band(TerrainRuleConditionKind::SlopeNormalized, 0.167f, 1.0f, 0.2f)},       // feathered
         {Band(TerrainRuleConditionKind::SlopeDegrees, 34.0f, 90.0f, 8.0f)},          // one-sided
-        {Band(TerrainRuleConditionKind::HeightMetres, 400.0f, 1.0e9f, 60.0f)},       // metres
-        {Band(TerrainRuleConditionKind::HeightNormalized, 0.65f, 1.0f, 0.1f)},       // normalized
+        {Band(TerrainRuleConditionKind::HeightMeters, 400.0f, 1.0e9f, 60.0f)},       // meters, one-sided
+        {Band(TerrainRuleConditionKind::HeightMeters, 420.0f, 700.0f, 80.0f)},       // meters, two-sided
         {Band(TerrainRuleConditionKind::SlopeNormalized, 0.3f, 0.3f, 0.2f)},         // degenerate peak
         {Band(TerrainRuleConditionKind::SlopeNormalized, 0.8f, 0.2f, 0.15f)},        // inverted
-        {Band(TerrainRuleConditionKind::HeightNormalized, 0.4f, 0.9f, 0.2f,
+        {Band(TerrainRuleConditionKind::HeightMeters, 220.0f, 620.0f, 160.0f,
               TerrainRuleFalloffCurve::Smoothstep)},                                 // smoothstep
         {Band(TerrainRuleConditionKind::Noise, 0.55f, 1.0f, 0.1f,
               TerrainRuleFalloffCurve::ClampedLinear, 0.013f, 99u)},                 // noise
         // Four conditions ANDing, mixing units and curves — the product, at the cap.
         {Band(TerrainRuleConditionKind::SlopeDegrees, 10.0f, 60.0f, 5.0f),
-         Band(TerrainRuleConditionKind::HeightNormalized, 0.2f, 0.9f, 0.15f,
+         Band(TerrainRuleConditionKind::HeightMeters, 60.0f, 620.0f, 120.0f,
               TerrainRuleFalloffCurve::Smoothstep),
          Band(TerrainRuleConditionKind::Noise, 0.3f, 0.8f, 0.2f,
               TerrainRuleFalloffCurve::ClampedLinear, 0.05f, 3u),
@@ -344,7 +339,7 @@ TEST(TerrainSurfaceRuleGpuParity, RowWeightMatchesExactlyAcrossTheConditionVocab
                 ASSERT_EQ(cpu, gpu)
                     << "row weight divergence: strength=" << strength
                     << " conditions=" << conditions.size() << " slopeNorm=" << s.SlopeNormalized
-                    << " heightNorm=" << s.HeightNormalized << " worldX=" << s.WorldX;
+                    << " heightMeters=" << s.HeightMeters << " worldX=" << s.WorldX;
                 if (cpu > 0.0f)
                     ++nonZero;
                 if (cpu > 0.0f && cpu < 1.0f)
@@ -699,7 +694,7 @@ TEST(TerrainSurfaceRuleGpuParity, WholeRowStackProducesIdenticalSplatBytes)
         snow.MaterialSlot = 3;
         snow.Strength = 0.8f;
         snow.ConditionCount = 2;
-        snow.Conditions[0] = Band(TerrainRuleConditionKind::HeightNormalized, 0.65f, 1.0f, 0.1f,
+        snow.Conditions[0] = Band(TerrainRuleConditionKind::HeightMeters, 0.3f, 1.0e9f, 0.05f,
                                   TerrainRuleFalloffCurve::Smoothstep);
         snow.Conditions[1] = Band(TerrainRuleConditionKind::SlopeDegrees, 0.0f, 40.0f, 10.0f);
         ground.Rows.push_back(snow);
@@ -724,7 +719,7 @@ TEST(TerrainSurfaceRuleGpuParity, WholeRowStackProducesIdenticalSplatBytes)
         road.Strength = 1.0f;
         road.Replace = true; // the other paint arm
         road.ConditionCount = 1;
-        road.Conditions[0] = Band(TerrainRuleConditionKind::HeightMetres, -1.0e9f, 0.25f, 0.1f);
+        road.Conditions[0] = Band(TerrainRuleConditionKind::HeightMeters, -1.0e9f, 0.25f, 0.1f);
         patch.Rows.push_back(road);
     }
     patch.Finish();
@@ -737,8 +732,6 @@ TEST(TerrainSurfaceRuleGpuParity, WholeRowStackProducesIdenticalSplatBytes)
     // ~89 degrees and the row never fires. (Found by red-arming: with a large scale the
     // two-condition row was inert, and a broken AND product went unnoticed here.)
     const float32 heightScale = 0.5f;
-    const float32 splatMinH = -0.1f;
-    const float32 heightRange = 1.2f;
     const std::array<uint8, 4> base = {{140, 60, 40, 15}}; // a plausible already-baked texel
 
     // Per-row activation counts: a row that never fires contributes nothing to the comparison, so
@@ -759,7 +752,7 @@ TEST(TerrainSurfaceRuleGpuParity, WholeRowStackProducesIdenticalSplatBytes)
             const float32 sampleH = 0.5f + 0.45f * std::sin(wx * 0.01f + wz * 0.013f);
 
             const TerrainRuleSample sample = MakeTerrainRuleSample(
-                nx, ny, nz, sampleH, heightScale, splatMinH, heightRange, wx, wz);
+                nx, ny, nz, sampleH, heightScale, wx, wz);
 
             // CPU arm — the ApplySplatModifiers row loop.
             uint8 cpu[4] = {base[0], base[1], base[2], base[3]};
@@ -861,8 +854,8 @@ TEST(TerrainSurfaceRuleGpuParity, ConditionBaseAddressesEachRowsOwnConditions)
     one.Conditions[0] = Band(TerrainRuleConditionKind::SlopeDegrees, 1.0f, 2.0f, 0.5f);
     TerrainSurfaceRule three{};
     three.ConditionCount = 3;
-    three.Conditions[0] = Band(TerrainRuleConditionKind::HeightMetres, 10.0f, 20.0f, 1.0f);
-    three.Conditions[1] = Band(TerrainRuleConditionKind::HeightNormalized, 0.1f, 0.2f, 0.01f);
+    three.Conditions[0] = Band(TerrainRuleConditionKind::HeightMeters, 10.0f, 20.0f, 1.0f);
+    three.Conditions[1] = Band(TerrainRuleConditionKind::SlopeDegrees, 0.1f, 0.2f, 0.01f);
     three.Conditions[2] = Band(TerrainRuleConditionKind::Noise, 0.3f, 0.4f, 0.05f);
     vol.Rows = {one, three};
     vol.Finish();

@@ -74,7 +74,7 @@ void main()
 
     vec3 sunDir = normalize(uSky.sunDirectionWS);
     vec3 moonDir = normalize(uSky.moonDirectionWS);
-    vec3 planetCenter = vec3(0.0, -uAtmos.planetRadius, 0.0);
+    vec3 planetCenter = uAtmos.planetCenter;
     vec3 camPos = uSky.cameraPositionWS;
     float camHeight = length(camPos - planetCenter);
     vec3 up = (camPos - planetCenter) / camHeight;

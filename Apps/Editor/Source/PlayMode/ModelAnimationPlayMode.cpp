@@ -120,9 +120,15 @@ void StartAnimatorPlayback(ECS::World& world, AssetManager& am, ECS::EntityHandl
 
 void ApplyAnimatorOnEnterPlayMode(ECS::World& world, AssetManager& am)
 {
+    std::vector<ECS::EntityHandle> clipRoots;
     world.Query<ECS::Write<Components::Animator>>().Each(
         [&](ECS::EntityHandle rootEntity, Components::Animator& animator)
-        { StartAnimatorPlayback(world, am, rootEntity, animator); });
+        {
+            StartAnimatorPlayback(world, am, rootEntity, animator);
+            if (animator.source == AnimatorPlaybackSource::Clip)
+                clipRoots.push_back(rootEntity);
+        });
+    Engine::Renderer::RecordAppliedClipSpeeds(world, clipRoots);
 }
 
 } // namespace GameEngine::Editor

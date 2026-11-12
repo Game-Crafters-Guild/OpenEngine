@@ -2513,12 +2513,12 @@ void AssetManager::StartAsyncReload(const GUID& guid, const SharedPtr<Asset>& as
     request.Priority = priority;
     request.CancelRequested = cancelFlag;
     request.ProcessData = [this, guid, metadata, cancelFlag, generation,
-                           submitTime](Vector<uint8> data) -> SharedPtr<Asset>
+                           submitTime](ByteBuffer data) -> SharedPtr<Asset>
     {
         SharedPtr<Asset> staged;
         if (!cancelFlag->load(std::memory_order_acquire))
         {
-            staged = DecodeAssetPayload(*this, guid, metadata, data, cancelFlag);
+            staged = DecodeAssetPayload(*this, guid, metadata, std::move(data), cancelFlag);
         }
         const double offThreadMs =
             std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - submitTime).count();
@@ -2532,6 +2532,7 @@ void AssetManager::StartAsyncReload(const GUID& guid, const SharedPtr<Asset>& as
         return staged;
     };
     request.ResolveDecodeInputs = MakeDecodeInputResolver(*this, metadata);
+    request.ResolveDecodeInputsWithoutBytes = MakeDecodeInputWithoutBytesResolver(*this, metadata);
     request.OnFailure = [this, guid, cancelFlag, generation, submitTime](const String& error)
     {
         if (!cancelFlag->load(std::memory_order_acquire))

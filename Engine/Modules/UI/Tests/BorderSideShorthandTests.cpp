@@ -34,6 +34,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -42,6 +43,8 @@
 #include "UIPixelReadback.h"
 
 #include "Core/ApplicationPaths.h"
+#include "Logger/CallbackSink.h"
+#include "Logger/Logger.h"
 #include "UI/Parsers/CSSParser.h"
 #include "UI/UITargetSpace.h"
 
@@ -218,8 +221,8 @@ TEST(BorderSideShorthand, TopShorthandDoesNotLeakIntoTheOtherThreeSides)
     EXPECT_FLOAT_EQ(rs->Layout.BorderWidth.Left, 0.0f);
 
     // The declared side takes the declared colour; the other three keep the
-    // initial BorderColorsTRBL value (0x000000FF — alpha 0, i.e. transparent),
-    // which is what "the shorthand never wrote here" looks like.
+    // initial BorderColorsTRBL value (transparent), which is what "the
+    // shorthand never wrote here" looks like.
     const BorderColorsTRBL initial{};
     EXPECT_EQ(rs->Visual.BorderColor.Top, 0xFFFF0000u);
     EXPECT_EQ(rs->Visual.BorderColor.Right, initial.Right);
@@ -227,14 +230,60 @@ TEST(BorderSideShorthand, TopShorthandDoesNotLeakIntoTheOtherThreeSides)
     EXPECT_EQ(rs->Visual.BorderColor.Left, initial.Left);
 }
 
-// Half the shipped declarations #875 unblocks are `border-bottom`, and the
-// paint path picks ONE colour for the whole box, preferring Top and skipping
-// only sides whose colour is exactly 0 (UIManager_PrimitiveGen.cpp). Top's
-// untouched initial value is 0x000000FF — non-zero, and alpha 0 — so a
-// bottom-only border is the case where that heuristic can silently win and
-// paint the band transparent. Pinned against the longhand twin, which this
-// change does not touch: if both are wrong the defect is in the paint path,
-// not in the expansion.
+// A border color no rule sets is transparent black. The colors are ARGB
+// (0xAARRGGBB), so 0x000000FF would be transparent blue to every reader.
+TEST(BorderSideShorthand, UnsetBorderColorIsTransparentBlack)
+{
+    IsolatedUIFixture fx;
+    const bool built = fx.Build(1.0f, R"(<uielement id="root"><uielement id="plain"/></uielement>)",
+                                "#plain { width: 10px; height: 10px; }");
+    if (!fx.DeviceAvailable())
+        GTEST_SKIP() << "No Vulkan device available";
+    ASSERT_TRUE(built) << fx.Diagnostic();
+    const ResolvedStyle* rs = fx.Style("plain");
+    ASSERT_NE(rs, nullptr);
+    EXPECT_EQ(rs->Visual.BorderColor, (BorderColorsTRBL{0u, 0u, 0u, 0u}));
+}
+
+// `border-style` is one value for the whole box, so a per-side `dashed` or
+// `dotted` cannot paint. The parser says so once per declaration.
+TEST(BorderSideShorthand, PerSideDashedStyleWarnsOncePerDeclaration)
+{
+    Logger::Log::Initialize({});
+    auto sink = std::make_unique<Logger::CallbackSink>();
+    auto* sinkPtr = sink.get();
+    auto messages = std::make_shared<std::vector<std::string>>();
+    const std::uint64_t callbackId = sinkPtr->RegisterCallback(
+        [messages](const Logger::LogMessage& msg) { messages->emplace_back(msg.Message.c_str()); });
+    Logger::Log::AddSink(std::move(sink));
+
+    const char* css = R"(
+        .a { border-left: 3px dashed #ff7004; }
+        .b { border-left: 3px dashed #ff7004; }
+        .c { border-top: 2px solid #ff7004; }
+    )";
+    for (int pass = 0; pass < 2; ++pass)
+    {
+        Stylesheet sheet;
+        ASSERT_TRUE(UIParsing::CSSParser::ParseStylesFromString(css, sheet));
+    }
+    Logger::Log::Flush();
+    sinkPtr->UnregisterCallback(callbackId);
+
+    int dashed = 0;
+    int solid = 0;
+    for (const std::string& message : *messages)
+    {
+        dashed += message.find("border-left: 3px dashed #ff7004") != std::string::npos ? 1 : 0;
+        solid += message.find("border-top: 2px solid #ff7004") != std::string::npos ? 1 : 0;
+    }
+    EXPECT_EQ(dashed, 1) << "one warning for the dashed declaration, however often it is parsed";
+    EXPECT_EQ(solid, 0) << "a per-side solid paints as written";
+}
+
+// A bottom-only border paints the bottom's colour, never the colour of a side
+// without a width. Pinned against the longhand twin: if both are wrong, the
+// defect is in the paint path, not in the expansion.
 TEST(BorderSideShorthand, BottomOnlyShorthandPaintsItsDeclaredColour)
 {
     IsolatedUIFixture fx;

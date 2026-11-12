@@ -23,7 +23,7 @@ bool FlareAtlasAsset::Load()
     return ok;
 }
 
-bool FlareAtlasAsset::LoadFromData(const Vector<uint8>& data)
+bool FlareAtlasAsset::LoadFromData(std::span<const uint8> data)
 {
     const std::string text(reinterpret_cast<const char*>(data.data()), data.size());
     const bool ok = ParseFromText(text);

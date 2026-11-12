@@ -255,19 +255,6 @@ long long NowNs()
 
 void WatchdogLoop()
 {
-#ifdef _WIN32
-    // Pre-warm DbgHelp so the suspend-window StackWalk64 hits loaded module
-    // tables instead of allocating during first-touch module loads. Serialized
-    // with every other dbghelp user; SymInitialize fails harmlessly when the
-    // logger's backtrace path initialized the session first.
-    {
-        std::lock_guard<std::mutex> dbghelpLock(Logger::DbgHelpMutex());
-        SymSetOptions(SYMOPT_DEFERRED_LOADS | SYMOPT_LOAD_LINES | SYMOPT_UNDNAME);
-        SymInitialize(GetCurrentProcess(), nullptr, TRUE);
-        SymRefreshModuleList(GetCurrentProcess());
-    }
-#endif
-
     bool inStall = false;
     long long stallStartNs = 0;
     long long lastReportNs = 0;
@@ -326,6 +313,10 @@ void WatchdogLoop()
                 void* frames[kMaxStackFrames];
                 // Held across suspend+walk+symbolize — see CaptureMainThreadStack.
                 std::lock_guard<std::mutex> dbghelpLock(Logger::DbgHelpMutex());
+                // Load the module tables before the suspend: StackWalk64 then does no first-touch
+                // module load in the suspend window. The DbgHelp start runs here, so the loop polls
+                // from its first iteration.
+                Logger::LoadDbgHelpModules();
                 const int n = CaptureMainThreadStack(frames, kMaxStackFrames);
                 stack = SymbolizeFrames(frames, n);
                 captured = true;

@@ -31,8 +31,6 @@ package_compute() {
 echo "Packaging shaders into ${OUT_DIR}"
 package_graphics copy fullscreen_noinput.vert copy.frag
 package_graphics tonemap fullscreen_noinput.vert tonemap.frag
-package_graphics forwardplus_lighting fullscreen_noinput.vert forwardplus_lighting.frag
-package_graphics world_debug_forwardplus world_debug_forwardplus.vert world_debug_forwardplus.frag
 package_graphics world_debug world_debug.vert world_debug.frag
 package_graphics sky_render fullscreen_noinput.vert sky_render.frag
 package_compute frustum_culling frustum_culling.comp

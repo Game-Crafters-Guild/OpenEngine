@@ -1,8 +1,12 @@
 #include "TerrainECS/TerrainHeightPageDriver.h"
 
+#include "TerrainECS/SurfaceHeightQuery.h"
+#include "TerrainECS/TerrainDefaultSurfaceRules.h"
+
+#include "TerrainECS/TerrainHeightFunction/RevocableTerrainHeightFunction.h"
 #include "TerrainECS/HeightPageStoreLoader.h"
 #include "TerrainECS/TerrainPageFeature.h"
-#include "TerrainECS/PlanetPageRequester.h"
+#include "TerrainECS/Planet/PlanetPageRequester.h"
 #include "TerrainECS/TerrainSurface/TerrainSurfacePageSource.h"
 #include "TerrainECS/TerrainSurface/TerrainSurfacePages.h"
 #include "TerrainECS/TerrainPages.h"
@@ -22,6 +26,7 @@
 #include <bit>
 #include <cmath>
 #include <format>
+#include <span>
 
 namespace GameEngine::TerrainECS
 {
@@ -31,16 +36,46 @@ using Hashing::HashCombine;
 PageStreaming::GeneratedHeightLattice MakeGeneratedHeightLattice(const TiledTerrainData& tiled)
 {
     PageStreaming::GeneratedHeightLattice lattice;
-    lattice.Source = tiled.Config.Base.Source == Components::TerrainBaseSource::ProceduralNoise
-                         ? PageStreaming::GeneratedHeightSource::Noise
-                         : PageStreaming::GeneratedHeightSource::Flat;
+    switch (tiled.Config.Base.Source)
+    {
+    case Components::TerrainBaseSource::HeightmapAsset:
+        lattice.Source = PageStreaming::GeneratedHeightSource::Heightmap;
+        lattice.Heightmap = tiled.Config.Base.Heightmap;
+        lattice.AuthoredSizeX = tiled.Config.WorldSizeX;
+        lattice.AuthoredSizeZ = tiled.Config.WorldSizeZ;
+        break;
+    case Components::TerrainBaseSource::Function:
+        if (const std::shared_ptr<const RevocableTerrainHeightFunction> function = tiled.Config.Base.HeightFunction)
+        {
+            const float32 band = FunctionBaseHeightBand(tiled.Config);
+            lattice.Source = PageStreaming::GeneratedHeightSource::Function;
+            // Any result but Filled leaves the page absent.
+            lattice.FunctionRow = [function, names = tiled.Config.Base.Names, band](
+                                      float32 localZ, std::span<const float32> localX, float32 minResolvedWavelength,
+                                      std::span<float32> out) {
+                return FillFunctionBaseRow(*function, names, localZ, localX, minResolvedWavelength, band, out) ==
+                       FunctionBaseRowFill::Filled;
+            };
+            const TerrainHeightFunctionKey& key = tiled.Config.Base.HeightFunctionKey;
+            lattice.FunctionIdentity = HashCombine(HashCombine(reinterpret_cast<uintptr_t>(function.get()), key.Generation),
+                                                   HashCombine(key.Context.Seed, std::bit_cast<uint32>(band)));
+            break;
+        }
+        lattice.Source = PageStreaming::GeneratedHeightSource::Flat;
+        break;
+    default:
+        lattice.Source = tiled.Config.Base.Noise ? PageStreaming::GeneratedHeightSource::Noise
+                                                 : PageStreaming::GeneratedHeightSource::Flat;
+        break;
+    }
     lattice.TerrainOriginX = tiled.WorldOriginX;
     lattice.TerrainOriginZ = tiled.WorldOriginZ;
     lattice.TileWorldSize = tiled.Config.TileWorldSize;
     lattice.TileSamples = tiled.Config.TileConfig.HeightmapWidth;
     lattice.TilesX = tiled.Config.TilesPerAxisX;
     lattice.TilesZ = tiled.Config.TilesPerAxisZ;
-    lattice.Noise = {kTileNoiseFrequency, kTileNoiseAmplitude, kTileNoiseOctaves, kTileNoiseSeed};
+    if (tiled.Config.Base.Noise)
+        lattice.Noise = *tiled.Config.Base.Noise;
     return lattice;
 }
 
@@ -52,7 +87,16 @@ uint64 GeneratedHeightIdentity(const PageStreaming::GeneratedHeightLattice& latt
     hash = HashCombine(hash, std::bit_cast<uint32>(lattice.TileWorldSize));
     hash = HashCombine(hash, lattice.TileSamples);
     hash = HashCombine(hash, lattice.TilesX);
-    return HashCombine(hash, lattice.TilesZ);
+    hash = HashCombine(hash, lattice.TilesZ);
+    hash = HashCombine(hash, reinterpret_cast<uintptr_t>(lattice.Heightmap.get()));
+    hash = HashCombine(hash, std::bit_cast<uint32>(lattice.AuthoredSizeX));
+    hash = HashCombine(hash, std::bit_cast<uint32>(lattice.AuthoredSizeZ));
+    hash = HashCombine(hash, std::bit_cast<uint32>(lattice.Noise.TopFrequency));
+    hash = HashCombine(hash, lattice.Noise.Octaves);
+    hash = HashCombine(hash, std::bit_cast<uint32>(lattice.Noise.Gain));
+    hash = HashCombine(hash, lattice.Noise.TopSeed);
+    hash = HashCombine(hash, std::bit_cast<uint32>(lattice.Noise.Amplitude));
+    return HashCombine(hash, lattice.FunctionIdentity);
 }
 
 namespace
@@ -90,12 +134,32 @@ void RequestSurfacePages(TerrainSurfacePages& pages, const PagedTerrainRequest& 
         MakePageLevelView(kPageLevelReferenceRows, 2.0f * std::atan(1.0f / focalScale), kSurfacePageTargetPixels);
     pages.Request(request, views, view);
 }
+// The surface pages of planet `height` over the view wedges of `views`, generated from the default rows
+// of its relief, one texel a pixel (kSurfacePageTargetPixels).
+void RequestPlanetSurfacePages(TerrainPages& pages, const PlanetPagedRequest& height,
+                               const Components::TerrainPlanetRelief& relief, std::span<const PageRequestCamera> views,
+                               float32 fieldOfView)
+{
+    const TerrainHeightRangeMeters range = PlanetHeightRangeMeters(relief);
+    const Components::TerrainSurfaceRulesEffect rules = MakeDefaultPlanetSurfaceRules(range.Min, range.Max);
+    PlanetSurfacePagedRequest request;
+    request.Planet = height.Planet;
+    request.Name = height.Name;
+    request.Rules = &rules;
+    request.RulesIdentity = HashCombine(std::bit_cast<uint32>(range.Min), std::bit_cast<uint32>(range.Max));
+    request.LayerChanged = height.OverlayChanged;
+    request.LayerChangedSince = height.OverlayChangedSince;
+    pages.RequestPlanetSurface(request, views,
+                               MakePageLevelView(kPageLevelReferenceRows, fieldOfView, kSurfacePageTargetPixels));
+}
 } // namespace
 
 void RequestPlanetHeightPages(TerrainService& service, const Rendering::IDevice& device, uint32 planet,
-                              uint32 renderTerrain, std::string_view name, const Components::Terrain& terrain,
+                              const Mathematics::Vector3& center, uint32 renderTerrain, std::string_view name,
+                              const Components::Terrain& terrain,
                               const Components::TerrainPlanetRelief& relief,
-                              std::span<const Mathematics::Vector3> cameras, float32 focalScale)
+                              std::span<const Mathematics::Vector3> cameras,
+                              std::span<const PageRequestCamera> views, float32 focalScale)
 {
     if (focalScale <= 0.0f || cameras.empty())
         return;
@@ -115,6 +179,7 @@ void RequestPlanetHeightPages(TerrainService& service, const Rendering::IDevice&
 
     PlanetPagedRequest request;
     request.Planet = planet;
+    request.Center = center;
     request.Name = name;
     request.SourceIdentity = PlanetIdentity(radius, faceSamples, relief);
     request.Shape.ReferenceRadius = radius;
@@ -131,9 +196,10 @@ void RequestPlanetHeightPages(TerrainService& service, const Rendering::IDevice&
         PageStreaming::GeneratedPlanetLattice lattice;
         lattice.ReferenceRadius = radius;
         lattice.FaceSamples = faceSamples;
-        lattice.Height = [relief](const Mathematics::Vector3& direction, float32 minResolvedArc) {
-            return CBTTerrain::PlanetRelief(direction.x, direction.y, direction.z, relief.Amplitude, relief.Frequency,
-                                            relief.Octaves, minResolvedArc);
+        lattice.HeightRow = [relief](std::span<const Mathematics::Vector3> directions, float32 minResolvedArc,
+                                     std::span<float32> outHeights) {
+            CBTTerrain::PlanetReliefRow(directions, relief.Amplitude, relief.Frequency, relief.Octaves,
+                                        minResolvedArc, outHeights);
         };
         lattice.HeightRange = [relief](const Mathematics::Vector3& direction, float32 chord, float32 minResolvedArc) {
             const CBTTerrain::PlanetReliefRange range =
@@ -146,14 +212,16 @@ void RequestPlanetHeightPages(TerrainService& service, const Rendering::IDevice&
     if (const TerrainService::PlanetPageOverlay* overlay = service.FindPlanetPageOverlay(planet))
     {
         request.Overlay = overlay->Layer;
+        request.Modifiers = overlay->Modifiers;
         request.OverlayVersion = overlay->Version;
-        request.OverlayChangedFace = overlay->ChangedFace;
         request.OverlayChanged = overlay->Changed;
         request.OverlayChangedSince = overlay->ChangedSince;
     }
-    const PageLevelView view = MakePageLevelView(kPageLevelReferenceRows, 2.0f * std::atan(1.0f / focalScale),
-                                                 terrain.TargetPixelError);
+    const float32 fieldOfView = 2.0f * std::atan(1.0f / focalScale);
+    const PageLevelView view = MakePageLevelView(kPageLevelReferenceRows, fieldOfView, terrain.TargetPixelError);
     pages.RequestPlanet(request, cameras, view);
+    if (request.GpuPages)
+        RequestPlanetSurfacePages(pages, request, relief, views, fieldOfView);
 }
 
 void RequestTiledTerrainPages(TerrainService& service, const Rendering::IDevice& device, TiledTerrainData& tiled,
@@ -177,6 +245,7 @@ void RequestTiledTerrainPages(TerrainService& service, const Rendering::IDevice&
     uint32 samplesZ = 0;
     std::shared_ptr<const PageStreaming::PageStoreReader> store;
     PageStreaming::GeneratedHeightLattice lattice;
+    bool decoded = false;
     if (generated)
     {
         lattice = MakeGeneratedHeightLattice(tiled);
@@ -193,15 +262,16 @@ void RequestTiledTerrainPages(TerrainService& service, const Rendering::IDevice&
             samplesX = store->Layout().Header.SamplesX;
             samplesZ = store->Layout().Header.SamplesZ;
         }
-        const std::string directoryRefusal =
-            DenseDirectoryRefusal(name.empty() ? std::string_view("A terrain") : name, samplesX, samplesZ);
-        if (!directoryRefusal.empty())
+        else if (base.Heightmap && !base.Heightmap->IsEmpty() &&
+                 service.GetHeightPageStores().NeverOpensStore(base.HeightmapGuid))
         {
-            // It draws from its height texture, as a terrain without a store does.
-            pages.ReportRefusal(request.Terrain, directoryRefusal);
-            store = nullptr;
-            samplesX = 0;
-            samplesZ = 0;
+            // No store will open: its CPU pages read the decoded heightmap on the tile lattice, as its
+            // tiles do. The provider holds the decoded field, so its address names it while it streams.
+            lattice = MakeGeneratedHeightLattice(tiled);
+            request.SourceIdentity = GeneratedHeightIdentity(lattice);
+            samplesX = lattice.TilesX * (lattice.TileSamples - 1u) + 1u;
+            samplesZ = lattice.TilesZ * (lattice.TileSamples - 1u) + 1u;
+            decoded = true;
         }
     }
 
@@ -209,13 +279,14 @@ void RequestTiledTerrainPages(TerrainService& service, const Rendering::IDevice&
     inputs.ModifiersPending = service.HeightModifiersMayApply() && !tiled.PageOverlayCurrent;
     inputs.GeneratedBase = generated;
     inputs.CookedStoreOpen = store != nullptr;
+    inputs.DecodedHeightmapBase = decoded;
     inputs.GpuReadsPages = gpuReadsPages;
-    // The terrain UV the CBT samples spans the tile grid's extent; a generated pyramid that does
-    // not cover exactly that lattice would place every page wrong, so it pages only on the lattice.
-    // A cooked store on its own grid pages too, but takes no modifier overlay (PageOverlayAllowance).
+    // The terrain UV the CBT samples spans the tile grid's extent; a generated or decoded pyramid
+    // that does not cover exactly that lattice would place every page wrong, so it pages only on the
+    // lattice. A cooked store on its own grid pages too, but takes no modifier overlay (PageOverlayAllowance).
     const bool onLattice = samplesX == extent.UnifiedWidth && samplesZ == extent.UnifiedHeight;
     const std::string_view label = name.empty() ? std::string_view("A terrain") : name;
-    const bool fitsLattice = samplesX > 1u && samplesZ > 1u && (!generated || onLattice);
+    const bool fitsLattice = samplesX > 1u && samplesZ > 1u && ((!generated && !decoded) || onLattice);
     std::string refusal;
     inputs.PagesOnLattice = fitsLattice;
     // The modifier system builds the overlay for every terrain with CPU pages: the CPU readers take
@@ -240,7 +311,7 @@ void RequestTiledTerrainPages(TerrainService& service, const Rendering::IDevice&
 
     if (pages.NeedsSource(request.Terrain, request.SourceIdentity))
     {
-        if (generated)
+        if (generated || decoded)
             request.Source.Generated = std::make_shared<const PageStreaming::GeneratedHeightPageProvider>(lattice);
         else
             request.Source.Store = store;

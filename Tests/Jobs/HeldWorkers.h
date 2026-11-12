@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <functional>
 #include <limits>
 #include <thread>
@@ -24,6 +25,12 @@ inline bool WaitUntil(const std::function<bool()>& pred, std::chrono::millisecon
         std::this_thread::yield();
     }
     return true;
+}
+
+// Nanoseconds on the steady clock.
+inline int64_t SteadyNowNs()
+{
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
 // Holds `workers` workers of the pool (every worker by default) inside one
@@ -68,5 +75,32 @@ class HeldWorkers
     std::atomic<size_t> m_Holding{0};
     std::atomic<bool> m_Released{false};
 };
+
+#if GE_DEBUG_INSTRUMENTATION
+// Installs a wake hook for one scope. On exit it calls `onExit` (when set), then
+// removes the hook.
+class ScopedWakeHook
+{
+  public:
+    using Hook = void (*)(JobSystem::WorkStealingThreadPool::WakePoint point, size_t workerId);
+
+    explicit ScopedWakeHook(Hook hook, void (*onExit)() = nullptr) : m_OnExit(onExit)
+    {
+        JobSystem::WorkStealingThreadPool::SetWakeHookForTests(hook);
+    }
+    ~ScopedWakeHook()
+    {
+        if (m_OnExit)
+            m_OnExit();
+        JobSystem::WorkStealingThreadPool::SetWakeHookForTests(nullptr);
+    }
+
+    ScopedWakeHook(const ScopedWakeHook&) = delete;
+    ScopedWakeHook& operator=(const ScopedWakeHook&) = delete;
+
+  private:
+    void (*m_OnExit)();
+};
+#endif
 
 } // namespace GameEngine::Tests

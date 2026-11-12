@@ -104,6 +104,7 @@ bool WasLastDefaultCompilerServer()
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <format>
 #include <functional>
 #ifdef _WIN32
 #include <windows.h>
@@ -823,9 +824,13 @@ void AssemblySwapTask::Execute()
         {
             SetResult(HotReloadResult::SystemResourcesUnavailable, m_ErrorMessage);
         }
+        else if (m_OtherSwapRunning)
+        {
+            SetResult(HotReloadResult::SwapBusy, m_ErrorMessage);
+        }
         else
         {
-            SetResult(HotReloadResult::SwapFailed, "Atomic swap failed");
+            SetResult(HotReloadResult::SwapFailed, m_ErrorMessage);
         }
     }
     catch (const HotReloadTask::CancellationException&)
@@ -856,7 +861,8 @@ bool AssemblySwapTask::PerformAtomicSwap()
 
         if (swapInProgress.exchange(true))
         {
-            m_ErrorMessage = "Another assembly swap is already in progress";
+            m_OtherSwapRunning = true;
+            m_ErrorMessage = "another script reload was running";
             return false;
         }
 
@@ -915,10 +921,16 @@ bool AssemblySwapTask::PerformAtomicSwap()
             {
                 Logger::Log::Debug("[HotReload] Atomic context swap completed successfully (managed call: {}ms)", callMs);
             }
+            else if (swapResult == GE_Result_Busy)
+            {
+                m_OtherSwapRunning = true;
+                m_ErrorMessage = "another script reload was running";
+                Logger::Log::Warning("[HotReload] Another context swap is running, so this swap did not start. This reload ends without a swap; the next script change starts a new reload.");
+            }
             else
             {
-                Logger::Log::Warning("[HotReload] Atomic context swap failed ({}). No preloaded context ready; deferring swap instead of blocking main thread.", swapResult);
-                result = false;
+                m_ErrorMessage = std::format("the script runtime returned code {}", swapResult);
+                Logger::Log::Warning("[HotReload] Atomic context swap failed ({}). This reload ends without a swap.", swapResult);
             }
 
             auto swapEnd = std::chrono::high_resolution_clock::now();
@@ -954,15 +966,11 @@ bool AssemblySwapTask::PerformAtomicSwap()
             Logger::Log::Debug("[HotReload] Assembly swap completed in {}ms", m_SwapDuration.count());
             return true;
         }
-        else
-        {
-            m_ErrorMessage = "Assembly swap failed via HotReloadManager";
-            return false;
-        }
+        return false;
     }
     catch (const std::exception& e)
     {
-        m_ErrorMessage = "Exception during assembly swap: " + std::string(e.what());
+        m_ErrorMessage = "an error stopped the script load: " + std::string(e.what());
         return false;
     }
 }

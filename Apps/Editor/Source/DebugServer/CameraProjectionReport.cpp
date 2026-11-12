@@ -2,6 +2,7 @@
 
 #include "Engine/Rendering/CameraUtils.h"
 #include "Engine/Rendering/Exposure.h"
+#include "Mathematics/Angle.h"
 #include "Mathematics/MatrixOps.h"
 
 #include <cmath>
@@ -10,8 +11,6 @@ namespace GameEngine::Editor
 {
 namespace
 {
-
-constexpr float kRadToDeg = 57.295779513082320876f;
 
 // Both builders produce strictly positive diagonal scales: cot(fovY/2) for a
 // FOV in (0, pi), and 2/(right-left), 2/(top-bottom) for a non-inverted ortho
@@ -29,7 +28,7 @@ bool UsableScale(float v)
 // recovered quantities and their error.
 float FullAngleDegFromCotHalf(float cotHalfAngle)
 {
-    return 2.0f * std::atan(1.0f / cotHalfAngle) * kRadToDeg;
+    return Mathematics::ToDegrees(2.0f * std::atan(1.0f / cotHalfAngle));
 }
 
 } // namespace

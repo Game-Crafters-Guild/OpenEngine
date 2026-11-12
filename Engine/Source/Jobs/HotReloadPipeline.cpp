@@ -7,6 +7,7 @@
 
 #include <chrono>
 #include <condition_variable>
+#include <format>
 #include <future>
 #include <mutex>
 #include <span>
@@ -277,15 +278,14 @@ void HotReloadPipeline::RunSwap(Run& run) {
     if (run.CancelToken->load()) {
         return;
     }
-    if (swap.GetResult() != HotReloadResult::Success) {
-        Logger::Log::Warning("[Pipeline] Swap stage did not succeed: {}", swap.GetErrorMessage());
-    }
-
-    // A swap stage that did not succeed still ends the run as Success; the
-    // stage logs why.
     PipelineStats stats;
-    stats.success = true;
-    stats.result = HotReloadResult::Success;
+    if (swap.GetResult() == HotReloadResult::Success) {
+        stats.success = true;
+    } else {
+        // The old scripts stay loaded. Nothing retries the swap; the next script change starts a new run.
+        stats.result = swap.GetResult();
+        stats.errorMessage = std::format("The edited scripts compiled but did not load: {}. Save a script again to retry.", swap.GetErrorMessage());
+    }
     stats.compilationDuration = ToMilliseconds(run.CompileEnd - run.Start);
     stats.fileLoadDuration = ToMilliseconds(run.ReadEnd - run.CompileEnd);
     stats.assemblyPrepDuration = ToMilliseconds(run.PrepEnd - run.ReadEnd);

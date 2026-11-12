@@ -41,14 +41,9 @@ void UpdateLoading()
 
 `Failures` writes the failed recipes into the span and returns how many there are, also when that is more than the span holds. `entity.SplineRecipes.StateOf()` gives the state of one recipe, and `entity.SplineRecipes.ReasonOf()` gives the reason of a `Held` or `Failed` recipe, or of a `Built` recipe that made nothing, or an empty string.
 
-The Player waits the same way before it writes its startup line and its `--screenshot` capture. The startup line names each failed recipe with its reason. A recipe that waits for a terrain or a model stops waiting after a time limit, so the wait always ends. A Player that runs with no render device, such as `--headless`, builds no recipe: each recipe reads `Failed` on the first frame, with the reason, and the scene settles at once. To make the Player wait for the resolve of the scene's assets only, set `waitForSplineRecipes` to `false` in the game config:
+The Player waits the same way before it writes its startup line and its `--screenshot` capture: after the scene loader reveals the startup scene, the Player waits until the scene is settled. The startup line names each failed recipe with its reason. A recipe that waits for a terrain or a model stops waiting after a time limit, so the wait always ends. A Player that runs with no render device, such as `--headless`, builds no recipe: each recipe reads `Failed` on the first frame, with the reason, and the scene settles at once.
 
-```json title="game.config"
-{
-  "startupScene": "Scenes/Main.scene",
-  "waitForSplineRecipes": false
-}
-```
+The scene loader does not wait for the recipes. A game's own load raises `Revealed` when the scene is ready to show, and its roads can still build after that. To wait for them, a game polls `IsSceneSettled` as above, or it loads with `SceneRevealPolicy::WhenGameReleases` and calls `Reveal()` when `IsSceneSettled` is true (see [Click to continue](scene-loader.mdx#click-to-continue)).
 
 Navigation surfaces wait for the same summary: a surface does not bake until every recipe of the scene has built or failed.
 

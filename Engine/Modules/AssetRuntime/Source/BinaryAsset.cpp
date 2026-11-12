@@ -32,7 +32,7 @@ bool BinaryAsset::Load() {
     }
 
     // Read file data
-    Vector<uint8> fileData;
+    ByteBuffer fileData;
     if (!ReadFileBytesShared(GetPath(), fileData)) {
         Logger::Log::Error("Failed to read binary file: {}", GetPath().string());
         SetState(AssetState::Failed);
@@ -42,7 +42,7 @@ bool BinaryAsset::Load() {
     return LoadFromData(fileData);
 }
 
-bool BinaryAsset::LoadFromData(const Vector<uint8>& data) {
+bool BinaryAsset::LoadFromData(std::span<const uint8> data) {
     if (GetState() == AssetState::Loaded) {
         return true;
     }

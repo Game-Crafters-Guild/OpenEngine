@@ -6,7 +6,8 @@ namespace GameEngine
 {
 
 class SceneViewController;
-class SceneViewPanel;
+class SceneViewport;
+class SceneViewportHost;
 
 // Small interactive 3D orientation gizmo drawn in the top-right corner of the
 // Scene View viewport.
@@ -26,11 +27,15 @@ public:
         if (m_Controller != controller) m_HasPerspectiveAngle = false;
         m_Controller = controller;
     }
-    void SetPanel(SceneViewPanel* panel) { m_Panel = panel; }
-    void SetViewportIndex(size_t index) { m_ViewportIndex = index; }
+    /// Sets the pane the gizmo is a child of and the pane's slot index (0 to 3: perspective, top, front, side).
+    /// The gizmo activates the pane, turns the pane's camera and tells the pane's host of a view change.
+    void SetPane(SceneViewport* pane, size_t viewportIndex)
+    {
+        m_Pane = pane;
+        m_ViewportIndex = viewportIndex;
+    }
 
-    // Called every frame by SceneViewPanel so the gizmo re-draws when the
-    // camera angles change (e.g. while panning in the viewport).
+    /// The pane calls it every frame, so the gizmo draws again when the camera angles change.
     void Tick();
 
     // Custom drawing via SDF primitive pipeline.
@@ -55,11 +60,13 @@ private:
     void OnMouseMove(UIEvent& ev);
     void OnMouseLeave(UIEvent& ev);
 
+    /// The host of the gizmo's pane, or null without a pane or a host.
+    SceneViewportHost* Host() const;
     void SnapToAxis(int axis);
     void ToggleGameProjection();
 
     SceneViewController* m_Controller = nullptr; // not owned
-    SceneViewPanel*      m_Panel      = nullptr; // not owned
+    SceneViewport*       m_Pane       = nullptr; // not owned
     size_t               m_ViewportIndex = 0;
 
     // Restore the perspective viewing angle after the angled ortho preset.

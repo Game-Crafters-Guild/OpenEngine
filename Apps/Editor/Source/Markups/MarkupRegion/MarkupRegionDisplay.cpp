@@ -65,7 +65,7 @@ std::optional<float32> ProbeTerrainHeight(ECS::World& world, const Vector2& xz)
     const Scene::PickResult result = Picking::PickScene(ray, world, options);
     if (!result.Hit)
         return std::nullopt;
-    return result.Best.WorldPosition.y;
+    return result.Best.Point.y;
 }
 
 // The outline's ground samples: the spline sampled as the drape samples it (kDrapeSampleStepMetres
@@ -201,7 +201,8 @@ MarkupRegionFrameGround ReadMarkupRegionFrameGround(ECS::World& world)
     frameGround.SeaLevel = ResolveMarkupSeaLevel(world);
     // The regions stand on the terrain by raycast, which reads the resident tiles only
     // (ConformSurfaceRevision).
-    frameGround.GroundRevision = SplineRecipes::ConformSurfaceRevision(world, nullptr);
+    frameGround.GroundRevision =
+        SplineRecipes::ConformSurfaceRevision(world, nullptr, SplineRecipes::UnboundedConformRun());
     return frameGround;
 }
 
@@ -224,7 +225,9 @@ const MarkupECS::MarkupRegionDisplayCache::Entry* ResolveMarkupRegionDisplay(
     key.SplineIndex = spline->SplineDataIndex;
     key.SplineGeneration = spline->SplineDataGeneration;
     key.SplineVersion = data->Version;
-    std::memcpy(key.Matrix, placed->matrix, sizeof(key.Matrix));
+    const Mathematics::Matrix4x4 worldMatrix =
+        placed->ToMatrix4x4(placed->GetPosition() - Mathematics::WorldPosition{});
+    std::memcpy(key.Matrix, worldMatrix.Data(), sizeof(key.Matrix));
     key.SeaLevel = frameGround.SeaLevel;
     key.GroundRevision = frameGround.GroundRevision;
     if (component)
@@ -232,7 +235,6 @@ const MarkupECS::MarkupRegionDisplayCache::Entry* ResolveMarkupRegionDisplay(
         key.MemberCount = std::min(component->MemberCount, Components::kMaxRegionMembers);
         std::copy_n(component->Members, key.MemberCount, key.Members);
     }
-    const Mathematics::Matrix4x4 worldMatrix = Mathematics::Matrix4x4::FromColumnMajor(placed->matrix);
     // A region's walls and lid stand the drape's lift above the ground; a path's ground is the ground
     // itself, its band lifting by the camera's distance as it draws (MarkupGizmo), and it stands no
     // height above it.

@@ -110,7 +110,7 @@ class SaveBlockedDuringPlayTests : public ::testing::Test
     {
         ECS::EntityHandle e = world.CreateEntity();
         Components::Transform xf{};
-        xf.matrix[12] = x; // column 3 = translation
+        xf.Position.X = x;
         world.AddComponentImmediate(e, xf);
     }
 

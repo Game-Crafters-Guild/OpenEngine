@@ -137,6 +137,14 @@ Transform.scale = (1, 1, 1)
 ; point is unusable on web today (the button deselects the entity instead of
 ; opening its menu), so the effect is authored here rather than driven.
 
+[entity id="terrain_noise"]
+Name.value = "Terrain Noise"
+Transform.position = (0, 0, 0)
+TerrainModifierVolume.shape = 4
+TerrainNoiseEffect.enabled = true
+TerrainNoiseEffect.mode = 1
+TerrainNoiseEffect.preset = 0
+
 [entity id="e_ppv_sssr"]
 Name.value = "Post Process Volume"
 PostProcessVolume.enabled = true

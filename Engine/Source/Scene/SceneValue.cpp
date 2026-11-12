@@ -1,9 +1,12 @@
 #include "Scene/SceneValue.h"
 
 #include "Mathematics/Curve.h"
+#include "Mathematics/WorldPosition.h"
 #include "Types/FormatNumber.h"
+#include "Types/StringUtils.h"
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <cctype>
 #include <cstdint>
@@ -224,6 +227,18 @@ static bool ParseDouble(std::string_view s, double& out)
         return false;
     out = v;
     return true;
+}
+
+bool ParseWorldPosition(std::string_view s, Mathematics::WorldPosition& out)
+{
+    s = Trim(s);
+    if (s.size() < 5 || s.front() != '(' || s.back() != ')')
+        return false;
+    std::vector<std::string_view> parts;
+    SplitCsvTuple(s.substr(1, s.size() - 2), parts);
+    if (parts.size() != 3)
+        return false;
+    return ParseDouble(parts[0], out.X) && ParseDouble(parts[1], out.Y) && ParseDouble(parts[2], out.Z);
 }
 
 bool ParseValue(std::string_view s, SceneValue& out, std::string* outError)
@@ -590,6 +605,13 @@ std::string FormatFloat4(float x, float y, float z, float w)
     AppendFloat(out, w);
     out.push_back(')');
     return out;
+}
+
+std::string FormatWorldPosition(const Mathematics::WorldPosition& position)
+{
+    const std::array<std::string, 3> axes{FormatDouble(position.X), FormatDouble(position.Y),
+                                          FormatDouble(position.Z)};
+    return "(" + Join(axes, ", ") + ")";
 }
 
 std::string_view AssetRefPath(const SceneValue& v)

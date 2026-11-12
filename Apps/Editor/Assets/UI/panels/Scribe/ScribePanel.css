@@ -1,0 +1,191 @@
+/* The Scribe panel (Panels/Scribe/ScribePanel.cpp): the toolbar, the outline of a state-tree program, and the
+   fields of the selected row. The rows and the fields are built from the program. */
+
+.scribe-panel {
+	flex-direction: column;
+	flex-grow: 1;
+	min-height: 0;
+}
+
+.scribe-panel-root {
+	flex-direction: column;
+	flex-grow: 1;
+	min-height: 0;
+	gap: 6px;
+	padding: 8px;
+}
+
+/* The toolbar, the hint and the notice keep their height in a short panel; only the outline shrinks and scrolls. */
+.scribe-toolbar {
+	flex-direction: row;
+	flex-shrink: 0;
+	align-items: center;
+	gap: 8px;
+	padding-bottom: 6px;
+	border-bottom-width: 1px;
+	border-color: var(--ui_color_border);
+}
+
+.scribe-file-name {
+	flex-shrink: 1;
+	min-width: 0;
+	color: var(--ui_color_text_bright);
+}
+
+.scribe-dirty-mark {
+	color: var(--ui_color_text_dim);
+}
+
+.scribe-save {
+	margin-left: auto;
+}
+
+.scribe-empty {
+	flex-shrink: 0;
+	color: var(--ui_color_text_dim);
+	white-space: normal;
+}
+
+.scribe-notice {
+	flex-shrink: 0;
+	padding: 4px 6px;
+	border-radius: 3px;
+	color: var(--ui_color_error_text);
+	background-color: var(--ui_color_error_background);
+	white-space: normal;
+}
+
+.scribe-outline {
+	flex-grow: 1;
+	min-height: 0;
+}
+
+.scribe-outline-content {
+	flex-direction: column;
+}
+
+.scribe-row {
+	flex-direction: row;
+	align-items: center;
+	gap: 8px;
+	height: 22px;
+	padding-right: 6px;
+	border-radius: 3px;
+}
+
+/* The Hierarchy's hovered and selected rows (theme/views.css .tree .tree-item): the same plates, and the selected
+   plate also on a hovered row. */
+.scribe-row:hover {
+	background-color: var(--ui_color_bg_hover_alt);
+}
+
+.scribe-row.scribe-row-selected {
+	background-color: var(--ui_color_bg_selected);
+}
+
+.scribe-row-selected .scribe-row-text {
+	color: var(--ui_color_text_bright);
+}
+
+/* A row is one line, as a row of the Hierarchy (theme/views.css .tree-title): the name and the detail end in an
+   ellipsis where they do not fit, the badge keeps its place, and the row's tooltip gives the whole text. */
+.scribe-row-kind {
+	flex-shrink: 0;
+	white-space: nowrap;
+	color: var(--ui_color_text_dim);
+}
+
+.scribe-row-text {
+	flex-shrink: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: var(--ui_color_text);
+}
+
+.scribe-row-detail {
+	flex-shrink: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: var(--ui_color_text_dim);
+}
+
+.scribe-row-state {
+	font-weight: 600;
+}
+
+.scribe-row-group {
+	margin-top: 6px;
+	font-weight: 600;
+}
+
+/* The badge is the inspector's error badge; it sits after the row's text, at the row's gap. */
+.scribe-row-badge {
+	flex-shrink: 0;
+}
+
+.scribe-depth-0 {
+	padding-left: 4px;
+}
+
+.scribe-depth-1 {
+	padding-left: 18px;
+}
+
+.scribe-depth-2 {
+	padding-left: 32px;
+}
+
+.scribe-depth-3 {
+	padding-left: 46px;
+}
+
+.scribe-depth-4 {
+	padding-left: 60px;
+}
+
+.scribe-depth-5 {
+	padding-left: 74px;
+}
+
+.scribe-depth-6 {
+	padding-left: 88px;
+}
+
+.scribe-depth-7 {
+	padding-left: 102px;
+}
+
+.scribe-depth-8 {
+	padding-left: 116px;
+}
+
+.scribe-details {
+	flex-direction: column;
+	flex-shrink: 0;
+	gap: 6px;
+	padding-top: 6px;
+	border-top-width: 1px;
+	border-color: var(--ui_color_border);
+}
+
+.scribe-details-hint {
+	color: var(--ui_color_text_dim);
+	white-space: normal;
+}
+
+/* The path of the selected row, over its fields. */
+.scribe-details-heading {
+	color: var(--ui_color_text_bright);
+	font-weight: 600;
+	white-space: normal;
+}
+
+/* A value that no field of this panel edits. */
+.scribe-details-value {
+	color: var(--ui_color_text_dim);
+}
+

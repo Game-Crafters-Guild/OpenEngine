@@ -25,16 +25,12 @@
                             // (meaningful only when bit 2 clear), bit 4 mirrored winding
                             // (negative-determinant world transform), bits 16..31 = 16-bit world tag
     float lodBias;          // log2 coverage scale consumed by ge_SelectLOD
-    vec3 boundingCenter;    // world-space bounding sphere
+    vec3 boundingCenter;    // local to the sector in sectorPacked; ge_SectorRelativePoint composes it
     float boundingRadius;
     uint skinPaletteOffset;
     uint runtimeId;         // SkeletonStore runtime id (per-runtime visibility OR)
-    // Packed 21-bit-per-axis render-origin sector (camera-relative rendering).
-    // Zero => sector (0,0,0) => transform column is full world space and the
-    // bytes match the pre-camera-relative layout exactly, so CPU memcmp still
-    // treats an untagged instance's 240 B as identity (quiescence preserved).
-    // Decode via ge_UnpackInstanceSector (instance_io.glsl); pack mirror is
-    // Engine/Rendering/RenderOrigin.h::PackSector.
+    // The sector of the transform column and boundingCenter, 21 bits per axis (PackSector in GPUScene.h).
+    // Zero is sector (0,0,0), where both are world space. Decode with ge_UnpackInstanceSector.
     uint sectorPacked0;
     uint sectorPacked1;
     vec4 custom0;

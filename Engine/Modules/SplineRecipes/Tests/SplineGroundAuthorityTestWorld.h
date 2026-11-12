@@ -67,8 +67,7 @@ struct ScopedSplineService
 inline Components::WorldTransform IdentityAt(float32 x, float32 y, float32 z)
 {
     Components::WorldTransform xf{};
-    xf.matrix[0] = xf.matrix[5] = xf.matrix[10] = xf.matrix[15] = 1.0f;
-    xf.matrix[12] = x; xf.matrix[13] = y; xf.matrix[14] = z;
+    xf.Position = Mathematics::WorldPosition{x, y, z};
     return xf;
 }
 

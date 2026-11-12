@@ -1,6 +1,6 @@
 ---
 title: Tooltips
-description: Hover tooltips for game and editor UI, with text or a layout template, placement on a side of the element, and a bubble and arrow styled from CSS.
+description: Hover tooltips for game and editor UI, with text or a layout template, placement on a side of the element or of an anchor panel, and a bubble and arrow styled from CSS.
 ---
 
 A tooltip is a bubble that shows when the pointer rests on an element. A small arrow on the edge of the bubble points at the element. The game UI and the editor use the same tooltip, so one stylesheet rule gives every tooltip the same look.
@@ -26,7 +26,7 @@ attackButton->SetTooltip("Attack (A)");
 ::::tab[C#]
 
 :::caution[No C# call]
-C# has no call that sets a tooltip ([OpenEngine issue #82](https://github.com/Game-Crafters-Guild/OpenEngine/issues/82)). The native calls are `UIElement::SetTooltip`, `UIElement::SetTooltipPlacement` and `UIElement::SetTooltipTemplate`.
+C# has no call that sets a tooltip ([OpenEngine issue #82](https://github.com/Game-Crafters-Guild/OpenEngine/issues/82)). The native calls are `UIElement::SetTooltip`, `UIElement::SetTooltipPlacement`, `UIElement::SetTooltipAnchor` and `UIElement::SetTooltipTemplate`.
 :::
 
 ::::
@@ -47,11 +47,31 @@ void SetTooltipPlacement(TooltipPlacement placement);
 
 | Placement | Where the bubble opens |
 |---|---|
-| `Auto` | Below the element, or above it when there is more room above. This is the default. |
+| `Auto` | Below the element. Above it when the bubble does not fit below, and it fits above or there is more room above. This is the default. |
 | `Right`, `Left` | Beside the element, centered on it. |
 | `Above`, `Below` | Above or below the element, centered on it. |
 
 The arrow points at the center of the element. When the window edge pushes the bubble to one side, the arrow moves along the edge of the bubble to keep pointing at the element. It stops before the rounded corners of the bubble.
+
+## Anchor the tooltip to a panel
+
+A tooltip above a tile in a grid covers the tiles above it, and a tooltip of a tile at the edge of a panel can run over the next panel. Give the tile an anchor: the tooltip then sits against the anchor instead of the tile.
+
+```cpp title="UI/UIElement.h"
+void SetTooltipAnchor(UIElement* anchor);
+```
+
+The bubble opens on the side of the anchor that the placement names. It does not cover the anchor while that side has room. Along the anchor's edge, the bubble is centered on the tile. It stays inside the anchor when it fits there, and always inside the window. A bubble that is wider than the anchor is centered on the anchor. Use an anchor that holds the tile, such as the tile's panel. Null removes the anchor. When the anchor is destroyed or hidden, the tooltip sits against the tile again.
+
+The arrow sits on the edge of the bubble that faces the anchor. It points at the center of the hovered tile: at the x of that center for a bubble above or below the anchor, and at the y of that center for a bubble on the right or left. It stops before the rounded corners of the bubble. When the pointer moves to another tile, the arrow moves to that tile. In a grid, a bubble above or below shows the column of the tile, not its row. A bubble on the right or left shows the row, not the column. Because the arrow shows only one of the two, give each tile a visible hover style so the tile is clear too.
+
+For a bubble that stays in one place for every tile, make the tooltip as wide as the anchor. This also applies to a scaled layout: the bubble starts on the whole pixel nearest to the start of the anchor.
+
+```cpp
+// Every tile of the command card opens its tooltip above the card.
+commandTile->SetTooltipPlacement(GameEngine::UIElement::TooltipPlacement::Above);
+commandTile->SetTooltipAnchor(commandCard);
+```
 
 ## Show a layout as the tooltip
 
@@ -119,7 +139,7 @@ The arrow is not an element. It takes its look from the bubble:
 - The fill of the arrow is the `background-color` of `.tooltip`.
 - The outline of the arrow is the border color of `.tooltip`, at the border width of the edge that the arrow sits on.
 - The arrow covers the border of the bubble where the two meet, so the bubble and the arrow show one outline.
-- The fill of the arrow reaches 8 px past the edge of the bubble and is 9 px wide where it meets the bubble. The border goes around the fill, so a wider border makes the arrow larger and keeps the fill the same size. The tip is 8 px from the element.
+- The fill of the arrow reaches 8 px past the edge of the bubble and is 9 px wide where it meets the bubble. The border goes around the fill, so a wider border makes the arrow larger and keeps the fill the same size. The tip is 8 px from the element, or from its anchor.
 
 ```css title="A framed card with a gold border, and its arrow"
 .tooltip {

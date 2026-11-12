@@ -32,6 +32,7 @@ struct PlanarPickBest
     Vector3 Position{};
     Vector3 Normal{0.0f, 1.0f, 0.0f};
     ECS::EntityHandle Entity{};
+    bool CoarseHeight = false;
     bool Hit = false;
 };
 
@@ -109,6 +110,7 @@ void PickPlanarTerrain(TerrainECS::TerrainService& service, const Mathematics::R
 
     float32 hitT = 0.0f;
     Vector3 hitPos{};
+    bool coarse = false;
     for (uint32 march = 0; march <= kPickRefinements; ++march)
     {
         const auto sampleHeight = [&surface](float32 worldX, float32 worldZ, float32& outY) {
@@ -116,8 +118,8 @@ void PickPlanarTerrain(TerrainECS::TerrainService& service, const Mathematics::R
         };
         if (!MarchTerrainSurface(ray, aabbMin, aabbMax, best.Distance, sampleHeight, hitT, hitPos))
             return;
-        if (march == kPickRefinements || !ReadsCoarse(surface, hitPos) ||
-            !service.FetchFinestHeightPage(terrain, hitPos))
+        coarse = ReadsCoarse(surface, hitPos);
+        if (march == kPickRefinements || !coarse || !service.FetchFinestHeightPage(terrain, hitPos))
             break;
         surface = service.SurfaceQuery(terrain, worldTransform);
     }
@@ -127,6 +129,7 @@ void PickPlanarTerrain(TerrainECS::TerrainService& service, const Mathematics::R
     best.Position = hitPos;
     best.Normal = PickSurfaceNormal(surface, terrain.SamplesPerMeter, hitPos.x, hitPos.z);
     best.Entity = entity;
+    best.CoarseHeight = coarse;
     best.Hit = true;
 }
 
@@ -155,23 +158,15 @@ bool RaycastPlanarTerrains(const Mathematics::Ray3D& ray,
         return false;
 
     outHit.Entity        = best.Entity;
-    outHit.WorldPosition = best.Position;
+    outHit.Point = best.Position;
     outHit.WorldNormal   = best.Normal;
     outHit.Distance      = best.Distance;
+    outHit.CoarseHeight  = best.CoarseHeight;
     return true;
 }
 
-// The CBT render feature when it is currently drawing a spherical planet. It is the
-// authority for both halves of the planet's geometry: GetDomainConfig().PlanetRadius is the
-// radius the GPU displaces FROM, and SampleSphereSurfaceHeight is the CPU mirror of the
-// height it displaces BY (procedural relief from the active planet tuning + TerrainService's
-// editable sculpt layer). Reading the renderer rather than the Terrain component is what
-// makes a pick land on the ground the user can see, including mid-edit frames where the
-// component has already moved and the drawn geometry has not.
-//
-// No feature, or a feature not on the spherical domain, means no planet is on screen: there
-// is then nothing to pick, and inventing a radius would place hits on a sphere the renderer
-// never drew.
+// The CBT render feature when it draws a spherical planet, else null. Its PlanetRadius and
+// SampleSphereSurfaceHeight are the drawn planet, so a pick lands on the ground the user sees.
 const CBTTerrainECS::CBTRenderFeature* ActivePlanetFeature()
 {
     auto* renderServices = EngineCore::GetInstance().GetRenderServices();
@@ -209,21 +204,27 @@ bool RaycastActivePlanet(const Mathematics::Ray3D& ray,
     float32 t = 0.0f;
     Vector3 pos{};
     Vector3 normal{};
-    if (!SolvePlanetSurfaceHit(ray, feature->GetDomainConfig().PlanetRadius, maxDistance,
-                               [feature](float32 dx, float32 dy, float32 dz) {
-                                   return feature->SampleSphereSurfaceHeight(dx, dy, dz);
-                               },
-                               t, pos, normal))
+    DrawnPlanetHeight height{*feature};
+    if (!SolvePlanetSurfaceHit(ray, feature->GetDomainConfig().PlanetRadius, maxDistance, height, t, pos, normal) ||
+        height.Missed)
         return false;
 
     outHit.Entity        = entity;
-    outHit.WorldPosition = pos;
+    outHit.Point = pos;
     outHit.WorldNormal   = normal;
     outHit.Distance      = t;
+    outHit.CoarseHeight  = false;
     return true;
 }
 
 } // namespace
+
+float32 DrawnPlanetHeight::operator()(float32 dx, float32 dy, float32 dz)
+{
+    float32 height = 0.0f;
+    Missed |= !Feature.SampleSphereSurfaceHeight(Mathematics::Vector3(dx, dy, dz), height);
+    return height;
+}
 
 bool RaycastTerrain(const Mathematics::Ray3D& ray,
                     GameEngine::ECS::World& world,

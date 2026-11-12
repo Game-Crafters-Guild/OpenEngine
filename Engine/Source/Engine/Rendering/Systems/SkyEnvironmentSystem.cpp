@@ -8,6 +8,8 @@
 #include "Components/Rendering/SkySunIlluminance.h"
 #include "Components/Rendering/SkySunPath.h"
 #include "Components/Rendering/Skybox.h"
+#include "Components/Terrain/Terrain.h"
+#include "Components/Terrain/TerrainPlanetRelief.h"
 #include "Components/Transform.h"
 #include "AssetCore/GUID.h"
 #include "ECS/Components.h"
@@ -23,11 +25,13 @@
 #include "Mathematics/Quaternion.h"
 #include "Mathematics/Vector3.h"
 #include "Rendering/Sky/AtmosphereTransmittance.h"
+#include "Rendering/Sky/SkyPlanet.h"
 #include "Rendering/Sky/SkySettings.h"
 #include "Rendering/Sky/SkySunState.h"
 #include "Rendering/Sky/SkySystem.h"
 #include "Rendering/Sky/SkyViewLutAltitude.h"
 #include "Rendering/Sky/SolarPath.h"
+#include "TerrainECS/SurfaceHeightQuery.h"
 #include "Types/ColorUtils.h"
 
 namespace GameEngine { namespace Engine::Renderer {
@@ -132,12 +136,31 @@ Mathematics::Quaternion RotationFromTo(const Mathematics::Vector3& from,
     return Mathematics::Quaternion::FromAxisAngle(axis, std::acos(d));
 }
 
+// The planet the sky wraps: the first spherical terrain's sphere (centered at the world origin,
+// Terrain.h), else the flat scene's planet. A second spherical terrain is ignored.
+Rendering::SkyPlanet FindSkyPlanet(ECS::World& world)
+{
+    Rendering::SkyPlanet planet{};
+    world.Query<ECS::Read<Components::Terrain>>().Each(
+        [&planet, &world](ECS::EntityHandle entity, const Components::Terrain& terrain)
+        {
+            if (planet.Spherical || terrain.Domain != Components::TerrainDomain::Spherical)
+                return;
+            planet.Center = Mathematics::Vector3(0.0f, 0.0f, 0.0f);
+            planet.Radius = terrain.PlanetRadius;
+            planet.AtmosphereHeight = TerrainECS::AtmosphereHeightMeters(
+                terrain, world.GetComponent<Components::TerrainPlanetRelief>(entity));
+            planet.Spherical = true;
+        });
+    return planet;
+}
+
 // A directional light's `directionWS` (the way it SHINES) = +Z column = +col2.
 // The sun sits the opposite way, so the sky's toward-sun direction =
 // -directionWS = -col2 of the WORLD matrix.
 void ReadLightSunDir(const Components::WorldTransform& xf, Mathematics::Vector3& out)
 {
-    out = Mathematics::Vector3(-xf.matrix[8], -xf.matrix[9], -xf.matrix[10]).NormalizeOr(kZenith);
+    out = (Mathematics::Vector3(xf.Basis[2]) * -1.0f).NormalizeOr(kZenith);
 }
 
 // Orient the light so it shines from the sun toward the scene: directionWS =
@@ -252,7 +275,7 @@ void WriteLinkedSunDirection(ECS::World& world, ECS::EntityHandle lightEntity, c
         // Toward-sun is -col2 (shine is +col2). Compare that to primarySunDir
         // so a settled write does not restamp every idle frame.
         const Mathematics::Vector3 currentSun =
-            Mathematics::Vector3(-localXf->matrix[8], -localXf->matrix[9], -localXf->matrix[10]).NormalizeOr(kZenith);
+            (Mathematics::Vector3(localXf->Basis[2]) * -1.0f).NormalizeOr(kZenith);
         const Mathematics::Vector3 targetSun = targetDir.NormalizeOr(kZenith);
         const float align = Mathematics::Vector3::Dot(currentSun, targetSun);
         constexpr float kSunDirHoldBand = 1e-7f;
@@ -331,6 +354,7 @@ void SkyEnvironmentSystem::Update(ECS::World& world, float32 deltaTime)
     if (foundSkybox)
     {
         Rendering::SkySettings settings{};
+        settings.planet = FindSkyPlanet(world);
         settings.scatteringSunDir[0] = settings.primarySunDir[0];
         settings.scatteringSunDir[1] = settings.primarySunDir[1];
         settings.scatteringSunDir[2] = settings.primarySunDir[2];
@@ -426,6 +450,7 @@ void SkyEnvironmentSystem::Update(ECS::World& world, float32 deltaTime)
     SyncSunLight(world, comp, solarFrame);
 
     Rendering::SkySettings settings{};
+    settings.planet = FindSkyPlanet(world);
     settings.scatteringSunDir[0] = settings.primarySunDir[0];
     settings.scatteringSunDir[1] = settings.primarySunDir[1];
     settings.scatteringSunDir[2] = settings.primarySunDir[2];
@@ -548,11 +573,11 @@ void SkyEnvironmentSystem::Update(ECS::World& world, float32 deltaTime)
     // Scene view writes it before this system runs, the editor Game view and the Player write it when
     // they declare, after the update, so theirs is last frame's.
     const Rendering::CameraData* mainCamera = rs->Views().FindMainCameraData(world.GetWorldId());
-    const float planetRadius = ScatteringAtmosphere().planetRadius;
+    const float planetRadius = settings.planet.Radius;
     const float cameraAltitude =
         mainCamera ? Rendering::AltitudeAbovePlanetMeters(
                          Mathematics::Vector3(mainCamera->cameraPos.x, mainCamera->cameraPos.y, mainCamera->cameraPos.z),
-                         planetRadius)
+                         settings.planet)
                    : 0.0f;
 
     // Physically anchor the sky's solar irradiance to the scene's directional sun. Set BEFORE the

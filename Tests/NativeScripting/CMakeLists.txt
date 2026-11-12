@@ -242,12 +242,49 @@ add_executable(NativeScriptManagerTests
     LinuxRuntimeTemplateTests.cpp
     # The desktop export's material cook: its command line, the packages it names and
     # their copy into the bundle's read-only shader cache.
-    MaterialVariantCookToolTests.cpp)
+    MaterialVariantCookToolTests.cpp
+    # The tools an export needs on the build machine: their check and the warning without them.
+    ExportRequirementsTests.cpp
+    # The Web export's player template: the WebPlayer files and the notices every game ships.
+    WebExportRunnerTests.cpp)
 set_target_properties(NativeScriptManagerTests PROPERTIES UNITY_BUILD OFF)
 # PlayerBuildConfigTests asserts per-configuration truths, so it needs the one
 # source that can name this binary's configuration. Preprocessor state cannot:
 # DebugFast defines neither _DEBUG nor NDEBUG. Same definition the Editor gets.
 target_compile_definitions(NativeScriptManagerTests PRIVATE GE_BUILD_CONFIG="$<CONFIG>")
+# EngineCore's module handlers and the terrain height functions of a user module: a probe that
+# loads and one whose Register_v1 fails, both staged beside the test executable.
+if(WIN32)
+    target_sources(NativeScriptManagerTests PRIVATE TerrainHeightFunctionModuleTests.cpp)
+    # The height function registry and instances, private to TerrainECS.
+    target_include_directories(NativeScriptManagerTests PRIVATE ${CMAKE_SOURCE_DIR}/Engine/Modules/TerrainECS/Source)
+    foreach(probe IN ITEMS TerrainHeightFunctionProbe TerrainHeightFunctionRefusedProbe)
+        add_library(${probe} SHARED TerrainHeightFunctionProbe.cpp)
+        set_target_properties(${probe} PROPERTIES UNITY_BUILD OFF)
+        target_link_libraries(${probe} PRIVATE Engine)
+        target_include_directories(${probe} PRIVATE
+            ${CMAKE_SOURCE_DIR}/Engine/Modules/NativeScripting/GameSDK/Include)
+        add_dependencies(NativeScriptManagerTests ${probe})
+        add_custom_command(TARGET NativeScriptManagerTests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:${probe}>
+                $<TARGET_FILE_DIR:NativeScriptManagerTests>/$<TARGET_FILE_NAME:${probe}>)
+    endforeach()
+    target_compile_definitions(TerrainHeightFunctionRefusedProbe PRIVATE GE_PROBE_REFUSED)
+    # The AI names a user module registers with the GameSDK macros: a probe and a newer version that drops names.
+    target_sources(NativeScriptManagerTests PRIVATE AiNamesModuleTests.cpp)
+    foreach(probe IN ITEMS AiNamesProbe AiNamesDroppedProbe)
+        add_library(${probe} SHARED AiNamesProbe.cpp)
+        set_target_properties(${probe} PROPERTIES UNITY_BUILD OFF)
+        target_link_libraries(${probe} PRIVATE Engine)
+        target_include_directories(${probe} PRIVATE
+            ${CMAKE_SOURCE_DIR}/Engine/Modules/NativeScripting/GameSDK/Include)
+        add_dependencies(NativeScriptManagerTests ${probe})
+        add_custom_command(TARGET NativeScriptManagerTests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:${probe}>
+                $<TARGET_FILE_DIR:NativeScriptManagerTests>/$<TARGET_FILE_NAME:${probe}>)
+    endforeach()
+    target_compile_definitions(AiNamesDroppedProbe PRIVATE GE_PROBE_DROPPED)
+endif()
 # The component scanner CMakeInvoker runs, for the scan of a project under a non-ASCII path.
 if(TARGET ComponentScanner)
     add_dependencies(NativeScriptManagerTests ComponentScanner)

@@ -87,11 +87,12 @@ namespace GameEngine {
        dimensions. GUID-referenced from a TerrainSculptZone / TerrainPaintZone \
        component; authored in place by the terrain brush (edit-pipeline sec 9.3). */ \
     X(TerrainZoneData) \
-    /* A planet's sphere sculpt page store (.tsculpt): the sparse virtual pages \
-       (dab + modifier layers) of a spherical terrain's authored sculpt, saved \
-       as a sidecar next to the scene. GUID-referenced from the Terrain \
-       component's sphereSculpt field; written by the editor's save flush. */ \
-    X(TerrainSphereSculptData) \
+    /* A terrain's authored height layer (.gepage height store): the sculpt's \
+       pages on a fixed 2^-14 m lattice, saved next to the scene. \
+       GUID-referenced from the Terrain component's heightLayer field; written \
+       by the editor's save flush. The derived page caches under .Cache use \
+       the same extension and are never scanned. */ \
+    X(TerrainHeightLayer) \
     /* A terrain's ordered material list (.terrainmatlib JSON): the authored \
        records its surface shades with, each keyed by a stable slot ID that the \
        painted splat stores. GUID-referenced from the Terrain component, so one \
@@ -109,7 +110,12 @@ namespace GameEngine {
        edited in the Day Cycle window. */ \
     X(DayCycleProfile) \
     /* Reusable entity hierarchy placed in scenes (.prefab, scene text with one root) */ \
-    X(Prefab)
+    X(Prefab) \
+    /* An AI program's option set with its difficulty presets (.aioptions JSON). \
+       Compiled into a program by AiRegistry::CompileProgram. */ \
+    X(AiOptionSet) \
+    /* An AI state-tree program (.scribe JSON), compiled at load into AI::StateTreeProgram. */ \
+    X(AiStateTree)
 
 /**
  * @brief Asset types supported by the engine

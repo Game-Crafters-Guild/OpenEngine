@@ -172,7 +172,9 @@ enum class GamepadButton : std::int32_t
     DpadLeft = 14,
 };
 
-/// A stick or trigger axis of a gamepad. A stick reads -1 to 1, a trigger 0 to 1.
+/// A stick or trigger axis of a gamepad, with one sign on every platform. A stick reads -1 to 1:
+/// +1 is pushed right on LeftX and RightX, and pushed up on LeftY and RightY. A trigger reads 0 to
+/// 1, and 1 is pulled fully. To invert an axis, bind it with a negative scale in BindGamepadAxis.
 // @ge-script
 enum class GamepadAxis : std::int32_t
 {
@@ -267,6 +269,21 @@ enum class PointerLockState : std::uint8_t
     Locked,
 };
 
+/// Whether the game can read gamepads. When it is RuntimeMissing, tell the player: "Install the
+/// GameInput runtime from Microsoft, then restart the game to use a gamepad."
+// @ge-script
+enum class GamepadRuntimeState : std::uint8_t
+{
+    // The engine is still starting the gamepad runtime; no pad reads as connected yet.
+    Starting,
+    // Gamepads work: a connected pad reads through the gamepad functions.
+    Available,
+    // The PC does not have the gamepad runtime (Windows: Microsoft GameInput), so gamepads are off.
+    RuntimeMissing,
+    // The gamepad runtime is installed but failed to start, so gamepads are off; the log has the code.
+    Failed,
+};
+
 } // namespace GameEngine::Input
 
 namespace GameEngine::Input::Script
@@ -332,6 +349,11 @@ void UnlockPointer(InputSystem& input);
 // @ge-script @ge-context @ge-engine-thread
 PointerLockState GetPointerLockState(InputSystem& input);
 
+/// Whether gamepads can be read on this PC. Read it before you ask the player for a gamepad:
+/// RuntimeMissing means the player must install Microsoft GameInput first.
+// @ge-script @ge-context @ge-engine-thread
+GamepadRuntimeState GetGamepadRuntimeState(InputSystem& input);
+
 /// The state of an action this frame, from the enabled contexts that hold it.
 // @ge-script @ge-context @ge-engine-thread
 ActionState GetActionState(InputSystem& input, StringId action);
@@ -371,7 +393,7 @@ void BindMouseAxis(InputSystem& input, StringId context, StringId action, MouseA
 void BindGamepadButton(InputSystem& input, StringId context, StringId action, GamepadButton button);
 
 /// Binds a gamepad stick or trigger to an axis action: the action's value is the axis times the
-/// scale.
+/// scale. A negative scale inverts the axis.
 // @ge-script @ge-context @ge-engine-thread
 void BindGamepadAxis(InputSystem& input, StringId context, StringId action, GamepadAxis axis, float scale = 1.0f);
 

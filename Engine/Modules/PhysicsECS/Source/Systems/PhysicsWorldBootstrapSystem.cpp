@@ -36,6 +36,13 @@ void PhysicsWorldBootstrapSystem::Update(ECS::World& world, float32 /*deltaTime*
     }
 
     PhysicsWorldService::Initialize(settings);
+    // The scene's physics rate sets the rate of the world's clock; the clock refuses a step of 0 or less.
+    ECS::SimulationClock& clock = world.GetSimulationClock();
+    clock.SetFixedDeltaSeconds(settings.fixedTimeStep);
+    if (settings.maxSubSteps > 0)
+        clock.SetMaxStepsPerFrame(static_cast<uint32>(settings.maxSubSteps));
+    // A new physics world starts a play session, and a play session starts at tick 0.
+    clock.Reset();
     PhysicsEntityEventCallbacks::NotifyWorldStateChanged();
 }
 } // namespace GameEngine::PhysicsECS

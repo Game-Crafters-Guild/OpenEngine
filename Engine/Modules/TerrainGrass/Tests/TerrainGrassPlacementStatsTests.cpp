@@ -75,7 +75,8 @@ constexpr size_t kLod0InstanceCountOffset = offsetof(GrassIndirectDrawGPU, Insta
 constexpr size_t kLod1InstanceCountOffset =
     sizeof(GrassIndirectDrawGPU) + offsetof(GrassIndirectDrawGPU, InstanceCount);
 constexpr size_t kCandidatesConsideredOffset = offsetof(GrassIndirectBlockGPU, CandidatesConsidered);
-constexpr size_t kCellsVisibleOffset = offsetof(GrassIndirectBlockGPU, CellsVisible);
+constexpr size_t kCellsCountedOffset = offsetof(GrassIndirectBlockGPU, CellsCounted);
+constexpr size_t kCellsPlacedOffset = offsetof(GrassIndirectBlockGPU, CellsPlaced);
 constexpr size_t kAcceptedBladesOffset = offsetof(GrassIndirectBlockGPU, AcceptedBlades);
 constexpr size_t kFittedRangeScaleOffset = offsetof(GrassIndirectBlockGPU, FittedRangeScaleBits);
 constexpr size_t kCapacityOffset = offsetof(GrassIndirectBlockGPU, Capacity);
@@ -132,7 +133,8 @@ void RunPlacementFrame(IDevice* dev, RGFrame& frame, TerrainGrassPlacementStats&
             // Counters the placement compute fills beside the draw records; seeded so the readback
             // is proven to carry the whole block and not just the first draw.
             ctx.Cmd->FillBuffer(args, kCandidatesConsideredOffset, sizeof(uint32), 900000u);
-            ctx.Cmd->FillBuffer(args, kCellsVisibleOffset, sizeof(uint32), 5000u);
+            ctx.Cmd->FillBuffer(args, kCellsCountedOffset, sizeof(uint32), 5000u);
+            ctx.Cmd->FillBuffer(args, kCellsPlacedOffset, sizeof(uint32), 2000u);
             ctx.Cmd->FillBuffer(args, kAcceptedBladesOffset, sizeof(uint32), 800000u);
             // The scale rides the block as float bits; 1.0f is 0x3F800000.
             ctx.Cmd->FillBuffer(args, kFittedRangeScaleOffset, sizeof(uint32), 0x3F800000u);
@@ -221,7 +223,8 @@ TEST(TerrainGrassPlacementStats, PlacedCountResolvesFromTheIndirectArgs)
         EXPECT_EQ(latched[0].Placed.Dispatched.PlannedCandidates, 370000u);
         // The whole block travelled, not just the first draw's InstanceCount.
         EXPECT_EQ(latched[0].Placed.CandidatesConsidered, 900000u);
-        EXPECT_EQ(latched[0].Placed.CellsVisible, 5000u);
+        EXPECT_EQ(latched[0].Placed.CellsCounted, 5000u);
+        EXPECT_EQ(latched[0].Placed.CellsPlaced, 2000u);
         EXPECT_EQ(latched[0].Placed.AcceptedBlades, 800000u);
         EXPECT_FLOAT_EQ(latched[0].Placed.FittedRangeScale, 1.0f);
         EXPECT_EQ(latched[0].Placed.PlacedPerLod[0], kPlaced);

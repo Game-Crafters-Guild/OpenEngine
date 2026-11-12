@@ -48,15 +48,15 @@ layout(set = 0, binding = 4, std430) readonly buffer LightBufferBlock
 
 layout(set = 0, binding = 5, std140) uniform ViewParamsBlock
 {
-    // 160 B core prefix of the shared ViewParams list.
+    // The full shared ViewParams list: the cull reads the relative view.
 #define GE_VP_MAT4(name) mat4 name;
 #define GE_VP_VEC4(name) vec4 name;
-#define GE_VIEWPARAMS_CORE_ONLY 1
 #include "Includes/view_params_fields.glsl"
-#undef GE_VIEWPARAMS_CORE_ONLY
 #undef GE_VP_VEC4
 #undef GE_VP_MAT4
 } ViewParams;
+
+#include "Includes/reverse_z.glsl"
 
 layout(set = 0, binding = 2, std140) uniform ClusterParamsBlock
 {
@@ -96,12 +96,7 @@ shared uint sIndices[kLdsMaxLights];
 
 // ----- Helpers --------------------------------------------------------------
 
-// Reverse-Z LH-ZO depth -> view-space Z (matches forwardplus_lighting.frag's
-// ViewZFromDepth_ReverseZ_LH).
-float ViewZFromDepth(float depth, float zNear, float zFar)
-{
-    return (zNear * zFar) / max(depth * (zFar - zNear) + zNear, 1e-6);
-}
+#include "Includes/cluster_projection.glsl"
 
 // ----- Main -----------------------------------------------------------------
 
@@ -137,7 +132,7 @@ void main()
     bool clusterActive = true;
 #endif
 
-    // --- Tile frustum planes (identical math to placeholder cull) ---------------
+    // --- Tile frustum planes ------------------------------------------------------
 
     const uvec2 tileSize = max(uvec2(ClusterParams.params0.xy), uvec2(1u, 1u));
     const float renderW = float(clustersX * tileSize.x);
@@ -159,24 +154,19 @@ void main()
     vec3 pBL = BL.xyz / max(abs(BL.w), 1e-6);
     vec3 pBR = BR.xyz / max(abs(BR.w), 1e-6);
 
-    vec3 rTL = normalize(pTL);
-    vec3 rTR = normalize(pTR);
-    vec3 rBL = normalize(pBL);
-    vec3 rBR = normalize(pBR);
-    vec3 rC  = normalize((rTL + rTR + rBL + rBR) * 0.25);
-
-    vec3 nLeft   = normalize(cross(rBL, rTL)); if (dot(nLeft, rC)   < 0.0) nLeft   = -nLeft;
-    vec3 nRight  = normalize(cross(rTR, rBR)); if (dot(nRight, rC)  < 0.0) nRight  = -nRight;
-    vec3 nTop    = normalize(cross(rTL, rTR)); if (dot(nTop, rC)    < 0.0) nTop    = -nTop;
-    vec3 nBottom = normalize(cross(rBR, rBL)); if (dot(nBottom, rC) < 0.0) nBottom = -nBottom;
+    // The near corners on the tile's diagonal: each side plane goes through one of them.
+    vec4 nearTL = ViewParams.ge_invProj * vec4(x0, y1, 1.0, 1.0);
+    vec4 nearBR = ViewParams.ge_invProj * vec4(x1, y0, 1.0, 1.0);
+    vec3 pNearTL = nearTL.xyz / max(abs(nearTL.w), 1e-6);
+    vec3 pNearBR = nearBR.xyz / max(abs(nearBR.w), 1e-6);
+    const GE_ClusterTilePlanes tilePlanes = GE_ClusterTilePlanesFromCorners(pTL, pTR, pBL, pBR, pNearTL, pNearBR);
 
     // --- Z slice bounds (log partition in view Z) ------------------------------
 
-    const float zNear = max(ViewParams.ge_nearFar.x, 1e-4);
-    float zFar = ViewParams.ge_nearFar.y;
-    if (zFar <= zNear + 1e-4) zFar = zNear + 1000.0;
-    const float invLogRatio = ViewParams.ge_nearFar.z;
-    const float logRatio = (invLogRatio > 0.0) ? (1.0 / invLogRatio) : log(zFar / zNear);
+    const float zNear = max(ViewParams.ge_viewRanges.x, 1e-4);
+    const float zRange = max(ViewParams.ge_viewRanges.y, zNear + 1e-4);
+    const float invLogRatio = ViewParams.ge_viewRanges.z;
+    const float logRatio = (invLogRatio > 0.0) ? (1.0 / invLogRatio) : log(zRange / zNear);
 
     const float tSliceMin = float(slice)        / float(depthSlices);
     const float tSliceMax = float(slice + 1u)   / float(depthSlices);
@@ -193,7 +183,7 @@ void main()
     {
         // Reverse-Z: dmBits.x = smallest depth = farthest opaque.
         const float depthFarthestBits = uintBitsToFloat(dmBits.x);
-        const float viewZ_farthest = ViewZFromDepth(depthFarthestBits, zNear, zFar);
+        const float viewZ_farthest = LinearizeReverseZ(depthFarthestBits, ViewParams.ge_depthTerms);
         // Skip ONLY slices entirely BEHIND the farthest opaque — nothing visible
         // is occluded back there. Do NOT skip slices in front of the nearest
         // opaque: transparent forward+ surfaces (e.g. the ocean water drawn over
@@ -234,11 +224,12 @@ void main()
         if (lightType == 0u) continue;  // skip directionals (out of band)
         if (LightBuffer.lights[i].meta.w == 0u) continue;
 
-        const vec3 posWS  = LightBuffer.lights[i].posRange.xyz;
+        // Relative to the view's render origin, the frame of ge_viewRel.
+        const vec3 posRel = LightBuffer.lights[i].posRange.xyz;
         const float fullRadius = max(LightBuffer.lights[i].posRange.w, 0.0);
 
         // View-space center.
-        vec3 posV = (ViewParams.ge_view * vec4(posWS, 1.0)).xyz;
+        vec3 posV = (ViewParams.ge_viewRel * vec4(posRel, 1.0)).xyz;
         float radius = fullRadius;
         if (lightType == 4u)
         {
@@ -268,7 +259,7 @@ void main()
             if (cosOuter > 0.05)
             {
                 const vec3 dirWS = LightBuffer.lights[i].dirIntensity.xyz;
-                const vec3 coneDirV = (ViewParams.ge_view * vec4(dirWS, 0.0)).xyz;
+                const vec3 coneDirV = (ViewParams.ge_viewRel * vec4(dirWS, 0.0)).xyz;
                 posV   += 0.5 * fullRadius * coneDirV;
                 radius  = fullRadius * sqrt(max(1.25 - cosOuter, 0.0));
             }
@@ -278,10 +269,10 @@ void main()
         if (posV.z + radius < zNear) continue;
 
         // Sphere-vs-frustum-plane: reject if entire sphere outside any plane.
-        if (dot(nLeft,   posV) < -radius) continue;
-        if (dot(nRight,  posV) < -radius) continue;
-        if (dot(nTop,    posV) < -radius) continue;
-        if (dot(nBottom, posV) < -radius) continue;
+        if (GE_ClusterPlaneDistance(tilePlanes.Left,   posV) < -radius) continue;
+        if (GE_ClusterPlaneDistance(tilePlanes.Right,  posV) < -radius) continue;
+        if (GE_ClusterPlaneDistance(tilePlanes.Top,    posV) < -radius) continue;
+        if (GE_ClusterPlaneDistance(tilePlanes.Bottom, posV) < -radius) continue;
 
         // Z slab.
         if (posV.z - radius > zSliceMax) continue;

@@ -51,6 +51,12 @@ bool IsHeight(const PageStoreHeader& header)
     return header.Format == PageFieldFormat::HeightSteps;
 }
 
+// An authored height layer is versioned by its Key (HeightLayerStore.h), not by kPageStoreFormatVersion.
+bool IsHeightLayer(const PageStoreHeader& header)
+{
+    return IsHeight(header) && header.Units == PageHeightUnits::LayerMeters;
+}
+
 // A format or filter value past the ones this engine knows was written by a newer engine; a known
 // pair that is not `kind`'s is another kind's store or a damaged one.
 std::string ValidateEncoding(const PageStoreHeader& header, PageFieldKind kind)
@@ -67,7 +73,8 @@ std::string ValidateEncoding(const PageStoreHeader& header, PageFieldKind kind)
 
 std::string ValidateHeader(const PageStoreHeader& header, uint32 levelCount)
 {
-    if (IsHeight(header) && header.Units != PageHeightUnits::Normalized && header.Units != PageHeightUnits::Absolute)
+    if (IsHeight(header) && header.Units != PageHeightUnits::Normalized && header.Units != PageHeightUnits::Absolute &&
+        header.Units != PageHeightUnits::LayerMeters)
         return "unknown height units";
     if (!IsHeight(header) && (header.Units != PageHeightUnits{} || header.ReferenceRadius != 0.0))
         return "a store that holds no heights has height units or a reference radius";
@@ -203,12 +210,12 @@ std::string ReadPageStoreHead(SharedFileReader& file, PageFieldKind kind, uint64
     std::size_t cursor = 0;
     if (Take<uint32>(fixed, cursor) != kPageStoreMagic)
         return "the file is not a page store";
-    if (const uint32 version = Take<uint32>(fixed, cursor); version != kPageStoreFormatVersion)
-        return VersionRefusal(version);
+    const uint32 version = Take<uint32>(fixed, cursor);
     if (availableBytes < kPageStoreHeaderBytes ||
         !ReadExact(file, baseOffset + kPageStorePrefixBytes, fixed + kPageStorePrefixBytes,
                    kPageStoreHeaderBytes - kPageStorePrefixBytes))
-        return "the file is shorter than a page store header";
+        return version != kPageStoreFormatVersion ? VersionRefusal(version)
+                                                  : "the file is shorter than a page store header";
 
     PageStoreLayout layout;
     PageStoreHeader& header = layout.Header;
@@ -222,6 +229,8 @@ std::string ReadPageStoreHead(SharedFileReader& file, PageFieldKind kind, uint64
     const uint32 levelCount = Take<uint32>(fixed, cursor);
     header.ReferenceRadius = Take<float64>(fixed, cursor);
     header.Key = Take<uint64>(fixed, cursor);
+    if (version != kPageStoreFormatVersion && !IsHeightLayer(header))
+        return VersionRefusal(version);
     if (std::string reason = ValidateEncoding(header, kind); !reason.empty())
         return reason;
     if (std::string reason = ValidateHeader(header, levelCount); !reason.empty())

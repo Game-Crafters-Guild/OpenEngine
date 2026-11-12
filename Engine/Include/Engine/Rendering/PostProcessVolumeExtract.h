@@ -10,6 +10,7 @@
 #include "Engine/Rendering/PostProcessSettings.h"
 #include "Engine/Rendering/ResolvedShadowSettings.h"
 #include "Engine/Rendering/VolumetricFogTypes.h"
+#include "Mathematics/WorldPosition.h"
 #include "Rendering/RenderLayerMask.h"
 #include "Rendering/Sky/SkySunState.h"
 #include "Types/Types.h"
@@ -35,7 +36,7 @@ struct PostProcessExtractedVolume
     bool IsGlobal = false;
     int32 Shape = 0;
     float32 BlendDistance = 0.0f;
-    float32 Center[3]{};
+    Mathematics::WorldPosition Center{};
     float32 AxisX[3]{};
     float32 AxisY[3]{};
     float32 AxisZ[3]{};

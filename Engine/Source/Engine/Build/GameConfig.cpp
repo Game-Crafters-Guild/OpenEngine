@@ -105,9 +105,6 @@ GameConfig LoadGameConfig(const std::filesystem::path& path)
     if (doc.contains("renderPipeline") && doc["renderPipeline"].is_string())
         cfg.renderPipeline = doc["renderPipeline"].get<std::string>();
 
-    if (doc.contains("waitForSplineRecipes") && doc["waitForSplineRecipes"].is_boolean())
-        cfg.waitForSplineRecipes = doc["waitForSplineRecipes"].get<bool>();
-
     if (doc.contains("scriptAssemblyPath") && doc["scriptAssemblyPath"].is_string())
         cfg.scriptAssemblyPath = doc["scriptAssemblyPath"].get<std::string>();
 
@@ -215,7 +212,6 @@ bool SaveGameConfig(const std::filesystem::path& path, const GameConfig& cfg)
     UIScaleProjectSettings::WriteTo(cfg.uiScale, doc[UIScaleProjectSettings::kUIScaleKey]);
     doc["startupScene"] = cfg.startupScene;
     doc["renderPipeline"] = cfg.renderPipeline;
-    doc["waitForSplineRecipes"] = cfg.waitForSplineRecipes;
     doc["scriptAssemblyPath"] = cfg.scriptAssemblyPath;
 
     if (!cfg.appIconPath.empty())

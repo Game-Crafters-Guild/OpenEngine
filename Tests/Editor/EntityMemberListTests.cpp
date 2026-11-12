@@ -38,7 +38,8 @@ constexpr uint8 kKeep = 0;
 constexpr uint8 kCut = 1;
 
 // The control's sheet and the shared control rules it relies on, in the order the editor attaches them.
-const std::vector<std::string> kListSheets{"Assets/UI/controls/Button.css", "Assets/UI/controls/Toggle.css",
+const std::vector<std::string> kListSheets{GE_UI_MODULE_SOURCE_DIR "/Assets/UI/controls/Button.css",
+                                           GE_UI_MODULE_SOURCE_DIR "/Assets/UI/controls/Toggle.css",
                                            "Assets/UI/controls/EntityMemberList/EntityMemberList.css"};
 
 // Layout rounds to a fraction of a pixel.

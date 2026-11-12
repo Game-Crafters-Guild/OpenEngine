@@ -20,6 +20,7 @@
 #include "Assets/AssetManager.h"
 #include "Assets/AssetRegistry.h" // AssetSourceDesc
 #include "JobSystem/WorkStealingThreadPool.h"
+#include "Jobs/JoinOnScopeExit.h"
 
 #include "Assets/ParserRegistry.h"
 #include "Assets/BinaryAsset.h"
@@ -152,19 +153,7 @@ bool WaitForDecodesToEnter(const HeldBinaryParser& parser, int count,
     return true;
 }
 
-// Joins its thread however the test leaves the scope. A gtest ASSERT_ returns
-// from the test body, and a joinable std::thread destroyed there terminates the
-// process instead of reporting the failure.
-struct JoinOnScopeExit
-{
-    std::thread Thread;
-    void Join()
-    {
-        if (Thread.joinable())
-            Thread.join();
-    }
-    ~JoinOnScopeExit() { Join(); }
-};
+using GameEngine::Tests::JoinOnScopeExit;
 
 // Drive Update() until `done` or the deadline. Each iteration is real work, not
 // a sleep: Update is where a rebind whose loads were still in flight lands.
@@ -269,17 +258,16 @@ TEST(SourceRebindAsync, RebindWithARunningDecodeReturnsBeforeTheDecodeDoes)
     ASSERT_TRUE(WaitForDecodesToEnter(*held, 1));
 
     // A blocking implementation would wait here forever, so the watchdog turns
-    // the hang into a late return that the assertion below can fail on. Joined
-    // by the guard on every exit path: a failing ASSERT_ returns from here, and
-    // a joinable thread at that point aborts the process instead of reporting.
+    // the hang into a late return that the assertion below can fail on.
     std::atomic<bool> releasedByWatchdog{false};
-    JoinOnScopeExit watchdog{std::thread(
+    std::thread watchdog(
         [&release, &releasedByWatchdog]
         {
             std::this_thread::sleep_for(std::chrono::seconds(3));
             releasedByWatchdog.store(true, std::memory_order_release);
             release.set_value();
-        })};
+        });
+    JoinOnScopeExit joinWatchdog({&watchdog, 1});
 
     std::atomic<bool> rebound{false};
     const auto beganAt = std::chrono::steady_clock::now();
@@ -297,7 +285,7 @@ TEST(SourceRebindAsync, RebindWithARunningDecodeReturnsBeforeTheDecodeDoes)
     EXPECT_FALSE(rebound.load(std::memory_order_acquire));
     EXPECT_EQ(assets.GetSourceRoot("project"), projectA.Assets);
 
-    watchdog.Join();
+    watchdog.join();
     EXPECT_TRUE(ConvergeOnUpdate(assets, rebound));
     EXPECT_EQ(assets.GetSourceRoot("project"), projectB.Assets);
 
@@ -334,12 +322,13 @@ TEST(SourceRebindAsync, ASecondBeginForAnAliasWithAPendingEjectIsRefused)
     AssetLoadHandle heldLoad = assets.LoadAsset(heldGuid, [](Result<SharedPtr<Asset>, AssetError>) {});
     ASSERT_TRUE(WaitForDecodesToEnter(*held, 1));
 
-    JoinOnScopeExit watchdog{std::thread(
+    std::thread watchdog(
         [&release]
         {
             std::this_thread::sleep_for(std::chrono::seconds(3));
             release.set_value();
-        })};
+        });
+    JoinOnScopeExit joinWatchdog({&watchdog, 1});
 
     std::atomic<bool> rebound{false};
     ASSERT_TRUE(assets.BeginRebindSource("project", MakeRebind(projectB),
@@ -353,7 +342,7 @@ TEST(SourceRebindAsync, ASecondBeginForAnAliasWithAPendingEjectIsRefused)
     EXPECT_FALSE(secondRebound);
     EXPECT_FALSE(unregistered);
 
-    watchdog.Join();
+    watchdog.join();
     EXPECT_TRUE(ConvergeOnUpdate(assets, rebound));
 
     // The refused calls left the first one to finish on its own terms.

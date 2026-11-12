@@ -28,6 +28,7 @@
 #include "Assets/ModelAsset.h" // Mesh/Vertex for registry fixtures
 #include "Rendering/Core/Device.h"
 #include "Rendering/Materials/MaterialDocument.h"
+#include "TestCameraEye.h"
 #include "TestDeviceHelper.h"
 
 #include <memory>
@@ -49,7 +50,7 @@ inline GUID FixedGuid(uint8 tag)
 
 inline Transform MakeTransformAt(float x, float y, float z)
 {
-    return Transform::FromTRS(Mathematics::Vector3{x, y, z}, Mathematics::Quaternion{},
+    return Transform::FromTRS(Mathematics::WorldPosition{x, y, z}, Mathematics::Quaternion{},
                               Mathematics::Vector3{1.0f, 1.0f, 1.0f});
 }
 
@@ -68,6 +69,9 @@ inline CameraData MakeIdentityCamera()
     data.viewProj = Mathematics::Matrix4x4::Identity();
     return data;
 }
+
+// The near and culling range of MakeIdentityCamera().
+inline constexpr CameraRanges kIdentityCameraRanges{0.1f, 1000.0f};
 
 struct ExtractionHarness
 {
@@ -119,7 +123,7 @@ struct ExtractionHarness
         Material::TestFactory::SetGpuSceneMaterialIndex(*material, 0u);
 
         cameraId = rs.Views().AllocateCamera("FastPathCamera");
-        rs.Views().SetCameraData(cameraId, MakeIdentityCamera());
+        rs.Views().SetCameraData(cameraId, ::GameEngine::Tests::TestCameraWithEye(MakeIdentityCamera()), kIdentityCameraRanges);
         viewId = rs.Views().AllocateView("FastPathView", cameraId);
         rs.Views().SetViewWorldId(viewId, worldId);
         rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());

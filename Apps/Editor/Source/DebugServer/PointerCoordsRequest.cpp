@@ -2,12 +2,15 @@
 
 #include "DebugServer/DebugServerReply.h"
 #include "DebugServer/InjectedInput.h"
+#include "Input/InputSystem.h"
 #include "Mathematics/Geometry.h"
+#include "Types/StringUtils.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <string>
+#include <string_view>
 
 namespace GameEngine::Editor
 {
@@ -132,6 +135,44 @@ std::vector<Mathematics::Vector2> SampleDragPath(const std::vector<Mathematics::
         lastMove = endMove;
     }
     return moves;
+}
+
+namespace
+{
+int ModifierForName(std::string_view name)
+{
+    const std::string lowered = ToLowerAscii(name);
+    if (lowered == "shift")
+        return Input::kModShift;
+    if (lowered == "control" || lowered == "ctrl")
+        return Input::kModControl;
+    if (lowered == "alt")
+        return Input::kModAlt;
+    if (lowered == "super" || lowered == "cmd" || lowered == "meta")
+        return Input::kModSuper;
+    return 0;
+}
+} // namespace
+
+int ReadKeyModifiers(const nlohmann::json& params)
+{
+    const auto it = params.find("mods");
+    if (it == params.end())
+        return 0;
+    if (it->is_number_integer())
+        return it->get<int>();
+    if (it->is_string())
+        return ModifierForName(it->get<std::string>());
+    int mods = 0;
+    if (it->is_array())
+    {
+        for (const auto& entry : *it)
+        {
+            if (entry.is_string())
+                mods |= ModifierForName(entry.get<std::string>());
+        }
+    }
+    return mods;
 }
 
 } // namespace GameEngine::Editor

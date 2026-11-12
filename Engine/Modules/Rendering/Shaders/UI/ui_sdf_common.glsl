@@ -80,6 +80,14 @@ const uint NO_TRANSFORM = 0u;
 // of vClipPos01 and vClipPos23 carry exactly this many.
 const int kMaxClipChainDepth = 4;
 
+// Depth of a draw-order position: (position + 1) / 65535, one exact D16 level
+// per position, so a later primitive is always nearer (reverse-Z, clear 0).
+// Positions past the last level share it; UIOpaqueInteriors lists none there.
+float uiDrawOrderDepth(uint position)
+{
+    return float(min(position + 1u, 65535u)) / 65535.0;
+}
+
 // --- Mode/flag bit layout (matches UIPrimitive.h) ---
 const uint MODE_MASK        = 0x00000007u;
 const uint POINT_FILTER_BIT = 0x00000008u;

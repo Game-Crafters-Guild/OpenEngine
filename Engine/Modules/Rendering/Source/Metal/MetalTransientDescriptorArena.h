@@ -15,7 +15,7 @@ namespace Rendering
 // sets live in. Tables are carved in order out of a few large shared pages, so
 // creating a transient set costs no Metal allocation once the pages have grown
 // to what a frame uses; Reset makes the whole arena free again when the frame
-// slot comes round (MetalDevice::BeginFrame, after the slot's command buffers
+// slot comes round (MetalDevice::RecycleFrameSlot, after the slot's command buffers
 // completed), which is the lifetime DescriptorSetDesc::transient promises.
 // Pages are kept for the device's life, so the arena settles at the largest
 // frame it has served.

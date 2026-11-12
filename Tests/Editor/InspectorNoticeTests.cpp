@@ -40,7 +40,8 @@ namespace
 
 // The notice's own sheet and the shared button and visibility rules it relies on, in the order the
 // editor attaches them after the theme.
-const std::vector<std::string> kNoticeSheets{"Assets/UI/theme/core.css", "Assets/UI/controls/Button.css",
+const std::vector<std::string> kNoticeSheets{"Assets/UI/theme/core.css",
+                                             GE_UI_MODULE_SOURCE_DIR "/Assets/UI/controls/Button.css",
                                              "Assets/UI/controls/InspectorNotice/InspectorNotice.css"};
 
 // Layout rounds to a fraction of a pixel; containment is checked to this tolerance.
@@ -366,12 +367,15 @@ TEST(InspectorNoticeLayout, TheDismissFollowsTheActionAndWrapsWithIt)
 
 // Attaches the sheets each element in the tree requested, in request order, the way the editor's
 // UIManager attaches them when the element joins it. A control's sheet attached to an element sits
-// after its ancestors' sheets in that element's cascade.
+// after its ancestors' sheets in that element's cascade. A UI module control's sheet is in the UI
+// module's source tree; the editor's sheets are in the editor's.
 bool AttachRequestedSheets(UIElement& element, std::string& diagnostic)
 {
     for (const UIElement::SubtreeStyleAssetRequest& request : element.ConsumeRequestedSubtreeStyleAssetPaths())
     {
-        const std::string css = InspectorLayoutTesting::ReadEditorFile("Assets/" + request.Path);
+        const std::string modulePath = GE_UI_MODULE_SOURCE_DIR "/Assets/" + request.Path;
+        const std::string path = std::filesystem::exists(modulePath) ? modulePath : "Assets/" + request.Path;
+        const std::string css = InspectorLayoutTesting::ReadEditorFile(path);
         GameEngine::Stylesheet sheet{};
         if (css.empty() || !GameEngine::UIParsing::CSSParser::ParseStylesFromString(css, sheet))
         {
@@ -379,6 +383,7 @@ bool AttachRequestedSheets(UIElement& element, std::string& diagnostic)
             return false;
         }
         sheet.SourceName = request.Path;
+        sheet.Origin = InspectorLayoutTesting::SheetOrigin(path);
         element.AddStylesheet(std::make_shared<const GameEngine::Stylesheet>(std::move(sheet)));
     }
     for (const auto& child : element.GetChildren())

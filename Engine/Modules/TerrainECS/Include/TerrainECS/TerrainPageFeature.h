@@ -68,6 +68,33 @@ public:
     /// committed height table, then its surface table when paged. The terrain draw and the grass bind
     /// this one slot. Invalid Buffer when the terrain's height is not paged.
     TerrainPageTableRing::Slot BindTableRing(uint32 terrain, uint32 generation);
+    /// A paged terrain's height table at a publish: its version, its word count and TerrainPages::WholeTableHash.
+    struct PublishedTable
+    {
+        uint32 Terrain = 0;
+        uint64 Version = 0;
+        uint32 Words = 0;
+        uint64 Hash = 0;
+    };
+    /// The tables at the last publish before frame `Frame`, and the ring slot that frame bound, copied on the GPU.
+    /// A slot whose version equals its table's version holds the table's hash.
+    struct TableReport
+    {
+        uint64 Frame = 0; // the render-graph frame of the copy
+        std::vector<PublishedTable> Tables;
+        TerrainPageTableRing::SlotReport Slot;
+    };
+    /// Main thread, on request: the next publish hashes the tables and the next frame copies its ring slot.
+    /// The report completes when the GPU finishes that frame, so a reader gets it a frame or more later.
+    void RequestTableReport();
+    /// Main thread: the last completed report; false before the first.
+    bool LastTableReport(TableReport& out) const;
+    /// Render thread, after Latch: reads a completed copy, and declares the copy of a requested report.
+    /// No work when no report is requested.
+    void DeclareTableReport(Rendering::RenderGraph::RGFrame& frame);
+    void OnFrameSubmittedRG(Rendering::RenderGraph::RGFrame& frame,
+                            const Rendering::IDevice::GpuSyncToken& token) override;
+    void OnFrameStreamRetiredRG(Rendering::RenderGraph::RGFrame& frame) override;
     /// Render thread: the serial of the last committed page change (an entry, a fade or an upload) of
     /// terrain `terrain` that meets terrain-UV rect `uv` (X along U, Y along V), to one cell of
     /// kChangeGridCells a side; 0 before the first. The table versions change for every page instead.
@@ -78,13 +105,20 @@ public:
     void OnDeviceRebuilt(Rendering::IDevice* device) override;
 
 private:
-    // Words are shared, not copied, between the published, latched and committed sets: a table is
-    // copied once, by Publish, when its version changes.
+    // The snapshots of one table that no set holds any more, kept for Publish to bring up to date.
+    struct TablePool
+    {
+        std::mutex Mutex;
+        std::vector<std::unique_ptr<PackedPageTable>> Free;
+    };
+    // Snapshots are shared, not copied, between the published, latched and committed sets: Publish
+    // copies a table once when its version changes, into a pooled snapshot that takes only the words
+    // changed since its own version.
     struct Table
     {
-        std::shared_ptr<const std::vector<uint32>> Words;
-        uint64 Version = 0;
-        uint32 PlaneMask = 0; // a surface table's planes (TerrainSurfacePageSource::PlaneMask)
+        std::shared_ptr<const PackedPageTable> Snapshot;
+        uint32 PlaneMask = 0;            // a surface table's planes (TerrainSurfacePageSource::PlaneMask)
+        std::shared_ptr<TablePool> Pool; // Publish's: where this table's released snapshots return
     };
     using TableMap = std::unordered_map<uint32, Table>;
     struct TableSet
@@ -102,13 +136,32 @@ private:
     struct PlaneCache
     {
         Rendering::TextureHandle Texture;
-        bool Written = false;  // FlushUploads recorded an upload into it
+        uint32 SlotsPerRow = 0; // the field's slots per row when the texture was made
+        bool Written = false;   // FlushUploads recorded an upload into it
         bool Readable = false; // an upload into it precedes this latch
     };
+    // The report that the GPU copies now: declared in a frame, then sealed at that frame's submit.
+    struct ReportCopy
+    {
+        enum class Stage : uint8
+        {
+            None,
+            Declared,
+            Sealed
+        };
+        Stage Step = Stage::None;
+        const Rendering::RenderGraph::RGFrame* FrameKey = nullptr;
+        uint64 Frame = 0;
+        bool Recorded = false; // the copy pass recorded the copy
+        Rendering::IDevice::GpuSyncToken Token;
+        std::vector<PublishedTable> Tables;
+    };
 
-    static void PublishTable(Table& table, const std::vector<uint32>* words, uint64 version, uint32 planeMask);
+    static void PublishTable(Table& table, const PackedPageTable* source, uint32 planeMask);
+    // A snapshot's deleter: returns it to `pool`, or frees it when the pool is full.
+    static void ReturnSnapshot(const std::shared_ptr<TablePool>& pool, const PackedPageTable* snapshot);
     static void ForgetUnpaged(TableMap& tables, std::span<const uint32> paged);
-    static bool FindTable(const TableMap& tables, uint32 terrain, std::span<const uint32>& words, uint64& version);
+    static const PackedPageTable* FindTable(const TableMap& tables, uint32 terrain);
     void EnsureCache();
     void EnsurePlaneCaches();
     void FlushSurfaceUploads(Rendering::CommandList& cl);
@@ -119,6 +172,10 @@ private:
     void RetireStaging();
     // Marks the latched change rects with a new serial: called where the latched tables commit.
     void CommitChanges();
+    // Hashes a whole pack of each table in `paged` for the requested report.
+    void PublishTableHashes(const TerrainPages& pages, std::span<const uint32> paged);
+    // Makes the sealed copy the last report once the GPU completes it.
+    void CompleteTableReport();
 
     // Published by the main thread, under m_Mutex.
     std::mutex m_Mutex;
@@ -153,6 +210,15 @@ private:
     uint32 m_LatchedSurfaceSlotsPerRow = 0;
     uint64 m_LatchedFrame = ~0ull;
     std::atomic<uint64> m_DeviceEpoch{0};
+
+    // The table report: requested and read on the main thread, copied on the render thread.
+    std::atomic<bool> m_ReportRequested{false};
+    mutable std::mutex m_ReportMutex; // guards the published hashes and the last report
+    std::vector<PublishedTable> m_PublishedTableHashes;
+    bool m_TableHashesPublished = false;
+    TableReport m_LastReport;
+    bool m_HasReport = false;
+    ReportCopy m_ReportCopy; // render thread only
 };
 
 } // namespace GameEngine::TerrainECS

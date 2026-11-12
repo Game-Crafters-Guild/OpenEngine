@@ -148,8 +148,9 @@ void RGGraph::GenerateBarriers(const uint8_t physicalOfLogical[kQueueCount])
     for (uint32_t si = 0; si < m_ScheduledOrder.size(); ++si)
     {
         const RGPassId p = m_ScheduledOrder[si];
+        // Stages follow the declared queue; ownership and coverage follow the queue the pass runs on.
         const RGQueue queue = m_Passes[p].Desc.Queue;
-        const uint8_t passQueue = static_cast<uint8_t>(queue);
+        const uint8_t passQueue = static_cast<uint8_t>(m_Passes[p].ExecutionQueue);
         // Coverage slot: PHYSICAL queue. Logical queues collapsed onto one
         // physical queue (the production default) must share reader coverage —
         // the submission plan emits no semaphore between them, so the barrier
@@ -161,21 +162,7 @@ void RGGraph::GenerateBarriers(const uint8_t physicalOfLogical[kQueueCount])
         for (uint32_t k = m_PassAccOff[p]; k < m_PassAccOff[p + 1]; ++k)
         {
             const RGAccessRecord& a = m_Accesses[m_PassAccIdx[k]];
-            RGAccessInfo info = MapAccess(a.Access, queue);
-            // Descriptor-claim constraint (View.DepthResolved): this texture's
-            // sampled descriptors claim GENERAL (TextureDesc::sampledInGeneralLayout),
-            // so a sampled read must observe GENERAL — ShaderReadOnly would
-            // contradict the claimed layout (VUID-vkCmdDraw-None-09600) and
-            // ping-pong the layout against storage users across queues. Scoped
-            // to sampled reads: storage accesses are natively General, and
-            // non-sampled reads (copies) keep their API-required layouts with
-            // the submission plan ordering the mix (RAW/WAR-on-layout edges).
-            const bool sampledRead = a.Access == RGAccess::Sampled ||
-                                     a.Access == RGAccess::SampledCompute ||
-                                     a.Access == RGAccess::SampledVertex;
-            if (sampledRead && m_Resources[a.Resource].SampledInGeneralLayout &&
-                m_Resources[a.Resource].Kind == RGResourceKind::Texture)
-                info.Layout = RGImageLayout::General;
+            const RGAccessInfo info = AccessInfo(a, queue);
             const uint32_t layers =
                 (m_CellOff[a.Resource + 1] - m_CellOff[a.Resource]) / m_CellMips[a.Resource];
             const ResolvedRange rr = Resolve(a.Range, m_CellMips[a.Resource], layers);

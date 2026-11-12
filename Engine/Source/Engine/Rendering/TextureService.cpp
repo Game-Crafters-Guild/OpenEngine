@@ -1097,7 +1097,7 @@ struct CounterRelease
 GUID EmbeddedTextureGuid(const EmbeddedImage& image, bool linear)
 {
     const GUID contentBase = GUID::Derive(
-        GUID{}, "embedded/" + std::to_string(image.ContentHash) + "/" + std::to_string(image.Data.size()));
+        GUID{}, "embedded/" + std::to_string(image.ContentHash) + "/" + std::to_string(image.Data.Size()));
     return GUID::Derive(contentBase, linear ? "linear" : "srgb");
 }
 
@@ -1356,7 +1356,10 @@ static void ExpandRawLdrToRgba(const uint8_t* pixels, size_t count, uint32_t cha
     }
 }
 
-static bool ResolveTextureCookSettings(const std::filesystem::path& path, TextureCookSettings& settings)
+// The import settings of `path`. False, with `failure` set, when its alpha coverage policy is invalid
+// or does not apply to its format.
+static bool ResolveTextureCookSettings(const std::filesystem::path& path, TextureCookSettings& settings,
+                                       std::string& failure)
 {
     if (path.empty())
         return true;
@@ -1382,13 +1385,13 @@ static bool ResolveTextureCookSettings(const std::filesystem::path& path, Textur
     if (!ParseTextureAlphaCoverageMeta(enabled, cutoff, settings, error) ||
         !ValidateTextureAlphaCoverageSettings(settings, extension == ".hdr", error))
     {
-        Logger::Log::Error("Texture upload '{}': invalid alpha coverage policy: {}", path.string(), error);
+        failure = "invalid alpha coverage policy: " + error;
         return false;
     }
     if (settings.PreserveAlphaCoverage &&
         (extension == ".ktx" || extension == ".ktx2" || extension == ".dds" || extension == ".svg"))
     {
-        Logger::Log::Error("Texture upload '{}': alpha coverage applies to decoded LDR source images, not authored containers or SVG", path.string());
+        failure = "alpha coverage applies to decoded LDR source images, not authored containers or SVG";
         return false;
     }
     return true;
@@ -1576,6 +1579,8 @@ static bool SubmitOrDiscardStagedUploads(Rendering::IDevice& device,
 // Why the device refused a texture, when no staging step names a cause.
 constexpr const char* kDeviceRefusal = "the device refused it";
 constexpr const char* kNoCommandListRefusal = "the device gave no command list";
+// Why a prepared texture has nothing to upload, when its prepare names no other cause.
+constexpr const char* kNoPixelsFailure = "it has no pixels";
 
 GUID TextureService::ResolveTextureRefGuid(const std::string& guidStr,
                                            const std::string& pathStr) const
@@ -1684,11 +1689,11 @@ struct TextureService::PreparedTextureUpload
 {
     enum class Outcome
     {
-        Ready,   // upload it
-        Refused, // terminal: publish a negative cache entry so callers stop retrying
-        Failed,  // nothing to upload (no pixels)
+        Ready,  // upload it
+        Failed, // not uploaded: Failure says why, in the one error line of PublishFailedUpload
     };
     Outcome Result = Outcome::Failed;
+    std::string Failure = kNoPixelsFailure;
     std::filesystem::path Path;
     SharedPtr<TextureAsset> Container;          // uploads its own mip chain (StageContainerMipChain)
     std::vector<TextureCookMipLevel> MipChain;  // raw levels, RGBA8 or RGBA32F
@@ -1771,11 +1776,8 @@ std::shared_ptr<const TextureService::PreparedTextureUpload> TextureService::Pre
     if (haveMeta)
         prepared->Path = meta.Path;
     TextureCookSettings cookSettings;
-    if (haveMeta && !ResolveTextureCookSettings(meta.Path, cookSettings))
-    {
-        prepared->Result = Outcome::Refused;
-        return prepared;
-    }
+    if (haveMeta && !ResolveTextureCookSettings(meta.Path, cookSettings, prepared->Failure))
+        return prepared; // Failed
 
     const auto tLoad = Clock::now();
     SharedPtr<TextureAsset> texAsset = std::move(resident);
@@ -1783,8 +1785,8 @@ std::shared_ptr<const TextureService::PreparedTextureUpload> TextureService::Pre
     {
         if (!haveMeta)
         {
-            prepared->Result = Outcome::Refused;
-            return prepared;
+            prepared->Failure = "it has no asset record";
+            return prepared; // Failed
         }
         // Only a texture the import cook does not read (DDS, KTX2, SVG), or any texture when no
         // engine runs, loads an instance of its own here: a cook source goes through the
@@ -1792,9 +1794,8 @@ std::shared_ptr<const TextureService::PreparedTextureUpload> TextureService::Pre
         texAsset = MakeShared<TextureAsset>(textureGuid, meta.Path);
         if (!texAsset->Load())
         {
-            Logger::Log::Warning("GetOrUpload: failed to load '{}'", meta.Path.string());
-            prepared->Result = Outcome::Refused;
-            return prepared;
+            prepared->Failure = "its file does not load";
+            return prepared; // Failed
         }
     }
     if (cancelled())
@@ -1883,11 +1884,9 @@ std::shared_ptr<const TextureService::PreparedTextureUpload> TextureService::Pre
     {
         if (cookSettings.PreserveAlphaCoverage)
         {
-            Logger::Log::Error("Texture upload '{}': alpha coverage mip build failed: {}",
-                               prepared->Path.string(), mipError);
             prepared->MipChain.clear();
-            prepared->Result = Outcome::Refused;
-            return prepared;
+            prepared->Failure = "alpha coverage mip build failed: " + mipError;
+            return prepared; // Failed
         }
         // No resampler compiled in, or a downsample failed: single-mip upload.
         prepared->MipChain.resize(1);
@@ -1902,9 +1901,9 @@ TextureGPUCache::Entry TextureService::SubmitPreparedUpload(const GUID& textureG
 {
     using Clock = std::chrono::high_resolution_clock;
     using Outcome = PreparedTextureUpload::Outcome;
-    if (prepared.Result == Outcome::Refused)
-        return m_TextureGPUCache.PublishOrAdopt(textureGuid, TextureGPUCache::Entry{});
-    if (prepared.Result != Outcome::Ready || !m_Device)
+    if (prepared.Result == Outcome::Failed)
+        return PublishFailedUpload(textureGuid, prepared.Path, prepared.Failure.c_str());
+    if (!m_Device)
         return {};
 
     const auto tUpload = Clock::now();
@@ -2172,11 +2171,11 @@ void TextureService::RunTextureUploadJob(const GUID& texGuid, uint32_t epoch,
         }
         catch (const std::exception& error)
         {
-            // An allocation the size of an 8K float texture can fail. Report the load as failed,
-            // which releases the binds waiting on it, rather than leave the texture loading forever.
-            Logger::Log::Error("TextureService: preparing texture {} failed: {}", texGuid.ToString(), error.what());
+            // An allocation the size of an 8K float texture can fail. The texture then fails as one
+            // with no pixels does, rather than loading forever.
             auto failed = std::make_shared<PreparedTextureUpload>();
             failed->Result = PreparedTextureUpload::Outcome::Failed;
+            failed->Failure = std::string("preparing it failed: ") + error.what();
             prepared = std::move(failed);
         }
     }
@@ -2197,16 +2196,8 @@ void TextureService::CompleteUploadJob(const GUID& texGuid, uint32_t epoch,
     // Cancelled (Evict, CancelPendingLoads, Shutdown): whoever cancelled owns what follows.
     if (cancel->load(std::memory_order_relaxed) || !prepared)
         return;
-    if (prepared->Result == PreparedTextureUpload::Outcome::Failed)
-    {
-        // Nothing to upload: release the binds waiting on it, as a failed AssetManager load does.
-        m_PendingTextureBinds.erase(
-            std::remove_if(m_PendingTextureBinds.begin(), m_PendingTextureBinds.end(),
-                [&](const PendingTextureBind& b) { return b.TextureGuid == texGuid; }),
-            m_PendingTextureBinds.end());
-        return;
-    }
-    // The epoch it was scheduled under: an Evict since then makes the drain discard it.
+    // Ready or failed, the drain publishes it, under the epoch it was scheduled under: an Evict
+    // since then makes the drain discard it.
     m_PendingGpuUploads.push_back({texGuid, nullptr, epoch, std::move(prepared)});
 }
 
@@ -2358,24 +2349,20 @@ void TextureService::FlushPendingUploads()
                      .TryGetAssetMetadata(upload.TextureGuid, texMeta) &&
                  !texMeta.Path.empty())
         {
-            // Metadata may have turned invalid after the worker prepared: a terminal refusal
-            // still wins over the prepared bytes.
-            if (TextureCookSettings settings; !ResolveTextureCookSettings(texMeta.Path, settings))
+            // The import settings may have turned invalid after the worker prepared: the texture
+            // then fails, even with its bytes ready.
+            std::string failure;
+            if (TextureCookSettings settings; !ResolveTextureCookSettings(texMeta.Path, settings, failure))
             {
-                m_TextureGPUCache.PublishOrAdopt(upload.TextureGuid, TextureGPUCache::Entry{});
+                PublishFailedUpload(upload.TextureGuid, texMeta.Path, failure.c_str());
                 continue;
             }
-        }
-        if (prepared && prepared->Result == PreparedTextureUpload::Outcome::Refused)
-        {
-            m_TextureGPUCache.PublishOrAdopt(upload.TextureGuid, TextureGPUCache::Entry{});
-            continue;
         }
         // Null only when cancelled, and this flush gives no cancel flag.
         if (!prepared || prepared->Result != PreparedTextureUpload::Outcome::Ready)
         {
             PublishFailedUpload(upload.TextureGuid, prepared ? prepared->Path : std::filesystem::path{},
-                                "it has no pixels");
+                                prepared ? prepared->Failure.c_str() : kNoPixelsFailure);
             continue;
         }
         const auto tStage = Clock::now();
@@ -2680,7 +2667,7 @@ void TextureService::EvictCubeLut(const GUID& lutGuid)
 
 
 void TextureService::ScheduleEmbeddedUploadJob(const GUID& derivedGuid, const GUID& matGuid, StringId slotName,
-                                               const Vector<uint8>& bytes, bool linear)
+                                               std::span<const uint8> bytes, bool linear)
 {
     auto& engine = GameEngine::EngineCore::GetInstance();
     if (!engine.IsInitialized())
@@ -2706,8 +2693,9 @@ void TextureService::ScheduleEmbeddedUploadJob(const GUID& derivedGuid, const GU
     }
     // The job owns a copy of the bytes: the model can unload or reload while it runs. `this` is
     // safe in it: DrainUploadJobs (Shutdown, destructor) waits for the counter.
-    engine.GetJobSystem().EnqueueWork([this, derivedGuid, epoch, cancel, bytes, linear]()
-                                      { RunEmbeddedUploadJob(derivedGuid, epoch, cancel, bytes, linear); });
+    engine.GetJobSystem().EnqueueWork(
+        [this, derivedGuid, epoch, cancel, owned = Vector<uint8>(bytes.begin(), bytes.end()), linear]()
+        { RunEmbeddedUploadJob(derivedGuid, epoch, cancel, owned, linear); });
 }
 
 void TextureService::RunEmbeddedUploadJob(const GUID& derivedGuid, uint32_t epoch,
@@ -2726,10 +2714,9 @@ void TextureService::RunEmbeddedUploadJob(const GUID& derivedGuid, uint32_t epoc
         }
         catch (const std::exception& error)
         {
-            Logger::Log::Error("TextureService: preparing embedded image {} failed: {}", derivedGuid.ToString(),
-                               error.what());
             prepared->MipChain.clear();
             prepared->Result = PreparedTextureUpload::Outcome::Failed;
+            prepared->Failure = std::string("preparing its embedded image failed: ") + error.what();
         }
     }
     CompleteUploadJob(derivedGuid, epoch, cancel, std::move(prepared));
@@ -2744,9 +2731,8 @@ void TextureService::PrepareEmbeddedUpload(const Vector<uint8>& bytes, bool line
         Image::Decode8(bytes, "embedded image " + derivedGuid.ToString(), Image::DecodeChannels::Rgba);
     if (!decoded.Valid)
     {
-        Logger::Log::Warning("Embedded image {} failed to decode; its material slots keep their default",
-                             derivedGuid.ToString());
         prepared.Result = Outcome::Failed;
+        prepared.Failure = "its embedded image does not decode";
         return;
     }
     prepared.Width = decoded.Width;
@@ -2872,7 +2858,7 @@ bool TextureService::AwaitsEmbeddedImage(const Material& mat, const GUID& matGui
 bool TextureService::BindEmbeddedImage(Material* mat, StringId slotName, const GUID& modelGuid,
                                        uint32_t imageIndex, std::span<const EmbeddedImage> images)
 {
-    if (imageIndex >= images.size() || images[imageIndex].Data.empty())
+    if (imageIndex >= images.size() || images[imageIndex].Data.Size() == 0)
     {
         BindAwaitedTexture(mat, slotName);
         return false;

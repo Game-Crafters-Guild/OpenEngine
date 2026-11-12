@@ -5,6 +5,7 @@
 #include "Assets/ModelAsset.h"
 #include "Components/Animation/Animator.h"
 #include "Components/Animation/AnimatorRef.h"
+#include "Components/Animation/ClipPlaybackState.h"
 #include "Components/Animation/SkeletonRef.h"
 #include "Components/Rendering/MeshRenderer.h"
 #include "Core/Engine.h"
@@ -27,6 +28,7 @@ using Components::Animator;
 using Components::AnimatorPlaybackCommand;
 using Components::AnimatorPlaybackSource;
 using Components::AnimatorRef;
+using Components::ClipPlaybackState;
 using Components::MeshRenderer;
 using Components::SkeletonRef;
 
@@ -252,6 +254,19 @@ void ApplyRestToSubtree(ECS::World& world, const std::vector<ECS::EntityHandle>&
     }
 }
 
+void ApplyClipSpeedToSubtree(ECS::World& world, float32 speed, const std::vector<ECS::EntityHandle>& subtree)
+{
+    for (ECS::EntityHandle entity : subtree)
+    {
+        const auto* anim = world.GetComponent<AnimatorRef>(entity);
+        if (!anim || !world.GetComponent<SkeletonRef>(entity) || anim->Speed == speed)
+            continue;
+        AnimatorRef updated = *anim;
+        updated.Speed = speed;
+        world.AddComponentImmediate(entity, updated);
+    }
+}
+
 uint32_t ApplyClipCommandToSubtree(ECS::World& world,
                                    const Animator& animator,
                                    const std::vector<ECS::EntityHandle>& subtree,
@@ -288,11 +303,17 @@ uint32_t ApplyClipCommandToSubtree(ECS::World& world,
         case AnimatorPlaybackCommand::PlaySection:
         case AnimatorPlaybackCommand::Autoplay:
             updated.SetAnimation(clipIndex, blendSeconds);
+            // Play is a hard cut: the clip that already plays starts again from 0.
+            if (command == AnimatorPlaybackCommand::Play)
+            {
+                updated.ClearBlend();
+                updated.Time = 0.0f;
+            }
             if (section)
                 updated.Time = animator.sectionStartSeconds;
             else if (autoplay)
                 updated.Time = std::max(0.0f, animator.seekTimeSeconds);
-            updated.Speed = std::max(0.0f, animator.speedScale);
+            updated.Speed = AnimatorPlaybackSpeed(animator);
             updated.SectionStart = animator.sectionStartSeconds;
             updated.SectionEnd = animator.sectionEndSeconds;
             updated.Flags &= ~(AnimatorRef::kFlag_Paused | AnimatorRef::kFlag_Loop | AnimatorRef::kFlag_Section);
@@ -390,10 +411,16 @@ void StartAnimatorFromSource(ECS::World& world, AssetManager& assetManager, Anim
     }
 
     const auto clip = ClipStore::Instance().Get(playback.ClipIndex);
-    if (!clip || clip->GetDuration() <= 0.0f)
+    if (!clip || clip->IsEmpty())
     {
-        Logger::Log::Warning("Animator: resolved clip invalid (idx={} duration={})", playback.ClipIndex,
-                             clip ? clip->GetDuration() : -1.0f);
+        if (clip)
+            Logger::Log::Warning("Animator: clip {} of '{}' has no length and no key, so it cannot play; it stays at "
+                                 "rest. Add a key to the animation in its source file.",
+                                 clip->GetGUID().ToString(), clip->GetName());
+        else
+            Logger::Log::Warning("Animator: no clip is loaded at clip index {}, so nothing plays; it stays at rest. "
+                                 "Import the clip's source file again.",
+                                 playback.ClipIndex);
         ApplyRestToSubtree(world, subtree);
         return;
     }
@@ -408,6 +435,7 @@ void StartAnimatorFromSource(ECS::World& world, AssetManager& assetManager, Anim
 
 void BootstrapSceneAnimators(ECS::World& world, AssetManager& assetManager)
 {
+    std::vector<ECS::EntityHandle> clipRoots;
     world.Query<ECS::Write<Animator>>().Each([&](ECS::EntityHandle rootEntity, Animator& animator) {
         if (!animator.active || !animator.autoPlayOnEnterPlayMode ||
             animator.pendingCommand != AnimatorPlaybackCommand::None)
@@ -419,7 +447,10 @@ void BootstrapSceneAnimators(ECS::World& world, AssetManager& assetManager)
         std::vector<ECS::EntityHandle> subtree;
         CollectEntitiesInSubtree(world, rootEntity, subtree);
         StartAnimatorFromSource(world, assetManager, animator, subtree);
+        if (animator.source == AnimatorPlaybackSource::Clip)
+            clipRoots.push_back(rootEntity);
     });
+    RecordAppliedClipSpeeds(world, clipRoots);
 }
 
 void ProcessClipAnimatorCommands(ECS::World& world)
@@ -430,6 +461,7 @@ void ProcessClipAnimatorCommands(ECS::World& world)
 
 void ProcessClipAnimatorCommands(ECS::World& world, AssetManager& assetManager)
 {
+    std::vector<ECS::EntityHandle> playedRoots;
     world.Query<ECS::Write<Animator>>().Each([&](ECS::EntityHandle rootEntity, Animator& animator) {
         if (!animator.active || animator.pendingCommand == AnimatorPlaybackCommand::None)
             return;
@@ -498,7 +530,50 @@ void ProcessClipAnimatorCommands(ECS::World& world, AssetManager& assetManager)
                 clipIndex);
         }
         animator.pendingCommand = AnimatorPlaybackCommand::None;
+        playedRoots.push_back(rootEntity);
     });
+    RecordAppliedClipSpeeds(world, playedRoots);
+}
+
+void RecordAppliedClipSpeeds(ECS::World& world, const std::vector<ECS::EntityHandle>& roots)
+{
+    for (ECS::EntityHandle rootEntity : roots)
+    {
+        const float32 speedScale = world.GetComponent<Animator>(rootEntity)->speedScale;
+        if (auto* state = world.GetComponentForWrite<ClipPlaybackState>(rootEntity))
+            state->appliedSpeedScale = speedScale;
+        else
+            world.AddComponentImmediate(rootEntity, ClipPlaybackState{speedScale});
+    }
+}
+
+void ApplyClipAnimatorSpeeds(ECS::World& world)
+{
+    std::vector<ECS::EntityHandle> untrackedRoots;
+    std::vector<ECS::EntityHandle> changedRoots;
+    world.Query<ECS::Read<Animator>>().Each([&](ECS::EntityHandle rootEntity, const Animator& animator) {
+        if (!animator.active || animator.source != AnimatorPlaybackSource::Clip)
+            return;
+        const auto* state = world.GetComponent<ClipPlaybackState>(rootEntity);
+        if (!state)
+            untrackedRoots.push_back(rootEntity);
+        else if (state->appliedSpeedScale != animator.speedScale)
+            changedRoots.push_back(rootEntity);
+    });
+
+    // A start or a Play command records the speedScale it applies. A root with no record has not
+    // started, so its start applies the speed: record speedScale only.
+    RecordAppliedClipSpeeds(world, untrackedRoots);
+
+    std::vector<ECS::EntityHandle> subtree;
+    for (ECS::EntityHandle rootEntity : changedRoots)
+    {
+        const Animator* animator = world.GetComponent<Animator>(rootEntity);
+        const float32 speedScale = animator->speedScale;
+        CollectEntitiesInSubtree(world, rootEntity, subtree);
+        ApplyClipSpeedToSubtree(world, AnimatorPlaybackSpeed(*animator), subtree);
+        world.GetComponentForWrite<ClipPlaybackState>(rootEntity)->appliedSpeedScale = speedScale;
+    }
 }
 
 } // namespace GameEngine::Engine::Renderer

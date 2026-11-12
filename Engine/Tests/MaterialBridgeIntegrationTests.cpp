@@ -770,6 +770,60 @@ TEST_F(MaterialPipelineCompilationTest, AsyncPublish_FailedCompileKeepsTheDeclar
         << "the lane the failed program declared must not appear on the CPU side";
 }
 
+// Registration takes a surface's texture slots from the shader source cache: a rewrite that no
+// announcement reports keeps the held slots, and an announced edit resolves the new ones.
+TEST_F(MaterialPipelineCompilationTest, SurfaceTextureSlotsComeFromTheHeldSurfaceUntilAnEditIsAnnounced)
+{
+    MaterialSystem& materials = m_rs->Materials();
+    const DeclaredSurfaceProject project(materials, m_shaderDir);
+    project.WriteSurface("// @texture flowMask linear\n");
+    MaterialDocument doc{};
+    doc.materialName = "HeldSurfaceSlots";
+    doc.lightingModel = "StandardPBR";
+    doc.surfaceShader = "declared.glsl";
+    const std::vector<std::string> held{"flowMask"};
+    EXPECT_EQ(materials.ResolveSurfaceTextureUse(doc, {}).DeclaredNames, held);
+
+    std::ofstream(project.Root / "declared.glsl", std::ios::binary | std::ios::trunc) << "// @texture auxMask linear\n";
+    EXPECT_EQ(materials.ResolveSurfaceTextureUse(doc, {}).DeclaredNames, held)
+        << "the surface was read again although no edit was announced";
+
+    project.WriteSurface("// @texture auxMask linear\n");
+    EXPECT_EQ(materials.ResolveSurfaceTextureUse(doc, {}).DeclaredNames, std::vector<std::string>{"auxMask"})
+        << "an announced edit kept the old slots";
+}
+
+// The tangent need of a graph surface beside its material comes from the shader source cache: a
+// rewrite that no announcement reports keeps it, and an announced edit is read. A surface the chain
+// finds under another root is not the material's own graph surface.
+TEST_F(MaterialPipelineCompilationTest, TheTangentNeedOfAGraphSurfaceComesFromTheHeldSurfaceUntilAnEditIsAnnounced)
+{
+    constexpr const char* kTangentGraph = "// @sg-graph     Held\n// @sg-stage     surface\n// @sg-variant   HAS_TANGENT\n";
+    constexpr const char* kPlainGraph = "// @sg-graph     Held\n// @sg-stage     surface\n";
+    const DeclaredSurfaceProject project(m_rs->Materials(), m_shaderDir);
+    project.WriteSurface(kTangentGraph);
+    MaterialDocument doc{};
+    doc.surfaceShader = "declared.glsl";
+    const std::filesystem::path materialPath = project.Root / "graph.material";
+    const std::filesystem::path surfacePath = std::filesystem::absolute(project.Root / "declared.glsl");
+    EXPECT_EQ(InferVertexAttributeFlagsFromDocument(doc, materialPath, surfacePath),
+              VertexAttributeFlags::StandardMeshWithTangent);
+
+    std::ofstream(project.Root / "declared.glsl", std::ios::binary | std::ios::trunc) << kPlainGraph;
+    EXPECT_EQ(InferVertexAttributeFlagsFromDocument(doc, materialPath, surfacePath),
+              VertexAttributeFlags::StandardMeshWithTangent)
+        << "the surface was read again although no edit was announced";
+
+    project.WriteSurface(kPlainGraph);
+    EXPECT_EQ(InferVertexAttributeFlagsFromDocument(doc, materialPath, surfacePath), VertexAttributeFlags::StandardMesh)
+        << "an announced edit kept the old tangent need";
+
+    project.WriteSurface(kTangentGraph);
+    EXPECT_EQ(InferVertexAttributeFlagsFromDocument(doc, project.Root / "Other" / "graph.material", surfacePath),
+              VertexAttributeFlags::StandardMesh)
+        << "a surface found under another root counted as the material's own graph surface";
+}
+
 // T6, both halves against one material through the production paths: a
 // recompile of an unchanged document moves the compile version and leaves the
 // content revision alone; a parameter edit through the ordinary setter moves

@@ -11,17 +11,18 @@
 namespace GameEngine::Terrain
 {
 
-/// The world-space base noise at one position: the fractal value noise every world-space fill
-/// writes (FillRegionWithNoiseWorldSpace), `octaves` octaves from `frequency` doubling, each half
-/// the amplitude of the one before, normalized to [0, amplitude].
+struct TerrainNoiseStack;
+
+/// The world-space base noise at one position, in [0, stack.BandTop()]: the stack's fractal value noise, which every
+/// world-space fill writes (FillRegionWithNoiseWorldSpace).
 ///
 /// An octave whose lattice cell (1 / its frequency, in meters) is shorter than
 /// `minResolvedCellMeters` is replaced by its mean (0.5 of its amplitude) instead of being
 /// evaluated: the band limit a coarser lattice samples at (its cell at least twice the lattice
 /// spacing), which keeps the mean height of every level equal. 0 evaluates every octave, the
 /// full-detail value the fills write, bit for bit.
-float32 SampleWorldSpaceNoise(float32 worldX, float32 worldZ, float32 frequency, float32 amplitude, uint32 octaves,
-                              uint32 seed, float32 minResolvedCellMeters = 0.0f);
+float32 SampleWorldSpaceNoise(float32 worldX, float32 worldZ, const TerrainNoiseStack& stack,
+                              float32 minResolvedCellMeters = 0.0f);
 
 /// A PNG heightmap's grid, from its header.
 struct PngHeightmapSize
@@ -120,20 +121,21 @@ public:
 
     // World-space noise: samples are computed using world positions so adjacent
     // tiles with matching world origins produce seamless boundaries.
-    void FillWithNoiseWorldSpace(float32 frequency, float32 amplitude,
-                                  float32 worldOriginX, float32 worldOriginZ,
-                                  float32 worldSizeX, float32 worldSizeZ,
-                                  uint32 octaves = 4, uint32 seed = 0);
+    void FillWithNoiseWorldSpace(const TerrainNoiseStack& stack,
+                                 float32 worldOriginX, float32 worldOriginZ,
+                                 float32 worldSizeX, float32 worldSizeZ);
 
-    // Fill only the samples in [minX, maxX] x [minZ, maxZ] (inclusive, clamped)
-    // with the same per-sample world-space noise as FillWithNoiseWorldSpace.
-    // The noise value depends only on the sample's world position, so a region
-    // fill is an exact subset of a full fill — used by tiled region re-bakes.
-    void FillRegionWithNoiseWorldSpace(float32 frequency, float32 amplitude,
-                                        float32 worldOriginX, float32 worldOriginZ,
-                                        float32 worldSizeX, float32 worldSizeZ,
-                                        int32 minX, int32 minZ, int32 maxX, int32 maxZ,
-                                        uint32 octaves = 4, uint32 seed = 0);
+    /// Fills only the samples in [minX, maxX] x [minZ, maxZ] (inclusive, clamped) with
+    /// SampleWorldSpaceNoise at each sample's world position, so a region fill is an exact
+    /// subset of a full fill.
+    /// @param minResolvedCellMeters In meters: an octave whose cell is shorter is replaced by its
+    ///        mean (SampleWorldSpaceNoise). 0 for a full-detail fill; twice the sample spacing for
+    ///        a coarse field that must not alias.
+    void FillRegionWithNoiseWorldSpace(const TerrainNoiseStack& stack,
+                                       float32 worldOriginX, float32 worldOriginZ,
+                                       float32 worldSizeX, float32 worldSizeZ,
+                                       int32 minX, int32 minZ, int32 maxX, int32 maxZ,
+                                       float32 minResolvedCellMeters);
 
     // Resize and clear to a default value.
     void Resize(uint32 width, uint32 height, float32 defaultValue = 0.0f);

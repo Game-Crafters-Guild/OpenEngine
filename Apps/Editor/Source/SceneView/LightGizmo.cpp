@@ -463,11 +463,10 @@ void LightGizmo::Render(GizmoRenderContext& context)
                                           != m_SelectedEntities.end();
                   const bool emphasize = isSelected || isHovered;
 
-                  const float* m = xf.matrix;
-                  const Vector3 pos(m[12], m[13], m[14]);
+                  const Vector3 pos = xf.GetPosition() - Mathematics::WorldPosition{};
 
                   // Shine along entity forward (+Z column).
-                  const Vector3 dir = Vector3(m[8], m[9], m[10]).NormalizeOrZero();
+                  const Vector3 dir = Vector3(xf.Basis[2]).NormalizeOrZero();
 
                   Vector3 right;
                   Vector3 up;
@@ -534,8 +533,8 @@ void LightGizmo::Render(GizmoRenderContext& context)
                       }
                       case LightType::Area:
                       {
-                          const Vector3 planeRight(m[0], m[1], m[2]);
-                          const Vector3 planeUp(m[4], m[5], m[6]);
+                          const Vector3 planeRight(xf.Basis[0]);
+                          const Vector3 planeUp(xf.Basis[1]);
                           DrawAreaIcon3D(context, pos, dir, planeRight, planeUp,
                                          light.AreaWidth, light.AreaHeight,
                                          iconR, iconColor, iconThick);

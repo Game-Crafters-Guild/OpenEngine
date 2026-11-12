@@ -58,20 +58,20 @@ inline Vector3 CatmullRom(Vector3 p0, Vector3 p1, Vector3 p2, Vector3 p3, float 
 {
     float t2 = t * t;
     float t3 = t2 * t;
-    return p0 * (-0.5f * t3 + t2 - 0.5f * t) +
-           p1 * (1.5f * t3 - 2.5f * t2 + 1.0f) +
-           p2 * (-1.5f * t3 + 2.0f * t2 + 0.5f * t) +
-           p3 * (0.5f * t3 - 0.5f * t2);
+    return p0 * MulAdd(-0.5f, t, MulAdd(-0.5f, t3, t2)) +
+           p1 * (MulAdd(1.5f, t3, -(2.5f * t2)) + 1.0f) +
+           p2 * MulAdd(0.5f, t, MulAdd(-1.5f, t3, 2.0f * t2)) +
+           p3 * MulAdd(0.5f, t3, -(0.5f * t2));
 }
 
 // Tangent of a Catmull-Rom spline at parameter t.
 inline Vector3 CatmullRomTangent(Vector3 p0, Vector3 p1, Vector3 p2, Vector3 p3, float t)
 {
     float t2 = t * t;
-    return p0 * (-1.5f * t2 + 2.0f * t - 0.5f) +
-           p1 * (4.5f * t2 - 5.0f * t) +
-           p2 * (-4.5f * t2 + 4.0f * t + 0.5f) +
-           p3 * (1.5f * t2 - 1.0f * t);
+    return p0 * (MulAdd(-1.5f, t2, 2.0f * t) - 0.5f) +
+           p1 * MulAdd(4.5f, t2, -(5.0f * t)) +
+           p2 * (MulAdd(-4.5f, t2, 4.0f * t) + 0.5f) +
+           p3 * MulAdd(1.5f, t2, -t);
 }
 
 } // namespace GameEngine::Math

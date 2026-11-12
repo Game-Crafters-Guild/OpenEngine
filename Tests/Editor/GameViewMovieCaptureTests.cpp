@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 
-#include "GameViewMovieCapture.h"
+#include "GameView/GameViewMovieCapture.h"
 #include "Video/AsyncVideoRecorder.h"
 
 #include <cstdint>

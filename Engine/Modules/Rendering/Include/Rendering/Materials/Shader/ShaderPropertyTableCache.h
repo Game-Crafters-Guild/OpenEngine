@@ -33,6 +33,9 @@ class ShaderPropertyTableCache
     // file. Thread-safe. An unreadable surface yields a table whose Errors name the file.
     std::shared_ptr<const ShaderPropertyTable> Resolve(const ShaderPropertyTableInputs& inputs);
 
+    // True when Resolve(inputs) touches no file.
+    bool Holds(const ShaderPropertyTableInputs& inputs);
+
   private:
     struct Entry
     {

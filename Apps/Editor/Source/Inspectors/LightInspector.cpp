@@ -1,6 +1,7 @@
 #include "Inspectors/LightInspector.h"
 
 #include "InspectorRegistry.h"
+#include "Mathematics/Angle.h"
 #include "Mathematics/Interpolation.h"
 #include "Platform/SystemMetrics.h"
 
@@ -143,8 +144,6 @@ static bool IsUnitValidForType(LightUnit unit, LightType type)
     }
 }
 
-constexpr float kRad2Deg = 57.2957795f;
-constexpr float kDeg2Rad = 0.0174532925f;
 // Width of the numeric value field paired with an inspector slider — sized to fit the formatted
 // value (e.g. "11196.42") plus the input's padding, so the input doesn't overflow past the value
 // column (which would push it tight against the panel's right edge, misaligned with other rows).
@@ -883,14 +882,14 @@ void RegisterLightInspector()
         // Editable: InnerAngle, OuterAngle (Spot only)
         if (type == LightType::Spot)
         {
-            AddComponentFloatRowWithDrag<Components::Light>(ctx.Parent, "Inner Angle (deg)", light->InnerAngle * kRad2Deg, w, e, n,
+            AddComponentFloatRowWithDrag<Components::Light>(ctx.Parent, "Inner Angle (deg)", Mathematics::ToDegrees(light->InnerAngle), w, e, n,
                 undo, "Change Light Inner Angle",
-                [](Components::Light& u, float v) { u.InnerAngle = std::max(0.0f, v * kDeg2Rad); },
-                0.5f * kRad2Deg, "Inner cone half-angle in degrees (full-brightness region)", extras);
-            AddComponentFloatRowWithDrag<Components::Light>(ctx.Parent, "Outer Angle (deg)", light->OuterAngle * kRad2Deg, w, e, n,
+                [](Components::Light& u, float v) { u.InnerAngle = std::max(0.0f, Mathematics::ToRadians(v)); },
+                Mathematics::ToDegrees(0.5f), "Inner cone half-angle in degrees (full-brightness region)", extras);
+            AddComponentFloatRowWithDrag<Components::Light>(ctx.Parent, "Outer Angle (deg)", Mathematics::ToDegrees(light->OuterAngle), w, e, n,
                 undo, "Change Light Outer Angle",
-                [](Components::Light& u, float v) { u.OuterAngle = std::max(0.0f, v * kDeg2Rad); },
-                0.8f * kRad2Deg, "Outer cone half-angle in degrees (falloff region)", extras);
+                [](Components::Light& u, float v) { u.OuterAngle = std::max(0.0f, Mathematics::ToRadians(v)); },
+                Mathematics::ToDegrees(0.8f), "Outer cone half-angle in degrees (falloff region)", extras);
         }
 
         if (type == LightType::Area)

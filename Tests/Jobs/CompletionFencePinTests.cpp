@@ -20,6 +20,8 @@
 #include <chrono>
 #include <thread>
 
+#include "ScopedLogLevel.h"
+
 namespace GameEngine::Tests {
 
 #if !GE_DEBUG_INSTRUMENTATION
@@ -37,12 +39,14 @@ TEST(CompletionFencePin, FenceCountsExact)
     constexpr size_t kNoWaiterTasks = 2000;
     constexpr size_t kWaitedRounds = 200;
 
-    Logger::Log::SetLogLevel(Logger::LogLevel::Error);
+    const ScopedLogLevel quietLog(Logger::LogLevel::Error);
+    // Declared before the pool: a queued job can still use them when an ASSERT returns early.
+    std::atomic<size_t> executed{0};
+    std::atomic<bool> release{false};
     JobSystem::WorkStealingThreadPool pool(2);
 
     // ---- Phase 1: no waiter ever registers -> zero fences. ----
     {
-        std::atomic<size_t> executed{0};
         const auto before = JobSystem::Detail::GetCompletionFenceStatsForTests();
         for (size_t i = 0; i < kNoWaiterTasks; ++i)
         {
@@ -68,7 +72,7 @@ TEST(CompletionFencePin, FenceCountsExact)
         const auto before = JobSystem::Detail::GetCompletionFenceStatsForTests();
         for (size_t round = 0; round < kWaitedRounds; ++round)
         {
-            std::atomic<bool> release{false};
+            release.store(false, std::memory_order_relaxed);
             auto handle = pool.Submit([&release] {
                 while (!release.load(std::memory_order_acquire))
                 {
@@ -102,7 +106,6 @@ TEST(CompletionFencePin, FenceCountsExact)
             << "a completion skipped the fence while a waiter was parked";
     }
 
-    Logger::Log::SetLogLevel(Logger::LogLevel::Debug);
     pool.Shutdown();
 }
 

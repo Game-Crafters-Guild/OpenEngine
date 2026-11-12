@@ -57,6 +57,8 @@ The clip's `loop` and `speed` have the lowest precedence of every loop and speed
 | An animation graph's clip player node | The node's `speed` and `loop` |
 | A montage | Its `playRate`; a montage plays its clip once |
 
+A change to the *Speed Scale* of an Animator that plays a clip, a timeline or a graph applies from the next frame. `PlayState` of the clip that already plays starts it again from 0. Call `PlayState` once when the state changes: a call every frame holds the clip at its first frame.
+
 :::caution
 
 Every one of these settings always holds a value (loop on and speed 1 unless changed), so a clip's `loop` and `speed` do not change playback today. Set the loop and speed you want on the Animator, the library entry, the controller motion, or the graph node that plays the clip.

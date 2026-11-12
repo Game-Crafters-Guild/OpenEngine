@@ -66,8 +66,6 @@ void CopySceneView(const FramePhaseRecorder::FrameInputs& inputs, FramePhaseHist
     sample.TerminalPassesMs = Ms(scene.terminalPassesMs);
     sample.RgCompileMs = Ms(scene.rgCompileMs);
     sample.RgExecuteMs = Ms(scene.rgExecuteMs);
-    sample.VariantCompileMs = Ms(scene.variantCompileMs);
-    sample.PrewarmMs = Ms(scene.prewarmMs);
     sample.PresentMs = Ms(scene.presentMs);
 }
 

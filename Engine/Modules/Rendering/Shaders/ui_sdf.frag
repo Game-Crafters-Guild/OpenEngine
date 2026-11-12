@@ -10,6 +10,12 @@
 #include "UI/sdf_functions.glsl"
 #include "UI/text_mask_gamma.glsl"
 
+#if !defined(GE_COMPAT_PROFILE)
+// The pass writes no depth, so the test may run before shading: a fragment
+// under an opaque interior (UIOpaqueInteriors) is rejected before it shades.
+layout(early_fragment_tests) in;
+#endif
+
 layout(location = 0) flat in uint vInstance;
 layout(location = 1) in vec2 vLocal;
 layout(location = 2) in vec2 vUV;

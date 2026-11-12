@@ -32,6 +32,7 @@
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/GPUScene.h"
 #include "Rendering/Materials/MaterialDocument.h"
+#include "TestCameraEye.h"
 
 #include <memory>
 #include <vector>
@@ -54,7 +55,7 @@ GUID FixedGuid(uint8 tag) {
 }
 
 Transform MakeTransformAt(float x, float y, float z) {
-    return Transform::FromTRS(Mathematics::Vector3{x, y, z}, Mathematics::Quaternion{},
+    return Transform::FromTRS(Mathematics::WorldPosition{x, y, z}, Mathematics::Quaternion{},
                               Mathematics::Vector3{1.0f, 1.0f, 1.0f});
 }
 
@@ -108,7 +109,7 @@ struct EvictionHarness {
         Material::TestFactory::SetGpuSceneMaterialIndex(*material, 0u);
 
         CameraId cameraId = rs.Views().AllocateCamera("HlodEvictCamera");
-        rs.Views().SetCameraData(cameraId, MakeIdentityCamera());
+        rs.Views().SetCameraData(cameraId, ::GameEngine::Tests::TestCameraWithEye(MakeIdentityCamera()), {0.1f, 1000.0f});
         ViewId viewId = rs.Views().AllocateView("HlodEvictView", cameraId);
         rs.Views().SetViewWorldId(viewId, worldId);
         rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());

@@ -21,11 +21,14 @@
 
 #include "Engine/Rendering/ShadowMapRenderFeature.h"
 
+#include "Engine/Rendering/CameraUtils.h"
 #include "Engine/Rendering/RenderOrigin.h"
 #include "Mathematics/Matrix4x4.h"
 #include "Mathematics/MatrixOps.h"
+#include "Mathematics/WorldPosition.h"
 #include "Rendering/Camera/CameraTypes.h"
 #include "Rendering/Common/Frustum.h"
+#include "TestCameraEye.h"
 
 #include <gtest/gtest.h>
 
@@ -84,7 +87,7 @@ Rendering::CameraData MakeCamera(const Vector3& pos, const Vector3& forward)
     cam.cameraPos.y = pos.y;
     cam.cameraPos.z = pos.z;
     cam.cameraPos.w = 0.0f;
-    return cam;
+    return ::GameEngine::Tests::TestCameraWithEye(cam);
 }
 
 struct ChurnStats
@@ -390,8 +393,7 @@ TEST(CascadeFitStability, FreezeOriginSectorStepRefits)
     feature.SetFitFreezeEnabled(true);
     const Vector3 fwd = YawPitchForward(kOverviewYawDeg, kOverviewPitchDeg);
     const Vector3 lightDir = kLightDir.Normalize();
-    // Beyond the render-origin activation radius (32768 m), straddling the
-    // sector-32/33 boundary at 32.5 * 1024 = 33280 m.
+    // Across the sector-32/33 boundary at 32.5 * 1024 = 33280 m.
     const Rendering::CameraData camA = MakeCamera(Vector3{33279.95f, 9.0f, 50.0f}, fwd);
     const Rendering::CameraData camB = MakeCamera(Vector3{33280.05f, 9.0f, 50.0f}, fwd);
 
@@ -606,9 +608,7 @@ Rendering::CameraData MakeCameraAt(const Matrix4x4& rot3x3, double ex, double ey
     cam.view = view;
     cam.proj = proj;
     cam.viewProj = viewProj;
-    cam.cameraPos.x = static_cast<float>(ex);
-    cam.cameraPos.y = static_cast<float>(ey);
-    cam.cameraPos.z = static_cast<float>(ez);
+    Renderer::SetCameraEye(cam, WorldPosition{ex, ey, ez});
     return cam;
 }
 
@@ -679,7 +679,7 @@ const Matrix4x4& OverviewRotation()
     return rot;
 }
 
-// |eye| ladder: inside the activation radius (origin inactive, sector 0) through
+// |eye| ladder: from the origin sector (0,0,0) through
 // planetary. Same local offset at every rung so the frustum is congruent.
 struct OriginMagnitudePose
 {
@@ -694,6 +694,33 @@ constexpr OriginMagnitudePose kOriginLadder[] = {
 };
 
 } // namespace
+
+// A long-range camera (near 0.01 m, far 500 km: an editor view framed from
+// 250 km) keeps cascade 0 near its split. The range comes out of the projection
+// as RefitView reads it; a wrong range stretches the slice toward the scene box.
+TEST(CascadeFitLongRange, CascadeZeroFitsItsSplitUnderALongRangeProjection)
+{
+    constexpr float kLongRangeNear = 0.01f;
+    constexpr float kLongRangeFar = 500000.0f;
+    constexpr float kMaxHalfExtentPerSplit = 4.0f;
+    constexpr uint32_t kViewId = 4100;
+    const Rendering::CameraData cam = MakeCameraAt(OverviewRotation(), kOverviewPos.x, kOverviewPos.y,
+                                                   kOverviewPos.z, kLongRangeNear, kLongRangeFar);
+    float nearPlane = 0.0f;
+    float farPlane = 0.0f;
+    Renderer::ExtractNearFarLH_ZO(cam.proj, nearPlane, farPlane);
+
+    ShadowMapRenderFeature feature;
+    feature.SetFitFreezeEnabled(false);
+    feature.ApplyRuntimeShadowSettings(200.0f, 0.5f, 0.0001f, 0.02f);
+    const ShadowMapRenderFeature::SceneBoundsRel scene{Vector3{-4000.0f, -50.0f, -4000.0f},
+                                                       Vector3{4000.0f, 400.0f, 4000.0f}};
+    const CascadeFrameData fd = feature.ComputeCascades(cam, nearPlane, farPlane, kLightDir.Normalize(),
+                                                        nullptr, kViewId, &scene);
+    EXPECT_LE(fd.OrthoHalfExtent[0], kMaxHalfExtentPerSplit * fd.SplitDistances[0])
+        << "cascade 0 half extent " << fd.OrthoHalfExtent[0] << " m for a " << fd.SplitDistances[0]
+        << " m split; range read back as " << nearPlane << " to " << farPlane << " m";
+}
 
 // Extents are exactly translation-invariant in real arithmetic (a rigid shift of
 // the frustum shifts its light-space AABB without resizing it), so the emitted
@@ -785,9 +812,9 @@ TEST(CascadeFitWorldMagnitude, SliceCornerErrorStaysSubMetreAtEarthRadius)
             feature.ComputeCascades(cam, kNearPlane, kPlanetFar, lightDir, nullptr, ++viewId);
         Matrix4x4 cameraViewProj = cam.viewProj;
         const double originWorld[3] = {
-            static_cast<double>(fd.RenderOriginSector[0]) * Renderer::kSectorSize,
-            static_cast<double>(fd.RenderOriginSector[1]) * Renderer::kSectorSize,
-            static_cast<double>(fd.RenderOriginSector[2]) * Renderer::kSectorSize};
+            static_cast<double>(fd.RenderOriginSector[0]) * kWorldSectorSize,
+            static_cast<double>(fd.RenderOriginSector[1]) * kWorldSectorSize,
+            static_cast<double>(fd.RenderOriginSector[2]) * kWorldSectorSize};
 
         for (uint32_t c = 0; c < fd.NumCascades; ++c)
         {
@@ -980,9 +1007,9 @@ TEST(CascadeFitWorldMagnitude, EmittedFitContainsTrueSliceAtPlanetaryMagnitude)
             const CascadeFrameData fd =
                 feature.ComputeCascades(cam, kNearPlane, kPlanetFar, lightDir, nullptr, ++viewId);
             const double originWorld[3] = {
-                static_cast<double>(fd.RenderOriginSector[0]) * Renderer::kSectorSize,
-                static_cast<double>(fd.RenderOriginSector[1]) * Renderer::kSectorSize,
-                static_cast<double>(fd.RenderOriginSector[2]) * Renderer::kSectorSize};
+                static_cast<double>(fd.RenderOriginSector[0]) * kWorldSectorSize,
+                static_cast<double>(fd.RenderOriginSector[1]) * kWorldSectorSize,
+                static_cast<double>(fd.RenderOriginSector[2]) * kWorldSectorSize};
 
             for (uint32_t c = 0; c < fd.NumCascades; ++c)
             {
@@ -1050,10 +1077,9 @@ TEST(CascadeFitWorldMagnitude, EmittedFitContainsTrueSliceAtPlanetaryMagnitude)
 // position by half a texel on alternate frames and must read a ~0.5 phase drift.
 // Without it, a measurement that silently saw nothing would report a perfect
 // result. The offset is applied in double AFTER the projection, so the probe's
-// sensitivity never depends on the magnitude of the matrix under test — folded
-// into an fp32 world-magnitude translation instead (GE_ES_FORCE_WORLD_SPACE=1) it
-// rounds away entirely, and the arm would then fail for a reason that has nothing
-// to do with the invariant.
+// sensitivity never depends on the magnitude of the matrix under test. Folded
+// into an fp32 world-magnitude translation instead, it rounds away entirely, and
+// the arm would then fail for a reason that has nothing to do with the invariant.
 TEST(CascadeFitWorldMagnitude, StaticReceiverTexelPhaseIsTranslationInvariant)
 {
     const Vector3 lightDir = kLightDir.Normalize();
@@ -1107,9 +1133,9 @@ TEST(CascadeFitWorldMagnitude, StaticReceiverTexelPhaseIsTranslationInvariant)
                 const CascadeFrameData fd =
                     feature.ComputeCascades(cam, kNearPlane, kPlanetFar, lightDir, nullptr, vid);
                 const double originWorld[3] = {
-                    static_cast<double>(fd.RenderOriginSector[0]) * Renderer::kSectorSize,
-                    static_cast<double>(fd.RenderOriginSector[1]) * Renderer::kSectorSize,
-                    static_cast<double>(fd.RenderOriginSector[2]) * Renderer::kSectorSize};
+                    static_cast<double>(fd.RenderOriginSector[0]) * kWorldSectorSize,
+                    static_cast<double>(fd.RenderOriginSector[1]) * kWorldSectorSize,
+                    static_cast<double>(fd.RenderOriginSector[2]) * kWorldSectorSize};
 
                 for (uint32_t c = 0; c < fd.NumCascades; ++c)
                 {

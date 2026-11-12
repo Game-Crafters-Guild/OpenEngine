@@ -1,0 +1,108 @@
+---
+title: Save files
+description: Write, read, list, and delete a game's save files and save slots through the platform services, and read the size and the last write time of a save file.
+---
+
+The platform services keep a game's saves as files in slots. A slot is a named group of files, for example one save game. The first write into a slot makes the slot. Slot and file names use letters, digits, `.`, `_`, and `-`, and do not start with `.`. A name of the shape `<name>.<number>-<text>.tmp` is reserved for the engine's temporary files and is refused.
+
+Each call returns a `Result`. `Ok` is success. `NotFound` tells you that the slot or the file does not exist. `InvalidArgument` tells you that a name is not valid.
+
+## Write, read, and list
+
+:::::tabs
+::::tab[C++]
+
+```cpp title="PlatformServices/PlatformServices.h"
+Result ListSlots(std::vector<std::string>& outSlots) const;
+Result ListFiles(std::string_view slot, std::vector<std::string>& outFiles) const;
+Result ReadFile(std::string_view slot, std::string_view name, std::vector<uint8_t>& outBytes) const;
+Result WriteFile(std::string_view slot, std::string_view name, std::span<const uint8_t> bytes);
+Result Commit(std::string_view slot);
+```
+
+::::
+::::tab[C#]
+
+```csharp title="GameEngine.Platform.ABI.dll"
+public static Result ListSlots(out string[] slots);
+public static Result ListFiles(string slot, out string[] files);
+public static Result ReadSaveFile(string slot, string name, out byte[] data);
+public static Result WriteSaveFile(string slot, string name, byte[] data);
+public static Result CommitSave(string slot);
+```
+
+::::
+:::::
+
+A write replaces the file completely. A reader sees the earlier contents or the new contents, never a part of a write. Call `Commit` after the last write of a save, so that a platform with cloud saves can send the slot.
+
+To save the game world in C++, write it with `Scene::WriteSceneFile` and `SceneWriteOptions::writeSimulationTick`, and write the bytes of that file into a slot. To load it, read the bytes from the slot into a file and load that file with `Scene::ReadSceneInto`: the [simulation tick](time-and-the-simulation-clock.mdx#saves) and the [AI agents](../ai/ai-agents.mdx) continue from the save. C# has no call yet to save or load the world; use the C++ calls above.
+
+## Size and last write time
+
+`GetFileInfo` gives the size of a file in bytes and the time of its last write in UTC. Use it to show when each save was made in a save menu.
+
+:::::tabs
+::::tab[C++]
+
+```cpp title="PlatformServices/PlatformServices.h"
+struct SaveFileInfo
+{
+    uint64_t SizeBytes = 0;
+    std::chrono::system_clock::time_point LastWriteTime; // UTC
+};
+
+Result GetFileInfo(std::string_view slot, std::string_view name, SaveFileInfo& outInfo) const;
+```
+
+::::
+::::tab[C#]
+
+```csharp title="GameEngine.Platform.ABI.dll"
+public struct SaveFileInfo
+{
+    public ulong SizeBytes;
+    public DateTimeOffset LastWriteTime; // UTC
+}
+
+public static Result GetSaveFileInfo(string slot, string name, out SaveFileInfo info);
+```
+
+::::
+:::::
+
+```csharp title="Show when each slot was saved"
+using GameEngine.Scripting;
+
+PlatformServices.ListSlots(out var slots);
+foreach (var slot in slots)
+{
+    if (PlatformServices.GetSaveFileInfo(slot, "game.sav", out var info) == PlatformServices.Result.Ok)
+        Console.WriteLine($"{slot}: {info.LastWriteTime.ToLocalTime():g}");
+}
+```
+
+A platform without file times returns `Unsupported`.
+
+## Delete a file or a slot
+
+`DeleteFile` removes one file. A slot stays after you delete its last file. `DeleteSlot` removes the slot and all its files. After the call, `ListSlots` does not give the slot. If `DeleteSlot` returns `IOError`, some files of the slot can stay; call it again. `NotFound` means that the slot is gone.
+
+:::::tabs
+::::tab[C++]
+
+```cpp title="PlatformServices/PlatformServices.h"
+Result DeleteFile(std::string_view slot, std::string_view name);
+Result DeleteSlot(std::string_view slot);
+```
+
+::::
+::::tab[C#]
+
+```csharp title="GameEngine.Platform.ABI.dll"
+public static Result DeleteSaveFile(string slot, string name);
+public static Result DeleteSaveSlot(string slot);
+```
+
+::::
+:::::

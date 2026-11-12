@@ -4,6 +4,7 @@
 
 #include "Logger/Logger.h"
 #include "UI/Controls/Button.h"
+#include "UI/Controls/InspectorNotice.h"
 #include "UI/Controls/Label.h"
 #include "UI/Controls/MarkdownText.h"
 #include "UI/Controls/TextArea.h"
@@ -89,12 +90,17 @@ bool AgentConversationRow::Build(UIManager& ui)
     m_Status = TakeElement<UIElement>(*this, "AgentRowStatus", m_Index);
     m_Actions = TakeElement<UIElement>(*this, "AgentRowActions", m_Index);
     m_MarkupChips = TakeElement<UIElement>(*this, "AgentRowMarkups", m_Index);
+    m_SetupRefusalHost = TakeElement<UIElement>(*this, "AgentRowSetupRefusal", m_Index);
     if (!m_Header || !m_Time || !m_Stop || !m_Retry || !m_UndoTurn || !m_Retried || !m_Text || !m_Reply || !m_Calls ||
-        !m_Status || !m_Actions || !m_MarkupChips)
+        !m_Status || !m_Actions || !m_MarkupChips || !m_SetupRefusalHost)
     {
         Logger::Log::Error("AI Assistant: {} is missing a row element.", kLayoutAssetPath);
         return false;
     }
+    // The settings page's Setup row shows the same finding in the same control.
+    auto refusal = std::make_unique<EditorUI::InspectorNotice>("", EditorUI::InspectorNotice::Kind::Error);
+    m_SetupRefusal = refusal.get();
+    m_SetupRefusalHost->AddChild(std::move(refusal));
 
     m_Stop->SetTooltip("Stop this reply and every queued prompt (Esc)");
     m_Stop->SetOnClick([this](UIEvent&) { m_OnStop(); });
@@ -143,6 +149,11 @@ void AgentConversationRow::Show(const AgentConversationRowModel& model, const st
     }
     if (!shown || shown->Status != model.Status || shown->Failed != model.Failed || shown->Stopped != model.Stopped)
         ShowStatus(model);
+    if (!shown || shown->SetupRefusal != model.SetupRefusal)
+    {
+        m_SetupRefusal->SetText(model.SetupRefusal);
+        SetClassIf(*m_SetupRefusalHost, "hidden", model.SetupRefusal.empty());
+    }
     if (!shown || shown->Failed != model.Failed || shown->Retried != model.Retried)
     {
         SetClassIf(*m_Retry, "hidden", !model.Failed || model.Retried);

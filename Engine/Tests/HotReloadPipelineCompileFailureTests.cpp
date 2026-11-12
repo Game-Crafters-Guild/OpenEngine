@@ -73,6 +73,8 @@ TEST(HotReloadPipelineCompileFailure, CompileCancelledByThePoolShutdownReportsCa
     const TestUtils::ScopedTempDir workspace(TestUtils::MakeUniqueTempDirectory("GE_HotReloadPipelineShutdownCancel"));
     const std::filesystem::path assemblyPath = workspace.Path() / "GameEngine.Scripts.dll";
 
+    // Declared before the pool: the blocker can still be inside set_value() after the wait returns.
+    std::promise<void> blockerStarted;
     JobSystem::WorkStealingThreadPool pool(2);
     JobSystem::JobChannel compiles(pool, JobSystem::JobChannelDesc{.Name = "Script compiles", .MaxRunning = 1});
     HotReloadPipeline pipeline(pool, compiles);
@@ -82,7 +84,6 @@ TEST(HotReloadPipelineCompileFailure, CompileCancelledByThePoolShutdownReportsCa
     // Another compile holds the channel's only slot, so the run's compile
     // waits in the FIFO, where the shutdown drain cancels it without the
     // run's token.
-    std::promise<void> blockerStarted;
     std::promise<void> releaseBlocker;
     std::shared_future<void> released = releaseBlocker.get_future().share();
     JobSystem::TaskHandle blocker = compiles.Submit([&blockerStarted, released] {

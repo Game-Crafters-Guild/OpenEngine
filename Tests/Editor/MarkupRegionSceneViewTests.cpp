@@ -100,10 +100,12 @@ class MarkupRegionSceneViewTest : public ::testing::Test
     {
         const ECS::EntityHandle entity = m_World.CreateEntity();
         const Editor::RegionPlacement placement =
-            Editor::NewRegionPlacement(knots, Components::WorldTransform{}.matrix, 0.0f);
+            Editor::NewRegionPlacement(knots, Mathematics::Matrix4x4::Identity(), 0.0f);
         m_World.AddComponentImmediate(entity, placement.Local);
         m_World.AddComponentImmediate(entity, Components::Markup{});
-        Editor::AddRegionParts(m_World, entity, placement.World.matrix, knots, Spline::SplineType::Linear, kHeight);
+        Editor::AddRegionParts(m_World, entity,
+                               placement.World.ToMatrix4x4(placement.World.GetPosition() - Mathematics::WorldPosition{}),
+                               knots, Spline::SplineType::Linear, kHeight);
         (void)MarkupECS::MarkupService::Get().BeginMarkup(m_World, entity, Components::MarkupAuthor::User, 1000);
         return entity;
     }
@@ -113,14 +115,13 @@ class MarkupRegionSceneViewTest : public ::testing::Test
     {
         const ECS::EntityHandle entity = m_World.CreateEntity();
         Components::Transform local{};
-        local.matrix[0] = size.x;
-        local.matrix[5] = size.y;
-        local.matrix[10] = size.z;
-        local.matrix[12] = center.x;
-        local.matrix[13] = center.y;
-        local.matrix[14] = center.z;
+        local.Basis[0].x = size.x;
+        local.Basis[1].y = size.y;
+        local.Basis[2].z = size.z;
+        local.Position = Mathematics::WorldPosition::FromVector3(center);
         Components::WorldTransform placed{};
-        std::copy(std::begin(local.matrix), std::end(local.matrix), placed.matrix);
+        placed.Position = local.Position;
+        placed.Basis = local.Basis;
         m_World.AddComponentImmediate(entity, local);
         m_World.AddComponentImmediate(entity, placed);
         m_World.AddComponentImmediate(entity, Components::Markup{});
@@ -196,7 +197,8 @@ class MarkupRegionSceneViewTest : public ::testing::Test
         const Components::Transform placed = Editor::NewPathPlacement(points);
         m_World.AddComponentImmediate(path, placed);
         m_World.AddComponentImmediate(path, Components::Markup{});
-        Editor::AddPathParts(m_World, path, placed.matrix, points, Spline::SplineType::Linear);
+        Editor::AddPathParts(m_World, path, placed.ToMatrix4x4(placed.GetPosition() - Mathematics::WorldPosition{}),
+                             points, Spline::SplineType::Linear);
         (void)MarkupECS::MarkupService::Get().BeginMarkup(m_World, path, Components::MarkupAuthor::User, 1000);
         return path;
     }
@@ -374,7 +376,7 @@ TEST_F(MarkupRegionSceneViewTest, ARegionStandsOnTheSeaWhereTheGroundIsBelowIt)
 {
     const ECS::EntityHandle ocean = m_World.CreateEntity();
     Components::WorldTransform placed{};
-    placed.matrix[13] = 5.0f;
+    placed.Position.Y = 5.0;
     m_World.AddComponentImmediate(ocean, placed);
     m_World.AddComponentImmediate(ocean, Components::OceanSurface{});
     EXPECT_FLOAT_EQ(Editor::ResolveMarkupSeaLevel(m_World), 5.0f);
@@ -611,7 +613,7 @@ TEST_F(MarkupRegionSceneViewTest, MovingAMemberRebuildsTheRegionsThatListItAndNo
     const uint64 forestRevision = Display(forest)->MeshRevision;
     const uint64 villageRevision = Display(village)->MeshRevision;
 
-    m_World.GetComponentForWrite<Components::WorldTransform>(pond)->matrix[12] = 25.0f;
+    m_World.GetComponentForWrite<Components::WorldTransform>(pond)->Position.X = 25.0;
     DrawFrame();
     EXPECT_NE(Display(forest)->MeshRevision, forestRevision) << "the region listing the box kept its old display";
     EXPECT_TRUE(LidCovers(forest, Vector2(15.0f, 15.0f))) << "the hole stayed where the box was";

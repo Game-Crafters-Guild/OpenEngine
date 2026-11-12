@@ -1,5 +1,6 @@
 #include "TerrainECS/TerrainAtlas.h"
 
+#include "CBTTerrain/CBTLayout.h"
 #include "Mathematics/Interpolation.h"
 
 #include <algorithm>
@@ -8,6 +9,42 @@
 
 namespace GameEngine::TerrainECS
 {
+
+namespace
+{
+// Tiles a side of the row window: the tile count, capped at the GPU's window side.
+uint32 WindowTiles(uint32 tilesPerAxis)
+{
+    return std::min(tilesPerAxis, CBTTerrain::kAtlasWindowTilesPerAxis);
+}
+
+// The key a row carries for the tile that owns it (mirror CBT_AtlasTileKey). Tile coordinates
+// are below 65536 a side (kMaxDerivedTilesPerAxis).
+uint32 AtlasTileKey(int32 tx, int32 tz)
+{
+    return (static_cast<uint32>(tz) << 16u) | static_cast<uint32>(tx);
+}
+} // namespace
+
+uint32 AtlasGeometry::RowCount() const
+{
+    return WindowTiles(TilesPerAxisX) * WindowTiles(TilesPerAxisZ);
+}
+
+uint32 AtlasGeometry::RowIndex(int32 tx, int32 tz) const
+{
+    const uint32 windowX = std::max(WindowTiles(TilesPerAxisX), 1u);
+    const uint32 windowZ = std::max(WindowTiles(TilesPerAxisZ), 1u);
+    return (static_cast<uint32>(tz) % windowZ) * windowX + static_cast<uint32>(tx) % windowX;
+}
+
+TileAtlasSlot AtlasRowAt(const TileAtlasSlot* rows, const AtlasGeometry& geo, int32 tx, int32 tz)
+{
+    const TileAtlasSlot& row = rows[geo.RowIndex(tx, tz)];
+    if (row.TileKey != AtlasTileKey(tx, tz))
+        return TileAtlasSlot{};
+    return row;
+}
 
 AtlasGeometry MakeAtlasGeometry(uint32 tileRes, uint32 slotCount,
                                 uint32 tilesPerAxisX, uint32 tilesPerAxisZ)
@@ -57,13 +94,23 @@ uint32 DeriveAtlasSlotCount(uint32 tilesPerAxisX, uint32 tilesPerAxisZ, uint32 t
 void AtlasIndirectionTable::Resize(const AtlasGeometry& geo)
 {
     Geometry = geo;
-    Rows.assign(static_cast<size_t>(geo.TilesPerAxisX) * geo.TilesPerAxisZ, TileAtlasSlot{});
+    Rows.assign(geo.RowCount(), TileAtlasSlot{});
 }
 
 void AtlasIndirectionTable::Clear()
 {
     for (TileAtlasSlot& r : Rows)
         r = TileAtlasSlot{};
+}
+
+TileAtlasSlot* AtlasIndirectionTable::Claim(int32 tx, int32 tz)
+{
+    TileAtlasSlot& row = Rows[Geometry.RowIndex(tx, tz)];
+    const uint32 key = AtlasTileKey(tx, tz);
+    if (row.Slot != kAtlasNoSlot && row.TileKey != key)
+        return nullptr;
+    row.TileKey = key;
+    return &row;
 }
 
 AtlasTileDirtyRoute ResolveAtlasTileDirtyRoute(bool heightDirty, bool splatDirty, bool resident)
@@ -297,7 +344,7 @@ float32 AtlasHeightSampler::SampleHeightNormalized(float32 u, float32 v) const
     const float32 localU = Math::Clamp01(fx - static_cast<float32>(tx));
     const float32 localV = Math::Clamp01(fz - static_cast<float32>(tz));
 
-    const TileAtlasSlot& row = Rows[Geometry.TileIndex(tx, tz)];
+    const TileAtlasSlot row = AtlasRowAt(Rows, Geometry, tx, tz);
     if (row.Slot == kAtlasNoSlot || !Atlas)
         return coarseSample(); // out-of-window fallback (Risk 3): coarse, never garbage
 
@@ -318,7 +365,7 @@ bool AtlasHeightSampler::IsResidentAt(float32 u, float32 v) const
                                 0, static_cast<int32>(Geometry.TilesPerAxisX) - 1);
     const int32 tz = std::clamp(static_cast<int32>(std::floor(v * static_cast<float32>(Geometry.TilesPerAxisZ))),
                                 0, static_cast<int32>(Geometry.TilesPerAxisZ) - 1);
-    return Rows[Geometry.TileIndex(tx, tz)].Slot != kAtlasNoSlot;
+    return AtlasRowAt(Rows, Geometry, tx, tz).Slot != kAtlasNoSlot;
 }
 
 void BuildCoarseHeightField(uint32 coarseDim, uint32 tilesX, uint32 tilesZ, float32 fallback,
@@ -438,7 +485,7 @@ void AtlasComponentSampler::Sample(float32 u, float32 v, float32* out) const
     const float32 localU = Math::Clamp01(fx - static_cast<float32>(tx));
     const float32 localV = Math::Clamp01(fz - static_cast<float32>(tz));
 
-    const TileAtlasSlot& row = Rows[Geometry.TileIndex(tx, tz)];
+    const TileAtlasSlot row = AtlasRowAt(Rows, Geometry, tx, tz);
     if (row.Slot == kAtlasNoSlot || !Atlas)
     {
         coarseSample(); // out-of-window fallback (Risk 3): coarse, never garbage
@@ -464,7 +511,7 @@ bool AtlasComponentSampler::IsResidentAt(float32 u, float32 v) const
                                 0, static_cast<int32>(Geometry.TilesPerAxisX) - 1);
     const int32 tz = std::clamp(static_cast<int32>(std::floor(v * static_cast<float32>(Geometry.TilesPerAxisZ))),
                                 0, static_cast<int32>(Geometry.TilesPerAxisZ) - 1);
-    return Rows[Geometry.TileIndex(tx, tz)].Slot != kAtlasNoSlot;
+    return AtlasRowAt(Rows, Geometry, tx, tz).Slot != kAtlasNoSlot;
 }
 
 void BuildCoarseComponentField(uint32 coarseDim, uint32 tilesX, uint32 tilesZ, uint32 components,

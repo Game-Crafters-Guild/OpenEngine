@@ -1,5 +1,6 @@
 #pragma once
 
+#include "PageStreaming/PageStore/PageStoreCommit.h"
 #include "PageStreaming/PageStore/PageStoreFormat.h"
 #include "PageStreaming/PageSampleRect.h"
 #include "PageStreaming/PageStore/PageStoreWriter.h"
@@ -42,13 +43,14 @@ public:
     PageFieldFormat Format() const { return m_Shape.Format; }
 
     /// Changes each time a page that a read found absent can become readable: at Commit, Finish
-    /// and Publish. A stream then reads again the absent pages that ReadableSince names.
+    /// and Publish. A stream then reads again the absent pages that ReadableSince names, and the
+    /// resident pages that a Commit names.
     uint64 Version() const { return m_Version.load(std::memory_order_acquire); }
 
-    /// The changes after version `since`: appends the level-0 rect of each Commit to `outRects` and
-    /// returns the version they reach. Sets `outWhole` when any page can have become readable: a
-    /// store was published (Publish, Finish), or the span is older than the changes the access keeps.
-    uint64 ReadableSince(uint64 since, std::vector<PageSampleRect>& outRects, bool& outWhole) const;
+    /// The changes after version `since`: appends each Commit to `outCommits` and returns the version
+    /// they reach. Sets `outWhole` when any page can have become readable: a store was published
+    /// (Publish, Finish), or the span is older than the changes the access keeps.
+    uint64 ReadableSince(uint64 since, std::vector<PageStoreCommit>& outCommits, bool& outWhole) const;
 
     /// Reads and decodes page `address` (FetchPage). Absent when the store does not hold the
     /// page, has not written it yet, or no store is open.
@@ -65,10 +67,11 @@ public:
     /// published at `file` again by Finish. Reads go to the writer from now on.
     std::string OpenForPatch(const std::filesystem::path& file, PageStoreLayout layout);
     /// PageStoreWriter::AddPresentPages. The pages it adds read as absent until they are written.
-    std::string AddPresentPages(std::span<const uint8> present);
-    /// Tells the streams that the pages written since the last change are readable: the pages that
-    /// read level-0 samples `level0Rect` (PageReadsLevel0Rect).
-    void Commit(const PageSampleRect& level0Rect);
+    std::string AddPresentPages(std::span<const PageAddress> added);
+    /// Tells the streams that the pages written since the last change are readable: the pages of
+    /// `level` and coarser that read level-0 samples `level0Rect` (PageReadsLevel0Rect). A stream
+    /// reads such a page again, absent or resident; it does not read a finer page again.
+    void Commit(const PageSampleRect& level0Rect, uint32 level);
     /// Publishes the store being written (PageStoreWriter::Finish) and reads it from now on.
     std::string Finish();
     /// Drops the store being written and lets the published store go: a read finds no page then.
@@ -82,14 +85,14 @@ public:
 private:
     bool MatchesShape(const PageStoreLayout& layout) const;
     std::string PublishLocked(const std::filesystem::path& file);
-    // Records a change and moves Version to it: the level-0 rect of a Commit, or the whole store when empty.
-    void AddChange(const std::optional<PageSampleRect>& level0Rect);
+    // Records a change and moves Version to it: a Commit, or the whole store when empty.
+    void AddChange(const std::optional<PageStoreCommit>& commit);
 
-    // One change of Version: the level-0 rect a Commit made readable, or the whole store (a publication).
+    // One change of Version: the pages a Commit made readable, or the whole store (a publication).
     struct ReadableChange
     {
         uint64 Version = 0;
-        std::optional<PageSampleRect> Level0Rect;
+        std::optional<PageStoreCommit> Commit;
     };
     // The changes a stream catches up with between two frames; older ones read as a whole change.
     static constexpr std::size_t kReadableChangesKept = 1024;

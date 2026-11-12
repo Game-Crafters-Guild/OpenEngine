@@ -851,7 +851,7 @@ TEST(TerrainRoleMaterials, TheSectionHeaderRuleExistsInTheInspectorStylesheet)
         << "the shared treatment no longer paints the header, so the section bar is unstyled";
 
     const std::filesystem::path base =
-        std::filesystem::path(GE_EDITOR_SOURCE_DIR) / "Assets/UI/controls/Foldout.css";
+        std::filesystem::path(GE_UI_MODULE_SOURCE_DIR) / "Assets/UI/controls/Foldout.css";
     std::ifstream baseIn(base, std::ios::binary);
     ASSERT_TRUE(baseIn.good()) << "the foldout stylesheet did not read; the control is unproven";
     std::ostringstream baseSs;

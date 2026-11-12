@@ -175,7 +175,7 @@ flat layout(location = 14) out uint vInstanceFlags;
 
 // Render-origin-relative world position (Earth-scale precision): PRECISE small-
 // magnitude position the fragment shadow receiver projects through the rebased
-// ge_shadowVP. Equals vPosWS when the render origin is inactive (near-origin
+// ge_shadowVP. Equals vPosWS when the render origin is sector (0,0,0) (near-origin
 // scenes), so the shadow path is byte-identical there. location 15 is the last
 // guaranteed varying slot (16 total); above the conditional vUV2..vUV7 at 8..13.
 layout(location = 15) GE_SURFACE_CENTROID out vec3 vPosRel;
@@ -432,6 +432,7 @@ void ge_ApplySkinning8(inout vec3 position, inout vec3 normal,
 //
 // 2. Extended (HAS_VERTEX_OUTPUT_MODIFIER): full vertex output control.
 //      void ModifyVertex(inout VertexOutput v, InstanceData inst);
+//    The modifier may take `inout InstanceData inst` to set inst.flags.
 //    The modifier declares its own vertex inputs and fills position, normal, UV.
 //    Used by terrain, water, and other procedural geometry.
 
@@ -535,7 +536,7 @@ void main()
     if (vo.useSector)
     {
         // Earth-scale (sector, local) vertex (CBT deep decode, terrain S2a): the modifier
-        // handed a SECTOR-LOCAL position + this vertex's integer world sector. Project it
+        // handed a sector-local position + this vertex's integer world sector. Project it
         // through the mesh path's GE_ClipFromSectorLocal — the clip position is built from
         // the EXACT integer sector delta + a small local offset, so no world-magnitude fp32
         // rounding ever enters the reconstruction. vPosWS keeps the recomposed full world
@@ -551,10 +552,9 @@ void main()
         vPosWS = worldPos.xyz;
         // Vertex-output modifiers (terrain, water) own their world positions; they carry
         // no per-instance sector, so they subtract the render origin here and project the
-        // small camera-relative position through the rebased view-proj (Earth-scale slice
-        // 1b). vPosRel is the render-origin-relative receiver position the fragment shadow
-        // path projects through the rebased ge_shadowVP. At origin (0,0,0) both reduce to
-        // the full-world path — byte-identical to the pre-feature build (dark-ship).
+        // small camera-relative position through the rebased view-proj. vPosRel is the
+        // render-origin-relative receiver position the fragment shadow path projects
+        // through the rebased ge_shadowVP.
         geClipPos = GE_ClipFromWorld(worldPos.xyz, vPosRel);
     }
     vNormalWS = normalize(vo.normal);

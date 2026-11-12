@@ -13,7 +13,9 @@
 #include "Rendering/Core/Device.h"
 #include "Rendering/Geometry/VertexAttributeFlags.h"
 
+#include <algorithm>
 #include <atomic>
+#include <cstdint>
 #include <cstring>
 #include <memory>
 #include <thread>
@@ -841,4 +843,223 @@ TEST_F(MeshGPURegistryTest, PoolResidencyIsLoggedAgainAfterADeviceRebuild)
            "rebuild, so where the rebuilt device's mesh pools landed is unobservable";
 
     sinkPtr->UnregisterCallback(callbackId);
+}
+
+// --- Uploaded bytes ---
+//
+// The bytes an upload writes to each pool stream, read back through the mapped
+// pool and compared with the layout this file builds from the Mesh.
+
+namespace
+{
+using StreamBytes = std::vector<uint8_t>;
+
+template <class T>
+void AppendBytes(StreamBytes& out, const T* values, size_t count)
+{
+    const auto* bytes = reinterpret_cast<const uint8_t*>(values);
+    out.insert(out.end(), bytes, bytes + count * sizeof(T));
+}
+
+template <class T>
+StreamBytes BytesOf(const Vector<T>& values)
+{
+    StreamBytes out;
+    AppendBytes(out, values.data(), values.size());
+    return out;
+}
+
+// LOD0's vertices, then the vertices of each level that carries its own block.
+std::vector<const Vector<Vertex>*> UploadedVertexBlocks(const Mesh& mesh)
+{
+    std::vector<const Vector<Vertex>*> blocks{&mesh.Vertices};
+    for (const Vector<Vertex>& block : mesh.ExtraLODVertices)
+        if (!block.empty())
+            blocks.push_back(&block);
+    return blocks;
+}
+
+// Position, normal and UV0 per vertex: 32 bytes.
+StreamBytes ExpectedCoreBytes(const Mesh& mesh)
+{
+    StreamBytes out;
+    for (const Vector<Vertex>* block : UploadedVertexBlocks(mesh))
+        for (const Vertex& v : *block)
+        {
+            AppendBytes(out, v.Position, 3);
+            AppendBytes(out, v.Normal, 3);
+            AppendBytes(out, v.TexCoords, 2);
+        }
+    return out;
+}
+
+// Four floats per vertex, when a LOD0 vertex has a non-zero tangent direction.
+StreamBytes ExpectedTangentBytes(const Mesh& mesh)
+{
+    const bool hasTangent = std::any_of(mesh.Vertices.begin(), mesh.Vertices.end(), [](const Vertex& v)
+                                        { return v.Tangent[0] != 0.0f || v.Tangent[1] != 0.0f || v.Tangent[2] != 0.0f; });
+    StreamBytes out;
+    if (!hasTangent)
+        return out;
+    for (const Vector<Vertex>* block : UploadedVertexBlocks(mesh))
+        for (const Vertex& v : *block)
+            AppendBytes(out, v.Tangent, 4);
+    return out;
+}
+
+// LOD0's RGBA, then the RGBA of each level that carries its own block.
+StreamBytes ExpectedColourBytes(const Mesh& mesh)
+{
+    StreamBytes out = BytesOf(mesh.Color0);
+    for (size_t k = 0; k < mesh.ExtraLODColor0.size(); ++k)
+        if (!mesh.ExtraLODVertices[k].empty())
+            AppendBytes(out, mesh.ExtraLODColor0[k].data(), mesh.ExtraLODColor0[k].size());
+    return out;
+}
+
+// Every level's indices in order: 16-bit when no level has more than 65535
+// vertices, padded with one zero to an even count; else 32-bit.
+StreamBytes ExpectedIndexBytes(const Mesh& mesh)
+{
+    size_t maxLevelVertices = mesh.Vertices.size();
+    for (const Vector<Vertex>& block : mesh.ExtraLODVertices)
+        maxLevelVertices = std::max(maxLevelVertices, block.size());
+    std::vector<uint32_t> indices;
+    for (uint32_t k = 0; k < mesh.LODCount(); ++k)
+        indices.insert(indices.end(), mesh.LODIndices(k).begin(), mesh.LODIndices(k).end());
+
+    StreamBytes out;
+    if (maxLevelVertices > 65535u)
+    {
+        AppendBytes(out, indices.data(), indices.size());
+        return out;
+    }
+    std::vector<uint16_t> narrow(indices.begin(), indices.end());
+    if (narrow.size() % 2u != 0u)
+        narrow.push_back(0u);
+    AppendBytes(out, narrow.data(), narrow.size());
+    return out;
+}
+
+// Compares the bytes at the stream's sub-allocation with `expected`. An empty
+// `expected` means the mesh uploads no such stream.
+void ExpectStreamBytes(IDevice& device, const char* stream, BufferHandle buffer,
+                       const Memory::RangeAllocator::Allocation& alloc, const StreamBytes& expected)
+{
+    if (expected.empty())
+    {
+        EXPECT_FALSE(buffer.IsValid()) << stream << ": the mesh uploads no such stream";
+        return;
+    }
+    ASSERT_TRUE(buffer.IsValid()) << stream;
+    ASSERT_GE(alloc.Size, expected.size()) << stream;
+    const auto* mapped = static_cast<const uint8_t*>(device.MapBuffer(buffer));
+    ASSERT_NE(mapped, nullptr) << stream;
+    const StreamBytes actual(mapped + alloc.Offset, mapped + alloc.Offset + expected.size());
+    device.UnmapBuffer(buffer);
+    const size_t firstDifference = static_cast<size_t>(
+        std::mismatch(actual.begin(), actual.end(), expected.begin()).first - actual.begin());
+    EXPECT_EQ(firstDifference, expected.size())
+        << stream << " differs first at byte " << firstDifference << " of " << expected.size();
+}
+
+void SetTangents(Mesh& mesh, float handedness)
+{
+    for (size_t vertexIndex = 0; vertexIndex < mesh.Vertices.size(); ++vertexIndex)
+    {
+        Vertex& vertex = mesh.Vertices[vertexIndex];
+        vertex.Tangent[0] = 1.0f;
+        vertex.Tangent[1] = 0.25f * static_cast<float>(vertexIndex);
+        vertex.Tangent[2] = -0.5f;
+        vertex.Tangent[3] = handedness;
+    }
+}
+
+// A copy of `base` scaled by `scale`, with its own normals, UVs and tangents.
+Vector<Vertex> ScaledVertexBlock(const Vector<Vertex>& base, float scale)
+{
+    Vector<Vertex> block = base;
+    for (size_t vertexIndex = 0; vertexIndex < block.size(); ++vertexIndex)
+    {
+        Vertex& vertex = block[vertexIndex];
+        for (float& coordinate : vertex.Position)
+            coordinate *= scale;
+        vertex.Normal[1] = 0.5f + 0.1f * static_cast<float>(vertexIndex);
+        vertex.TexCoords[0] = 0.75f - 0.2f * static_cast<float>(vertexIndex);
+        vertex.Tangent[3] = -vertex.Tangent[3];
+    }
+    return block;
+}
+} // namespace
+
+// Every stream an upload writes holds the mesh's bytes in the layout the draw reads:
+// core vertices, tangents, chain colours, 16-bit indices with their pad, 32-bit
+// indices over several levels, and the streams copied as they are (UV1, UV2, skinning).
+TEST_F(MeshGPURegistryTest, UploadedStreamBytesMatchTheMeshLayout)
+{
+    struct UploadCase
+    {
+        const char* Name;
+        Mesh SourceMesh;
+    };
+    std::vector<UploadCase> cases;
+
+    cases.push_back({"16-bit odd index count, no tangents", MakeTriangleMesh()});
+
+    Mesh streams = MakeTriangleMesh();
+    SetTangents(streams, 1.0f);
+    streams.Color0 = {1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 1.0f, 0.0f, 0.5f, 0.0f, 0.0f, 1.0f, 0.25f};
+    streams.TexCoords1 = {0.5f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f};
+    streams.ExtraTexCoords = {{0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f}};
+    cases.push_back({"tangents, colour, UV1 and UV2", streams});
+
+    Mesh indexOnlyChain = MakeTriangleMesh();
+    SetTangents(indexOnlyChain, -1.0f);
+    indexOnlyChain.Indices = {0u, 1u, 2u, 2u, 1u, 0u};
+    indexOnlyChain.ExtraLODs = {{0u, 1u, 2u}, {2u, 0u, 1u}};
+    cases.push_back({"16-bit index-only LOD chain", indexOnlyChain});
+
+    Mesh ownChain = MakeTriangleMesh();
+    SetTangents(ownChain, 1.0f);
+    ownChain.Color0 = {1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f};
+    ownChain.ExtraLODVertices = {ScaledVertexBlock(ownChain.Vertices, 0.5f), {}, ScaledVertexBlock(ownChain.Vertices, 0.25f)};
+    ownChain.ExtraLODs = {{2u, 1u, 0u}, {0u, 1u, 2u}, {1u, 2u, 0u}};
+    ownChain.ExtraLODColor0 = {{0.5f, 0.5f, 0.5f, 1.0f, 0.25f, 0.5f, 0.75f, 1.0f, 0.0f, 0.1f, 0.2f, 0.3f},
+                               {},
+                               {0.9f, 0.8f, 0.7f, 0.6f, 0.5f, 0.4f, 0.3f, 0.2f, 0.1f, 0.0f, 0.1f, 0.2f}};
+    cases.push_back({"own-vertex chain with colours", ownChain});
+
+    Mesh wide = MakeUint32IndexMesh(70000u, 9u);
+    wide.Indices[4] = 69999u;
+    wide.ExtraLODs = {{69999u, 1u, 2u}};
+    cases.push_back({"32-bit indices over two levels", wide});
+
+    Mesh skinned = MakeTriangleMesh(true, true, true);
+    SetTangents(skinned, 1.0f);
+    skinned.Joints1 = {2, 0, 0, 0, 3, 0, 0, 0, 3, 1, 0, 0};
+    skinned.Weights1 = {0.0f, 0.0f, 0.0f, 0.0f, 0.1f, 0.0f, 0.0f, 0.0f, 0.2f, 0.3f, 0.0f, 0.0f};
+    cases.push_back({"skinned, eight weights", skinned});
+
+    for (const UploadCase& uploadCase : cases)
+    {
+        SCOPED_TRACE(uploadCase.Name);
+        const Mesh& mesh = uploadCase.SourceMesh;
+        const MeshGPUEntry* entry = m_registry.Find(m_registry.RegisterSubmesh({GUID::Generate(), 0}, mesh));
+        ASSERT_NE(entry, nullptr);
+        ASSERT_EQ(entry->lodCount, mesh.LODCount()) << "every level must be admitted";
+        MeshGPUEntryBindings bindings{};
+        ASSERT_TRUE(m_registry.TryGetDrawableBindings(*entry, bindings));
+
+        ExpectStreamBytes(*m_device, "core", bindings.coreVB, entry->coreSubAlloc, ExpectedCoreBytes(mesh));
+        ExpectStreamBytes(*m_device, "index", bindings.indexBuffer, entry->indexSubAlloc, ExpectedIndexBytes(mesh));
+        ExpectStreamBytes(*m_device, "tangent", bindings.tangentVB, entry->tangentSubAlloc, ExpectedTangentBytes(mesh));
+        ExpectStreamBytes(*m_device, "colour", bindings.colorVB, entry->colorSubAlloc, ExpectedColourBytes(mesh));
+        ExpectStreamBytes(*m_device, "uv1", bindings.uv1VB, entry->uv1SubAlloc, BytesOf(mesh.TexCoords1));
+        ExpectStreamBytes(*m_device, "uv2", bindings.extraUvVB[0], entry->extraUvSubAlloc[0],
+                          mesh.ExtraTexCoords.empty() ? StreamBytes{} : BytesOf(mesh.ExtraTexCoords[0]));
+        ExpectStreamBytes(*m_device, "joints", bindings.jointsVB, entry->jointsSubAlloc, BytesOf(mesh.Joints0));
+        ExpectStreamBytes(*m_device, "weights", bindings.weightsVB, entry->weightsSubAlloc, BytesOf(mesh.Weights0));
+        ExpectStreamBytes(*m_device, "joints1", bindings.joints1VB, entry->joints1SubAlloc, BytesOf(mesh.Joints1));
+        ExpectStreamBytes(*m_device, "weights1", bindings.weights1VB, entry->weights1SubAlloc, BytesOf(mesh.Weights1));
+    }
 }

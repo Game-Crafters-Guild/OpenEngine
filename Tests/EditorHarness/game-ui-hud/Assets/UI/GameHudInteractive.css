@@ -39,25 +39,19 @@
     letter-spacing: 2px;
 }
 
-.hp-track {
+/* A <progress> bar: the colors are the control's tokens, so the fill needs no rule of its own. */
+.hp-bar {
     width: 100%;
     height: 18px;
-    background-color: rgba(0, 0, 0, 0.5);
     border: 1px solid rgba(120, 170, 240, 0.6);
-    border-radius: 8px;
+    --ui_color_progress_track: rgba(0, 0, 0, 0.5);
+    --ui_color_progress_fill: rgba(80, 220, 130, 0.95);
 }
 
-.hp-fill {
-    width: 100%;
-    height: 100%;
-    background-color: rgba(80, 220, 130, 0.95);
-    border-radius: 8px;
-}
-
-/* Driven from script by toggling a class, never by writing a colour across the ABI:
+/* Driven from script by toggling a class, never by writing a color across the ABI:
    the look stays in CSS where it can be restyled without touching code. */
-.hp-fill.low-health {
-    background-color: rgba(235, 80, 70, 0.95);
+.low-health {
+    --ui_color_progress_fill: rgba(235, 80, 70, 0.95);
 }
 
 .hp-label {
@@ -115,4 +109,12 @@
 
 .chat-input:focus {
     border: 2px solid rgba(190, 225, 255, 1.0);
+}
+
+/* Position only: the Button's own sheet draws its fill and border, so an exported game
+   shows whether it ships its control sheets. */
+#bare-button {
+    position: absolute;
+    left: 32px;
+    top: 290px;
 }

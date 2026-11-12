@@ -44,6 +44,10 @@ TEST(AssetTypes, DefaultExtensionSetsContainExpectedEntries)
     // JSON, so the editor's text-asset paths (external edit, diffing, VCS) treat it as text.
     EXPECT_TRUE(IsTextBasedAssetType(AssetType::TerrainMaterialLibrary));
 
+    // A terrain's authored height layer is a height page store.
+    EXPECT_EQ(GetAssetTypeFromExtension(".gepage"), AssetType::TerrainHeightLayer);
+    EXPECT_FALSE(IsTextBasedAssetType(AssetType::TerrainHeightLayer));
+
     // `.xml` is intentionally classified as generic XML by default (UILayout requires sniffing).
     const auto uiLayoutExts = GetDefaultExtensionsForAssetType(AssetType::UILayout);
     EXPECT_EQ(std::find(uiLayoutExts.begin(), uiLayoutExts.end(), ".xml"), uiLayoutExts.end());

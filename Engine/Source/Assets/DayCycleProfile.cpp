@@ -4,14 +4,13 @@
 #include "Logger/Logger.h"
 #include "Rendering/Sky/SkySunState.h"
 #include "Scene/SceneValue.h"
+#include "Serialization/JsonRead.h"
 #include "Types/ParseNumber.h"
 
 #include <nlohmann/json.hpp>
 
-#include <algorithm>
 #include <cmath>
 #include <numbers>
-#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -172,32 +171,6 @@ const DayCycleTrackDesc* FindTrackByFileKey(std::string_view fileKey)
     return nullptr;
 }
 
-// The first key written twice in one object of `text`, or empty. JSON leaves a repeated key to the
-// reader, which keeps the last; a profile refuses it instead, so no definition is lost unseen.
-std::string FirstRepeatedKey(std::string_view text)
-{
-    std::vector<std::vector<std::string>> objects;
-    std::string repeated;
-    const auto callback = [&](int, nlohmann::json::parse_event_t event, nlohmann::json& parsed) {
-        if (event == nlohmann::json::parse_event_t::object_start)
-            objects.emplace_back();
-        else if (event == nlohmann::json::parse_event_t::object_end && !objects.empty())
-            objects.pop_back();
-        else if (event == nlohmann::json::parse_event_t::key && !objects.empty() && repeated.empty())
-        {
-            const std::string key = parsed.get<std::string>();
-            std::vector<std::string>& seen = objects.back();
-            if (std::find(seen.begin(), seen.end(), key) != seen.end())
-                repeated = key;
-            seen.push_back(key);
-        }
-        return true;
-    };
-    // Only the callback is wanted. GCC does not let a void cast drop a warn_unused_result value.
-    std::ignore = nlohmann::json::parse(text, callback, false);
-    return repeated;
-}
-
 bool ParseTrack(const DayCycleTrackDesc& desc, const nlohmann::json& value, DayCycleTrackKeys& out,
                 std::string& outError)
 {
@@ -291,7 +264,7 @@ bool ParseDayCycleProfile(std::string_view text, DayCycleProfileData& out, std::
         outError = "the file is not a JSON object";
         return false;
     }
-    if (const std::string repeated = FirstRepeatedKey(text); !repeated.empty())
+    if (const std::string repeated = Serialization::FirstRepeatedKey(text); !repeated.empty())
     {
         outError = "'" + repeated + "' is written twice; keep one";
         return false;
@@ -384,7 +357,7 @@ DayCycleProfile::DayCycleProfile(const GUID& guid, const std::filesystem::path& 
 
 bool DayCycleProfile::Load()
 {
-    Vector<uint8> bytes;
+    ByteBuffer bytes;
     if (!ReadFileBytesShared(GetPath(), bytes))
     {
         Logger::Log::Error("Day Cycle profile '{}' could not be read", GetPath().string());
@@ -394,7 +367,7 @@ bool DayCycleProfile::Load()
     return LoadFromData(bytes);
 }
 
-bool DayCycleProfile::LoadFromData(const Vector<uint8>& data)
+bool DayCycleProfile::LoadFromData(std::span<const uint8> data)
 {
     std::shared_ptr<const DayCycleProfileData> parsed = ParseBytes(data);
     if (!parsed)
@@ -413,7 +386,7 @@ void DayCycleProfile::Unload()
     SetState(AssetState::Unloaded);
 }
 
-bool DayCycleProfile::ReloadFromData(const Vector<uint8>& data)
+bool DayCycleProfile::ReloadFromData(std::span<const uint8> data)
 {
     std::shared_ptr<const DayCycleProfileData> parsed = ParseBytes(data);
     if (!parsed)
@@ -428,7 +401,7 @@ std::shared_ptr<const DayCycleProfileData> DayCycleProfile::GetData() const
     return m_Data;
 }
 
-std::shared_ptr<const DayCycleProfileData> DayCycleProfile::ParseBytes(const Vector<uint8>& data) const
+std::shared_ptr<const DayCycleProfileData> DayCycleProfile::ParseBytes(std::span<const uint8> data) const
 {
     auto parsed = std::make_shared<DayCycleProfileData>();
     std::string error;

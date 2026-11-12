@@ -144,7 +144,7 @@ Components::Light MakeLight()
 
 Components::Transform MakeTransform(int index)
 {
-    return Components::Transform::FromTRS(Mathematics::Vector3{static_cast<float>(index), 0.0f, 0.0f},
+    return Components::Transform::FromTRS(Mathematics::WorldPosition{static_cast<double>(index), 0.0, 0.0},
                                           Mathematics::Quaternion{}, Mathematics::Vector3{1.0f, 1.0f, 1.0f});
 }
 
@@ -229,19 +229,17 @@ class PrefabTimingTests : public ::testing::Test
 
     // Loads `path` into `world` (Replace). With `resolved`, prefab sources resolve through the
     // engine's asset manager, so the templates carry their GUIDs.
-    bool Load(ECS::World& world, const std::filesystem::path& path, bool resolved,
-              Scene::SceneDegradation* report = nullptr)
+    Scene::SceneInstantiateResult Load(ECS::World& world, const std::filesystem::path& path, bool resolved)
     {
         Scene::SceneReadOptions options{};
-        options.outDegradation = report;
         if (resolved)
         {
             if (!m_Resolver)
                 m_Resolver.emplace(EngineCore::GetInstance().GetAssetManager(),
                                    EngineCore::GetInstance().GetResolvedAssetRoot(),
                                    Scene::AssetManagerSceneResolver::UnknownFile::Register);
-            options.assetResolver = &*m_Resolver;
-            options.assetRootOverride = m_Resolver->GetAssetRoot();
+            options.AssetResolver = &*m_Resolver;
+            options.AssetRootOverride = m_Resolver->GetAssetRoot();
         }
         return Scene::ReadSceneInto(world, path, options);
     }
@@ -271,17 +269,17 @@ class PrefabTimingTests : public ::testing::Test
     void TimeLoad(const std::filesystem::path& scene)
     {
         ECS::World world;
-        ASSERT_TRUE(Load(world, scene, false)) << Scene::GetLastSceneIOError().message;
+        const auto readResult = Load(world, scene, false);
+        ASSERT_TRUE(readResult) << readResult.Error->message;
         world.Clear();
         EngineCore::GetInstance().TryGetPrefabLibrary()->CollectAtFrameBoundary();
 
-        Scene::SceneDegradation report;
         const Clock::time_point start = Clock::now();
-        const bool loaded = Load(world, scene, false, &report);
+        const auto loaded = Load(world, scene, false);
         const double ms = ElapsedMs(start);
-        ASSERT_TRUE(loaded) << Scene::GetLastSceneIOError().message;
+        ASSERT_TRUE(loaded) << loaded.Error->message;
         EXPECT_EQ(world.GetEntityCount(), static_cast<std::size_t>(kH1Instances * kH1PrefabEntities));
-        EXPECT_TRUE(report.skips.empty()) << report.skips.front().message;
+        EXPECT_TRUE(loaded.Degradation.skips.empty()) << loaded.Degradation.skips.front().message;
         WriteResult(std::format("\"loadMs\": {:.4f}, \"entities\": {}", ms, world.GetEntityCount()));
     }
 
@@ -292,7 +290,8 @@ class PrefabTimingTests : public ::testing::Test
         const GUID prefab = Register(Write("Spawned.prefab", PrefabText(kH2PrefabEntities, Parts::WithLightAndCollider)));
         const auto scene = Write("Holder.scene", "[scene name=\"Holder\" version=1]\n[resource id=\"p\" path=\"Spawned.prefab\"]\n"
                                                  "[prefab id=\"held\" source=\"p\"]\n");
-        EXPECT_TRUE(Load(m_Holder, scene, true)) << Scene::GetLastSceneIOError().message;
+        const auto readResult2 = Load(m_Holder, scene, true);
+        EXPECT_TRUE(readResult2) << readResult2.Error->message;
         EXPECT_NE(EngineCore::GetInstance().TryGetPrefabLibrary()->FindByGuid(prefab), nullptr);
         return prefab;
     }
@@ -431,7 +430,8 @@ TEST_F(PrefabTimingTests, DISABLED_H5LibraryMemory)
     for (int prefabIndex = 0; prefabIndex < kH5Prefabs; ++prefabIndex)
         scene += std::format("[prefab id=\"i{}\" source=\"p{}\"]\n", prefabIndex, prefabIndex);
     ECS::World world;
-    ASSERT_TRUE(Load(world, Write("Library.scene", scene), false)) << Scene::GetLastSceneIOError().message;
+    const auto readResult = Load(world, Write("Library.scene", scene), false);
+    ASSERT_TRUE(readResult) << readResult.Error->message;
 
     const Scene::PrefabLibrary& library = *EngineCore::GetInstance().TryGetPrefabLibrary();
     ASSERT_EQ(library.GetResidentCount(), static_cast<std::size_t>(kH5Prefabs));

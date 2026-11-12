@@ -25,6 +25,12 @@
 
 #include "CBTTerrain/CBTLayout.h"
 
+namespace GameEngine::Mathematics
+{
+struct Matrix4x4;
+struct Vector3Int;
+}
+
 namespace GameEngine::CBTTerrain
 {
 
@@ -87,5 +93,22 @@ CBTTreeAuditResult AuditTree(const CBTTreeSnapshot& snapshot);
 // A canonical signature of the LOGICAL tree — the sorted live HeapID multiset — independent of
 // which pool slot each bisector occupies. Two runs of the same path agree iff this agrees.
 uint64_t TreeSignature(const CBTTreeSnapshot& snapshot);
+
+// The leaves of the visible stream, counted by their projected area in viewport pixels (px^2). The three
+// counts sum to VisibleCount. A leaf with a corner at or behind the eye plane has no bounded area: it
+// counts in the largest band.
+struct CBTVisibleAreaBands
+{
+    uint32_t BelowOnePx = 0;      // under 1 px^2
+    uint32_t OneToSixteenPx = 0;  // 1 to 16 px^2
+    uint32_t AboveSixteenPx = 0;  // over 16 px^2
+};
+
+// `snapshot` must carry the corners (ReadTreeSnapshot withCorners). `viewProjectionRel` maps a point relative to
+// `renderOriginSector` (meters) to clip space, as CameraData::viewProjRel; the viewport is `widthPx` x `heightPx`.
+CBTVisibleAreaBands CountVisibleLeavesByArea(const CBTTreeSnapshot& snapshot,
+                                             const Mathematics::Matrix4x4& viewProjectionRel,
+                                             const Mathematics::Vector3Int& renderOriginSector, uint32_t widthPx,
+                                             uint32_t heightPx);
 
 } // namespace GameEngine::CBTTerrain

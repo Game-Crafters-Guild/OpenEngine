@@ -609,7 +609,7 @@ void RenderGraphPanel::RefreshTimings()
     m_TimingByName.clear();
     if (!m_LastFrame)
         return;
-    for (const auto& t : m_LastFrame->LastFrameTimings())
+    for (const auto& t : m_LastFrame->LastFrameProfiling().Passes)
         m_TimingByName[t.Name] = {t.CpuMs, t.GpuSpanMs};
 }
 

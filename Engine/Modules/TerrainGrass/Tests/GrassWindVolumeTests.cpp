@@ -64,10 +64,10 @@ TEST(GrassWindVolumes, ShaderMatchesCpuForEveryShapeAndBlendAtRotatedScaledSites
         v.Weight = 0.65f;
         v.Speed = 3.0f;
         Components::WorldTransform xf{};
-        xf.matrix[0] = 0; xf.matrix[2] = -4;
-        xf.matrix[5] = 8;
-        xf.matrix[8] = 2; xf.matrix[10] = 0;
-        xf.matrix[12] = 10; xf.matrix[13] = 2; xf.matrix[14] = -4;
+        xf.Basis[0] = glm::vec3(0.0f, 0.0f, -4.0f);
+        xf.Basis[1] = glm::vec3(0.0f, 8.0f, 0.0f);
+        xf.Basis[2] = glm::vec3(2.0f, 0.0f, 0.0f);
+        xf.Position = Mathematics::WorldPosition{10.0, 2.0, -4.0};
         AddWind(world, v, xf);
         for (int x = 5; x <= 15; ++x)
         for (int y = -4; y <= 8; ++y)
@@ -113,7 +113,7 @@ TEST(GrassWindVolumes, DegenerateTransformOnlyAffectsGlobalVolumes)
 {
     ECS::World world;
     Components::WorldTransform xf{};
-    xf.matrix[0] = 0;
+    xf.Basis[0].x = 0.0f;
     Components::WindVolume v{};
     AddWind(world, v, xf);
     CheckParity(world, 0, 0, 0);

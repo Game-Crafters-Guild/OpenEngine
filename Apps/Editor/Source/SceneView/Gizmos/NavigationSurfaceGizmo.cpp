@@ -204,7 +204,7 @@ void DrawNavigationSurface(GizmoRenderContext& context, const ECS::World& world,
     if (surface->FitBounds)
         return;
     const auto* transform = world.GetComponent<Components::WorldTransform>(entity);
-    const Vector3 position = transform ? Vector3(transform->matrix[12], transform->matrix[13], transform->matrix[14])
+    const Vector3 position = transform ? transform->GetPosition() - Mathematics::WorldPosition{}
                                        : Vector3(0.0f, 0.0f, 0.0f);
     context.DrawWireBox(position + Vector3(surface->Center.x, surface->Center.y, surface->Center.z),
                         Vector3(std::abs(surface->Extent.x), std::abs(surface->Extent.y), std::abs(surface->Extent.z)),

@@ -1,5 +1,7 @@
 // The night sky's procedural star field (Source/Sky/StarCatalog.h). Pure CPU, no device.
 
+#include "Mathematics/Vector3.h"
+#include "Mathematics/Vector4.h"
 #include "Source/Sky/StarCatalog.h"
 #include "Types/Color.h"
 #include "Types/ColorUtils.h"
@@ -9,9 +11,13 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <random>
+#include <vector>
 
 using GameEngine::ColorLinear;
 using GameEngine::ColorUtils::LinearRec709Luminance;
+using GameEngine::Mathematics::Vector3;
+using GameEngine::Mathematics::Vector4;
 using GameEngine::Rendering::BlackbodyLinearRec709;
 using GameEngine::Rendering::BuildStarField;
 using GameEngine::Rendering::kStarFieldFaintestMagnitude;
@@ -53,6 +59,59 @@ ColorLinear DirectBlackbodyLinearRec709(double kelvin)
                        static_cast<float>(rgb[2] / luminance));
 }
 
+// A uniform value in [0, 1) from the generator's top 24 bits.
+double Uniform01(std::mt19937& rng)
+{
+    constexpr double kTopBitsScale = 1.0 / 16777216.0;
+    return static_cast<double>(rng() >> 8) * kTopBitsScale;
+}
+
+// Each star's temperature in kelvin, drawn as BuildStarField draws it: from std::mt19937 seeded with 42,
+// five uniform values per star (direction z, azimuth, class pick, position in the class, twinkle seed),
+// with the class picked from the naked-eye spectral mix.
+std::vector<float> StarFieldTemperatures(size_t starCount)
+{
+    struct SpectralClass
+    {
+        double Share;
+        float HotKelvin;
+        float CoolKelvin;
+    };
+    constexpr std::array<SpectralClass, 6> kSpectralMix = {{
+        {0.20, 25000.0f, 10000.0f},
+        {0.22, 10000.0f, 7500.0f},
+        {0.13, 7500.0f, 6000.0f},
+        {0.14, 6000.0f, 5200.0f},
+        {0.27, 5200.0f, 3900.0f},
+        {0.04, 3900.0f, 2800.0f},
+    }};
+    std::mt19937 rng(42u);
+
+    std::vector<float> temperatures;
+    temperatures.reserve(starCount);
+    for (size_t star = 0; star < starCount; ++star)
+    {
+        Uniform01(rng);
+        Uniform01(rng);
+        const double classPick = Uniform01(rng);
+        const double withinClass = Uniform01(rng);
+        Uniform01(rng);
+        float kelvin = kSpectralMix.back().CoolKelvin;
+        double cumulative = 0.0;
+        for (const SpectralClass& spectral : kSpectralMix)
+        {
+            cumulative += spectral.Share;
+            if (classPick < cumulative)
+            {
+                kelvin = spectral.CoolKelvin + static_cast<float>(withinClass) * (spectral.HotKelvin - spectral.CoolKelvin);
+                break;
+            }
+        }
+        temperatures.push_back(kelvin);
+    }
+    return temperatures;
+}
+
 } // namespace
 
 // The field has the naked-eye sky's counts: about 9,000 stars to magnitude 6.5 and 50,600 to 8 over
@@ -86,14 +145,14 @@ TEST(StarCatalog, CountsFollowTheNakedEyeSkyBrightestFirst)
 TEST(StarCatalog, DirectionsCoverTheSphereEvenly)
 {
     const auto stars = BuildStarField();
-    for (int axis = 0; axis < 3; ++axis)
+    for (size_t axis = 0; axis < 3; ++axis)
     {
         size_t positive = 0;
         for (const auto& star : stars)
         {
-            const float* d = star.dirAndMagnitude.v;
-            ASSERT_NEAR(d[0] * d[0] + d[1] * d[1] + d[2] * d[2], 1.0f, 1e-5f);
-            positive += d[axis] > 0.0f ? 1u : 0u;
+            const Vector3 direction(star.dirAndMagnitude.x, star.dirAndMagnitude.y, star.dirAndMagnitude.z);
+            ASSERT_NEAR(direction.LengthSquared(), 1.0f, 1e-5f);
+            positive += direction[axis] > 0.0f ? 1u : 0u;
         }
         EXPECT_NEAR(static_cast<double>(positive) / static_cast<double>(stars.size()), 0.5, 0.02) << "axis " << axis;
     }
@@ -129,6 +188,23 @@ TEST(StarCatalog, TabulatedBlackbodyMatchesTheDirectIntegral)
     }
 }
 
+// The field reads star colours from a table of the blackbody integral: every star's colour is within
+// 1e-4 per channel of BlackbodyLinearRec709 at the star's own temperature.
+TEST(StarCatalog, EveryStarColourMatchesTheBlackbodyOfItsTemperature)
+{
+    constexpr float kChannelTolerance = 1e-4f;
+    const auto stars = BuildStarField();
+    const std::vector<float> temperatures = StarFieldTemperatures(stars.size());
+    for (size_t starIndex = 0; starIndex < stars.size(); ++starIndex)
+    {
+        const ColorLinear exact = BlackbodyLinearRec709(temperatures[starIndex]);
+        const Vector4& color = stars[starIndex].colorAndSeed;
+        ASSERT_NEAR(color.x, exact.r, kChannelTolerance) << "star " << starIndex << " at " << temperatures[starIndex] << " K";
+        ASSERT_NEAR(color.y, exact.g, kChannelTolerance) << "star " << starIndex << " at " << temperatures[starIndex] << " K";
+        ASSERT_NEAR(color.z, exact.b, kChannelTolerance) << "star " << starIndex << " at " << temperatures[starIndex] << " K";
+    }
+}
+
 // The spectral mix of naked-eye stars: 42 % are B or A (hotter than 7,500 K, bluer than that
 // edge) and 31 % are K or M (cooler than 5,200 K, redder). Every colour has luminance 1, so the
 // colour never changes a star's brightness.
@@ -141,9 +217,9 @@ TEST(StarCatalog, ColoursFollowTheNakedEyeSpectralMix)
     size_t cool = 0;
     for (const auto& star : stars)
     {
-        const float* rgb = star.colorAndSeed.v;
-        ASSERT_NEAR(LinearRec709Luminance(ColorLinear(rgb[0], rgb[1], rgb[2])), 1.0f, 1e-4f);
-        const float blueOverRed = rgb[2] / std::max(rgb[0], 1e-6f);
+        const ColorLinear color(star.colorAndSeed.x, star.colorAndSeed.y, star.colorAndSeed.z);
+        ASSERT_NEAR(LinearRec709Luminance(color), 1.0f, 1e-4f);
+        const float blueOverRed = color.b / std::max(color.r, 1e-6f);
         hot += blueOverRed > hotEdge.b / hotEdge.r ? 1u : 0u;
         cool += blueOverRed < coolEdge.b / coolEdge.r ? 1u : 0u;
     }

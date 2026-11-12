@@ -1,5 +1,6 @@
 #include "PageStreaming/GeneratedHeightPageProvider.h"
 
+#include "Mathematics/Interpolation.h"
 #include "Mathematics/Vector3.h"
 #include "Terrain/Heightfield.h"
 
@@ -49,9 +50,9 @@ constexpr float64 kApronSteps = 2.0;
 GeneratedHeightPageProvider::GeneratedHeightPageProvider(GeneratedPlanetLattice planet)
     : m_Planet(std::move(planet))
 {
-    if (!m_Planet.Height || !m_Planet.HeightRange || !PlanetFaceSamplesHalve(m_Planet.FaceSamples) || !(m_Planet.ReferenceRadius > 0.0))
+    if (!m_Planet.HeightRow || !m_Planet.HeightRange || !PlanetFaceSamplesHalve(m_Planet.FaceSamples) || !(m_Planet.ReferenceRadius > 0.0))
     {
-        m_Planet.Height = nullptr;
+        m_Planet.HeightRow = nullptr;
         m_Planet.HeightRange = nullptr;
         return;
     }
@@ -94,42 +95,54 @@ PageHeightRange GeneratedHeightPageProvider::PlanetPageHeightRange(const PageAdd
     return m_Planet.HeightRange(center, chord, PlanetMinResolvedArc(address.Level));
 }
 
-void GeneratedHeightPageProvider::FillPlanetPage(const PageAddress& address, std::span<float32> outSamples) const
+bool GeneratedHeightPageProvider::FillPlanetWindow(const PageAddress& address, uint32 margin,
+                                                   std::span<float32> outSamples,
+                                                   std::span<Mathematics::Vector3> outDirections) const
 {
+    constexpr uint32 kMaxStride = kPageOwnedSamples + 2u * kPageSurfaceWindowMarginSamples;
+    const uint32 stride = kPageOwnedSamples + 2u * margin;
+    if (!m_Planet.HeightRow || margin > kPageSurfaceWindowMarginSamples || address.Face >= kPageStoreMaxFaces ||
+        address.Level >= m_Levels.size() || address.X >= m_Levels[address.Level].PagesX ||
+        address.Z >= m_Levels[address.Level].PagesZ || outSamples.size() != static_cast<std::size_t>(stride) * stride ||
+        (!outDirections.empty() && outDirections.size() != outSamples.size()))
+        return false;
     const uint32 level0Samples = m_Levels.front().SamplesX;
     const int64 last = static_cast<int64>(m_Levels[address.Level].SamplesX) - 1;
     const float32 minResolvedArc = PlanetMinResolvedArc(address.Level);
-    const int64 firstX = static_cast<int64>(address.X) * kPageOwnedSamples - kPageApronSamples;
-    const int64 firstZ = static_cast<int64>(address.Z) * kPageOwnedSamples - kPageApronSamples;
-    // The gnomonic coordinate of each column and row on the page's own face, solved once a page.
-    float64 columns[kPageStrideSamples];
-    float64 rows[kPageStrideSamples];
-    for (uint32 i = 0; i < kPageStrideSamples; ++i)
+    const int64 firstX = static_cast<int64>(address.X) * kPageOwnedSamples - margin;
+    const int64 firstZ = static_cast<int64>(address.Z) * kPageOwnedSamples - margin;
+    // The gnomonic coordinate of each column and row on the page's own face, solved once a window.
+    float64 columns[kMaxStride];
+    float64 rows[kMaxStride];
+    for (uint32 i = 0; i < stride; ++i)
     {
         columns[i] = PlanetGnomonic(std::clamp<int64>(firstX + i, 0, last), address.Level, level0Samples);
         rows[i] = PlanetGnomonic(std::clamp<int64>(firstZ + i, 0, last), address.Level, level0Samples);
     }
-    for (uint32 row = 0; row < kPageStrideSamples; ++row)
+    Mathematics::Vector3 rowScratch[kMaxStride];
+    for (uint32 row = 0; row < stride; ++row)
     {
-        float32* out = outSamples.data() + static_cast<std::size_t>(row) * kPageStrideSamples;
+        const std::size_t rowStart = static_cast<std::size_t>(row) * stride;
+        const std::span<Mathematics::Vector3> directions =
+            outDirections.empty() ? std::span<Mathematics::Vector3>(rowScratch, stride) : outDirections.subspan(rowStart, stride);
         const int64 z = firstZ + row;
         const bool outsideZ = z < 0 || z > last;
-        for (uint32 i = 0; i < kPageStrideSamples; ++i)
+        for (uint32 i = 0; i < stride; ++i)
         {
             const int64 x = firstX + i;
             const bool outsideX = x < 0 || x > last;
-            Mathematics::Vector3 direction;
             if (outsideX != outsideZ)
             {
-                const PageFaceSample sample = PageCubeSampleAt(address.Face, x, z, static_cast<uint32>(last + 1));
-                direction = EqualAngleSampleDirection(sample.Face, sample.X << address.Level, sample.Z << address.Level,
-                                                      level0Samples);
+                const PageFaceSample sample = PageCubeWindowSampleAt(address.Face, x, z, static_cast<uint32>(last + 1), margin);
+                directions[i] = EqualAngleSampleDirection(sample.Face, sample.X << address.Level,
+                                                          sample.Z << address.Level, level0Samples);
             }
             else
-                direction = GnomonicFaceDirection(address.Face, columns[i], rows[row]);
-            out[i] = m_Planet.Height(direction, minResolvedArc);
+                directions[i] = GnomonicFaceDirection(address.Face, columns[i], rows[row]);
         }
+        m_Planet.HeightRow(directions, minResolvedArc, outSamples.subspan(rowStart, stride));
     }
+    return true;
 }
 
 GeneratedHeightPageProvider::GeneratedHeightPageProvider(const GeneratedHeightLattice& lattice)
@@ -162,13 +175,15 @@ bool GeneratedHeightPageProvider::FillPage(const PageAddress& address, std::span
     const PageStoreLevel& level = m_Levels[address.Level];
     if (address.X >= level.PagesX || address.Z >= level.PagesZ)
         return false;
-    if (m_Planet.Height)
-    {
-        FillPlanetPage(address, outSamples);
-        return true;
-    }
+    if (m_Planet.HeightRow)
+        return FillPlanetWindow(address, kPageApronSamples, outSamples, {});
 
-    if (m_Lattice.Source == GeneratedHeightSource::Flat)
+    const Terrain::HeightfieldData* heightmap = m_Lattice.Heightmap.get();
+    const bool heightmapSource = m_Lattice.Source == GeneratedHeightSource::Heightmap;
+    if (m_Lattice.Source == GeneratedHeightSource::Flat ||
+        (m_Lattice.Source == GeneratedHeightSource::Function && !m_Lattice.FunctionRow) ||
+        (heightmapSource && (!heightmap || heightmap->IsEmpty() || !(m_Lattice.AuthoredSizeX > 0.0f) ||
+                             !(m_Lattice.AuthoredSizeZ > 0.0f))))
     {
         std::fill(outSamples.begin(), outSamples.end(), 0.0f);
         return true;
@@ -182,7 +197,6 @@ bool GeneratedHeightPageProvider::FillPage(const PageAddress& address, std::span
     const uint32 level0SamplesZ = m_Levels.front().SamplesZ;
     const int64 firstX = static_cast<int64>(address.X) * kPageOwnedSamples - kPageApronSamples;
     const int64 firstZ = static_cast<int64>(address.Z) * kPageOwnedSamples - kPageApronSamples;
-    const GeneratedHeightNoise& noise = m_Lattice.Noise;
 
     float32 rowWorldX[kPageStrideSamples];
     for (uint32 i = 0; i < kPageStrideSamples; ++i)
@@ -195,9 +209,29 @@ bool GeneratedHeightPageProvider::FillPage(const PageAddress& address, std::span
         const int64 sample = std::min<int64>(firstZ + row, static_cast<int64>(level.SamplesZ) - 1);
         const float32 worldZ = WorldZ(Level0Index(sample, address.Level, level0SamplesZ));
         float32* out = outSamples.data() + static_cast<std::size_t>(row) * kPageStrideSamples;
+        if (m_Lattice.Source == GeneratedHeightSource::Function)
+        {
+            // Terrain-local positions, formed as the tile fill forms them (TerrainECS FillTiledBaseRegion).
+            float32 rowLocalX[kPageStrideSamples];
+            for (uint32 i = 0; i < kPageStrideSamples; ++i)
+                rowLocalX[i] = rowWorldX[i] - m_Lattice.TerrainOriginX;
+            if (!m_Lattice.FunctionRow(worldZ - m_Lattice.TerrainOriginZ, rowLocalX, minResolvedCell,
+                                       std::span<float32>(out, kPageStrideSamples)))
+                return false;
+            continue;
+        }
+        if (heightmapSource)
+        {
+            // The tile fill's footprint UV (TerrainECS FillTiledBaseRegion): the offset from the
+            // terrain's corner over the authored size, clamped where the tile grid overhangs it.
+            const float32 v = Math::Clamp01((worldZ - m_Lattice.TerrainOriginZ) / m_Lattice.AuthoredSizeZ);
+            for (uint32 i = 0; i < kPageStrideSamples; ++i)
+                out[i] = heightmap->SampleBilinear(
+                    Math::Clamp01((rowWorldX[i] - m_Lattice.TerrainOriginX) / m_Lattice.AuthoredSizeX), v);
+            continue;
+        }
         for (uint32 i = 0; i < kPageStrideSamples; ++i)
-            out[i] = Terrain::SampleWorldSpaceNoise(rowWorldX[i], worldZ, noise.Frequency, noise.Amplitude,
-                                                    noise.Octaves, noise.Seed, minResolvedCell);
+            out[i] = Terrain::SampleWorldSpaceNoise(rowWorldX[i], worldZ, m_Lattice.Noise, minResolvedCell);
     }
     return true;
 }

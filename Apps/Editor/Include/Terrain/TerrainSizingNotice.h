@@ -25,9 +25,9 @@ namespace GameEngine::Editor
 // own TU, like TerrainRuleNotices and TerrainVolumeNotices, so the wording is reachable from a
 // test rather than only from a running editor.
 
-// The one-line summary of what the authored size + density actually buy: resolution, detail in
-// metres per texel, and the tile grid. Always present — an author should never have to guess
-// what a drag did.
+// The summary of what the authored size and density buy: first the stored size when the tile grid
+// is larger than the authored size, then resolution, meters per sample, and the tile grid or that
+// nothing streams. Always present, so an author never has to guess what a drag did.
 std::string DescribeTerrainSizing(const TerrainECS::TerrainSizingPlan& plan);
 
 // What the terrain costs and what it gives up, when either is worth saying: the VRAM figure, and
@@ -36,7 +36,7 @@ std::string DescribeTerrainSizing(const TerrainECS::TerrainSizingPlan& plan);
 std::string DescribeTerrainResidency(const TerrainECS::TerrainSizingPlan& plan);
 
 // Renders the two above under the size/density rows, warning-styled when the terrain is only
-// partially resident (the far-field detail call).
-void AddTerrainSizingNotice(UIElement* parent, const TerrainECS::TerrainSizingPlan& plan);
+// partially resident (the far-field detail call). Adds nothing for a size that creation refuses.
+void AddTerrainSizingNotice(UIElement* parent, float32 sizeX, float32 sizeZ, float32 samplesPerMeter);
 
 } // namespace GameEngine::Editor

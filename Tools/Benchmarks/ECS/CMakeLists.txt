@@ -42,11 +42,5 @@ if(WIN32)
     target_link_libraries(ECSBenchCompare PRIVATE ws2_32)
 endif()
 
-if(MSVC)
-    # Same SIMD baseline as the shipped ECS module (/arch:AVX2), applied to ALL
-    # framework lanes — one flag set for every TU keeps the comparison fair.
-    target_compile_options(ECSBenchCompare PRIVATE /arch:AVX2)
-endif()
-
 ge_set_output_tools(ECSBenchCompare)
 ge_stage_runtime_dependencies(ECSBenchCompare)

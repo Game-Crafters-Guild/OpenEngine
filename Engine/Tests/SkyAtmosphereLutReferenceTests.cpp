@@ -350,7 +350,7 @@ class SkyAtmosphereLutReferenceTest : public ::testing::Test
         if (!m_Device)
             GTEST_SKIP() << "No Vulkan device available";
 
-        SkyRenderer::FillDefaultAtmosphere(m_AtmoGpu);
+        SkyRenderer::FillDefaultAtmosphere(m_AtmoGpu, SkyPlanet{});
         m_Atmo = FromGpu(m_AtmoGpu);
 
         m_TransmittancePipe = MakePipeline("sky_transmittance_lut", m_TransmittanceLayout,

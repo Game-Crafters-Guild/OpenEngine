@@ -1,5 +1,9 @@
 #include "DebugServer/Terrain/TerrainStrokeTarget.h"
 
+#include "Components/Terrain/Terrain.h"
+#include "TerrainECS/Planet/PlanetPageRequester.h"
+#include "TerrainECS/TerrainService.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -89,6 +93,13 @@ bool ResolveStrokeTarget(const json& params, const char* posKey, const char* dir
         return true;
     }
     return false;
+}
+
+std::string DescribePlanetDabRefusal(const TerrainECS::TerrainService& service, uint32 planet,
+                                     const Components::Terrain& terrain)
+{
+    const float32 texel = terrain.SamplesPerMeter > 0.0f ? 1.0f / terrain.SamplesPerMeter : 0.0f;
+    return service.PlanetSculptRefusal(planet, TerrainECS::PlanetFaceSamples(terrain.PlanetRadius, texel), texel);
 }
 
 } // namespace GameEngine::Editor

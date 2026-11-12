@@ -61,7 +61,8 @@
     flex: 0 0 auto;
 }
 
-.animationwindow-view-button.active {
+/* With the base class, this rule ties the Button sheet's .button.secondary.active and wins as a host rule. */
+.button.animationwindow-view-button.active {
     background-color: #3c4d63;
     border-color: #5f7894;
     color: #f0f6ff;
@@ -168,31 +169,21 @@ button.toolbar-gap,
     border-left-style: solid;
 }
 
-.toolbar-gap:hover,
-button.toolbar-gap:hover,
-.button.toolbar-gap:hover {
+.toolbar-gap:hover {
     background-color: transparent;
 }
 
-.toolbar-gap.dragging,
-button.toolbar-gap.dragging {
+.toolbar-gap.dragging {
     opacity: 0.6;
 }
 
 .animationwindow-toolbar .linear-curve-icon.active,
-.animationwindow-toolbar button.linear-curve-icon.active,
 .animationwindow-toolbar .stepped-curve-icon.active,
-.animationwindow-toolbar button.stepped-curve-icon.active,
 .animationwindow-toolbar .spline-curve-icon.active,
-.animationwindow-toolbar button.spline-curve-icon.active,
 .animationwindow-toolbar .retime-icon.active,
-.animationwindow-toolbar button.retime-icon.active,
 .animationwindow-toolbar .draw-curve-icon.active,
-.animationwindow-toolbar button.draw-curve-icon.active,
 .animationwindow-toolbar .fit-height-icon.active,
-.animationwindow-toolbar button.fit-height-icon.active,
-.animationwindow-toolbar .lattice-icon.active,
-.animationwindow-toolbar button.lattice-icon.active {
+.animationwindow-toolbar .lattice-icon.active {
     background-image-tint: var(--ui_icon_tint_active);
 }
 
@@ -286,8 +277,7 @@ button.toolbar-gap.dragging {
 /* Unified icon-button state: 35% default (matches top toolbar), 80% active/toggle-on, 100% hover. */
 .animationwindow-toolbar .icon-button,
 .animationwindow-toolbar button.icon-button,
-.animationwindow-timeline-controls .icon-button,
-.animationwindow-timeline-controls button.icon-button {
+.animationwindow-timeline-controls .icon-button {
     opacity: 1.0;
     background-color: transparent;
     border-width: 0;
@@ -296,38 +286,26 @@ button.toolbar-gap.dragging {
 }
 
 .animationwindow-toolbar .icon-button:hover,
-.animationwindow-toolbar button.icon-button:hover,
-.animationwindow-timeline-controls .icon-button:hover,
-.animationwindow-timeline-controls button.icon-button:hover {
+.animationwindow-timeline-controls .icon-button:hover {
     opacity: 1.0;
     background-image-tint: var(--ui_icon_tint_hover);
     background-color: transparent;
 }
 
 .animationwindow-toolbar .icon-button.active,
-.animationwindow-toolbar button.icon-button.active,
 .animationwindow-toolbar .icon-button.pressed,
-.animationwindow-toolbar button.icon-button.pressed,
 .animationwindow-toolbar .icon-button.icon-active,
-.animationwindow-toolbar button.icon-button.icon-active,
 .animationwindow-timeline-controls .icon-button.active,
-.animationwindow-timeline-controls button.icon-button.active,
-.animationwindow-timeline-controls .icon-button.pressed,
-.animationwindow-timeline-controls button.icon-button.pressed {
+.animationwindow-timeline-controls .icon-button.pressed {
     opacity: 1.0;
     background-image-tint: var(--ui_icon_tint_active);
 }
 
 .animationwindow-toolbar .icon-button.active:hover,
-.animationwindow-toolbar button.icon-button.active:hover,
 .animationwindow-toolbar .icon-button.pressed:hover,
-.animationwindow-toolbar button.icon-button.pressed:hover,
 .animationwindow-toolbar .icon-button.icon-active:hover,
-.animationwindow-toolbar button.icon-button.icon-active:hover,
 .animationwindow-timeline-controls .icon-button.active:hover,
-.animationwindow-timeline-controls button.icon-button.active:hover,
-.animationwindow-timeline-controls .icon-button.pressed:hover,
-.animationwindow-timeline-controls button.icon-button.pressed:hover {
+.animationwindow-timeline-controls .icon-button.pressed:hover {
     opacity: 1.0;
     background-image-tint: var(--ui_icon_tint_hover);
 }
@@ -341,8 +319,7 @@ button.toolbar-gap.dragging {
     background-image-tint: unset;
 }
 
-.animationwindow-toolbar .icon-button.plus-icon:hover,
-.animationwindow-toolbar button.icon-button.plus-icon:hover {
+.animationwindow-toolbar .icon-button.plus-icon:hover {
     opacity: 1.0;
     background-image-tint: unset;
 }

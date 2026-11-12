@@ -14,7 +14,8 @@ layout(set = 0, binding = 3, std140) uniform ViewParamsBlock
 {
     mat4 ge_invProj;
     mat4 ge_view;
-    vec4 ge_nearFar;
+    vec4 ge_depthTerms;
+    vec4 ge_viewRanges;
     vec4 ge_cameraPosWS;
 } ViewParams;
 
@@ -46,7 +47,7 @@ float PhysicalCocMeters(float rawDepth)
     // to focus distance and aperture instead of forcing the artistic cap.
     if (IsBackgroundDepth(rawDepth))
         return -apertureDiameter * focal / max(focus - focal, 1e-6);
-    float d = LinearizeReverseZ(rawDepth, ViewParams.ge_nearFar.xy);
+    float d = LinearizeReverseZ(rawDepth, ViewParams.ge_depthTerms);
     return apertureDiameter * focal * (focus - d) /
            max(d * (focus - focal), 1e-6);
 }

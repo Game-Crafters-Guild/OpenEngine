@@ -37,6 +37,7 @@ struct WindowDesc
     bool StartMaximized = false;
 };
 
+/// Call every member on the main thread: GLFW and the web canvas need it.
 class Window
 {
   public:
@@ -272,10 +273,13 @@ class Window
     // Fullscreen bookkeeping for SetFullscreen.
     bool m_IsFullscreen = false;
     bool m_AlwaysOnTop = false;
+#if !defined(__EMSCRIPTEN__)
+    // The windowed rectangle that leaving fullscreen restores; the browser's Fullscreen API keeps its own.
     int m_WindowedX = 0;
     int m_WindowedY = 0;
     int m_WindowedW = 0;
     int m_WindowedH = 0;
+#endif
     int m_LastMonitorIndex = -1;
 
     MouseMoveHandler m_MouseMove;
@@ -293,7 +297,9 @@ class Window
     FullscreenChangedHandler m_FullscreenChangedHandler;
     TitleBarRightClickHandler m_TitleBarRightClick;
     CloseRequestedHandler m_CloseRequestedHandler;
-    void* m_TitleBarRightClickMonitor = nullptr; // platform-specific event monitor handle
+#if defined(__APPLE__)
+    void* m_TitleBarRightClickMonitor = nullptr; // the NSEvent monitor of title bar right clicks
+#endif
     std::string m_CurrentTitle;                  // cached last SetTitle value (glfw has no getter)
 #if defined(__EMSCRIPTEN__)
     // HTML5 file drags do not emit GLFW mousemove. Last dragover/drop client

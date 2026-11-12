@@ -46,4 +46,9 @@ bool ReadDragPath(const nlohmann::json& params, std::size_t maxPathPoints, std::
 // Returns `steps` positions, or one per segment when there are more segments than steps.
 std::vector<Mathematics::Vector2> SampleDragPath(const std::vector<Mathematics::Vector2>& points, int steps);
 
+// Reads the "mods" field of an input request (send_key, send_scroll) as a GLFW modifier mask: one
+// name, an array of names or a raw mask integer. Names ignore case: shift, control or ctrl, alt,
+// super or cmd or meta. An unknown name adds nothing; an absent field is no modifier.
+int ReadKeyModifiers(const nlohmann::json& params);
+
 } // namespace GameEngine::Editor

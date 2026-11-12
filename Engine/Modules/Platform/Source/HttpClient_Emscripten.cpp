@@ -63,7 +63,7 @@ HttpClient::HttpResponse HttpClient::PostJsonStream(const std::string&,
 
 HttpClient::HttpResponse HttpClient::Get(const std::string&,
                                          const std::unordered_map<std::string, std::string>&,
-                                         size_t)
+                                         const GetOptions&)
 {
     return Unsupported("Get");
 }
@@ -341,9 +341,15 @@ HttpClient::HttpResponse HttpClient::PostForm(
 HttpClient::HttpResponse HttpClient::Get(
     const std::string& url,
     const std::unordered_map<std::string, std::string>& headers,
-    size_t maxBodyBytes)
+    const GetOptions& options)
 {
-    return Perform("GET", url, headers, nullptr, nullptr, maxBodyBytes, {});
+    // The synchronous request cannot be stopped: the flag is read before and after it.
+    if (IsCancelled(options.Cancellation))
+        return Cancelled();
+    HttpResponse response = Perform("GET", url, headers, nullptr, nullptr, options.MaxResponseBytes, {});
+    if (IsCancelled(options.Cancellation))
+        return Cancelled();
+    return response;
 }
 
 bool HttpClient::IsAvailable()

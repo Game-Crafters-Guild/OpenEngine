@@ -37,12 +37,13 @@ int main()
         });
     }
 
+    constexpr size_t kImageCount = 32;
+    // Declared before the pool: a job can still be inside set_value() after the wait returns.
+    std::array<std::promise<bool>, kImageCount> completions;
     JobSystem::WorkStealingThreadPool pool(4);
     std::puts("SvgWorkerBudgetBrowserSmoke: 4 job workers + 4 reserved threads, pthread pool 8");
     std::fflush(stdout);
 
-    constexpr size_t kImageCount = 32;
-    std::array<std::promise<bool>, kImageCount> completions;
     std::array<std::future<bool>, kImageCount> pending;
     JobSystem::JobCounter joined;
     for (size_t i = 0; i < kImageCount; ++i)

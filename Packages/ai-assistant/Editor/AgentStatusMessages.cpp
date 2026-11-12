@@ -12,6 +12,13 @@ namespace GameEngine
 {
 static_assert(Conversation::kMaxMessageBytes == 64 * 1024, "CopyReplyFeedback names the cap");
 
+std::string FailedReplyStatus(const ConversationMessage& reply, bool sessionWasLost)
+{
+    if (reply.NotReady)
+        return kNotReadyStatus;
+    return sessionWasLost ? kSessionLostStatus : "Reply failed";
+}
+
 std::string CopyReplyFeedback(const ConversationMessage& reply)
 {
     if (reply.Truncated)

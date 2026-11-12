@@ -85,7 +85,7 @@ SplineWallController::Candidate SplineWallController::MakeCandidate(ECS::EntityH
     candidate.Recipe = SanitizeWallRecipe(recipe);
     candidate.SplineDataIndex = spline.SplineDataIndex;
     candidate.SplineDataGeneration = spline.SplineDataGeneration;
-    candidate.WorldMatrix = Mathematics::Matrix4x4::FromColumnMajor(transform.matrix);
+    candidate.WorldMatrix = transform.ToMatrix4x4(transform.GetPosition() - Mathematics::WorldPosition{});
     return candidate;
 }
 
@@ -96,10 +96,9 @@ void SplineWallController::Update(ECS::World& world, Engine::Renderer::RenderSer
     if (!splineService)
         return;
 
-    // A world reset destroys every chunk with no per-entity Removed event and
-    // restarts entity versions, so cached chunk handles would alias unrelated
-    // entities: drop the bookkeeping before the query (World::DeserializeWorld —
-    // play-mode exit, undo snapshot restore — clears with no swap-site hook).
+    // A world reset removes every generated chunk and sends no Removed event: no snapshot or scene file
+    // holds a GeneratedEntity, so each cached handle names an entity that does not exist. Drop the
+    // state here, before the query, and build again.
     const uint64 resetGeneration = world.GetLifecycleResetGeneration();
     if (resetGeneration != m_LastWorldResetGeneration)
     {
@@ -121,7 +120,7 @@ void SplineWallController::Update(ECS::World& world, Engine::Renderer::RenderSer
     const bool anyReadsGround = std::any_of(candidates.begin(), candidates.end(),
                                             [](const Candidate& c) { return ReadsGround(c.Recipe); });
     const uint64 surfaceRevision =
-        anyReadsGround ? ConformSurfaceRevision(world, ResolveTerrainModifierSystem()) : 0u;
+        anyReadsGround ? ConformSurfaceRevision(world, ResolveTerrainModifierSystem(), UnboundedConformRun()) : 0u;
 
     bool worldDirty = false;
     for (const Candidate& candidate : candidates)

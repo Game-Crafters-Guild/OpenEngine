@@ -1,4 +1,5 @@
 #include "Components/Transform.h"
+#include "Mathematics/Angle.h"
 #include "SplineLayout/PieceAxis.h"
 #include "SplineLayout/PieceEntity.h"
 #include "SplineLayout/TileLayout.h"
@@ -952,7 +953,7 @@ std::vector<CenterSample> CrestCrossing(float32 halfWidth, float32 rise, uint32 
 
 float32 AngleDegrees(const V3& a, const V3& b)
 {
-    return std::acos(std::clamp(V3::Dot(a, b), -1.0f, 1.0f)) * 180.0f / 3.14159265358979f;
+    return Mathematics::ToDegrees(std::acos(std::clamp(V3::Dot(a, b), -1.0f, 1.0f)));
 }
 
 float32 TiltFromWorldUpDegrees(const V3& up) { return AngleDegrees(up, V3(0.0f, 1.0f, 0.0f)); }
@@ -1167,9 +1168,7 @@ const Mathematics::Matrix4x4& IdentityPlacer()
 // wrong layout.
 V3 EmittedBoundsCenter(const Components::Transform& t, const V3& localCenter)
 {
-    Mathematics::Matrix4x4 world;
-    std::memcpy(world.Data(), t.matrix, sizeof(t.matrix));
-    return world.TransformPoint(localCenter);
+    return t.ToMatrix4x4(t.GetPosition() - Mathematics::WorldPosition{}).TransformPoint(localCenter);
 }
 
 } // namespace

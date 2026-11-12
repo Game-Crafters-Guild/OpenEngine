@@ -228,6 +228,11 @@ class RGGraph
     // order, at resource granularity (conservative w.r.t. subresource ranges).
     void Schedule();
 
+    // After Schedule, before GenerateBarriers: a compute run keeps its queue only when graphics work it does
+    // not read or feed (layout-change waits included) runs beside it, else the whole run runs on graphics.
+    // A kept run ends the graphics submission before it after its last feeder and the next before its first consumer.
+    void PlaceQueues(const uint8_t physicalOfLogical[kQueueCount]);
+
     const std::vector<RGPassId>& ScheduledOrder() const { return m_ScheduledOrder; }
     uint32_t Level(RGPassId p) const { return m_Level[p]; }
     // Hazard-edge successors of p (RAW/WAR/WAW, deduped). Valid after
@@ -350,7 +355,13 @@ class RGGraph
     const char* PassName(RGPassId p) const { return m_Passes[p].Desc.Name; }
     const char* ResourceName(RGResourceId r) const { return m_Resources[r].Name; } // arena-copied
     const RGResourceDesc& ResourceDesc(RGResourceId r) const { return m_Resources[r]; }
+    // The declared queue; PassExecutionQueue is the queue the pass runs on after PlaceQueues.
     RGQueue PassQueue(RGPassId p) const { return m_Passes[p].Desc.Queue; }
+    RGQueue PassExecutionQueue(RGPassId p) const { return m_Passes[p].ExecutionQueue; }
+    // The index into Submissions() of the submission that records p (BuildSubmissionPlan); kInvalidId before it.
+    uint32_t PassSubmission(RGPassId p) const { return m_Passes[p].Submission; }
+    // The index into Submissions() of the submission that signals `wait`; kInvalidId when an earlier frame signals it.
+    uint32_t WaitedSubmission(const RGSemaphoreWait& wait) const;
     int32_t PassPhase(RGPassId p) const { return m_Passes[p].Desc.Phase; }
 
     Memory::Arena& Arena() { return m_Arena; }
@@ -362,6 +373,9 @@ class RGGraph
         bool PreventCull = false;
         bool Culled = false;
         RGCullReason CullReason = RGCullReason::NotCulled;
+        RGQueue ExecutionQueue = RGQueue::Graphics; // set by Schedule and PlaceQueues
+        bool EndsSubmission = false;                 // the plan ends a submission after it
+        uint32_t Submission = kInvalidId;            // set by BuildSubmissionPlan
     };
 
     // What one pass does to one resource, merged over the pass's accesses to it (Compile scratch).
@@ -447,6 +461,17 @@ class RGGraph
     bool m_PassAccValid = false;
     void EnsurePassAccessIndex();
 
+    // The stage, access and layout of a recorded access, the layout as the barrier layer sets it.
+    RGAccessInfo AccessInfo(const RGAccessRecord& access, RGQueue declaredQueue) const;
+
+    // PlaceQueues: adds to Schedule's closure, in scheduled order, an edge into each texture read that
+    // changes the layout after other reads since the last write, and from it into the reads after it.
+    void AddLayoutTransitionReach();
+    // `source` and every pass that reaches it now reach `target` and all that `target` reaches.
+    void LinkReach(RGPassId source, RGPassId target);
+    // True when `to` depends on `from` in the closure that m_ScratchReach holds.
+    bool Feeds(RGPassId from, RGPassId to) const;
+
     // Per-queue timeline counters. Deliberately NOT reset per frame: frames
     // overlap in flight, so per-frame values would collide with frame N-1's
     // still-pending signals.
@@ -484,7 +509,10 @@ class RGGraph
     std::vector<RGPassId> m_ScratchLastWriter;
     std::vector<std::vector<RGPassId>> m_ScratchReadersSince;
     std::vector<RGPassId> m_ScratchTopo;
-    std::vector<uint64_t> m_ScratchReach;
+    std::vector<uint64_t> m_ScratchReach; // PlaceQueues adds layout-change edges, then reads it
+    std::vector<RGPassId> m_ScratchNextGraphics;
+    std::vector<RGImageLayout> m_ScratchLayoutOf;
+    std::vector<RGPassId> m_ScratchLayoutProducer;
     DisjointSets m_ScratchComponents;
     std::vector<uint32_t> m_ScratchClusterOf;
     std::vector<uint64_t> m_ScratchUnionReach;

@@ -28,7 +28,10 @@ struct CollisionFilter
 
 struct RayCastQuery
 {
-    Ray3D ray;
+    /// The start of the ray: an exact world position.
+    WorldPosition origin{};
+    /// The direction of the ray, of any length above zero.
+    Vector3 direction{0.0f, 0.0f, 1.0f};
     float32 maxDistance = 1000.0f;
     CollisionFilter filter{};
 };
@@ -36,7 +39,7 @@ struct RayCastQuery
 struct RayCastResult
 {
     BodyHandle body{};
-    Vector3 hitPoint{0.0f, 0.0f, 0.0f};
+    WorldPosition hitPoint{};
     Vector3 hitNormal{0.0f, 1.0f, 0.0f};
     float32 distance = 0.0f;
     uint64 userData = 0;
@@ -46,7 +49,7 @@ struct RayCastResult
 
 struct BoxOverlapQuery
 {
-    Vector3 center{0.0f, 0.0f, 0.0f};
+    WorldPosition center{};
     Vector3 halfExtents{0.5f, 0.5f, 0.5f};
     Quaternion rotation = Quaternion::Identity();
     CollisionFilter filter{};
@@ -58,6 +61,13 @@ struct OverlapResult
     uint64 userData = 0;
 
     bool HasHit() const { return body.IsValid(); }
+};
+
+/// A body and its world-space bounding box.
+struct BodyBounds
+{
+    BodyHandle body{};
+    AABB bounds{};
 };
 
 } // namespace GameEngine::Physics

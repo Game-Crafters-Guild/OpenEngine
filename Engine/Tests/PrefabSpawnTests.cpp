@@ -90,11 +90,11 @@ class PrefabSpawnTests : public ::testing::Test
         return path;
     }
 
-    bool Load(ECS::World& world, const std::string& file, std::string_view text)
+    Scene::SceneInstantiateResult Load(ECS::World& world, const std::string& file, std::string_view text)
     {
         Scene::SceneReadOptions options{};
-        options.assetResolver = &*m_Resolver;
-        options.assetRootOverride = m_Resolver->GetAssetRoot();
+        options.AssetResolver = &*m_Resolver;
+        options.AssetRootOverride = m_Resolver->GetAssetRoot();
         return Scene::ReadSceneInto(world, Write(file, text), options);
     }
 
@@ -126,10 +126,11 @@ TEST_F(PrefabSpawnTests, TheKthEntityOfASpawnIsThePrefabsKthEntityInFileOrder)
     ASSERT_TRUE(registered.IsOk());
     const GUID squad = registered.Value();
     ECS::World holder;
-    ASSERT_TRUE(Load(holder, "Holder.scene",
+    const auto readResult = Load(holder, "Holder.scene",
                      "[scene name=\"Holder\" version=1]\n[resource id=\"p\" path=\"Squad.prefab\"]\n"
-                     "[prefab id=\"held\" source=\"p\"]\n"))
-        << Scene::GetLastSceneIOError().message;
+                     "[prefab id=\"held\" source=\"p\"]\n");
+    ASSERT_TRUE(readResult)
+        << readResult.Error->message;
 
     ECS::World world;
     const ECS::EntityHandle root = Scene::SpawnPrefab(world, squad, Components::Transform{}, {});
@@ -149,13 +150,14 @@ TEST_F(PrefabSpawnTests, ASubsceneUnloadDestroysItsInstancesAndNothingElse)
                         "[prefab id=\"a\" source=\"p\"]\n"
                         "[prefab id=\"b\" source=\"p\"]\n");
     ECS::World world;
-    ASSERT_TRUE(Load(world, "World.scene",
+    const auto readResult = Load(world, "World.scene",
                      "[scene name=\"World\" version=1]\n"
                      "[resource id=\"cell\" path=\"Cell.scene\"]\n"
                      "[entity id=\"sun\"]\n"
                      "Name.value = \"Sun\"\n"
-                     "[subscene id=\"cell0\" source=\"cell\"]\n"))
-        << Scene::GetLastSceneIOError().message;
+                     "[subscene id=\"cell0\" source=\"cell\"]\n");
+    ASSERT_TRUE(readResult)
+        << readResult.Error->message;
 
     ECS::EntityHandle cell{};
     world.Query<ECS::Read<Components::SceneSubsceneInstance>>().Each(

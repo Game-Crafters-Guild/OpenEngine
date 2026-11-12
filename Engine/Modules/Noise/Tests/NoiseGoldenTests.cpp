@@ -1,5 +1,5 @@
-#include "Noise/FractalNoise2D.h"
-#include "Noise/GradientNoise2D.h"
+#include "Noise/FractalNoise.h"
+#include "Noise/Gradient/GradientNoise2D.h"
 
 #include "NoiseGoldenSweep.h"
 
@@ -9,11 +9,11 @@
 
 // Byte-identity gate for the shared noise primitives.
 //
-// The expected hashes were produced by sweeping the implementations this module
-// replaced, compiled standalone from their pre-move sources and run at both /Od
-// and /O2 (the two agree, so optimisation level does not move them). A change
-// here that alters any sampled value by one bit fails this test, which is what
-// keeps existing terrain bakes reproducing exactly.
+// The expected hashes come from the shared implementations. They fuse only through
+// Math::MulAdd and the build turns contraction off, so every platform and every
+// optimisation level gives the same hashes. A change here that alters any sampled
+// value by one bit fails this test, which is what keeps existing terrain bakes
+// reproducing exactly.
 
 namespace
 {
@@ -21,10 +21,10 @@ namespace
 using namespace GameEngine::Noise;
 using namespace GameEngine::Noise::Testing;
 
-constexpr uint64_t kGoldenGradientNoise2D = 0x70FFF0140F2BE3AAull;
-constexpr uint64_t kGoldenGradientNoise2DDerivatives = 0x9992AA87FBA3B39Dull;
-constexpr uint64_t kGoldenFBMNoise2D = 0x59EAC39A2F8FDBE4ull;
-constexpr uint64_t kGoldenFBMNoise2DDerivatives = 0x54C24D266E3807F1ull;
+constexpr uint64_t kGoldenGradientNoise2D = 0x6F204CE8D7DB0C39ull;
+constexpr uint64_t kGoldenGradientNoise2DDerivatives = 0xD2F326354D5CF97Full;
+constexpr uint64_t kGoldenFBMNoise2D = 0x3EB360D743C3543Dull;
+constexpr uint64_t kGoldenFBMNoise2DDerivatives = 0x9A5F8CAB75F39231ull;
 
 struct SharedModule
 {

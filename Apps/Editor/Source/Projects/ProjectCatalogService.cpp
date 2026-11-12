@@ -137,7 +137,7 @@ void ResolveThumbnailsToCache(ProjectCatalog& catalog, const fs::path& thumbnail
             continue;
         }
 
-        const HttpClient::HttpResponse response = HttpClient::Get(entry.ThumbnailRef);
+        const HttpClient::HttpResponse response = HttpClient::Get(entry.ThumbnailRef, {}, {});
         if (response.success && response.statusCode == 200 && !response.body.empty() &&
             WriteStringToFile(cached, response.body))
         {
@@ -263,7 +263,7 @@ void ProjectCatalogService::FetchWorker(std::string source, fs::path cacheRoot)
     std::string fetchError;
     if (IsHttpSource(source))
     {
-        const HttpClient::HttpResponse response = HttpClient::Get(source);
+        const HttpClient::HttpResponse response = HttpClient::Get(source, {}, {});
         if (response.success && response.statusCode == 200)
             jsonText = response.body;
         else

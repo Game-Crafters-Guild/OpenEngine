@@ -126,10 +126,6 @@ namespace GameEngine.Interop
         /// <summary>Resolved GetAssetCount delegate (if available).</summary>
         public GE_GetAssetCount_Delegate? GetAssetCount;
 
-        /// <summary>Delegate to notify native of a scripts domain swap.</summary>
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-        public delegate int GE_ScriptsDomainSwap_Delegate(ulong newDomain);
-
         /// <summary>Delegate to get a world handle from native ECS.</summary>
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         public delegate int GE_ECS_GetWorldHandle_Delegate(out ulong world);
@@ -148,9 +144,6 @@ namespace GameEngine.Interop
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         public delegate int GE_ScriptsDomainUnload_Delegate(ulong domain);
 
-
-        /// <summary>Resolved ScriptsDomainSwap delegate (if available).</summary>
-        public GE_ScriptsDomainSwap_Delegate? ScriptsDomainSwap;
 
         /// <summary>Resolved ScriptsDomainUnload delegate (if available).</summary>
         public GE_ScriptsDomainUnload_Delegate? ScriptsDomainUnload;
@@ -262,7 +255,6 @@ namespace GameEngine.Interop
             GE_GetManagedCallback_Delegate? getCb = iface.GetManagedCallback != 0 ? Marshal.GetDelegateForFunctionPointer<GE_GetManagedCallback_Delegate>(iface.GetManagedCallback) : null;
             GE_SubscribeDiagnostics_Delegate? subDiag = iface.SubscribeDiagnostics != 0 ? Marshal.GetDelegateForFunctionPointer<GE_SubscribeDiagnostics_Delegate>(iface.SubscribeDiagnostics) : null;
             GE_UnsubscribeDiagnostics_Delegate? unsubDiag = iface.UnsubscribeDiagnostics != 0 ? Marshal.GetDelegateForFunctionPointer<GE_UnsubscribeDiagnostics_Delegate>(iface.UnsubscribeDiagnostics) : null;
-            GE_ScriptsDomainSwap_Delegate? domSwap = iface.ScriptsDomainSwap != 0 ? Marshal.GetDelegateForFunctionPointer<GE_ScriptsDomainSwap_Delegate>(iface.ScriptsDomainSwap) : null;
             GE_ECS_GetWorldHandle_Delegate? ecsWorld = iface.ECS_GetWorldHandle != 0 ? Marshal.GetDelegateForFunctionPointer<GE_ECS_GetWorldHandle_Delegate>(iface.ECS_GetWorldHandle) : null;
             GE_ECS_GetEntityCount_Delegate? ecsCount = iface.ECS_GetEntityCount != 0 ? Marshal.GetDelegateForFunctionPointer<GE_ECS_GetEntityCount_Delegate>(iface.ECS_GetEntityCount) : null;
             GE_ScriptsDomainUnload_Delegate? domUnload = iface.ScriptsDomainUnload != 0 ? Marshal.GetDelegateForFunctionPointer<GE_ScriptsDomainUnload_Delegate>(iface.ScriptsDomainUnload) : null;
@@ -276,7 +268,6 @@ namespace GameEngine.Interop
                 GetManagedCallback = getCb,
                 SubscribeDiagnostics = subDiag,
                 UnsubscribeDiagnostics = unsubDiag,
-                ScriptsDomainSwap = domSwap,
                 ECS_GetWorldHandle = ecsWorld,
                 ECS_GetEntityCount = ecsCount,
                 ScriptsDomainUnload = domUnload
@@ -352,8 +343,6 @@ namespace GameEngine.Interop
             return UnsubscribeDiagnostics != null ? UnsubscribeDiagnostics(in sink) : -1;
         }
 
-        /// <summary>Try to inform native of a scripts domain swap.</summary>
-        public int TryScriptsDomainSwap(ulong newDomain) => ScriptsDomainSwap != null ? ScriptsDomainSwap(newDomain) : -1;
         /// <summary>Try to inform native to unload a domain.</summary>
         public int TryScriptsDomainUnload(ulong domain) => ScriptsDomainUnload != null ? ScriptsDomainUnload(domain) : -1;
 

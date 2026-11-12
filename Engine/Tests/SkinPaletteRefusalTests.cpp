@@ -1,17 +1,6 @@
-// What a palette producer must do when the atlas REFUSES an allocation.
-//
-// The bone-palette ring refuses rather than wrapping, and grows only on the
-// next visit to the slot that overflowed. A producer that ignores the refusal
-// leaves the runtime's CURRENT-frame offset naming last frame's slot — which
-// the atlas has since handed to a different runtime. RenderExtractionSystem
-// copies that offset straight into GPUInstance::skinPaletteOffset, so the
-// entity is skinned with another entity's bones: a visibly wrong pose, not a
-// dropped frame.
-//
-// Atlas slot 0 is the identity block SkinPaletteAtlas::BeginFrame reserves, so
-// retiring the offset to it renders bind pose for the cycle the ring takes to
-// grow. The first test pins that slot 0 really is that block; the second pins
-// the producer behaviour that depends on it.
+// A producer whose palette the atlas refuses sets the runtime's offset to the identity
+// block at slot 0 (bind pose); a kept offset names another runtime's slot this frame.
+// The atlas reserves the frame's palettes and grows in the frame, so it refuses only past the cap.
 
 #include <gtest/gtest.h>
 
@@ -25,6 +14,7 @@
 #include "Engine/Rendering/PerFrameWritePool.h"
 #include "Engine/Rendering/RenderServices.h"
 #include "Engine/Rendering/SkinPaletteAtlas.h"
+#include "Rendering/Core/CommandList.h"
 #include "Rendering/Core/Device.h"
 
 #include <algorithm>
@@ -106,13 +96,34 @@ class SkinPaletteRefusalTest : public ::testing::Test
     {
         m_RenderServices.GetPerFrameWritePool().BeginFrame(frameIndex);
         m_RenderServices.GetSkinPaletteAtlas().BeginFrame(
-            m_RenderServices.GetPerFrameWritePool());
+            m_RenderServices.GetPerFrameWritePool(), SkeletonStore::Instance().GetLivePaletteBoneCount());
         SkeletonStore::Instance().RollPaletteOffsets();
     }
 
-    uint32_t MakeRuntime()
+    // Run the growth copies the frame's render graph records, then wait, so the
+    // mapped atlas holds every palette at its offset. Returns the copy count.
+    size_t ExecutePaletteGrowthCopies()
     {
-        const uint32_t runtimeId = SkeletonStore::Instance().CreateRuntime(m_SkeletonId);
+        const auto copies = m_RenderServices.GetPerFrameWritePool().TakeFrameCopies(FrameWriteUsage::BonePalette);
+        if (copies.empty())
+            return 0;
+        auto commands = m_Device->CreateCommandList(IDevice::QueueType::Graphics);
+        commands->Begin();
+        for (const auto& copy : copies)
+            commands->CopyBuffer(copy.Source, m_RenderServices.GetSkinPaletteAtlas().GetBuffer(), copy.Bytes,
+                                 copy.Offset, copy.Offset);
+        commands->End();
+        std::vector<CommandList*> lists{commands.get()};
+        m_Device->ExecuteCommandLists(lists);
+        m_Device->WaitForIdle();
+        return copies.size();
+    }
+
+    uint32_t MakeRuntime() { return MakeRuntime(m_SkeletonId); }
+
+    uint32_t MakeRuntime(uint32_t skeletonId)
+    {
+        const uint32_t runtimeId = SkeletonStore::Instance().CreateRuntime(skeletonId);
         if (runtimeId != 0)
             m_Runtimes.push_back(runtimeId);
         return runtimeId;
@@ -236,4 +247,153 @@ TEST_F(SkinPaletteRefusalTest, RefusedUploadRetiresOffsetToIdentityBlock)
               SkinPaletteAtlas::kIdentityPaletteOffsetBones)
         << "a refused allocation must retire the offset to the identity block so "
            "the frame renders bind pose";
+}
+
+namespace
+{
+constexpr uint32_t kCrowdJointCount = 64;
+
+// Bytes of the identity block plus `bones` caller bones.
+constexpr size_t FramePaletteBytes(size_t bones)
+{
+    return (bones + SkinPaletteAtlas::kIdentityBoneCount) * SkinPaletteAtlas::kBytesPerBone;
+}
+} // namespace
+
+// The first frame's ring comes from the scene: the skinned instances it holds at
+// load, times their palette bytes, rounded up by the ring's doubling.
+TEST_F(SkinPaletteRefusalTest, FrameZeroReservesThePalettesTheSceneHolds)
+{
+    SkeletonStore& store = SkeletonStore::Instance();
+    const uint32_t crowdSkeleton = store.CreateSkeleton(kCrowdJointCount);
+    ASSERT_NE(crowdSkeleton, 0u);
+    store.Get(crowdSkeleton)->SkinJointCount = kCrowdJointCount;
+
+    // 400 x 64 bones x 48 B = 1.17 MiB: more than the 1 MiB floor.
+    constexpr uint32_t kInstances = 400;
+    for (uint32_t i = 0; i < kInstances; ++i)
+        ASSERT_NE(MakeRuntime(crowdSkeleton), 0u);
+
+    BeginPaletteFrame(0);
+
+    const size_t sceneBytes = FramePaletteBytes(static_cast<size_t>(kInstances) * kCrowdJointCount);
+    const size_t liveBytes = FramePaletteBytes(store.GetLivePaletteBoneCount());
+    const size_t capacity =
+        m_RenderServices.GetPerFrameWritePool().GetCapacity(FrameWriteUsage::BonePalette);
+    EXPECT_GE(capacity, sceneBytes) << "frame 0's ring cannot hold the scene's palettes";
+    EXPECT_LE(capacity, 2u * liveBytes)
+        << "frame 0's ring is not sized from the scene's skinned instances";
+}
+
+// A crowd that doubles across frames never meets the refusal path: every
+// runtime gets its own slot above the identity block on every frame.
+TEST_F(SkinPaletteRefusalTest, DemandThatDoublesAcrossFramesIsNeverRefused)
+{
+    SkeletonStore& store = SkeletonStore::Instance();
+    const uint32_t crowdSkeleton = store.CreateSkeleton(kCrowdJointCount);
+    ASSERT_NE(crowdSkeleton, 0u);
+    store.Get(crowdSkeleton)->SkinJointCount = kCrowdJointCount;
+
+    ECS::World world(nullptr);
+    SkinningUploadSystem uploadSystem(&m_RenderServices);
+    std::vector<uint32_t> crowd;
+
+    // 0.6, 1.2 and 2.3 MiB of palettes: frames 1 and 2 overflow the ring the
+    // previous frame used.
+    uint32_t frameIndex = 0;
+    for (const uint32_t instances : {200u, 400u, 800u})
+    {
+        while (crowd.size() < instances)
+        {
+            const uint32_t runtimeId = MakeRuntime(crowdSkeleton);
+            ASSERT_NE(runtimeId, 0u);
+            crowd.push_back(runtimeId);
+            world.Create().Set(Components::SkeletonRef{crowdSkeleton, runtimeId});
+        }
+        world.ProcessCommands();
+
+        BeginPaletteFrame(frameIndex++);
+        uploadSystem.Update(world, kDt);
+
+        uint32_t refused = 0;
+        for (const uint32_t runtimeId : crowd)
+        {
+            if (store.GetRuntime(runtimeId)->AtlasPaletteOffsetBones < SkinPaletteAtlas::kIdentityBoneCount)
+                ++refused;
+        }
+        EXPECT_EQ(refused, 0u) << instances << " instances: " << refused
+                               << " palettes were refused and render bind pose";
+    }
+}
+
+// A scene that finishes loading creates its runtimes after the frame's reserve.
+// The ring grows in that frame, so no palette is refused, and the bytes the frame
+// wrote before the growth stay at their offsets.
+TEST_F(SkinPaletteRefusalTest, RuntimesCreatedAfterTheFrameReserveAreNeverRefused)
+{
+    SkeletonStore& store = SkeletonStore::Instance();
+    const uint32_t crowdSkeleton = store.CreateSkeleton(kCrowdJointCount);
+    ASSERT_NE(crowdSkeleton, 0u);
+    store.Get(crowdSkeleton)->SkinJointCount = kCrowdJointCount;
+
+    ECS::World world(nullptr);
+    SkinningUploadSystem uploadSystem(&m_RenderServices);
+    SkinPaletteAtlas& atlas = m_RenderServices.GetSkinPaletteAtlas();
+
+    BeginPaletteFrame(0);
+    const size_t reservedBones = store.GetLivePaletteBoneCount();
+
+    // A palette written before the growth: diagonal (2, 3, 4), packed to 3 rows.
+    std::vector<float> marker(kTestJointCount * 16u, 0.0f);
+    for (uint32_t bone = 0; bone < kTestJointCount; ++bone)
+    {
+        const size_t base = static_cast<size_t>(bone) * 16u;
+        marker[base + 0] = 2.0f;
+        marker[base + 5] = 3.0f;
+        marker[base + 10] = 4.0f;
+        marker[base + 15] = 1.0f;
+    }
+    const PaletteAllocation markerAlloc = atlas.Upload(marker.data(), kTestJointCount);
+    ASSERT_TRUE(markerAlloc.valid);
+
+    // 400 x 64 bones x 48 B = 1.17 MiB, all created after the reserve.
+    constexpr uint32_t kInstances = 400;
+    std::vector<uint32_t> crowd;
+    for (uint32_t i = 0; i < kInstances; ++i)
+    {
+        const uint32_t runtimeId = MakeRuntime(crowdSkeleton);
+        ASSERT_NE(runtimeId, 0u);
+        crowd.push_back(runtimeId);
+        world.Create().Set(Components::SkeletonRef{crowdSkeleton, runtimeId});
+    }
+    world.ProcessCommands();
+    uploadSystem.Update(world, kDt);
+
+    uint32_t refused = 0;
+    for (const uint32_t runtimeId : crowd)
+    {
+        if (store.GetRuntime(runtimeId)->AtlasPaletteOffsetBones < SkinPaletteAtlas::kIdentityBoneCount)
+            ++refused;
+    }
+    EXPECT_EQ(refused, 0u) << refused << " of " << kInstances << " palettes were refused: the reserve held "
+                           << reservedBones << " bones, the frame wrote " << atlas.GetCurrentFrameTotalBones();
+    ASSERT_GT(ExecutePaletteGrowthCopies(), 0u) << "the crowd must grow the ring in the frame";
+
+    const auto* rows = static_cast<const float*>(m_Device->MapBuffer(atlas.GetBuffer()));
+    ASSERT_NE(rows, nullptr);
+    static constexpr float kIdentityRows[BonePaletteLayout::kFloatsPerBone] = {
+        1.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 1.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 1.0f, 0.0f};
+    static constexpr float kMarkerRows[BonePaletteLayout::kFloatsPerBone] = {
+        2.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 3.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 4.0f, 0.0f};
+    const float* lastIdentityBone =
+        rows + static_cast<size_t>(SkinPaletteAtlas::kIdentityBoneCount - 1u) * BonePaletteLayout::kFloatsPerBone;
+    EXPECT_TRUE(std::equal(kIdentityRows, kIdentityRows + BonePaletteLayout::kFloatsPerBone, lastIdentityBone))
+        << "the identity block did not survive the growth";
+    const float* markerBone = rows + markerAlloc.offsetInFloats;
+    EXPECT_TRUE(std::equal(kMarkerRows, kMarkerRows + BonePaletteLayout::kFloatsPerBone, markerBone))
+        << "a palette written before the growth is not at its offset after it";
 }

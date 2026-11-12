@@ -25,30 +25,30 @@ ScopedAssetDecodeInputFiles::~ScopedAssetDecodeInputFiles()
     t_DecodeInputFiles = m_Prev;
 }
 
-bool ReadAssetDecodeInputFromDisk(const AssetDecodeInput& input, Vector<uint8>& bytes)
+bool ReadAssetDecodeInputFromDisk(const AssetDecodeInput& input, ByteBuffer& bytes)
 {
     if (!input.PrefixBytes)
         return ReadFileBytesShared(input.Path, bytes);
 
-    bytes.clear();
+    bytes = ByteBuffer();
     SharedFileReader file(input.Path);
     if (!file.IsOpen())
         return false;
     const int64 size = file.Size();
     if (size < 0)
         return false;
-    bytes.resize(static_cast<size_t>(std::min(*input.PrefixBytes, static_cast<uint64>(size))));
-    const int64 read = file.Read(bytes.data(), bytes.size());
+    bytes = ByteBuffer(static_cast<size_t>(std::min(*input.PrefixBytes, static_cast<uint64>(size))));
+    const int64 read = file.Read(bytes.Data(), bytes.Size());
     if (read < 0)
     {
-        bytes.clear();
+        bytes = ByteBuffer();
         return false;
     }
-    bytes.resize(static_cast<size_t>(read));
+    bytes.Truncate(static_cast<size_t>(read));
     return true;
 }
 
-const Vector<uint8>* ReadAssetDecodeInputFile(const AssetDecodeInput& input, Vector<uint8>& storage)
+const ByteBuffer* ReadAssetDecodeInputFile(const AssetDecodeInput& input, ByteBuffer& storage)
 {
     if (t_DecodeInputFiles)
     {
@@ -58,7 +58,7 @@ const Vector<uint8>* ReadAssetDecodeInputFile(const AssetDecodeInput& input, Vec
     return ReadAssetDecodeInputFromDisk(input, storage) ? &storage : nullptr;
 }
 
-bool TakeAssetDecodeInputFile(const AssetDecodeInput& input, Vector<uint8>& bytes)
+bool TakeAssetDecodeInputFile(const AssetDecodeInput& input, ByteBuffer& bytes)
 {
     if (!t_DecodeInputFiles)
         return ReadAssetDecodeInputFromDisk(input, bytes);

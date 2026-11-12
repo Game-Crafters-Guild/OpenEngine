@@ -29,3 +29,13 @@ TEST(ParseIntegerTests, ParseUnsignedReadsDigitsOnly)
     for (const char* text : {"", "-1", "+1", " 7", "7 ", "18446744073709551616", "1e3"})
         EXPECT_FALSE(ParseUnsigned(text).has_value()) << "'" << text << "'";
 }
+
+TEST(ParseIntegerTests, ParseUnsignedReadsHexDigitsOfEitherCaseInBase16)
+{
+    EXPECT_EQ(ParseUnsigned("4c", 16), 0x4Cu);
+    EXPECT_EQ(ParseUnsigned("4C", 16), 0x4Cu);
+    EXPECT_EQ(ParseUnsigned("aBcDeF", 16), 0xABCDEFu);
+    EXPECT_EQ(ParseUnsigned("ffffffffffffffff", 16), std::numeric_limits<uint64_t>::max());
+    for (const char* text : {"", "0x4c", "4g", "-1"})
+        EXPECT_FALSE(ParseUnsigned(text, 16).has_value()) << "'" << text << "'";
+}

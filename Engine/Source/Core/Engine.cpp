@@ -1,6 +1,7 @@
 #include "EngineShaderPath.h"
 #include "Core/ApplicationPaths.h"
 #include "Core/Engine.h"
+#include "Engine/Loading/SceneLoader.h"
 #include "SceneLoadTracker/SceneLoadTracker.h"
 
 #include "EngineShaderHookState.h"
@@ -42,6 +43,9 @@
 
 // Rendering utilities (shader loader indirection)
 #include "Rendering/Common/Utils.h"
+#include "Rendering/ShaderCache/MetalLibraryArchive.h"
+#include "Rendering/ShaderCache/ShaderPackageIO.h"
+#include "Rendering/ShaderCache/ShaderStageRecord.h"
 #include "Rendering/ShaderGraph/SgGraphFileIO.h"
 
 // Rendering hot-reload bridge (Engine side)
@@ -76,6 +80,9 @@
 #include "SplineRecipes/SplineRecipeSystem.h"
 #include "PathfindingECS/NavigationService.h"
 #include "PathfindingECS/Systems/RegisterPathfindingSystems.h"
+#include "SpatialGridECS/Systems/SpatialGridBuildSystem.h"
+#include "AIECS/AiGroupKnowledge.h"
+#include "AIECS/AiRegistry.h"
 // ECS integration
 #include "Components/Components.h"
 #include "Components/Audio/AudioEmitter.h"
@@ -112,6 +119,18 @@ bool EqualsIgnoringCase(const std::string& a, const std::string& b)
            std::equal(a.begin(), a.end(), b.begin(), [](unsigned char l, unsigned char r) {
                return std::tolower(l) == std::tolower(r);
            });
+}
+
+// The time the last frame's main thread waited for a free frame slot and for the next swapchain
+// image. Zero when the device does not report it.
+std::chrono::microseconds LastFrameGpuWait(const Engine::Renderer::RenderServices* services)
+{
+    Rendering::IDevice* device = services ? services->GetDevice() : nullptr;
+    Rendering::IDevice::FrameSyncTimings sync{};
+    if (!device || !device->GetLastFrameSyncTimings(sync))
+        return std::chrono::microseconds{0};
+    return std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::duration<double, std::milli>(sync.beginFrameWaitMs + sync.acquireMs));
 }
 
 // An asset root that does not exist is either a brand-new project (fine — the
@@ -224,6 +243,22 @@ static std::filesystem::path ResolveEngineShaderPath(const std::filesystem::path
 static std::string ShaderPackageRebuildAction(const std::string& packageName)
 {
     return Detail::ShaderPackageRebuildAction(packageName, ApplicationPaths::GetExecutableDirectory());
+}
+
+// An export reads the stages it compiled offline from its bundled cache. A development run on a Mac records
+// the stage inputs it uses in its project, where the next export of that project reads them. Only a Mac
+// exports to Mac. A staging workspace or the executable's folder (a test's) is not a project.
+static void ApplyPrecompiledShaderFiles([[maybe_unused]] const std::filesystem::path& workspaceRoot,
+                                        [[maybe_unused]] bool workspaceIsFallback)
+{
+    Rendering::PrecompiledShaderFiles files;
+    if (const std::filesystem::path bundleCache = ApplicationPaths::GetBundledShaderCacheRoot(); !bundleCache.empty())
+        files.MetalLibraries = bundleCache / Rendering::kMetalLibraryArchiveFileName;
+#if defined(__APPLE__)
+    else if (!workspaceIsFallback && workspaceRoot != ResolveWorkspaceRoot({}))
+        files.StageRecord = Rendering::ShaderStageRecordFile(workspaceRoot);
+#endif
+    Rendering::SetPrecompiledShaderFiles(std::move(files));
 }
 
 static std::vector<uint8_t> EngineShaderBytecodeLoaderFromAssets(const char* name)
@@ -432,6 +467,7 @@ EngineCore::EngineCore()
     }
     s_Instance = this;
     m_SceneLoadTracker = MakeUnique<SceneLoadTracker>();
+    m_SceneLoader = MakeUnique<SceneLoader>(*m_SceneLoadTracker);
 }
 
 EngineCore::~EngineCore()
@@ -661,6 +697,8 @@ bool EngineCore::Initialize(const ApplicationConfig& config)
             ECS::ComponentFieldRegistry::PurgeModuleFieldTables(moduleId, generation);
             Scene::SceneSchemaRegistry::PurgeModuleSchemas(moduleId, generation);
             Particles::ParticleProcessorRegistry::PurgeModuleProcessors(moduleId, generation);
+            AIECS::AiRegistry::Get().PurgeModuleRegistrations(moduleId, generation);
+            TerrainECS::TerrainService::RevokeHeightFunctions(moduleId, generation, generation + 1u);
             if (m_RenderServices)
                 m_RenderServices->Spine().PurgeModulePipelineNodes(moduleId, generation);
             if (m_RenderingLoop)
@@ -764,13 +802,14 @@ bool EngineCore::Initialize(const ApplicationConfig& config)
         return observer;
     }());
 
-    // C12 reload reconcile: after a successful reload's replay re-owned the
-    // re-declared registrations, retire the pipeline-node factories the replay
-    // stopped declaring and rebuild live pipeline instances from the newest
-    // factories — before the unload decision reads the ledger above.
+    // Reload reconcile: retire the AI entries, pipeline-node factories and terrain height functions
+    // that the new load did not register, and rebuild live pipelines, before the unload decision.
+    // A terrain regenerates from the new load's height function.
     m_NativeScriptManager->SetModuleReloadReconcileHandler(
         [this](std::string_view moduleId, uint64 generation)
         {
+            AIECS::AiRegistry::Get().RetireSupersededModuleRegistrations(moduleId, generation);
+            TerrainECS::TerrainService::RevokeHeightFunctions(moduleId, 0u, generation);
             if (m_RenderServices)
                 m_RenderServices->Spine().ReconcileModuleNodeRegistrations(moduleId, generation);
         });
@@ -788,6 +827,7 @@ bool EngineCore::Initialize(const ApplicationConfig& config)
             shaderCacheRoots.ReadOnly.push_back(bundleCache);
         shaderCacheRoots.Writable = resolvedWorkspaceRoot / ".Cache" / "Shaders";
         ShaderProgramAsset::SetShaderCacheRoots(std::move(shaderCacheRoots));
+        ApplyPrecompiledShaderFiles(resolvedWorkspaceRoot, config.WorkspaceDirectoryIsFallback);
     }
 
     // Initialize script manager (only when scripting is enabled at build time).
@@ -997,6 +1037,7 @@ GameEngine::ECS::World* GameEngine::EngineCore::EnsurePrimaryWorld()
         TerrainECS::RegisterTerrainWorldHooks(*m_PrimaryWorld);
         PhysicsECS::RegisterPhysicsWorldHooks(*m_PrimaryWorld);
         PathfindingECS::RegisterNavigationWorldHooks(*m_PrimaryWorld);
+        AIECS::RegisterAiWorldHooks(*m_PrimaryWorld);
 
         // Per-entity dirty feed (change-signaling §5 P2): subscribe the
         // engine-driven world to WorldTransform. Only worlds whose swap is
@@ -1097,6 +1138,9 @@ void EngineCore::Shutdown()
     }
 
     Logger::Log::Info("Shutting down Game Engine");
+
+    // A read in flight uses the asset manager and the job system.
+    m_SceneLoader->Shutdown();
 
     // Tear down engine-managed rendering loop and primary ECS world while the
     // process is still in a well-defined state (before static destruction).
@@ -1244,6 +1288,9 @@ void EngineCore::SetWorkspaceRoot(const std::filesystem::path& newRoot)
     m_ResolvedAssetRoot = projectPaths.AssetRoot;
     m_AuthoritativeAssetDbFile = projectPaths.AssetDatabaseFile;
     m_AssetDbCacheRoot = projectPaths.AssetDatabaseCacheRoot;
+    // An editor on a Mac records the stage inputs of the project it opens, so the next export of it compiles them.
+    if (m_ShaderHookState)
+        ApplyPrecompiledShaderFiles(m_WorkspaceRoot, m_WorkspaceRootIsFallback);
 
     // Propagate to ScriptManager so it watches the new project's script directory.
     if (m_ScriptManager && m_ScriptManager->IsInitialized())
@@ -1255,24 +1302,14 @@ void EngineCore::SetWorkspaceRoot(const std::filesystem::path& newRoot)
         m_ScriptManager->RebindProjectScripts(newScriptsConfig);
     }
 
-    ApplyTerrainBakeCacheLocation();
+    ApplyTerrainPageStoreLocation();
     Logger::Log::Info("Engine workspace root updated to: {}", m_WorkspaceRoot.string());
 }
 
-void EngineCore::ApplyTerrainBakeCacheLocation()
+void EngineCore::ApplyTerrainPageStoreLocation()
 {
     if (!TerrainECS::TerrainService::IsInitialized())
         return;
-    // A packaged game reads the bakes its build staged beside the asset manifest
-    // and never writes beside its install; a run on a project workspace reads and
-    // fills that workspace's derived-data cache; a run without one always bakes.
-    TerrainECS::TerrainBakeCacheConfig cache;
-    if (m_ScriptsConfig && m_ScriptsConfig->packagedMode && m_AssetManager)
-        cache = {m_AssetManager->GetAssetRoot() / ".terrainbake", false};
-    else if (!m_WorkspaceRoot.empty() && !m_WorkspaceRootIsFallback)
-        cache = {m_WorkspaceRoot / ".Cache" / "TerrainBake", true};
-    TerrainECS::TerrainService::Get().SetBakeCache(std::move(cache));
-
     // The cooked height stores the paged terrains read: the build's terrain containers in a
     // packaged game (never cooked on load), the workspace's derived-data cache otherwise (cooked
     // there in the background when missing), none without a workspace.
@@ -1292,7 +1329,10 @@ void EngineCore::Update(float64 deltaTime)
     }
 
     // The frame boundary of the load snapshot: it reads what the previous frame left pending.
-    m_SceneLoadTracker->Tick(std::chrono::steady_clock::now());
+    const auto frameStart = std::chrono::steady_clock::now();
+    m_SceneLoadTracker->Tick(frameStart);
+    // Before the systems run: a load's instantiate and its first resolve slice share this frame.
+    m_SceneLoader->Tick(frameStart, LastFrameGpuWait(m_RenderServices));
 
     // Update asset manager (process loading queue, check for file changes)
     if (m_AssetManager)
@@ -1484,7 +1524,8 @@ bool EngineCore::EnableRenderingLoop(Engine::Renderer::RenderServices* renderSer
             return false;
         }
         m_RenderingLoop->GetSceneResolveService().ReportLoadingWork(*m_SceneLoadTracker);
-        if (renderServices)
+        // A RenderServices with no device has no variant cache and no texture service to report.
+        if (renderServices && renderServices->GetDevice())
         {
             renderServices->Materials().ReportLoadingWork(*m_SceneLoadTracker);
             renderServices->Textures().ReportLoadingWork(*m_SceneLoadTracker);
@@ -1494,7 +1535,7 @@ bool EngineCore::EnableRenderingLoop(Engine::Renderer::RenderServices* renderSer
 
         // Initialize world services and register module pipeline node types.
         InitializeWorldServices();
-        ApplyTerrainBakeCacheLocation();
+        ApplyTerrainPageStoreLocation();
         // A headless host passes no render services: there are no pipeline node types
         // to register, and every scheduled system skips its render work, including the
         // render-side systems that also produce terrain height and ocean buoyancy.
@@ -1544,6 +1585,8 @@ bool EngineCore::EnableRenderingLoop(Engine::Renderer::RenderServices* renderSer
         SplineECS::AddSplineSystemsToSchedule(schedule);
         SplineRecipes::AddSplineRecipeSystemsToSchedule(schedule, renderServices);
         PathfindingECS::AddPathfindingSystemsToSchedule(schedule);
+        SpatialGridECS::AddSpatialGridSystemsToSchedule(schedule);
+        AIECS::AiRegistry::Get().AddSystemsToSchedule(schedule);
         // Associate contributions with their plugin so reload reconciliation
         // can replace or retire that plugin's systems.
         for (Plugins::IEnginePlugin* plugin :

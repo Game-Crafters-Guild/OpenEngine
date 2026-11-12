@@ -1,6 +1,9 @@
 #pragma once
 
+#include "Types/StringUtils.h"
+
 #include <charconv>
+#include <cmath>
 #include <cstdint>
 #include <span>
 #include <string>
@@ -79,6 +82,25 @@ inline std::string FormatFixed(double value, int decimals)
 inline std::string FormatMeters(double meters, int decimals)
 {
     return FormatFixed(meters, decimals) + " m";
+}
+
+/// `value` rounded to a whole number, with a comma between each group of three digits and no unit:
+/// 1048576.4 -> "1,048,576", -2500.6 -> "-2,501", -0.4 -> "0". From 10^15 the short form "1e+15";
+/// infinity and NaN read "inf", "-inf" and "nan".
+inline std::string FormatGroupedWholeNumber(double value)
+{
+    constexpr double kGroupedLimit = 1e15;
+    constexpr int kShortFormSignificantDigits = 3;
+    if (std::isnan(value) || std::abs(value) >= kGroupedLimit)
+    {
+        char text[32];
+        const auto result = std::to_chars(text, text + sizeof(text), value, std::chars_format::general,
+                                          kShortFormSignificantDigits);
+        return result.ec == std::errc{} ? std::string(text, result.ptr) : std::string("0");
+    }
+    const unsigned long long whole = static_cast<unsigned long long>(std::llround(std::abs(value)));
+    const std::string grouped = FormatGroupedInteger(whole);
+    return value < 0.0 && whole != 0 ? "-" + grouped : grouped;
 }
 
 // Each byte as two lowercase hex digits, in order: {0x0a, 0xff} appends "0aff".

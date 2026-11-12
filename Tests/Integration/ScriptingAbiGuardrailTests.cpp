@@ -36,8 +36,7 @@ TEST(ScriptingAbi_Guardrails, SwapWithoutPreload_ReturnsNotInitialized)
 
 TEST(ScriptingAbi_Guardrails, NativeShim_StagedWhereManagedTestsExpect)
 {
-    // Exe-anchored: an empty working directory keeps the lookup off the cwd.
-    auto nativeLibrary = GameEngine::ScriptingPaths::ResolveNativeLibraryPathFrom(GameEngine::TestPaths::ExecutableDirectory(), {});
+    auto nativeLibrary = GameEngine::ScriptingPaths::ResolveNativeLibraryPathFrom(GameEngine::TestPaths::ExecutableDirectory());
     ASSERT_FALSE(nativeLibrary.empty())
         << "The GameEngine.Native library, under this platform's file name, is not next to the test executable "
         << "or in the staged bin/<config> tree. "

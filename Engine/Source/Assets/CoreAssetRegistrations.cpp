@@ -1,5 +1,7 @@
 #include "Assets/CoreAssetRegistrations.h"
 
+#include "AIECS/Assets/AiOptionSetAsset.h"
+#include "AIECS/Assets/AiStateTree/AiStateTreeAsset.h"
 #include "Animation/Humanoid/HumanoidRig.h"
 #include "Animation/AnimationController.h"
 #include "Animation/AnimationLibrary.h"
@@ -146,6 +148,10 @@ void RegisterCoreAssetTypes(AssetTypeRegistry& typeRegistry)
                      "Navigation Surface Data");
     RegisterCoreType(typeRegistry, AssetType::DayCycleProfile, &CreateAssetAtPath<DayCycleProfile>,
                      "Day Cycle Profile");
+    RegisterCoreType(typeRegistry, AssetType::AiOptionSet, &CreateAssetAtPath<AIECS::AiOptionSetAsset>,
+                     "AI Option Set");
+    RegisterCoreType(typeRegistry, AssetType::AiStateTree, &CreateAssetAtPath<AIECS::AiStateTreeAsset>,
+                     "AI Program");
 
     // Ocean payloads are consumed by the ocean systems directly.
     RegisterCoreType(typeRegistry, AssetType::OceanDepthCache, &CreateBinaryAsset, "Ocean Depth Cache");
@@ -167,11 +173,9 @@ void RegisterCoreAssetTypes(AssetTypeRegistry& typeRegistry)
     // save time.
     RegisterCoreType(typeRegistry, AssetType::TerrainZoneData, &CreateBinaryAsset, "Terrain Zone Data");
 
-    // The sparse dab + modifier page store of a spherical terrain's authored
-    // sculpt, GUID-referenced from the Terrain component. The CBTTerrain
-    // SphereSculptSerialization codec decodes/encodes it at load and save time.
-    RegisterCoreType(typeRegistry, AssetType::TerrainSphereSculptData, &CreateBinaryAsset,
-                     "Terrain Sphere Sculpt Data");
+    // A terrain's authored height layer, GUID-referenced from the Terrain
+    // component. TerrainService reads it (LoadHeightLayer); the editor's save writes it.
+    RegisterCoreType(typeRegistry, AssetType::TerrainHeightLayer, &CreateBinaryAsset, "Terrain Height Layer");
 
     RegisterCoreType(typeRegistry, AssetType::RenderPipeline, &CreateAssetAtPath<RenderPipelineAsset>,
                      "Render Pipeline Asset");

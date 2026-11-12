@@ -3,6 +3,7 @@
 #include "Components/Spline/SplineStationJitter.h"
 #include "ECS/Component/ComponentFieldRegistry.h"
 #include "ECS/Components.h"
+#include "Types/Fnv1a.h"
 
 #include <gtest/gtest.h>
 #include <algorithm>
@@ -24,7 +25,7 @@ using Components::SplineJitterUnit;
 using Components::SplinePlantMode;
 using Components::SplinePoolRole;
 using Components::SplinePoolSelect;
-using Components::SplineSelectionMix;
+using Hashing::SplitMix64;
 
 namespace
 {
@@ -49,15 +50,6 @@ MaterialRef MaterialTestRef(uint8 ordinal)
 }
 
 } // namespace
-
-// The mix is pinned to reference splitmix64: these are the published first
-// outputs for states 0 and 1. If this test fails, the selection hash changed
-// and every authored scene's picks reshuffle — that must be a deliberate edit.
-TEST(SplinePoolSelection, MixMatchesReferenceSplitmix64)
-{
-    EXPECT_EQ(SplineSelectionMix(0ull), 0xE220A8397B1DCDAFull);
-    EXPECT_EQ(SplineSelectionMix(1ull), 0x910A2DEC89025CC1ull);
-}
 
 // Golden picks: a deliberate hash change must edit these values consciously.
 TEST(SplinePoolSelection, GoldenPicks)
@@ -401,10 +393,10 @@ TEST(SplineStationJitter, ChannelSaltLiftsDrawsClearOfPoolRoles)
 {
     for (uint32 s = 0; s < 32; ++s)
     {
-        uint64 h = SplineSelectionMix(3u);
-        h = SplineSelectionMix(h ^ static_cast<uint64>(SplinePoolRole::Straight));
-        h = SplineSelectionMix(h ^ static_cast<uint64>(s));
-        const float32 unsalted = static_cast<float32>(h >> 40) * (1.0f / 16777216.0f);
+        uint64 h = SplitMix64(3u);
+        h = SplitMix64(h ^ static_cast<uint64>(SplinePoolRole::Straight));
+        h = SplitMix64(h ^ static_cast<uint64>(s));
+        const float32 unsalted = static_cast<float32>(h >> Hashing::kUnitDrawDiscardedBits) * Hashing::kUnitDrawScale;
         EXPECT_NE(SplineJitterUnit(3u, SplineJitterChannel::Spacing, s), unsalted)
             << "station " << s << ": jitter channel 0 collided with pool role 0";
     }

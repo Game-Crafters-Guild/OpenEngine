@@ -17,7 +17,6 @@
 #include "AssetCore/GUID.h"
 #include "Components/Rendering/MeshRenderer.h"
 #include "Components/Rendering/LocalBounds.h"
-#include "Components/Rendering/WorldSectorCoord.h"
 #include "Components/Transform.h"
 #include "Types/Types.h"
 #include <array>
@@ -81,12 +80,6 @@ public:
         bool alwaysRefreshCarrier = false;
         bool hasBounds = false;
         GameEngine::Components::LocalBounds bounds{};
-        // E.5.2: optional sector authoring. When hasSectorCoord is true, the
-        // worldTransform.matrix is interpreted as sector-local and the true
-        // world matrix is Translate(sectorCoord * sectorSize) * worldTransform.
-        // When false, worldTransform is already in world-space (legacy path).
-        bool hasSectorCoord = false;
-        GameEngine::Components::WorldSectorCoord sectorCoord{};
         uint32 skeletonId = 0;      // Non-zero when entity has SkinnedMeshRenderer
         uint32 runtimeId = 0;       // Per-entity skeleton runtime for independent animation
         bool hasActiveAnimation = false; // True when entity has AnimatorRef with a valid clip
@@ -128,7 +121,6 @@ public:
         kEscalationStructuralChange   = 1u << 3,  // E4
         kEscalationProbeMeshRenderer  = 1u << 4,  // E5
         kEscalationProbeLocalBounds   = 1u << 5,  // E5
-        kEscalationProbeSectorCoord   = 1u << 6,  // E5
         kEscalationProbeLodGroup      = 1u << 7,  // E5
         kEscalationMeshReload         = 1u << 8,  // E6
         kEscalationMaterialDigest     = 1u << 9,  // E7
@@ -232,7 +224,6 @@ private:
     ECS::SwapGenerationGuard m_FeedGuard;         // E3
     ECS::ChangeGate m_ProbeGateMeshRenderer;      // E5 — one gate per probe query (R8)
     ECS::ChangeGate m_ProbeGateLocalBounds;
-    ECS::ChangeGate m_ProbeGateSectorCoord;
     ECS::ChangeGate m_ProbeGateLodGroup;
     // The oldest of the four probe gates before this frame's probes advanced
     // them: what the structural delta lane's changed-chunk query compares against.

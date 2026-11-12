@@ -24,7 +24,7 @@ class ParticleStackAsset final : public Asset
     ParticleStackAsset(const GUID& guid, const std::filesystem::path& path);
 
     bool Load() override;
-    bool LoadFromData(const Vector<uint8>& data) override;
+    bool LoadFromData(std::span<const uint8> data) override;
     void Unload() override;
 
     /// The stack as last loaded or set, or null before a valid one was.
@@ -46,7 +46,7 @@ class ParticleStackAsset final : public Asset
     static bool CookFile(const std::filesystem::path& file, std::string& error);
 
   protected:
-    bool ReloadFromData(const Vector<uint8>& data) override;
+    bool ReloadFromData(std::span<const uint8> data) override;
 
   private:
     bool Adopt(std::span<const uint8> bytes);

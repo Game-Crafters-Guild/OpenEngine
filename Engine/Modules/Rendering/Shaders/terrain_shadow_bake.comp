@@ -26,6 +26,7 @@ layout(set = 0, binding = 0, std140) uniform TerrainShadowBakeParams
     vec4 uRange;          // x = u of sample 0, y = v of line 0, z = samples per line, w = lines
     vec4 uBake;           // x = first line this dispatch bakes; y = metres per normalized height;
                           // z = tan of the sun disc's lower edge's elevation
+    vec4 uCasters;        // x, y = the extent X, Z that casts (the authored size, inside the lattice)
 };
 
 layout(set = 0, binding = 1) uniform sampler2D uHeight;
@@ -62,8 +63,9 @@ GE_TerrainShadowGrid BakeGrid()
     g.CenterZ = uCenterTerrain.y;
     g.TerrainX = 0.0;
     g.TerrainZ = 0.0;
-    g.TerrainSizeX = uCenterTerrain.z;
-    g.TerrainSizeZ = uCenterTerrain.w;
+    // The caster test's extent: a tiled terrain casts inside its authored size, not its whole lattice.
+    g.TerrainSizeX = uCasters.x;
+    g.TerrainSizeZ = uCasters.y;
     g.SunX = uSunTexel.x;
     g.SunZ = uSunTexel.y;
     g.TanElevation = uSunTexel.z;

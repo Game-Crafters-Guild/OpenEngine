@@ -122,7 +122,7 @@ void CheckTools(std::promise<std::string> answer, std::shared_ptr<CliSessionProv
 {
     try
     {
-        answer.set_value(provider->ToolsRefusal(node, port, *cancel));
+        answer.set_value(AssistantAttachment::ActingRefusal(*provider, node, port, SetupSurface::Panel, *cancel));
     }
     catch (const std::exception& e)
     {
@@ -309,6 +309,7 @@ void AgentConversationController::FollowActing()
         m_ActingCheckCancel->Cancel();
     m_ActingCheckCancel.reset();
     m_ActingCheck = {};
+    m_ActingGeneration = AiAssistantSettings::SetupGeneration();
     m_ActingRefusal = AssistantAttachment::Unavailable();
     if (!m_ActingRefusal.empty())
         return;
@@ -497,6 +498,9 @@ bool AgentConversationController::Update()
         m_InFlight.reset();
     }
     TakeSessionList();
+    // A changed executable or connection makes the last tools answer stale.
+    if (AiAssistantSettings::SetupGeneration() != m_ActingGeneration)
+        FollowActing();
     TakeActingCheck();
     while (!m_InFlight && !m_Queue.empty())
         StartNextTurn();

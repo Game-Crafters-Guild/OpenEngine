@@ -20,6 +20,8 @@ namespace GameEngine.CoreBridge
         AlreadyInitialized = -5,
         /// <summary>The destination buffer is full. GE_Result_BufferFull.</summary>
         BufferFull = -6,
+        /// <summary>The same operation is already running; retry later. GE_Result_Busy.</summary>
+        Busy = -7,
     }
 
     internal static class ScriptingOp
@@ -31,7 +33,8 @@ namespace GameEngine.CoreBridge
         /// </summary>
         /// <remarks>
         /// -5 and -6 stay Fail: HotReloadManager returns -5 for a script method
-        /// that threw, which is not GE_Result_AlreadyInitialized.
+        /// that threw, which is not GE_Result_AlreadyInitialized. -9 is
+        /// HotReloadManager's "a swap is already running", which is Busy.
         /// </remarks>
         public static ScriptingOpResult MapCommon(int code)
         {
@@ -42,6 +45,7 @@ namespace GameEngine.CoreBridge
                 -2 => ScriptingOpResult.InvalidArg,
                 -3 => ScriptingOpResult.NotFound,
                 -4 => ScriptingOpResult.NotInitialized,
+                -9 => ScriptingOpResult.Busy,
                 _ => ScriptingOpResult.Fail,
             };
         }

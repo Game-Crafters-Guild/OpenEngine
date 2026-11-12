@@ -44,7 +44,7 @@ struct Vector4
 
     float Dot(const Vector4& other) const
     {
-        return x * other.x + y * other.y + z * other.z + w * other.w;
+        return Math::MulAdd(w, other.w, Math::MulAdd(z, other.z, Math::MulAdd(x, other.x, y * other.y)));
     }
 
     // GLM interop.

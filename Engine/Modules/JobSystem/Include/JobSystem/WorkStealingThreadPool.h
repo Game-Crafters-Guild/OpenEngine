@@ -1,5 +1,6 @@
 #pragma once
 
+#include "JobSystem/AvailableProcessors.h"
 #include "JobSystem/ConcurrentQueue.h"
 #include "JobSystem/JobCounter.h"
 #include "JobSystem/JobSystemStatistics.h"
@@ -12,6 +13,7 @@
 #include "Logger/Logger.h"
 #include "Memory/FrameJoinedScope.h"
 #include "Types/FalseSharing.h"
+#include "Types/FunctionRef.h"
 #include <algorithm>
 #include <atomic>
 #include <condition_variable>
@@ -30,6 +32,39 @@ struct TaskGraphActions;
 
 namespace Detail
 {
+// One member's bytes and its writer group, for GroupsNeverShareALine.
+struct GroupedMember
+{
+    size_t Offset;
+    size_t Size;
+    size_t Group;
+};
+
+// True when members of different groups are a full false-sharing separation apart, and each member is a full
+// separation from both ends of the struct: then no two groups, and no group and a member outside the struct,
+// share a line at any address of the struct.
+template <size_t N>
+constexpr bool GroupsNeverShareALine(const GroupedMember (&members)[N], size_t structSize)
+{
+    for (const GroupedMember& member : members)
+    {
+        if (member.Offset < GameEngine::kFalseSharingSeparation ||
+            member.Offset + member.Size + GameEngine::kFalseSharingSeparation > structSize)
+        {
+            return false;
+        }
+        for (const GroupedMember& other : members)
+        {
+            if (other.Group != member.Group && other.Offset > member.Offset &&
+                other.Offset < member.Offset + member.Size + GameEngine::kFalseSharingSeparation)
+            {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 class BlockingThreads;
 class ChannelSlot;
 class JobChannelState;
@@ -46,12 +81,15 @@ class WorkStealingThreadPool;
 
 /**
  * @brief Run `body(unit)` once for every unit in [0, count), claimed one at
- * a time by the calling thread and by up to `options.Helpers` helper tasks on
- * `pool`; legal on any thread, a pool worker included.
+ * a time by the calling thread and by helper tasks on `pool`: up to
+ * `options.Helpers` from the start, and more while
+ * `options.HelpersToKeepQueued` asks for them; legal on any thread, a pool
+ * worker included.
  *
- * Helpers are bare pool tasks published in one batch at
- * options.HelperPriority, clamped by the class of the pool body running on
- * this thread (ParallelForOptions::HelperPriority). The caller claims and
+ * Helpers are bare pool tasks published at the class of the pool body running
+ * on this thread, or at Background when options.HelperPriority asks for it
+ * (ParallelForOptions::HelperPriority): one batch at the start and, with
+ * HelpersToKeepQueued, a batch before any claim of the caller. The caller claims and
  * runs units itself until none is left or the run is stopped, then closes
  * the run and waits only for the units in progress on other threads, parked
  * on an atomic word (std::atomic::wait). A helper still queued at that point
@@ -63,8 +101,9 @@ class WorkStealingThreadPool;
  * proxied calls instead of parking.
  *
  * Stopping: a body that returns false, a body that throws, options.Stop
- * returning true or throwing, or an admission hook throwing stops the run:
- * no further unit starts on any thread, units in flight finish.
+ * returning true or throwing, an admission hook throwing, or
+ * options.HelpersToKeepQueued throwing stops the run: no further unit starts
+ * on any thread, units in flight finish.
  *
  * Frame memory: under GE_DEBUG_INSTRUMENTATION every unit runs with the
  * frame-joined bit (Memory::Detail::IsFrameJoined) of the calling thread, on
@@ -76,13 +115,14 @@ class WorkStealingThreadPool;
  * @param body Callable as void(size_t unit) or bool(size_t unit); false
  *        stops the run. Runs on several threads at once; each unit must
  *        touch only its own output.
- * @param options Helpers, their lane, the stop poll and the helper admission.
+ * @param options Helpers, their lane, the stop poll, the helper admission and
+ *        the count of helpers to keep queued.
  * @return False when a body returned false or options.Stop returned true (a
  *         stopped run, even when no unit was left to skip), true otherwise;
  *         always true for a void body without a Stop.
- * @throws The first exception a body, options.Stop or an admission hook
- *         threw, on any thread, rethrown here once every unit in flight has
- *         finished.
+ * @throws The first exception a body, options.Stop, an admission hook or
+ *         options.HelpersToKeepQueued threw, on any thread, rethrown here
+ *         once every unit in flight has finished.
  * @note No helper is published in inline mode or once Shutdown() has been
  *       requested, and none re-publishes after that: the caller runs what is
  *       left. The pool keeps at most
@@ -98,14 +138,21 @@ bool ParallelFor(WorkStealingThreadPool* pool, size_t count, Body&& body, const 
 
 /**
  * @brief The engine's job scheduler: one global MPMC queue, per-worker local
- * queues, a steal ring and a Background lane.
+ * queues, a steal ring, an Awaited lane and a Background lane.
  *
+ * - The Awaited lane is one more global MPMC queue, for JobPriority::Awaited:
+ *   jobs that a thread is blocked waiting for. Every scan (the worker lap, the
+ *   spin poll and the retiring spinner's recheck) polls it first, before the
+ *   worker's own local queue, so an Awaited job waits only for the remainder
+ *   of the bodies already running. Each poll is gated on m_Counters.AwaitedQueued, as
+ *   the Background lane's is, and the lane has the Background lane's rules.
  * - The global queue (moodycamel; it shards internally per producer) carries
- *   every Submit(F&&) handle envelope, every EnqueueWork and EnqueueWorkBatch
- *   bare envelope, every JobCounter visit, and the graph tasks published from
+ *   the Normal Submit(F&&) handle envelopes, EnqueueWork and EnqueueWorkBatch
+ *   bare envelopes and JobCounter visits, and the graph tasks published from
  *   threads that are not workers of this pool. Producers publish tokenless;
  *   workers consume through their own ConsumerTokens for cross-producer
  *   fairness (see Worker::GlobalConsumerToken).
+ *   An Awaited or Background publish goes to the Awaited or Background lane.
  * - A worker's local queue has one feed: graph tasks published from that
  *   worker (a completion releasing its ready dependents, or a
  *   Submit(F&&, dependencies) on the worker). Owners consume their own
@@ -113,26 +160,27 @@ bool ParallelFor(WorkStealingThreadPool* pool, size_t count, Body&& body, const 
  * - The steal ring lets an idle worker take from other workers' local queues
  *   in ring order, tokenless, giving up after half the ring. A task in a busy
  *   worker's local queue can therefore be invisible to a given thief; the
- *   sleep predicate (m_QueuedTasks > 0) keeps such a worker re-scanning
+ *   sleep predicate (m_Counters.QueuedTasks > 0) keeps such a worker re-scanning
  *   instead of sleeping, a busy-poll bounded by the backlog's lifetime
  *   (counted in the census as EmptyLoopsWithBacklog).
  * - The Background lane is one more global MPMC queue, for
  *   JobPriority::Background, polled last in every scan (the worker lap, the
  *   spin poll and the retiring spinner's recheck). Each poll is gated on the
- *   m_BackgroundQueued occupancy counter, so an empty lane costs one relaxed
+ *   m_Counters.BackgroundQueued occupancy counter, so an empty lane costs one relaxed
  *   load. Background work never enters a local queue or the steal ring;
  *   graph tasks are always Normal, and a fork (JobCounter visits, ParallelFor
  *   helpers) publishes at the class of the body that forks, so a Background
- *   body's forks stay Background. m_QueuedTasks counts
- *   both classes, so both share one wake protocol and differ only in dequeue
+ *   body's forks stay Background. m_Counters.QueuedTasks counts
+ *   every class, so all share one wake protocol and differ only in dequeue
  *   order. Starvation runs one way: a saturating Normal flood postpones
  *   Background work indefinitely (there is no aging), while Background work
  *   delays Normal work only by the remainder of a body already running.
- * - Wake protocol: bounded notify_one decisions under globalMutex, up to
- *   m_MaxSpinners workers spinning before they sleep (100 us by default), and
- *   worker-side wake propagation on every dequeue while a backlog and
- *   sleepers remain. Sleepers wait with a backstop timeout (1 ms by default)
- *   as a liveness rescue.
+ * - Wake protocol: each worker parks on its own slot and sets its bit in an
+ *   idle mask. A waker claims a set bit and signals only that slot, so no
+ *   lock is shared between workers. Up to m_MaxSpinners workers spin before
+ *   they park (100 us by default), and every dequeue passes one wake along
+ *   while a backlog and idle workers remain. A parked worker also wakes on a
+ *   backstop timeout (1 ms by default), as a liveness rescue.
  * - Blocking threads run the jobs of JobChannels (JobChannel.h): work whose
  *   thread is off-CPU for most of the job (another process, the OS, a
  *   driver). They are created on a channel's first dispatch, up to the sum of
@@ -154,10 +202,11 @@ class WorkStealingThreadPool
   public:
     /**
      * @brief Create the pool and start its workers.
-     * @param numThreads Number of worker threads (default: hardware_concurrency,
-     *        floored at 1). 0 selects inline mode: no worker threads exist and
-     *        every submission executes synchronously on the submitting thread
-     *        at publish time (dependency chains recurse up to a stack bound).
+     * @param numThreads Number of worker threads (default: the processors this
+     *        process may run on, AvailableProcessors::Query()). 0 selects
+     *        inline mode: no worker threads exist and every submission
+     *        executes synchronously on the submitting thread at publish
+     *        time (dependency chains recurse up to a stack bound).
      *        For single-threaded platforms (wasm without SharedArrayBuffer)
      *        and deterministic tests.
      * @param blockingThreadBudget The most blocking threads the pool creates
@@ -167,7 +216,7 @@ class WorkStealingThreadPool
      *        mode, where a channel job runs on the submitting thread.
      */
     explicit WorkStealingThreadPool(
-        size_t numThreads = std::max<size_t>(1, std::thread::hardware_concurrency()),
+        size_t numThreads = AvailableProcessors::Query().Count,
         size_t blockingThreadBudget = kMaxBlockingThreadBudget);
 
     /** @brief True when constructed with 0 workers (inline execution). */
@@ -196,7 +245,8 @@ class WorkStealingThreadPool
      *       and cancels its own task; the returned handle is then valid and
      *       Cancelled, so Wait() always returns.
      * @note JobPriority::Background publishes into the Background lane, polled
-     *       last by every consumer; Cancel, Wait and shutdown cancellation
+     *       last by every consumer, and JobPriority::Awaited into the Awaited
+     *       lane, polled first; Cancel, Wait and shutdown cancellation
      *       behave exactly as for Normal.
      */
     template <typename F, typename = std::enable_if_t<std::is_invocable_v<F&>>>
@@ -250,24 +300,17 @@ class WorkStealingThreadPool
      * the queues on the calling thread: bare tasks (this one and possibly other
      * callers') execute, handle and graph tasks are cancelled. After Shutdown()
      * has returned, the callable therefore runs synchronously on the calling
-     * thread. The rule is the same for both priority classes.
+     * thread. The rule is the same for every priority class.
      */
     template <typename F, typename = std::enable_if_t<std::is_invocable_v<F&>>>
     void EnqueueWork(F&& func, JobPriority priority = JobPriority::Normal);
 
-    // Batch publication tuning. kStackBatch is the staging-run length:
-    // EnqueueWorkBatch wraps callables into envelopes through a stack array of
-    // this size and loops for larger batches. kMaxWakePerBatch bounds the
-    // caller-side notify_one count per batch; the worker-side wake propagation
-    // carries the wake front to the backlog's full width. kBulkPublishThreshold
-    // sends smaller batches down the per-task publish loop: staging then one
-    // bulk push hides every task until the whole batch is pushed, which gives
-    // up the overlap of publish and execute that armed spinners give a small
-    // warm fork (a fan-out-8 fork's median latency doubles through the bulk
-    // path). Below the threshold the per-task path's earlier visibility wins;
-    // at and above it the bulk operation and the single bounded wake win.
+    // EnqueueWorkBatch stages a batch of at most kStackBatch envelopes on the stack, and a larger one in the calling
+    // thread's scratch arena in runs of at most kMaxBulkRun (16 KiB of scratch). Each run is one bulk push.
     static constexpr size_t kStackBatch = 64;
-    static constexpr uint32 kMaxWakePerBatch = 4;
+    static constexpr size_t kMaxBulkRun = 1024;
+    // A smaller batch uses the per-task publish loop: a bulk push hides every
+    // task until the last one, so a small warm fork loses its publish-execute overlap.
     static constexpr size_t kBulkPublishThreshold = 8;
 
     // Fork tasks published and not yet started, across every caller, are at
@@ -292,8 +335,9 @@ class WorkStealingThreadPool
      * The envelopes are bare, as with EnqueueWork: no TaskHandle, no TaskData,
      * and the caller owns synchronization.
      *
-     * Publication (count >= kBulkPublishThreshold): envelopes are staged
-     * through a stack array in runs of kStackBatch, counted into the wake and
+     * Publication (count >= kBulkPublishThreshold): envelopes are staged in
+     * one run (on the stack up to kStackBatch, else in scratch; a batch above
+     * kMaxBulkRun makes one run per kMaxBulkRun), counted into the wake and
      * backpressure counters before each bulk push (so a fast consumer cannot
      * underflow them), and published with moodycamel's allocating enqueue_bulk.
      * It fails only when an allocation fails, and then before any element is
@@ -305,19 +349,18 @@ class WorkStealingThreadPool
      * semantics, per-task visibility, and the single-task wake decision (at
      * most one notify per task) in place of the batch wake below.
      *
-     * Wake policy: after the whole batch is pushed, the caller issues
-     * min(queued tasks not covered by armed spinners, sleepers,
-     * kMaxWakePerBatch) notify_ones under globalMutex. Every successful
-     * dequeue on a worker passes one more wake along while a backlog and
-     * sleepers remain (AccountDequeuedTask), so the batch reaches full worker
-     * width without notify_all, which would wake a thundering herd that then
-     * thrashes the steal ring.
+     * Wake policy: after the whole batch is pushed, the caller claims and
+     * signals one idle worker when armed spinners do not cover the queued
+     * tasks. Every successful dequeue on a worker passes one more wake along
+     * while a backlog and idle workers remain (AccountDequeuedTask), so the
+     * batch reaches full worker width without notify_all, which would wake a
+     * thundering herd that then thrashes the steal ring.
      *
      * Shutdown (as EnqueueWork): never drops work. After Shutdown() has
      * returned the batch executes synchronously on the calling thread; a batch
      * racing Shutdown() re-checks after its publish and drains. Every callable
      * runs exactly once: on a worker, in Shutdown()'s post-join drain, or on
-     * this thread. The rule is the same for both priority classes.
+     * this thread. The rule is the same for every priority class.
      */
     template <typename F, typename = std::enable_if_t<std::is_invocable_v<F&>>>
     void EnqueueWorkBatch(F* funcs, size_t count, JobPriority priority = JobPriority::Normal);
@@ -478,19 +521,19 @@ class WorkStealingThreadPool
     // saturates at zero: the two relaxed loads can interleave with concurrent
     // publishes, and the occupancy counter over-counts during a producer's
     // publish window.
-    // GetApproximateQueueSize counts queued Normal tasks in every queue, from
+    // GetApproximateQueueSize counts queued Normal and Awaited tasks in every queue, from
     // the counter the sleep predicate reads. GetPendingTasksApprox also counts
     // tasks that are executing (queued plus in flight).
     size_t GetApproximateQueueSize() const
     {
-        const uint32 queued = m_QueuedTasks.load(std::memory_order_relaxed);
-        const uint32 background = m_BackgroundQueued.load(std::memory_order_relaxed);
+        const uint32 queued = m_Counters.QueuedTasks.load(std::memory_order_relaxed);
+        const uint32 background = m_Counters.BackgroundQueued.load(std::memory_order_relaxed);
         return queued > background ? queued - background : 0;
     }
     size_t GetPendingTasksApprox() const
     {
-        const size_t pending = pendingTasks.load(std::memory_order_relaxed);
-        const uint32 background = m_BackgroundQueued.load(std::memory_order_relaxed);
+        const size_t pending = m_Counters.PendingTasks.load(std::memory_order_relaxed);
+        const uint32 background = m_Counters.BackgroundQueued.load(std::memory_order_relaxed);
         return pending > background ? pending - background : 0;
     }
 
@@ -511,16 +554,16 @@ class WorkStealingThreadPool
     uint32 GetSpinningCountForTests() const;
 
     /**
-     * @brief Test hook: workers currently parked in the sleep wait.
+     * @brief Test hook: workers whose idle bit is set and not yet claimed by a
+     * waker. A worker sets its bit before it reads the queued count and clears
+     * it when it leaves the wait; a waker clears the bit when it claims the worker.
      */
-    uint32 GetSleepingCountForTests() const;
+    uint32 GetIdleCountForTests() const;
 
     /**
-     * @brief Test hook: cumulative caller-side notify_one count issued by batch
-     * publishes (PublishAndWakeBatch). One EnqueueWorkBatch call of count >=
-     * kBulkPublishThreshold adds at most kMaxWakePerBatch. Worker-side wake
-     * propagation and the small-batch path's per-task notifies
-     * (NotifyAfterPublish) are not counted.
+     * @brief Test hook: idle workers that batch publishes (PublishAndWakeBatch)
+     * claimed and signaled, at most 1 per EnqueueWorkBatch call. Worker-side wakes
+     * and the per-task path's wakes (NotifyAfterPublish) are not counted.
      */
     uint64 GetBatchNotifyCountForTests() const;
 
@@ -571,7 +614,7 @@ class WorkStealingThreadPool
 
     /**
      * @brief Jobs published into the compute queues so far: GlobalPushes +
-     * LocalPushes + BackgroundPushes of the census, as three relaxed loads
+     * LocalPushes + AwaitedPushes + BackgroundPushes of the census, as four relaxed loads
      * with no allocation and no lock. The ECS wave trace reads it at the start
      * and the end of a traced frame.
      */
@@ -618,7 +661,7 @@ class WorkStealingThreadPool
 
     /**
      * @brief Test hook: what the calling thread is executing as a job body:
-     * "Normal" or "Background" for a compute job, the channel's name for a
+     * "Normal", "Awaited" or "Background" for a compute job, the channel's name for a
      * channel job, null outside a job body (completion callbacks included).
      */
     static const char* GetCurrentJobForTests();
@@ -684,6 +727,41 @@ class WorkStealingThreadPool
      * A test holds a visit at a point by blocking inside the hook.
      */
     static void SetTaggedVisitHookForTests(void (*hook)(TaggedVisitPoint point));
+
+    /**
+     * @brief Debug-only test hook: where the wake path calls the hook installed
+     * with SetWakeHookForTests. `workerId` is the parked worker.
+     */
+    enum class WakePoint : uint8
+    {
+        BeforeIdleBit,   ///< The worker found no task and did not set its idle bit yet.
+        AfterIdleBit,    ///< The bit is set. The worker did not read the queued count yet.
+        BeforeSlotLock,  ///< The queued count is zero. The slot is not locked yet.
+        BeforeBlock,     ///< The worker holds its slot lock and blocks next. The hook must not lock.
+        AfterClaim,      ///< On the waker's thread: the bit is claimed, the slot is not locked yet.
+        BeforeIdleClear, ///< The worker left its wait and did not clear its bit yet.
+    };
+
+    /**
+     * @brief Debug-only test hook: install a function the wake path of every
+     * pool calls at each WakePoint (null removes it). A test holds a worker
+     * or a waker at a point by blocking inside the hook.
+     */
+    static void SetWakeHookForTests(void (*hook)(WakePoint point, size_t workerId));
+
+    /**
+     * @brief Debug-only test hook: the wake path's counts. All but FlagsSet count
+     * over the pool's life. At quiesce, Claims equals Consumed + Merged + FlagsSet.
+     */
+    struct WakeCountsForTests
+    {
+        uint64 Claims = 0;        ///< Idle workers claimed by a waker (one flag write each).
+        uint64 Consumed = 0;      ///< Flags a worker cleared when it left its wait.
+        uint64 Merged = 0;        ///< Flag writes that found the flag already set.
+        uint64 StaleConsumed = 0; ///< Flags already set when the worker locked its slot.
+        uint64 FlagsSet = 0;      ///< Slots whose flag is set now.
+    };
+    WakeCountsForTests GetWakeCountsForTests() const;
 #endif
 
     /**
@@ -742,7 +820,7 @@ class WorkStealingThreadPool
     /**
      * @brief True once Shutdown() has been requested.
      */
-    bool IsShuttingDown() const { return shutdown_requested.load(); }
+    bool IsShuttingDown() const { return m_ShutdownRequested.load(); }
 
   private:
     // What a job body runs as. The envelope carries no class (TaskBase has
@@ -877,7 +955,7 @@ class WorkStealingThreadPool
         ConcurrentQueue<UniquePtr<TaskBase>> LocalQueue;
         moodycamel::ProducerToken ProducerToken;
         moodycamel::ConsumerToken LocalConsumerToken;
-        // Fair-scan tokens for the two global lanes. moodycamel's tokenless
+        // Fair-scan tokens for the global lanes. moodycamel's tokenless
         // try_dequeue scores only the first three non-empty producer
         // sub-queues (newest first), dequeues from the biggest, and scans them
         // all only when that dequeue fails, so while a sustained flood from a
@@ -889,73 +967,130 @@ class WorkStealingThreadPool
         // on an empty sub-queue walks the entire producer ring, so every
         // producer's sub-queue is reached within a bounded number of rotations
         // whatever the flood depth. A failed dequeue still means every
-        // sub-queue appeared empty, so the relap on m_QueuedTasks is the same
+        // sub-queue appeared empty, so the relap on m_Counters.QueuedTasks is the same
         // as for the tokenless path.
         moodycamel::ConsumerToken GlobalConsumerToken;
+        moodycamel::ConsumerToken AwaitedConsumerToken;
         moodycamel::ConsumerToken BackgroundConsumerToken;
 
         explicit Worker(WorkStealingThreadPool& pool)
             : ProducerToken(LocalQueue), LocalConsumerToken(LocalQueue),
-              GlobalConsumerToken(pool.m_GlobalQueue),
-              BackgroundConsumerToken(pool.m_BackgroundQueue)
+              GlobalConsumerToken(pool.m_Queues.Global),
+              AwaitedConsumerToken(pool.m_Queues.Awaited),
+              BackgroundConsumerToken(pool.m_Queues.Background)
         {
         }
     };
 
     Vector<UniquePtr<Worker>> workers;
 
-    // The global queue: one MPMC (moodycamel shards it internally per
-    // implicit producer; publishes are tokenless) carrying every bare, handle,
-    // batch and JobCounter-visit publish, plus graph tasks published from
-    // threads that are not workers of this pool. Workers consume it through
-    // their GlobalConsumerToken (see the token's declaration for why); the
-    // drain, which runs on any thread, consumes it tokenless.
-    ConcurrentQueue<UniquePtr<TaskBase>> m_GlobalQueue;
+    // The lanes' queues, each a full separation of char padding from the next and from the members around them: a
+    // queue's head (producer list, free list) and its tail (consumer rotation) take writes from different threads.
+    struct LaneQueues
+    {
+        char PadBeforeGlobal[GameEngine::kFalseSharingSeparation];
+        // The Global lane (MPMC). Every Normal-priority bare, handle, batch and JobCounter-visit publish enqueues here
+        // tokenless, and so does a graph task published from a thread that is not a worker of this pool. Workers
+        // dequeue through their GlobalConsumerToken; the drain, which runs on any thread, dequeues tokenless.
+        ConcurrentQueue<UniquePtr<TaskBase>> Global;
+        char PadBeforeBackground[GameEngine::kFalseSharingSeparation];
+        // The Background lane: Global's discipline (allocating tokenless enqueue; allocation failure aborts). Workers
+        // dequeue through their BackgroundConsumerToken (GlobalConsumerToken tells why). Every scan polls it last, and
+        // only when m_Counters.BackgroundQueued is not zero.
+        ConcurrentQueue<UniquePtr<TaskBase>> Background;
+        char PadBeforeAwaited[GameEngine::kFalseSharingSeparation];
+        // The Awaited lane: the Background lane's queue type and discipline, with
+        // its own consumer token and occupancy counter (m_Counters.AwaitedQueued). Consumed
+        // first in every scan.
+        ConcurrentQueue<UniquePtr<TaskBase>> Awaited;
+        char PadAfterAwaited[GameEngine::kFalseSharingSeparation];
+    };
+    // One row per member: a member without a row is not checked.
+    static_assert(Detail::GroupsNeverShareALine(
+                      {
+                          {offsetof(LaneQueues, Global), sizeof(LaneQueues::Global), 0},
+                          {offsetof(LaneQueues, Background), sizeof(LaneQueues::Background), 1},
+                          {offsetof(LaneQueues, Awaited), sizeof(LaneQueues::Awaited), 2},
+                      },
+                      sizeof(LaneQueues)),
+                  "LaneQueues: no two queues share a line");
+    LaneQueues m_Queues;
 
-    // The Background lane: the same queue type and discipline as
-    // m_GlobalQueue (allocating tokenless enqueue, an allocation failure
-    // aborts loudly; workers consume through their BackgroundConsumerToken,
-    // because the fairness hole depends on the producer count, not the
-    // priority, so one Background flood could starve another Background
-    // producer the same way). Consumed last in every scan, and every poll is
-    // gated on m_BackgroundQueued, so an empty lane never costs a queue touch.
-    ConcurrentQueue<UniquePtr<TaskBase>> m_BackgroundQueue;
+    // One worker's wait. The worker blocks on Condition until Signaled or
+    // shutdown. Signaled is read and written only under Mutex, a leaf lock:
+    // nobody takes another lock while holding it.
+    struct ParkSlot
+    {
+        std::mutex Mutex;
+        std::condition_variable Condition;
+        bool Signaled = false;
+    };
+    // Read-mostly: construction writes them; every park and every wake reads them. One slot and one idle bit per
+    // worker, each slot and mask word on its own line (none in inline mode). A waker claims a worker when its
+    // fetch_and clears the bit.
+    UniquePtr<GameEngine::FalseSharingPadded<ParkSlot>[]> m_ParkSlots;
+    UniquePtr<GameEngine::FalseSharingPadded<std::atomic<uint64>>[]> m_IdleMask;
+    size_t m_ParkSlotCount = 0;
+    size_t m_IdleMaskWords = 0;
+    // Fills the handles to the bytes of a std::condition_variable and a std::mutex, so m_Counters and the members
+    // after it sit at the offsets of the constructor's MeasuredLayout: per-task enqueue time changes with the
+    // counters' placement. The constructor checks the offset at compile time.
+    [[maybe_unused]] char m_PadKeepsCounterPlacement[sizeof(std::mutex) + sizeof(std::condition_variable) -
+                                                     sizeof(m_ParkSlots) - sizeof(m_IdleMask) -
+                                                     sizeof(m_ParkSlotCount) - sizeof(m_IdleMaskWords)];
 
-    // Synchronization
-    std::atomic<bool> shutdown_requested{false};
-    // Constructed with 0 workers: submissions execute synchronously on the
-    // submitting thread at the publish points (EnqueueTask, EnqueueTaskGlobal,
-    // EnqueueWorkBatch); the queues and the wake protocol stay untouched.
-    bool m_InlineMode = false;
-    // Queued plus executing tasks; the backpressure signals read it.
-    std::atomic<size_t> pendingTasks{0};
-    std::condition_variable globalCondition;
-    std::mutex globalMutex;
-
-    // Wake protocol state.
-    // m_QueuedTasks counts tasks in queues only (not in flight): incremented
-    // before every queue push, decremented at every successful dequeue. It is
-    // the sleep predicate and the producer side of the Dekker pair with the
-    // spinner and sleeper counts.
-    std::atomic<uint32> m_QueuedTasks{0};
-    // Background-lane occupancy: incremented before the Background push (an
-    // over-count is the safe side, and it cannot underflow because consumers
-    // decrement only after a successful dequeue), read relaxed by every
-    // consumer scan so an empty lane costs one load, never a queue touch.
-    // Liveness never rests on this counter: the sleep predicate and every
-    // Dekker pair run on m_QueuedTasks, which counts both classes, so a stale
-    // zero here only defers the pickup to the next lap. It shares its cache
-    // line with m_QueuedTasks on purpose: idle scans load that line every lap
-    // already.
-    std::atomic<uint32> m_BackgroundQueued{0};
-    // Fork tasks (ParallelFor helpers and Run's queue visits) published and
-    // not yet started, indexed by lane (JobPriority), each at most
-    // kMaxUnstartedForkTasksPerWorker per worker: a fork reserves its tasks'
-    // counts in their lane before it publishes them, and a task gives its
-    // count back when it starts or when its envelope is destroyed unrun. A
-    // bound, not a synchronization: relaxed. On the queued counter's line,
-    // which the dequeue before a task's start has just written.
-    std::atomic<uint32> m_UnstartedForkTasks[2]{};
+    // Wake protocol state: the atomics that threads write on every task or every idle lap, in writer groups. A full
+    // separation of char padding comes before each group and after the last, so no two groups, and no group and a
+    // member outside the struct, share a line at any address of the pool. Not alignas: see the alignof check (.cpp).
+    struct CounterLines
+    {
+        char PadBeforeTaskCounts[GameEngine::kFalseSharingSeparation];
+        // Task counts: every publish and every dequeue or completion writes them; idle scans read them every lap.
+        // QueuedTasks counts queued tasks in every queue, not in flight: incremented before every push, decremented at
+        // every successful dequeue. It is the sleep predicate and the producer side of the Dekker pairs with NumSpinning
+        // and with the idle mask.
+        std::atomic<uint32> QueuedTasks{0};
+        // Background-lane occupancy: incremented before the push, decremented only after a successful dequeue (it can
+        // over-count, never underflow). Every scan reads it relaxed. Liveness never rests on it: the sleep predicate
+        // and every Dekker pair read QueuedTasks, so a stale zero only defers the pickup to the next lap.
+        std::atomic<uint32> BackgroundQueued{0};
+        // Queued plus executing tasks; the backpressure signals read it.
+        std::atomic<size_t> PendingTasks{0};
+        // Fork tasks (ParallelFor helpers, Run's queue visits) published and not started, per lane, at most
+        // kMaxUnstartedForkTasksPerWorker per worker. A fork reserves the counts before it publishes; a task gives its
+        // count back when it starts or when its envelope is destroyed unrun. A bound, not a synchronization: relaxed.
+        std::atomic<uint32> UnstartedForkTasks[kJobPriorityCount]{};
+        // Caller-side notifies issued by batch publishes (one relaxed add per
+        // bulk EnqueueWorkBatch, not per task).
+        std::atomic<uint64> BatchNotifiesForTests{0};
+        char PadBeforeAwaitedCount[GameEngine::kFalseSharingSeparation];
+        // Awaited-lane occupancy, with BackgroundQueued's rules, in a group of its own: every scan and every spin
+        // iteration reads it first, and every publish and dequeue writes the task counts.
+        std::atomic<uint32> AwaitedQueued{0};
+        char PadBeforeIdleCounts[GameEngine::kFalseSharingSeparation];
+        // Idle counts: a worker writes them when it starts or stops a spin or a park; every publish reads them.
+        // NumSpinning counts workers inside the TrySpinPoll poll loop only (the token is retired before any task
+        // found is executed). NumParking counts workers in ParkWorker from before the idle bit is set to after it is
+        // cleared: it is never below the idle mask's popcount, so a zero means no worker to claim.
+        std::atomic<uint32> NumSpinning{0};
+        std::atomic<uint32> NumParking{0};
+        char PadAfterIdleCounts[GameEngine::kFalseSharingSeparation];
+    };
+    // One row per member: a member without a row is not checked.
+    static_assert(Detail::GroupsNeverShareALine(
+                      {
+                          {offsetof(CounterLines, QueuedTasks), sizeof(CounterLines::QueuedTasks), 0},
+                          {offsetof(CounterLines, BackgroundQueued), sizeof(CounterLines::BackgroundQueued), 0},
+                          {offsetof(CounterLines, PendingTasks), sizeof(CounterLines::PendingTasks), 0},
+                          {offsetof(CounterLines, UnstartedForkTasks), sizeof(CounterLines::UnstartedForkTasks), 0},
+                          {offsetof(CounterLines, BatchNotifiesForTests), sizeof(CounterLines::BatchNotifiesForTests), 0},
+                          {offsetof(CounterLines, AwaitedQueued), sizeof(CounterLines::AwaitedQueued), 1},
+                          {offsetof(CounterLines, NumSpinning), sizeof(CounterLines::NumSpinning), 2},
+                          {offsetof(CounterLines, NumParking), sizeof(CounterLines::NumParking), 2},
+                      },
+                      sizeof(CounterLines)),
+                  "CounterLines: the task counts (0), the Awaited count (1) and the idle counts (2) never share a line");
+    CounterLines m_Counters;
     // Reserves up to `wanted` of `unstarted`'s budget and returns the count
     // granted; the rest is given back at once. The add comes first, so
     // concurrent forks never grant more than `budget` between them.
@@ -967,11 +1102,13 @@ class WorkStealingThreadPool
     // lane's fork-task budget grants, else one only when no visit to `jobs`
     // is pending.
     void PublishTaggedQueueVisit(JobCounter::TaggedJobs& jobs, JobPriority lane);
-    // Workers inside the TrySpinPoll poll loop only (the token is retired
-    // before any task found is executed).
-    std::atomic<uint32> m_NumSpinning{0};
-    // Sleeper count; changed under globalMutex only.
-    std::atomic<uint32> m_NumSleeping{0};
+    // Read-mostly: every scan, spin or publish reads them; construction, Shutdown and the test setters write them.
+    // They sit between the padded m_Counters and m_Census, so no hot writer shares their line.
+    std::atomic<bool> m_ShutdownRequested{false};
+    // Constructed with 0 workers: submissions execute synchronously on the
+    // submitting thread at the publish points (EnqueueTask, EnqueueTaskGlobal,
+    // EnqueueWorkBatch); the queues and the wake protocol stay untouched.
+    bool m_InlineMode = false;
     // Adaptive-spin configuration: read from the environment once at
     // construction (GE_JOB_SPIN_US, GE_JOB_MAX_SPINNERS), overridable with
     // SetSpinConfigForTest.
@@ -981,14 +1118,11 @@ class WorkStealingThreadPool
     // the lost-wakeup stress test can prove the protocol without the rescue
     // masking a bug.
     std::atomic<uint32> m_SleepBackstopUs{1000};
-    // Caller-side notifies issued by batch publishes (one relaxed add per
-    // bulk EnqueueWorkBatch, not per task).
-    std::atomic<uint64> m_BatchNotifiesForTests{0};
 
     // Topology census (see JobSystemStatistics), in two contention classes:
     //  - Per-task counters (pushes and pops): one relaxed read-modify-write per
     //    task on paths that already pay two seq_cst read-modify-writes
-    //    (m_QueuedTasks, pendingTasks) per task, so their shared-line traffic
+    //    (m_Counters.QueuedTasks, m_Counters.PendingTasks) per task, so their shared-line traffic
     //    is bounded by task throughput. Producers and consumers contend on
     //    this line with each other, bounded the same way.
     //  - Idle-lap counters (StealMisses per failed scan, spin-poll iterations
@@ -996,25 +1130,46 @@ class WorkStealingThreadPool
     //    predicate; BackstopTimeouts per expired sleep): written by idle
     //    workers in every configuration. On the per-task line they would turn
     //    read-only idle polling into shared-line ping-pong against the
-    //    producers' counters, so they get their own line. The separation uses
-    //    explicit full-line char padding, not alignas (MSVC's C4324 is an
-    //    error here): a 64-byte gap guarantees no shared line at any struct
-    //    alignment.
+    //    producers' counters, so they get their own line. A full separation of
+    //    char padding comes before, between and after the two classes, not
+    //    alignas (MSVC's C4324 is an error here), so no line is shared at any
+    //    address.
     struct TopologyCensusCounters
     {
+        char PadHead[GameEngine::kFalseSharingSeparation];
         std::atomic<uint64> GlobalPushes{0};
         std::atomic<uint64> LocalPushes{0};
+        std::atomic<uint64> AwaitedPushes{0};
         std::atomic<uint64> BackgroundPushes{0};
         std::atomic<uint64> GlobalPops{0};
         std::atomic<uint64> LocalPops{0};
         std::atomic<uint64> StealPops{0};
+        std::atomic<uint64> AwaitedPops{0};
         std::atomic<uint64> BackgroundPops{0};
-        char PadIdleLapSplit[64];
+        char PadIdleLapSplit[GameEngine::kFalseSharingSeparation];
         std::atomic<uint64> StealMisses{0};
         std::atomic<uint64> EmptyLoopsWithBacklog{0};
         std::atomic<uint64> BackstopTimeouts{0};
-        char PadTail[64]; // keep the idle-lap line off whatever follows m_Census
+        char PadTail[GameEngine::kFalseSharingSeparation];
     };
+    // One row per member: a member without a row is not checked.
+    static_assert(Detail::GroupsNeverShareALine(
+                      {
+                          {offsetof(TopologyCensusCounters, GlobalPushes), sizeof(TopologyCensusCounters::GlobalPushes), 0},
+                          {offsetof(TopologyCensusCounters, LocalPushes), sizeof(TopologyCensusCounters::LocalPushes), 0},
+                          {offsetof(TopologyCensusCounters, AwaitedPushes), sizeof(TopologyCensusCounters::AwaitedPushes), 0},
+                          {offsetof(TopologyCensusCounters, BackgroundPushes), sizeof(TopologyCensusCounters::BackgroundPushes), 0},
+                          {offsetof(TopologyCensusCounters, GlobalPops), sizeof(TopologyCensusCounters::GlobalPops), 0},
+                          {offsetof(TopologyCensusCounters, LocalPops), sizeof(TopologyCensusCounters::LocalPops), 0},
+                          {offsetof(TopologyCensusCounters, StealPops), sizeof(TopologyCensusCounters::StealPops), 0},
+                          {offsetof(TopologyCensusCounters, AwaitedPops), sizeof(TopologyCensusCounters::AwaitedPops), 0},
+                          {offsetof(TopologyCensusCounters, BackgroundPops), sizeof(TopologyCensusCounters::BackgroundPops), 0},
+                          {offsetof(TopologyCensusCounters, StealMisses), sizeof(TopologyCensusCounters::StealMisses), 1},
+                          {offsetof(TopologyCensusCounters, EmptyLoopsWithBacklog), sizeof(TopologyCensusCounters::EmptyLoopsWithBacklog), 1},
+                          {offsetof(TopologyCensusCounters, BackstopTimeouts), sizeof(TopologyCensusCounters::BackstopTimeouts), 1},
+                      },
+                      sizeof(TopologyCensusCounters)),
+                  "TopologyCensusCounters: the per-task counters (0) and the idle-lap counters (1) never share a line");
     TopologyCensusCounters m_Census;
 
 #if GE_DEBUG_INSTRUMENTATION
@@ -1041,28 +1196,21 @@ class WorkStealingThreadPool
     // or a queued task that a later bracket consumes, which reduces to (a) or
     // (b) for that bracket.
     std::atomic<uint64> m_CounterBracketEpoch{0};
+    std::atomic<uint64> m_WakeClaimsForTests{0};
+    std::atomic<uint64> m_WakeConsumedForTests{0};
+    std::atomic<uint64> m_WakeMergedForTests{0};
+    std::atomic<uint64> m_WakeStaleForTests{0};
 #endif
 
     // Dependency management
     UniquePtr<TaskDependencyGraph> m_DependencyGraph;
-
-    // Cross-thread TaskData freelist: a bounded MPMC queue (the slab pool's
-    // shape) that hands TaskData recycled by workers, which drain the
-    // registry's cleanups, back to submitters, which acquire.
-    // Invariant: every pooled entry is pristine (reset in RecycleTaskData,
-    // outside the registry mutex, because a reset can run user destructors).
-    static SharedPtr<TaskHandle::TaskData> AcquireTaskData();
-    // Accepts only exclusively owned TaskData (the registry drain's
-    // use_count() == 1 guarantee, see DrainPendingCleanupLocked).
-    static void RecycleTaskData(SharedPtr<TaskHandle::TaskData> data);
-    static ConcurrentQueue<SharedPtr<TaskHandle::TaskData>>& TaskDataFreelist();
 
     // Process-wide task id source; ids are never reused across pools.
     static std::atomic<TaskId> m_NextTaskId;
 
     // The TaskData registry every TaskHandle of a task resolves through.
     mutable std::mutex m_TaskDataMutex;
-    std::unordered_map<TaskId, SharedPtr<TaskHandle::TaskData>> m_TaskDataRegistry;
+    std::unordered_map<TaskId, TaskHandle::TaskDataRef> m_TaskDataRegistry;
 
     // Thread-local worker identity.
     static thread_local size_t s_CurrentWorkerId;
@@ -1135,10 +1283,15 @@ class WorkStealingThreadPool
     void DependencyAwareWorkerLoop(size_t workerId);
     void EnqueueTask(UniquePtr<TaskBase> task);
     void PushTask(UniquePtr<TaskBase> task);
-    // The global lane for `priority`: m_GlobalQueue or m_BackgroundQueue.
+    // The global lane for `priority`: m_Queues.Global, m_Queues.Awaited or m_Queues.Background.
     // Worker-local queues are not lanes: they carry graph tasks published on
     // workers, always Normal.
     ConcurrentQueue<UniquePtr<TaskBase>>& PriorityLane(JobPriority priority);
+    // The occupancy counter that gates the polls of `priority`'s lane; null
+    // for Normal, whose lane is polled ungated.
+    std::atomic<uint32>* LaneOccupancy(JobPriority priority);
+    // The census counter of pushes into `priority`'s lane.
+    std::atomic<uint64>& LanePushes(JobPriority priority);
     // Push into the priority's lane (allocating tokenless enqueue). It fails
     // only when an allocation fails, and a silently dropped task can be a
     // caller-barrier release, so a failure aborts loudly.
@@ -1150,23 +1303,45 @@ class WorkStealingThreadPool
     // failure path retries per task and aborts loudly only if a
     // single-element allocation fails too.
     void EnqueueBulkGlobal(UniquePtr<TaskBase>* tasks, size_t count, JobPriority priority);
+    // One run of EnqueueWorkBatch: stages funcs[0, run) as envelopes in `staging` (their slabs in `slabs` when the
+    // envelope is slab-pooled), counts the run, and pushes it with one EnqueueBulkGlobal. No wake.
+    template <typename F>
+    void PublishBulkRun(F* funcs, size_t run, UniquePtr<TaskBase>* staging, void** slabs, JobPriority priority);
+    // Stages a batch above kStackBatch in the calling thread's scratch arena: calls publishRun once per run of at
+    // most kMaxBulkRun tasks, with the run's first index, its size, and scratch room for its envelopes and slabs.
+    void PublishInScratchRuns(
+        size_t count,
+        GameEngine::FunctionRef<void(size_t first, size_t run, UniquePtr<TaskBase>* staging, void** slabs)> publishRun);
     void NotifyAfterPublish();
-    // Batch form of NotifyAfterPublish: one bounded wake decision for a batch
-    // of `publishedCount` tasks already counted and pushed. Issues
-    // min(publishedCount, queued - armed spinners, sleepers, kMaxWakePerBatch)
-    // notify_ones under globalMutex.
+    // Batch form of NotifyAfterPublish: one wake decision for a batch of
+    // `publishedCount` tasks already counted and pushed. Wakes one idle worker
+    // when min(publishedCount, queued - armed spinners) is above 0.
     void PublishAndWakeBatch(size_t publishedCount);
-    void AccountDequeuedTask();
+    // `wakeScanStart` is the worker id where the wake propagation starts its
+    // scan of the idle mask.
+    void AccountDequeuedTask(size_t wakeScanStart);
+    // Claims one idle worker and signals it. The scan starts at worker
+    // `firstWorker` (modulo the worker count) and wraps. Returns false when no
+    // worker is idle.
+    bool WakeIdleWorker(size_t firstWorker);
+    // Sets the claimed worker's flag under its slot lock, then notifies it.
+    void SignalClaimedWorker(size_t workerId);
+    // Parks the calling worker until a waker signals it, shutdown, or the
+    // backstop. Returns true when the backstop expired with no signal.
+    bool ParkWorker(size_t workerId);
     // `lane` receives the class of the lane the task came from.
     bool TrySpinPoll(size_t workerId, UniquePtr<TaskBase>& task, JobPriority& lane);
+    // The first arm of every scan, before the local queue. Gated on
+    // m_Counters.AwaitedQueued like TryGetBackgroundTask; worker-only.
+    bool TryGetAwaitedTask(size_t workerId, UniquePtr<TaskBase>& task);
     bool TryGetLocalTask(size_t workerId, UniquePtr<TaskBase>& task);
     // Worker-only (takes the worker's thread-affine GlobalConsumerToken); the
     // drain consumes the global lanes tokenless.
     bool TryGetGlobalTask(size_t workerId, UniquePtr<TaskBase>& task);
     bool TryStealTask(size_t thiefId, UniquePtr<TaskBase>& task);
-    // The last arm of every scan. Gated on m_BackgroundQueued (one relaxed
+    // The last arm of every scan. Gated on m_Counters.BackgroundQueued (one relaxed
     // load when the lane is empty, never a queue touch). No retry on a
-    // spurious failure: consumers relap on the m_QueuedTasks predicate, the
+    // spurious failure: consumers relap on the m_Counters.QueuedTasks predicate, the
     // same tolerance the global lane and the steal ring rely on. Worker-only,
     // like TryGetGlobalTask.
     bool TryGetBackgroundTask(size_t workerId, UniquePtr<TaskBase>& task);
@@ -1196,38 +1371,37 @@ class WorkStealingThreadPool
     void EnqueueTaskGlobal(UniquePtr<TaskBase> task,
                            JobPriority priority = JobPriority::Normal);
 
-    // Deferred registry cleanup (CleanupTaskData batches ids thread-locally;
-    // the batch drains under m_TaskDataMutex). Entries whose registry
-    // reference is the last reference are moved into `recycle` (up to
-    // kPendingCleanupBatch) for reset and pooling by CommitRecycledTaskData
-    // after unlock: a reset can run user destructors (stale results and
-    // callbacks) and must never run under the registry mutex. The caller
-    // holds m_TaskDataMutex.
+    // Deferred registry cleanup: CleanupTaskData batches ids thread-locally,
+    // and a thread drains its batch when this pool's share reaches this size.
     static constexpr size_t kPendingCleanupBatch = 32;
-    // Erased entries that are not exclusively owned go to deferDrop: their
-    // reference may be the last by the time they are erased (handles drop
-    // references without the mutex), and the resulting user destructors must
-    // run outside m_TaskDataMutex.
-    size_t DrainPendingCleanupLocked(
-        SharedPtr<TaskHandle::TaskData> (&recycle)[kPendingCleanupBatch],
-        std::vector<SharedPtr<TaskHandle::TaskData>>& deferDrop);
-    void CommitRecycledTaskData(SharedPtr<TaskHandle::TaskData> (&recycle)[kPendingCleanupBatch],
-                                size_t count);
+    // The registry references that one drain erases. Declare it before the
+    // lock on m_TaskDataMutex: the references then drop after the unlock,
+    // because a last reference runs user destructors (results, callbacks).
+    struct TaskDataReleaseBatch
+    {
+        TaskHandle::TaskDataRef Entries[kPendingCleanupBatch];
+        size_t Count = 0;
+
+        void Add(TaskHandle::TaskDataRef data);
+    };
+    // Erases this pool's entries in this thread's batch. The caller holds
+    // m_TaskDataMutex.
+    void DrainPendingCleanupLocked(TaskDataReleaseBatch& released);
 
     // The registry's factory: the TaskData every handle of `taskId` shares.
     // Callers are the pool, TaskHandle's constructor and
     // Detail::SubmitGraphTask (its result).
-    SharedPtr<TaskHandle::TaskData> GetOrCreateTaskData(TaskId taskId);
+    TaskHandle::TaskDataRef GetOrCreateTaskData(TaskId taskId);
     TaskId GenerateTaskId();
 
     // Registry lookup without creation (GetOrCreateTaskData stays the only
     // factory). Returns null for an unknown id and for a task whose deferred
     // registry cleanup already ran (both mean terminal or never submitted).
-    SharedPtr<TaskHandle::TaskData> TryGetTaskData(TaskId taskId) const;
+    TaskHandle::TaskDataRef TryGetTaskData(TaskId taskId) const;
     // Cancel core: CAS(Pending -> Cancelled) on the TaskData and, if it wins,
     // fire the single Cancelled event set (the graph cascade included) on the
     // calling thread, outside every lock.
-    bool CancelPendingArbitrated(TaskId taskId, const SharedPtr<TaskHandle::TaskData>& data);
+    bool CancelPendingArbitrated(TaskId taskId, const TaskHandle::TaskDataRef& data);
     // Submit(F&&, dependencies) per-dependency linking: returns true when the
     // caller should register an edge to the dependency. A terminal, invalid or
     // foreign-pool handle returns false (no edge; an absent dependency is
@@ -1258,7 +1432,7 @@ class WorkStealingThreadPool
     // caller's post-publish shutdown re-check.
     void DrainQueuesOnThisThread();
     // One drained envelope. PoolCounted: it came from a pool queue, so its
-    // disposal releases pendingTasks; channel and blocking-FIFO envelopes
+    // disposal releases m_Counters.PendingTasks; channel and blocking-FIFO envelopes
     // never entered the pool's counters. Context: the lane it was taken from,
     // or its channel, which phase 3 runs a bare one as.
     struct DrainedTask
@@ -1348,11 +1522,11 @@ TaskHandle WorkStealingThreadPool::CreateHandleEnvelope(UniquePtr<Envelope>& env
 
     // One TaskData for the task's whole lifetime: this registry insert is the
     // path's only m_TaskDataMutex acquisition; the returned handle adopts the
-    // same SharedPtr, the envelope carries it, and the execute side reads it
+    // same reference, the envelope carries it, and the execute side reads it
     // from the envelope. The registry entry itself stays, because
     // CancelTask(id), the arbitration invariant (see CleanupTaskData) and
     // Shutdown's registry sweep all resolve through it.
-    SharedPtr<TaskHandle::TaskData> data = GetOrCreateTaskData(taskId);
+    TaskHandle::TaskDataRef data = GetOrCreateTaskData(taskId);
     TaskHandle handle(taskId, this, data);
     envelope = MakeTaskEnvelope<Envelope>(taskId, std::move(data), std::forward<F>(fn),
                                           std::forward<Extra>(extra)...);
@@ -1458,63 +1632,19 @@ void WorkStealingThreadPool::EnqueueWorkBatch(F* funcs, size_t count, JobPriorit
         return;
     }
 
-    UniquePtr<TaskBase> staging[kStackBatch];
-    size_t published = 0;
-    while (published < count)
+    // One run per kMaxBulkRun tasks: the caller visits the lines that awake workers write (the slab freelist, the
+    // task counts, the queue's index, the census) once per run. A batch of at most kStackBatch stages on the stack.
+    if (count <= kStackBatch)
     {
-        const size_t run = std::min(count - published, kStackBatch);
-
-        // Stage the envelopes before touching the counters: the over-count
-        // window (the queued counter above the physical queue depth, the
-        // benign direction) then spans only the bulk push, not the envelope
-        // allocations. Slabs are acquired with one bulk freelist operation per
-        // run; a dequeue per item doubles the caller's cost for a 200-task
-        // burst.
-        if constexpr (kIsSlabPooled<Detail::BareWorkTask<F>>)
-        {
-            // A throwing move constructor at staging index i would leak the
-            // raw slabs [i+1, run), which no UniquePtr owns yet, and skew the
-            // Live statistic for good. Every real chunk type is nothrow
-            // movable; the requirement is stated here rather than guarded on a
-            // path no caller can reach.
-            static_assert(std::is_nothrow_move_constructible_v<F>,
-                          "EnqueueWorkBatch bulk staging requires a nothrow-move closure");
-            void* slabs[kStackBatch];
-            Detail::AcquireTaskSlabsBulk(slabs, run);
-            for (size_t i = 0; i < run; ++i)
-            {
-                staging[i] = MakeTaskEnvelopeInSlab<Detail::BareWorkTask<F>>(
-                    slabs[i], std::move(funcs[published + i]));
-            }
-        }
-        else
-        {
-            for (size_t i = 0; i < run; ++i)
-            {
-                staging[i] = MakeTaskEnvelope<Detail::BareWorkTask<F>>(std::move(funcs[published + i]));
-            }
-        }
-
-#if GE_DEBUG_INSTRUMENTATION
-        // Bracket enter: in-flight first, then the epoch (see m_CounterBracketEpoch).
-        m_CounterRacersInFlight.fetch_add(1, std::memory_order_seq_cst);
-        m_CounterBracketEpoch.fetch_add(1, std::memory_order_seq_cst);
-#endif
-        // The publish sequence, batch form: counters before the push (a fast
-        // consumer decrements at dequeue; pushing first would let it underflow
-        // the unsigned counter for a moment). The Background occupancy counter
-        // follows the same before-push order.
-        pendingTasks.fetch_add(run, std::memory_order_relaxed);
-        m_QueuedTasks.fetch_add(static_cast<uint32>(run), std::memory_order_seq_cst); // (P1)
-        if (priority == JobPriority::Background)
-        {
-            m_BackgroundQueued.fetch_add(static_cast<uint32>(run), std::memory_order_relaxed);
-        }
-        EnqueueBulkGlobal(staging, run, priority);
-#if GE_DEBUG_INSTRUMENTATION
-        m_CounterRacersInFlight.fetch_sub(1, std::memory_order_seq_cst);
-#endif
-        published += run;
+        UniquePtr<TaskBase> staging[kStackBatch];
+        void* slabs[kStackBatch];
+        PublishBulkRun(funcs, count, staging, slabs, priority);
+    }
+    else
+    {
+        PublishInScratchRuns(count, [&](size_t first, size_t run, UniquePtr<TaskBase>* staging, void** slabs) {
+            PublishBulkRun(funcs + first, run, staging, slabs, priority);
+        });
     }
 
     // One bounded wake decision for the whole batch; worker-side wake
@@ -1530,6 +1660,60 @@ void WorkStealingThreadPool::EnqueueWorkBatch(F* funcs, size_t count, JobPriorit
     {
         DrainQueuesOnThisThread();
     }
+}
+
+template <typename F>
+void WorkStealingThreadPool::PublishBulkRun(F* funcs, size_t run, UniquePtr<TaskBase>* staging,
+                                            [[maybe_unused]] void** slabs, JobPriority priority)
+{
+    // Stage the envelopes before touching the counters: the over-count
+    // window (the queued counter above the physical queue depth, the
+    // benign direction) then spans only the bulk push, not the envelope
+    // allocations. Slabs are acquired with one bulk freelist operation per
+    // run; a dequeue per item doubles the caller's cost for a 200-task
+    // burst.
+    if constexpr (kIsSlabPooled<Detail::BareWorkTask<F>>)
+    {
+        // A throwing move constructor at staging index i would leak the
+        // raw slabs [i+1, run), which no UniquePtr owns yet, and skew the
+        // Live statistic for good. Every real chunk type is nothrow
+        // movable; the requirement is stated here rather than guarded on a
+        // path no caller can reach.
+        static_assert(std::is_nothrow_move_constructible_v<F>,
+                      "EnqueueWorkBatch bulk staging requires a nothrow-move closure");
+        Detail::AcquireTaskSlabsBulk(slabs, run);
+        for (size_t i = 0; i < run; ++i)
+        {
+            staging[i] = MakeTaskEnvelopeInSlab<Detail::BareWorkTask<F>>(slabs[i], std::move(funcs[i]));
+        }
+    }
+    else
+    {
+        for (size_t i = 0; i < run; ++i)
+        {
+            staging[i] = MakeTaskEnvelope<Detail::BareWorkTask<F>>(std::move(funcs[i]));
+        }
+    }
+
+#if GE_DEBUG_INSTRUMENTATION
+    // Bracket enter: in-flight first, then the epoch (see m_CounterBracketEpoch).
+    m_CounterRacersInFlight.fetch_add(1, std::memory_order_seq_cst);
+    m_CounterBracketEpoch.fetch_add(1, std::memory_order_seq_cst);
+#endif
+    // The publish sequence, batch form: counters before the push (a fast
+    // consumer decrements at dequeue; pushing first would let it underflow
+    // the unsigned counter for a moment). The lane occupancy counter
+    // follows the same before-push order.
+    m_Counters.PendingTasks.fetch_add(run, std::memory_order_relaxed);
+    m_Counters.QueuedTasks.fetch_add(static_cast<uint32>(run), std::memory_order_seq_cst); // (P1)
+    if (std::atomic<uint32>* occupancy = LaneOccupancy(priority))
+    {
+        occupancy->fetch_add(static_cast<uint32>(run), std::memory_order_relaxed);
+    }
+    EnqueueBulkGlobal(staging, run, priority);
+#if GE_DEBUG_INSTRUMENTATION
+    m_CounterRacersInFlight.fetch_sub(1, std::memory_order_seq_cst);
+#endif
 }
 
 template <typename F, typename>

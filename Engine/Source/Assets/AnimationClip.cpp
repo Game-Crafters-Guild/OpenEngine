@@ -406,7 +406,7 @@ bool AnimationClip::Load()
 
     // Reuse cached file data when switching animation indices to avoid
     // re-reading the (potentially large) model file from disk.
-    if (m_CachedFileData.empty())
+    if (m_CachedFileData.Size() == 0)
     {
         SetState(AssetState::Loading);
 
@@ -421,7 +421,7 @@ bool AnimationClip::Load()
     return LoadFromData(m_CachedFileData);
 }
 
-bool AnimationClip::LoadFromData(const Vector<uint8>& data)
+bool AnimationClip::LoadFromData(std::span<const uint8> data)
 {
     if (GetState() == AssetState::Loaded)
         return true;
@@ -961,7 +961,7 @@ bool AnimationClip::LoadFromData(const Vector<uint8>& data)
     return success;
 }
 
-bool AnimationClip::LoadEditableData(const Vector<uint8>& data)
+bool AnimationClip::LoadEditableData(std::span<const uint8> data)
 {
     const std::string text(reinterpret_cast<const char*>(data.data()), data.size());
     json document;
@@ -1595,11 +1595,11 @@ std::vector<std::string> AnimationClip::EnumerateAnimationNames() const
     }
 
 #if defined(GE_HAVE_CGLTF)
-    if ((extension == ".gltf" || extension == ".glb") && !m_CachedFileData.empty())
+    if ((extension == ".gltf" || extension == ".glb") && m_CachedFileData.Size() != 0)
     {
         cgltf_options options{};
         cgltf_data* gltf = nullptr;
-        if (cgltf_parse(&options, m_CachedFileData.data(), m_CachedFileData.size(), &gltf) == cgltf_result_success && gltf)
+        if (cgltf_parse(&options, m_CachedFileData.Data(), m_CachedFileData.Size(), &gltf) == cgltf_result_success && gltf)
         {
             std::vector<std::string> names;
             names.reserve(gltf->animations_count);

@@ -312,7 +312,8 @@ bool RenderServices::Initialize(Rendering::IDevice* device)
                                 [this] { return ResolveWorldPassKeywordsForPrewarm(); });
 
     // Per-frame double-buffered SSBO pools for material params and bone palettes.
-    InitializePerFrameWritePool();
+    if (!InitializePerFrameWritePool())
+        return false;
 
     // Initialize GPU animation data store for Tier 2 compute skinning.
     // The compute pass and shader are loaded lazily in BuildFrameGraph
@@ -488,11 +489,16 @@ void RenderServices::CreateFallbackBuffers()
         std::memcpy(vp.ge_view, kIdentity4x4.Data(), 64);
         std::memcpy(vp.ge_viewProj, kIdentity4x4.Data(), 64);
         std::memcpy(vp.ge_proj, kIdentity4x4.Data(), 64);
+        // The relative frame of an eye at the world origin: sector (0,0,0).
+        std::memcpy(vp.ge_viewRel, kIdentity4x4.Data(), 64);
+        std::memcpy(vp.ge_invViewRel, kIdentity4x4.Data(), 64);
+        vp.ge_renderOrigin[3] = static_cast<float>(Mathematics::kWorldSectorSize);
         std::memcpy(lightUbo.uLightVP, kIdentity4x4.Data(), 64);
-        vp.ge_nearFar[0] = 0.1f;
-        vp.ge_nearFar[1] = 1000.0f;
-        vp.ge_nearFar[2] = 0.0f;
-        vp.ge_nearFar[3] = 0.0f;
+        // The depth terms of the identity projection (m22, m32, m23, m33).
+        vp.ge_depthTerms[0] = 1.0f;
+        vp.ge_depthTerms[3] = 1.0f;
+        vp.ge_viewRanges[0] = 0.1f;
+        vp.ge_viewRanges[1] = 1000.0f;
         vp.ge_cameraPosWS[0] = 0.0f;
         vp.ge_cameraPosWS[1] = 0.0f;
         vp.ge_cameraPosWS[2] = 0.0f;
@@ -853,7 +859,7 @@ void RenderServices::CreateShadowFallbackResources()
     }
 }
 
-void RenderServices::InitializePerFrameWritePool()
+bool RenderServices::InitializePerFrameWritePool()
 {
     // Idempotent: Shutdown() is a safe no-op on an uninitialized pool, so this
     // both initializes (from Initialize) and re-initializes over dead buffers
@@ -891,7 +897,7 @@ void RenderServices::InitializePerFrameWritePool()
         }
     }
 
-    m_PerFrameWritePool.Initialize(m_Device, poolCfg);
+    return m_PerFrameWritePool.Initialize(m_Device, poolCfg);
 }
 
 void RenderServices::OnDeviceRebuilt()

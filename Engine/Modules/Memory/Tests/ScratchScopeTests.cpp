@@ -16,6 +16,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory_resource>
 #include <optional>
 #include <span>
@@ -440,6 +441,173 @@ TEST(ScratchScopeTests, ANestedPeakInsideTheFirstBlockReachesTheHighWater)
     thread.join();
     ASSERT_TRUE(scratch.has_value());
     EXPECT_GE(scratch->HighWaterBytes, kNestedBytes);
+}
+
+namespace
+{
+/// True when every byte of `values` holds the arena's fresh-allocation fill, or when the build has no fill.
+bool HoldsTheDebugFill([[maybe_unused]] std::span<const std::uint32_t> values)
+{
+#if GE_DEBUG_INSTRUMENTATION
+    return std::all_of(values.begin(), values.end(), [](std::uint32_t value) { return value == 0xCDCDCDCDu; });
+#else
+    return true;
+#endif
+}
+
+template <class T>
+concept ScratchGrowable = requires(ScratchScope& scratch, std::span<T> array) { scratch.GrowArray(array, 1); };
+
+struct NotTriviallyCopyable
+{
+    NotTriviallyCopyable(const NotTriviallyCopyable&) {}
+};
+struct NotDefaultConstructible
+{
+    NotDefaultConstructible() = delete;
+    std::uint32_t Value;
+};
+static_assert(ScratchGrowable<std::uint32_t>);
+static_assert(!ScratchGrowable<NotTriviallyCopyable>);
+static_assert(!ScratchGrowable<NotDefaultConstructible>);
+
+struct BlockGrowth
+{
+    bool Moved = false;
+    bool Kept = false;
+    bool Filled = false;
+};
+
+/// On a new thread, whose first scratch block holds `kArenaFirstBlockBytes`, grows an array to twice that size.
+void GrowPastTheFirstBlock(BlockGrowth& result)
+{
+    constexpr std::size_t kTakenCount = 1024;
+    constexpr std::size_t kGrownCount = 2 * GameEngine::Memory::kArenaFirstBlockBytes / sizeof(std::uint32_t);
+    ScratchScope scratch;
+    const std::span<std::uint32_t> values = scratch.AllocateArrayForOverwrite<std::uint32_t>(kTakenCount);
+    Fill(values, 7);
+    const std::span<std::uint32_t> grown = scratch.GrowArray(values, kGrownCount);
+    result.Moved = grown.data() != values.data() && grown.size() == kGrownCount;
+    result.Kept = Holds(grown.first(kTakenCount), 7);
+    result.Filled = HoldsTheDebugFill(grown.subspan(kTakenCount));
+}
+} // namespace
+
+// The latest take grows into the room after it: same address, old values kept, the added part filled,
+// no heap allocation, and the next take starts after the grown array.
+TEST(ScratchScopeTests, GrowArrayExtendsTheLatestTakeInPlace)
+{
+    ScratchScope scratch;
+    const std::span<std::uint32_t> values = scratch.AllocateArrayForOverwrite<std::uint32_t>(16);
+    Fill(values, 100);
+    AllocationCountScope count(CountWindow::ThisThread);
+    const std::span<std::uint32_t> grown = scratch.GrowArray(values, 32);
+    EXPECT_EQ(count.Count(), 0u);
+    EXPECT_EQ(grown.data(), values.data());
+    ASSERT_EQ(grown.size(), 32u);
+    EXPECT_TRUE(Holds(grown.first(16), 100));
+    EXPECT_TRUE(HoldsTheDebugFill(grown.subspan(16)));
+    EXPECT_EQ(scratch.Allocate(1, 1), static_cast<void*>(grown.data() + grown.size()));
+}
+
+// An array that outgrows its block moves to a new block with its values.
+TEST(ScratchScopeTests, GrowArrayMovesWhenTheBlockIsFull)
+{
+    BlockGrowth result;
+    std::thread thread(GrowPastTheFirstBlock, std::ref(result));
+    thread.join();
+    EXPECT_TRUE(result.Moved);
+    EXPECT_TRUE(result.Kept);
+    EXPECT_TRUE(result.Filled);
+}
+
+// A take after the array stops the growth in place: the array moves and the later take keeps its values.
+TEST(ScratchScopeTests, GrowArrayMovesWhenAnotherTakeFollows)
+{
+    ScratchScope scratch;
+    const std::span<std::uint32_t> values = scratch.AllocateArrayForOverwrite<std::uint32_t>(16);
+    Fill(values, 100);
+    const std::span<std::uint32_t> later = scratch.AllocateArrayForOverwrite<std::uint32_t>(16);
+    Fill(later, 200);
+    const std::span<std::uint32_t> grown = scratch.GrowArray(values, 32);
+    EXPECT_NE(grown.data(), values.data());
+    ASSERT_EQ(grown.size(), 32u);
+    EXPECT_TRUE(Holds(grown.first(16), 100));
+    Fill(grown, 300);
+    EXPECT_TRUE(Holds(later, 200));
+}
+
+// A scope that is not the innermost one grows its latest take through the heap.
+TEST(ScratchScopeTests, GrowArrayThroughAnOuterScopeMoves)
+{
+    ScratchScope outer;
+    const std::span<std::uint32_t> values = outer.AllocateArrayForOverwrite<std::uint32_t>(16);
+    Fill(values, 100);
+    ScratchScope inner;
+    const std::span<std::uint32_t> grown = outer.GrowArray(values, 32);
+    EXPECT_NE(grown.data(), values.data());
+    ASSERT_EQ(grown.size(), 32u);
+    EXPECT_TRUE(Holds(grown.first(16), 100));
+}
+
+// An inner scope that has taken nothing moves an outer scope's array into a take of its own, so the
+// outer array and the outer scope's next take keep their values after the inner scope closes.
+TEST(ScratchScopeTests, GrowArrayOfAnOuterScopesArrayMoves)
+{
+    ScratchScope outer;
+    const std::span<std::uint32_t> values = outer.AllocateArrayForOverwrite<std::uint32_t>(16);
+    Fill(values, 100);
+    {
+        ScratchScope inner;
+        const std::span<std::uint32_t> grown = inner.GrowArray(values, 32);
+        EXPECT_NE(grown.data(), values.data());
+        ASSERT_EQ(grown.size(), 32u);
+        EXPECT_TRUE(Holds(grown.first(16), 100));
+        Fill(grown, 300);
+    }
+    EXPECT_TRUE(Holds(values, 100));
+    const std::span<std::uint32_t> next = outer.AllocateArrayForOverwrite<std::uint32_t>(16);
+    Fill(next, 200);
+    EXPECT_TRUE(Holds(values, 100));
+    EXPECT_TRUE(Holds(next, 200));
+}
+
+// An inner scope's first take starts at the scope's marker and grows in place.
+TEST(ScratchScopeTests, GrowArrayOfAnInnerScopesFirstTakeStaysInPlace)
+{
+    ScratchScope outer;
+    Fill(outer.AllocateArrayForOverwrite<std::uint32_t>(16), 100);
+    ScratchScope inner;
+    const std::span<std::uint32_t> values = inner.AllocateArrayForOverwrite<std::uint32_t>(16);
+    Fill(values, 200);
+    const std::span<std::uint32_t> grown = inner.GrowArray(values, 32);
+    EXPECT_EQ(grown.data(), values.data());
+    EXPECT_TRUE(Holds(grown.first(16), 200));
+}
+
+// An empty array grows into a new take of the count.
+TEST(ScratchScopeTests, GrowArrayOfAnEmptyArrayTakesANewOne)
+{
+    ScratchScope scratch;
+    const std::span<std::uint32_t> grown = scratch.GrowArray(std::span<std::uint32_t>{}, 8);
+    ASSERT_EQ(grown.size(), 8u);
+    ASSERT_NE(grown.data(), nullptr);
+    Fill(grown, 5);
+    EXPECT_TRUE(Holds(grown, 5));
+}
+
+// A count at or below the size, zero included, returns the array as it is.
+TEST(ScratchScopeTests, GrowArrayToNoMoreElementsReturnsTheArray)
+{
+    ScratchScope scratch;
+    const std::span<std::uint32_t> values = scratch.AllocateArrayForOverwrite<std::uint32_t>(16);
+    for (const std::size_t count : {std::size_t{0}, std::size_t{8}, std::size_t{16}})
+    {
+        const std::span<std::uint32_t> same = scratch.GrowArray(values, count);
+        EXPECT_EQ(same.data(), values.data());
+        EXPECT_EQ(same.size(), 16u);
+    }
+    EXPECT_TRUE(scratch.GrowArray(std::span<std::uint32_t>{}, 0).empty());
 }
 
 #if GE_DEBUG_INSTRUMENTATION && !defined(NDEBUG)

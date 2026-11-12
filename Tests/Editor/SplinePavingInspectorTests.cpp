@@ -16,16 +16,19 @@
 #include "InspectorRegistry.h"
 #include "Inspectors/SplineRecipe/Paving/SplinePavingInspector.h"
 #include "PlayMode/PlayModeManager.h"
+#include "Rendering/Materials/MaterialDocument.h"
 #include "Spline/SplineData.h"
 #include "SplineECS/SplineNetwork.h"
 #include "SplineECS/SplineService.h"
 #include "SplineRecipes/Paving/PavingStatus.h"
 #include "Input/KeyCodes.h"
 #include "UI/Controls/Button.h"
+#include "UI/Controls/FloatField.h"
 #include "UI/Controls/Foldout.h"
 #include "UI/Controls/Label.h"
 #include "UI/Controls/PictureChoiceField.h"
 #include "UI/Controls/Slider.h"
+#include "UI/Controls/TextField.h"
 #include "UI/Controls/Toggle.h"
 #include "UI/InspectorSection.h"
 #include "UI/UIElement.h"
@@ -58,6 +61,40 @@ void CollectTexts(UIElement& element, std::vector<std::string>& texts)
         texts.push_back(label->GetText());
     for (const auto& child : element.GetChildren())
         CollectTexts(*child, texts);
+}
+
+// The first number box under `element`, or null.
+FloatField* FirstNumberBox(UIElement& element)
+{
+    if (auto* field = dynamic_cast<FloatField*>(&element))
+        return field;
+    for (const auto& child : element.GetChildren())
+    {
+        if (FloatField* field = FirstNumberBox(*child))
+            return field;
+    }
+    return nullptr;
+}
+
+// The text the first number box under `element` shows.
+std::string NumberBoxText(UIElement& element)
+{
+    if (auto* field = dynamic_cast<FloatField*>(&element))
+    {
+        for (const auto& child : field->GetChildren())
+        {
+            if (const auto* editor = dynamic_cast<const TextInput*>(child.get()))
+                return editor->GetValue();
+        }
+        return {};
+    }
+    for (const auto& child : element.GetChildren())
+    {
+        const std::string text = NumberBoxText(*child);
+        if (!text.empty())
+            return text;
+    }
+    return {};
 }
 
 bool Shows(UIElement& element, const std::string& text)
@@ -120,6 +157,21 @@ void PickTile(UIElement& section, const std::string& label, std::size_t index)
     tiles[index]->DispatchEvent(press);
 }
 
+// The setting rows of the Road Mouths section under `first`, in order: `first` and the rows after it,
+// without the caption rows.
+std::vector<UIElement*> RowsFrom(UIElement& first)
+{
+    std::vector<UIElement*> rows;
+    bool reached = false;
+    for (const auto& row : first.GetParent()->GetChildren())
+    {
+        reached |= row.get() == &first;
+        if (reached && row->HasClass("inspector-row") && !row->HasClass("inspector-caption-row"))
+            rows.push_back(row.get());
+    }
+    return rows;
+}
+
 // The member list's row whose title reads `title`.
 UIElement* MemberRow(UIElement& root, const std::string& title)
 {
@@ -178,6 +230,20 @@ std::string TextOf(UIElement& row, const char* className)
 {
     const auto* label = dynamic_cast<Label*>(FirstWithClass(row, className));
     return label ? label->GetText() : std::string();
+}
+
+// Whether a notice under `element` reads `text`.
+bool ShowsNotice(UIElement& element, const std::string& text)
+{
+    std::vector<UIElement*> labels;
+    CollectWithClass(element, "inspector-notice-text", labels);
+    for (UIElement* found : labels)
+    {
+        const auto* label = dynamic_cast<Label*>(found);
+        if (label && label->GetText() == text)
+            return true;
+    }
+    return false;
 }
 
 class SplinePavingInspectorTest : public ::testing::Test
@@ -543,6 +609,28 @@ TEST_F(SplinePavingInspectorTest, APavingOnARoadHasNoGroundAuthorityAndSaysTheRo
                                 "that only grades the ground, the grass still grows."));
 }
 
+// An area's Seam rows serve the roads that enter it with no paving of their own, and its caption says so
+// under them. A paving on a road owns only its own seams, so it has no caption.
+TEST_F(SplinePavingInspectorTest, AnAreasSeamRowsSayTheyApplyToTheRoadsWithoutTheirOwnPaving)
+{
+    const char* caption = "These Seam settings apply to each road that enters this paving and has no Spline Paving of its own.";
+    const ECS::EntityHandle square = CreateSquare();
+    PavingStatus areaStatus;
+    areaStatus.Entity = square;
+    std::unique_ptr<InspectorSection> area = Build(square, areaStatus);
+    EXPECT_TRUE(Shows(*area, caption));
+    EXPECT_LT(TextPosition(*area, "Course Material"), TextPosition(*area, caption));
+
+    const ECS::EntityHandle road =
+        CreateSpline("High Street", {Vector3(-20.0f, 0.0f, 40.0f), Vector3(20.0f, 0.0f, 40.0f)}, false, &kRoad);
+    World.AddComponentImmediate(road, Components::SplinePaving{});
+    PavingStatus roadStatus;
+    roadStatus.Entity = road;
+    std::unique_ptr<InspectorSection> paved = Build(road, roadStatus);
+    EXPECT_TRUE(Shows(*paved, "Seam"));
+    EXPECT_FALSE(Shows(*paved, caption));
+}
+
 TEST_F(SplinePavingInspectorTest, TheSectionsReadInWorkingOrderWithShadowsLastAndTheSettingsShowTheirUnits)
 {
     const ECS::EntityHandle square = CreateSquare();
@@ -684,6 +772,162 @@ TEST_F(SplinePavingInspectorTest, TheRadiusIsASliderThatReadsInactiveWithAStraig
     const auto* label = dynamic_cast<const Label*>(FirstWithClass(*radius, "inspector-label"));
     ASSERT_NE(label, nullptr);
     EXPECT_EQ(label->GetTooltip(), radius->GetTooltip()) << "a hover on the greyed label hides the reason";
+}
+
+TEST_F(SplinePavingInspectorTest, TheSeamRowsFollowTheRadiusAndARowTheSeamDoesNotUseSaysWhichSeamUsesIt)
+{
+    const ECS::EntityHandle square = CreateSquare();
+    PavingStatus status;
+    status.Entity = square;
+
+    std::unique_ptr<InspectorSection> blend = Build(square, status);
+    UIElement* seam = RowLabeled(*blend, "Seam");
+    ASSERT_NE(seam, nullptr);
+    EXPECT_EQ(SectionTitleOf(*seam), "Road Mouths");
+    EXPECT_TRUE(Shows(*seam, "Blend"));
+    EXPECT_LT(TextPosition(*blend, "Radius (m)"), TextPosition(*blend, "Seam"));
+    std::vector<UIElement*> rows = RowsFrom(*seam);
+    ASSERT_EQ(rows.size(), 4u) << "Seam, Band, Course Width and Course Material";
+    EXPECT_TRUE(Shows(*rows[1], "Blend Width (tiles)"));
+    EXPECT_TRUE(Shows(*rows[2], "Course Width (m)"));
+    EXPECT_TRUE(Shows(*rows[3], "Course Material"));
+    for (UIElement* row : rows)
+    {
+        const auto* label = dynamic_cast<const Label*>(FirstWithClass(*row, "inspector-label"));
+        ASSERT_NE(label, nullptr);
+        EXPECT_FALSE(label->GetTooltip().empty()) << label->GetText() << " has no tooltip";
+    }
+    const char* courseReason = "Only a Joint Line or a Stone Course has a width and a material. Choose one to set them.";
+    EXPECT_TRUE(rows[1]->IsEnabled());
+    EXPECT_NE(FirstWithClass(*rows[1], "slider"), nullptr);
+    EXPECT_FALSE(rows[2]->IsEnabled());
+    EXPECT_EQ(rows[2]->GetTooltip(), courseReason);
+    EXPECT_FALSE(rows[3]->IsEnabled());
+    EXPECT_EQ(rows[3]->GetTooltip(), courseReason);
+    EXPECT_TRUE(Shows(*rows[3], "Paving")) << "an unused course names no look";
+
+    World.GetComponentForWrite<Components::SplinePaving>(square)->Seam = Components::SplinePavingSeam::StoneCourse;
+    std::unique_ptr<InspectorSection> stones = Build(square, status);
+    seam = RowLabeled(*stones, "Seam");
+    ASSERT_NE(seam, nullptr);
+    EXPECT_TRUE(Shows(*seam, "Stone Course"));
+    rows = RowsFrom(*seam);
+    ASSERT_EQ(rows.size(), 4u);
+    EXPECT_FALSE(rows[1]->IsEnabled());
+    EXPECT_EQ(rows[1]->GetTooltip(), "Only a Blend seam has a band. Choose Blend to set how far it reaches into the road.");
+    EXPECT_TRUE(rows[2]->IsEnabled());
+    // The texts fit the 60 px number box and the asset field; the whole statement is the tooltip.
+    EXPECT_EQ(NumberBoxText(*rows[2]), "Auto") << "a width of 0 says it is automatic";
+    ASSERT_NE(FirstNumberBox(*rows[2]), nullptr);
+    EXPECT_EQ(FirstNumberBox(*rows[2])->GetTooltip(),
+              "Auto: a row of stones half a tile of the other pattern wide. Type a width in meters to set it.");
+    EXPECT_TRUE(rows[3]->IsEnabled());
+    EXPECT_TRUE(Shows(*rows[3], "Paving, as stones"));
+    EXPECT_EQ(rows[3]->GetTooltip(), "Empty: the paving's material draws the course, its stones turned across the "
+                                     "seam and a little brighter.");
+
+    World.GetComponentForWrite<Components::SplinePaving>(square)->Seam = Components::SplinePavingSeam::JointLine;
+    std::unique_ptr<InspectorSection> joint = Build(square, status);
+    seam = RowLabeled(*joint, "Seam");
+    ASSERT_NE(seam, nullptr);
+    rows = RowsFrom(*seam);
+    ASSERT_EQ(rows.size(), 4u);
+    EXPECT_EQ(NumberBoxText(*rows[2]), "Auto");
+    ASSERT_NE(FirstNumberBox(*rows[2]), nullptr);
+    EXPECT_EQ(FirstNumberBox(*rows[2])->GetTooltip(), "Auto: a 3 cm joint. Type a width in meters to set it.");
+    EXPECT_TRUE(Shows(*rows[3], "Paving, darker"));
+    EXPECT_EQ(rows[3]->GetTooltip(), "Empty: the paving's material draws the joint, darker.");
+}
+
+// A junction whose Blend seam draws as a hard cut names the seam it gets in its state.
+TEST_F(SplinePavingInspectorTest, AJunctionWhoseStripEndsOnTheSeamReadsHardCut)
+{
+    const ECS::EntityHandle square = CreateSquare();
+    const ECS::EntityHandle road =
+        CreateSpline("Mill Lane", {Vector3(-40.0f, 0.0f, 0.0f), Vector3(-4.0f, 0.0f, 0.0f)}, false, &kRoad);
+    PavingStatus status;
+    status.Entity = square;
+    status.Role = SplineRecipes::PavingRole::Owns;
+    PavingJunctionStatus junction{1u, SplineECS::SplineNodeKind::Entry, road, 0.0f, PavingJunctionState::Paved, {}, 0.0f};
+    junction.SeamDrawsHardCut = true;
+    status.Junctions.push_back(junction);
+
+    std::unique_ptr<InspectorSection> section = Build(square, status);
+
+    EXPECT_EQ(TextOf(*section, "spline-junction-state"), "paved \xC2\xB7 Hard Cut: the road's paving ends on the seam");
+}
+
+// The Seam is picture tiles like Shape and Corner, each with a one-line caption. Under Blend, an
+// Information notice under the tiles says which form the material that draws the seams gives: bending
+// with a Square or Rectangular pattern, the crossfade with none. No other seam shows the notice.
+TEST_F(SplinePavingInspectorTest, TheSeamIsPictureTilesAndABlendNoticeSaysWhichFormTheMaterialGives)
+{
+    const ECS::EntityHandle square = CreateSquare();
+    PavingStatus status;
+    status.Entity = square;
+
+    std::unique_ptr<InspectorSection> unbuilt = Build(square, status);
+    UIElement* seam = RowLabeled(*unbuilt, "Seam");
+    ASSERT_NE(seam, nullptr);
+    EXPECT_NE(FirstWithClass(*seam, "picture-choice-field"), nullptr);
+    EXPECT_TRUE(seam->HasClass("picture-choice-row"));
+    std::vector<UIElement*> tiles;
+    CollectWithClass(*seam, "picture-choice-tile", tiles);
+    ASSERT_EQ(tiles.size(), 4u);
+    const char* names[] = {"Hard Cut", "Blend", "Joint Line", "Stone Course"};
+    for (std::size_t i = 0; i < tiles.size(); ++i)
+        EXPECT_TRUE(Shows(*tiles[i], names[i])) << names[i];
+    EXPECT_TRUE(Shows(*tiles[0], "The road's pattern stops on the seam."));
+    EXPECT_TRUE(Shows(*tiles[1], "Bends or fades into the other pattern."));
+    EXPECT_TRUE(Shows(*tiles[2], "A thin line along the seam."));
+    EXPECT_TRUE(Shows(*tiles[3], "A row of stones along the seam."));
+    EXPECT_TRUE(ShowsNotice(*unbuilt, "No seam uses this setting yet.")) << "Blend shows its notice";
+    EXPECT_LT(TextPosition(*unbuilt, "Bends or fades into the other pattern."),
+              TextPosition(*unbuilt, "No seam uses this setting yet."))
+        << "the notice lies under the tiles";
+
+    status.SeamPatternSymmetry = MaterialPatternSymmetry::Square;
+    std::unique_ptr<InspectorSection> bending = Build(square, status);
+    EXPECT_TRUE(ShowsNotice(*bending, "Bending: this paving's material has a Square pattern."));
+
+    status.SeamPatternSymmetry = MaterialPatternSymmetry::Rectangular;
+    std::unique_ptr<InspectorSection> aligned = Build(square, status);
+    EXPECT_TRUE(
+        ShowsNotice(*aligned, "Bending where the patterns line up: this paving's material has a Rectangular pattern."));
+
+    status.SeamPatternSymmetry = MaterialPatternSymmetry::None;
+    std::unique_ptr<InspectorSection> crossfade = Build(square, status);
+    const char* crossfadeText =
+        "Crossfade: this paving's material has no Pattern Symmetry. Set Pattern Symmetry in the material to bend.";
+    EXPECT_TRUE(ShowsNotice(*crossfade, crossfadeText));
+
+    PavingStatus mixed;
+    mixed.Entity = square;
+    mixed.SeamPatternMixed = true;
+    std::unique_ptr<InspectorSection> differing = Build(square, mixed);
+    EXPECT_TRUE(ShowsNotice(*differing, "The seams this setting reaches meet materials with different Pattern "
+                                        "Symmetry: each bends or crossfades by its own."));
+
+    PickTile(*crossfade, "Seam", 3);
+    EXPECT_EQ(World.GetComponent<Components::SplinePaving>(square)->Seam, Components::SplinePavingSeam::StoneCourse);
+    EXPECT_STREQ(Undo.PeekUndoName(), "Change Spline Paving Seam");
+    std::unique_ptr<InspectorSection> stones = Build(square, status);
+    EXPECT_FALSE(ShowsNotice(*stones, crossfadeText)) << "only Blend shows the notice";
+}
+
+// On a road, the Blend notice names the paving the road gives way to, whose material draws the seam.
+TEST_F(SplinePavingInspectorTest, ARoadsBlendNoticeNamesThePavingItGivesWayTo)
+{
+    const ECS::EntityHandle road =
+        CreateSpline("High Street", {Vector3(-20.0f, 0.0f, 40.0f), Vector3(20.0f, 0.0f, 40.0f)}, false, &kRoad);
+    World.AddComponentImmediate(road, Components::SplinePaving{});
+    PavingStatus status;
+    status.Entity = road;
+    status.SeamPatternSymmetry = MaterialPatternSymmetry::Square;
+
+    std::unique_ptr<InspectorSection> section = Build(road, status);
+
+    EXPECT_TRUE(ShowsNotice(*section, "Bending: the paving it gives way to has a Square pattern."));
 }
 
 TEST_F(SplinePavingInspectorTest, EachListIsASectionWithTheNameInTheLabelColumnAndTheStateInTheValueColumn)

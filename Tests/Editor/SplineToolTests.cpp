@@ -62,6 +62,7 @@ using GameEngine::ECS::Entity;
 using GameEngine::ECS::World;
 using GameEngine::Mathematics::Quaternion;
 using GameEngine::Mathematics::Vector3;
+using GameEngine::Mathematics::WorldPosition;
 
 using GameEngine::Editor::SceneTools::ComputeSplineScreenScale;
 using GameEngine::Editor::SceneTools::AcquireSplineInteractionState;
@@ -245,7 +246,7 @@ TEST_F(SplineToolTests, DirectKnotDragUsesStableViewPlaneWhenSceneRayMisses)
 
     Entity entity = world->Create();
     entity.Set(Transform::FromTRS(
-        Vector3(0.0f, 0.0f, 0.0f),
+        WorldPosition{},
         Quaternion(1.0f, 0.0f, 0.0f, 0.0f),
         Vector3(1.0f, 1.0f, 1.0f)));
 
@@ -321,7 +322,7 @@ TEST_F(SplineToolTests, DirectKnotDragFallsBackWhenCameraForwardIsNonFinite)
 
     Entity entity = world->Create();
     entity.Set(Transform::FromTRS(
-        Vector3(0.0f, 0.0f, 0.0f),
+        WorldPosition{},
         Quaternion(1.0f, 0.0f, 0.0f, 0.0f),
         Vector3(1.0f, 1.0f, 1.0f)));
 
@@ -550,7 +551,7 @@ SplineFixture MakeSplineEntity(World* world, uint32_t pointCount, bool closed = 
 
     Entity entity = world->Create();
     entity.Set(Transform::FromTRS(
-        Vector3(0.0f, 0.0f, 0.0f),
+        WorldPosition{},
         Quaternion(1.0f, 0.0f, 0.0f, 0.0f),
         Vector3(1.0f, 1.0f, 1.0f)));
 
@@ -1072,8 +1073,8 @@ TEST_F(SplineToolTests, TwoDimensionalBrushDrawsInXYWithoutGroundHit)
             ASSERT_GE(spline->Points.size(), 2u);
             for (const auto& point : spline->Points)
             {
-                EXPECT_NEAR(point.Position.y + transform.GetPosition().y, 3.0f, 0.001f);
-                EXPECT_NEAR(point.Position.z + transform.GetPosition().z, 0.0f, 0.001f);
+                EXPECT_NEAR(point.Position.y + transform.GetPosition().Y, 3.0, 0.001);
+                EXPECT_NEAR(point.Position.z + transform.GetPosition().Z, 0.0, 0.001);
             }
         });
     EXPECT_EQ(count, 1u);
@@ -1085,8 +1086,10 @@ TEST_F(SplineToolTests, TwoDimensionalBrushDrawsInTheTiltedPlaneOfTheSelection)
     const Vector3 ownerPosition(1.0f, 2.0f, 5.0f);
     const Quaternion ownerRotation = Quaternion::FromAxisAngle(Vector3(0.0f, 1.0f, 0.0f), 0.5f);
     WorldTransform ownerWorld{};
-    const Transform ownerPose = Transform::FromTRS(ownerPosition, ownerRotation, Vector3(1.0f, 1.0f, 1.0f));
-    std::copy(std::begin(ownerPose.matrix), std::end(ownerPose.matrix), std::begin(ownerWorld.matrix));
+    const Transform ownerPose =
+        Transform::FromTRS(WorldPosition::FromVector3(ownerPosition), ownerRotation, Vector3(1.0f, 1.0f, 1.0f));
+    ownerWorld.Position = ownerPose.Position;
+    ownerWorld.Basis = ownerPose.Basis;
     const GameEngine::ECS::EntityHandle owner = GetWorld()->CreateEntity();
     GetWorld()->AddComponentImmediate(owner, ownerWorld);
 
@@ -1116,7 +1119,7 @@ TEST_F(SplineToolTests, TwoDimensionalBrushDrawsInTheTiltedPlaneOfTheSelection)
             ASSERT_GE(spline->Points.size(), 2u);
             for (const auto& point : spline->Points)
             {
-                const Vector3 world = point.Position + transform.GetPosition();
+                const Vector3 world = point.Position + (transform.GetPosition() - WorldPosition{});
                 EXPECT_NEAR(Vector3::Dot(world - ownerPosition, ownerNormal), 0.0f, 0.001f);
                 EXPECT_NEAR(world.y, 3.0f, 0.001f);
             }
@@ -1208,11 +1211,10 @@ void AddCubeOnTheGround(World* world, float x)
     bounds.Box.halfExtents = {0.5f, 0.5f, 0.5f};
     mesh.Set(bounds);
     WorldTransform transform{};
-    transform.matrix[0] = 2.0f;
-    transform.matrix[5] = 2.0f;
-    transform.matrix[10] = 2.0f;
-    transform.matrix[12] = x;
-    transform.matrix[13] = 1.0f;
+    transform.Basis[0].x = 2.0f;
+    transform.Basis[1].y = 2.0f;
+    transform.Basis[2].z = 2.0f;
+    transform.Position = WorldPosition{x, 1.0, 0.0};
     transform.Version = 1u;
     mesh.Set(transform);
     world->ProcessCommands();
@@ -1357,7 +1359,7 @@ TEST_F(SplineToolTests, TheDrapeReadsTheMeshesUnderASplineOnlyWhenTheSceneOrTheS
         << "a mesh that arrived was not read once per draped spline";
 
     auto* transform = world->GetComponentForWrite<WorldTransform>(moved.SplineEntity);
-    transform->matrix[12] = 1.0f;
+    transform->Position.X = 1.0;
     ++transform->Version;
     RenderSplineGizmoFrame(gizmo, world, kView);
     RenderSplineGizmoFrame(gizmo, world, kView);
@@ -1419,7 +1421,7 @@ GameEngine::ECS::EntityHandle MakeNamedSpline(World* world, const char* name, co
         data->AddPoint(point, 1.0f);
     splineService->RebuildCache(handle);
     Entity entity = world->Create();
-    entity.Set(Transform::FromTRS(Vector3(0.0f, 0.0f, 0.0f), Quaternion(1.0f, 0.0f, 0.0f, 0.0f),
+    entity.Set(Transform::FromTRS(WorldPosition{}, Quaternion(1.0f, 0.0f, 0.0f, 0.0f),
                                   Vector3(1.0f, 1.0f, 1.0f)));
     entity.Set(WorldTransform{});
     SplineComponent spline{};
@@ -1517,12 +1519,10 @@ void MakeGeneratedSlab(World* world, const Vector3& center, const Vector3& halfE
     bounds.Box.halfExtents = {0.5f, 0.5f, 0.5f};
     slab.Set(bounds);
     WorldTransform transform{};
-    transform.matrix[0] = 2.0f * halfExtents.x;
-    transform.matrix[5] = 2.0f * halfExtents.y;
-    transform.matrix[10] = 2.0f * halfExtents.z;
-    transform.matrix[12] = center.x;
-    transform.matrix[13] = center.y;
-    transform.matrix[14] = center.z;
+    transform.Basis[0].x = 2.0f * halfExtents.x;
+    transform.Basis[1].y = 2.0f * halfExtents.y;
+    transform.Basis[2].z = 2.0f * halfExtents.z;
+    transform.Position = WorldPosition::FromVector3(center);
     slab.Set(transform);
     slab.Set(GameEngine::Components::RuntimeOnlyEntity{});
     world->ProcessCommands();
@@ -1542,7 +1542,7 @@ void MakeGeneratedSlab(World* world, const Vector3& center, const Vector3& halfE
 std::vector<float> KnotHeights(World* world, GameEngine::ECS::EntityHandle spline)
 {
     const auto* origin = world->GetComponent<Transform>(spline);
-    const float originY = origin ? origin->matrix[13] : 0.0f;
+    const float originY = origin ? (origin->GetPosition() - WorldPosition{}).y : 0.0f;
     std::vector<float> heights;
     for (const auto& point : DataOf(world, spline)->Points)
         heights.push_back(point.Position.y + originY);
@@ -1566,9 +1566,7 @@ GameEngine::SharedPtr<GameEngine::ModelAsset> AddGridWithAPendingBvh(World* worl
     bounds.Box.halfExtents = {0.5f * PendingBvhGrid::kGridSize, 0.5f, 0.5f * PendingBvhGrid::kGridSize};
     mesh.Set(bounds);
     WorldTransform transform{};
-    transform.matrix[12] = center.x;
-    transform.matrix[13] = center.y;
-    transform.matrix[14] = center.z;
+    transform.Position = WorldPosition::FromVector3(center);
     transform.Version = 1u;
     mesh.Set(transform);
     world->ProcessCommands();
@@ -1641,7 +1639,7 @@ TEST_F(SplineToolTests, AStrokeWhoseLastPointIsWithinTheReachOfARimEndsOnIt)
             const auto drawn = splines[0] == square ? splines[1] : splines[0];
             const auto* origin = world->GetComponent<Transform>(drawn);
             ASSERT_NE(origin, nullptr);
-            const float lastZ = DataOf(world, drawn)->Points.back().Position.z + origin->matrix[14];
+            const float lastZ = DataOf(world, drawn)->Points.back().Position.z + (origin->GetPosition() - WorldPosition{}).z;
             EXPECT_NEAR(lastZ, fraction < 1.0f ? 20.0f : endZ, 1.0e-3f)
                 << Describe(snapCase) << ", ended " << fraction << " reach out";
         }
@@ -1774,8 +1772,8 @@ TEST_F(SplineToolTests, AStrokeFromAGeneratedMeshOntoTheGroundStaysOpen)
     EXPECT_FALSE(data->Closed);
     const auto* origin = world->GetComponent<Transform>(strokes[0]);
     ASSERT_NE(origin, nullptr);
-    EXPECT_NEAR(data->Points.back().Position.x + origin->matrix[12], 20.0f, 1.0e-3f);
-    EXPECT_NEAR(data->Points.back().Position.y + origin->matrix[13], 0.0f, 1.0e-3f);
+    EXPECT_NEAR(data->Points.back().Position.x + origin->Position.X, 20.0, 1.0e-3);
+    EXPECT_NEAR(data->Points.back().Position.y + origin->Position.Y, 0.0, 1.0e-3);
 }
 
 // A stroke drawn over generator output (a paved slab) lands on the ground under it: the slab is rebuilt from

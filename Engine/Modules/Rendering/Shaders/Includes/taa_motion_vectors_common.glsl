@@ -53,18 +53,6 @@ layout(push_constant) uniform TaaMVPush
 layout(location = 0) out vec4 vCurrClip;
 layout(location = 1) out vec4 vPrevClip;
 
-// Mirror of instance_io.glsl::ge_UnpackInstanceSector (this pass binds the
-// instance buffer directly instead of pulling in the adapter's BDA machinery).
-ivec3 TaaUnpackInstanceSector(uint p0, uint p1)
-{
-    uint ux = p0 & 0x1FFFFFu;
-    uint uy = ((p0 >> 21) & 0x7FFu) | ((p1 & 0x3FFu) << 11);
-    uint uz = (p1 >> 10) & 0x1FFFFFu;
-    return ivec3(bitfieldExtract(int(ux), 0, 21),
-                 bitfieldExtract(int(uy), 0, 21),
-                 bitfieldExtract(int(uz), 0, 21));
-}
-
 // currLocal / prevLocal are OBJECT-space positions for this frame's and last
 // frame's pose. The rigid variant passes aPosition for both; the skinned
 // variant passes the two skinned results. Raster uses the current pose only —
@@ -72,7 +60,7 @@ ivec3 TaaUnpackInstanceSector(uint p0, uint p1)
 void ge_TaaMVEmit(vec3 currLocal, vec3 prevLocal)
 {
     GPUInstance inst = ge_instances[pc.uInstanceSlot];
-    ivec3 sector = TaaUnpackInstanceSector(inst.sectorPacked0, inst.sectorPacked1);
+    ivec3 sector = ge_UnpackInstanceSector(inst.sectorPacked0, inst.sectorPacked1);
 
     // Raster position: identical expression chain to adapter_vertex.glsl's
     // instanced path (jittered Cam).

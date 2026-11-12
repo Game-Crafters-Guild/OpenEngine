@@ -3,6 +3,7 @@
 // tools cannot be reached safely.
 
 #include "AssistantAttachment.h"
+#include "AiAssistantSettings.h"
 #include "AssistantTools.h"
 #include "Providers/CancelToken.h"
 #include "Providers/ClaudeSessionProvider.h"
@@ -144,28 +145,61 @@ TEST(AssistantAttachmentTests, CodexActsOnlyWhenItsSandboxedShellCannotReachTheP
     {
         ScopedEnvironmentVariable mode("FAKE_AGENT_CLI_MODE", "sandbox-open");
         CodexSessionProvider provider(FakeCli(), {});
-        EXPECT_EQ(provider.ToolsRefusal(FakeCli(), kPort, cancel),
+        EXPECT_EQ(provider.ToolsRefusal(FakeCli(), kPort, SetupSurface::Panel, cancel),
                   "Codex's shell can reach the editor's port outside the assistant's checks, so Codex runs as a "
-                  "conversation only. Use Claude (local session) for the editor's tools.");
+                  "conversation only. Use Claude (Subscription) for the editor's tools.");
     }
     {
         ScopedEnvironmentVariable mode("FAKE_AGENT_CLI_MODE", "sandbox-closed");
         CodexSessionProvider provider(FakeCli(), {});
-        EXPECT_EQ(provider.ToolsRefusal(FakeCli(), kPort, cancel), "");
+        EXPECT_EQ(provider.ToolsRefusal(FakeCli(), kPort, SetupSurface::Panel, cancel), "");
     }
     {
         ScopedEnvironmentVariable mode("FAKE_AGENT_CLI_MODE", "sandbox-broken");
         CodexSessionProvider provider(FakeCli(), {});
-        const std::string refusal = provider.ToolsRefusal(FakeCli(), kPort, cancel);
+        const std::string refusal = provider.ToolsRefusal(FakeCli(), kPort, SetupSurface::Panel, cancel);
         EXPECT_NE(refusal.find("CODEX_HOME points to"), std::string::npos) << refusal;
         EXPECT_NE(refusal.find("Settings > AI Assistant > Codex executable"), std::string::npos) << refusal;
     }
     {
         ScopedEnvironmentVariable mode("FAKE_AGENT_CLI_MODE", "old-node");
         ClaudeSessionProvider provider(FakeCli(), {});
-        EXPECT_EQ(provider.ToolsRefusal(FakeCli(), kPort, cancel),
-                  "Node.js 18.20.0 is too old for the editor's tools: install Node 20 or later.");
+        EXPECT_EQ(provider.ToolsRefusal(FakeCli(), kPort, SetupSurface::Panel, cancel),
+                  "Node.js 18.20.0 is too old for the editor's tools. Install Node.js 20 or later.");
     }
+}
+
+// A Node.js installed behind the same executable is found after Check again: the cached
+// refusal stays until the setup generation moves.
+TEST(AssistantAttachmentTests, CheckAgainDropsTheCachedToolsRefusal)
+{
+    CancelToken cancel;
+    ClaudeSessionProvider provider(FakeCli(), {});
+    const std::string tooOld = "Node.js 18.20.0 is too old for the editor's tools. Install Node.js 20 or later.";
+    {
+        ScopedEnvironmentVariable mode("FAKE_AGENT_CLI_MODE", "old-node");
+        ASSERT_EQ(provider.ToolsRefusal(FakeCli(), kPort, SetupSurface::Panel, cancel), tooOld);
+    }
+    EXPECT_EQ(provider.ToolsRefusal(FakeCli(), kPort, SetupSurface::Panel, cancel), tooOld);
+
+    AiAssistantSettings::CheckSetupAgain();
+
+    EXPECT_EQ(provider.ToolsRefusal(FakeCli(), kPort, SetupSurface::Panel, cancel), "");
+}
+
+// The settings page names the row to set; the panel, which has no such row, names the page.
+TEST(AssistantAttachmentTests, TheNodeFixNamesTheRowOnThePageAndThePageInThePanel)
+{
+    CancelToken cancel;
+    const std::string node = (std::filesystem::temp_directory_path() / "ge-no-such-node.exe").string();
+    ClaudeSessionProvider provider(FakeCli(), {});
+    EXPECT_EQ(provider.ToolsRefusal(node, kPort, SetupSurface::SettingsPage, cancel),
+              "Could not start Node.js at " + node +
+                  ". Install Node.js 20 or later, or set Node executable under Model and options.");
+    EXPECT_EQ(provider.ToolsRefusal(node, kPort, SetupSurface::Panel, cancel),
+              "Could not start Node.js at " + node +
+                  ". Install Node.js 20 or later, or set its path in Settings > AI Assistant > Model and options > "
+                  "Node executable.");
 }
 
 // Claude's `user` record carries each tool call's result; an error result is reported
@@ -216,7 +250,7 @@ TEST(AssistantAttachmentTests, ATurnWhoseToolsAreRefusedRunsWithoutThemAndSaysWh
 
     ASSERT_EQ(events.Result.Outcome, TurnOutcome::Succeeded) << events.Result.Error;
     EXPECT_EQ(events.Result.Text.find("--mcp-config"), std::string::npos) << events.Result.Text;
-    EXPECT_TRUE(events.Result.Note.starts_with("This reply ran without the editor's tools. Node.js did not run"))
+    EXPECT_TRUE(events.Result.Note.starts_with("This reply ran without the editor's tools. Could not start Node.js"))
         << events.Result.Note;
 }
 } // namespace GameEngine

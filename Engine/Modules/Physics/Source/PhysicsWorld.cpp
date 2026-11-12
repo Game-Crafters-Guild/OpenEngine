@@ -33,6 +33,8 @@ public:
     // (equally no-op but more expensive to orchestrate) rebuild path.
     bool UpdateHeightFieldRegion(BodyHandle, ShapeHandle, const float32*, uint32, uint32, uint32, uint32, uint32) override { return true; }
     void ActivateBodiesInAABB(const AABB&) override {}
+    void GetDynamicBodiesInAABB(const AABB&, std::vector<BodyBounds>& outBodies) const override { outBodies.clear(); }
+    float32 GetContactDistance() const override { return 0.0f; }
 
     BodyHandle CreateBody(const BodySettings&) override { return {}; }
     void DestroyBody(BodyHandle) override {}
@@ -47,19 +49,18 @@ public:
 
     Vector3 GetAngularVelocity(BodyHandle) const override { return {}; }
     void SetAngularVelocity(BodyHandle, const Vector3&) override {}
-    Vector3 GetCenterOfMassPosition(BodyHandle) const override { return {}; }
     void AddForce(BodyHandle, const Vector3&) override {}
-    void AddForceAtPosition(BodyHandle, const Vector3&, const Vector3&) override {}
+    void AddForceAtPosition(BodyHandle, const Vector3&, const WorldPosition&) override {}
     void AddTorque(BodyHandle, const Vector3&) override {}
     void AddImpulse(BodyHandle, const Vector3&) override {}
-    void AddImpulseAtPosition(BodyHandle, const Vector3&, const Vector3&) override {}
+    void AddImpulseAtPosition(BodyHandle, const Vector3&, const WorldPosition&) override {}
 
     CharacterHandle CreateCharacter(const CharacterSettings&) override { return {}; }
     void DestroyCharacter(CharacterHandle) override {}
     bool IsCharacterValid(CharacterHandle character) const override { return character.IsValid(); }
 
     Transform GetCharacterTransform(CharacterHandle) const override { return {}; }
-    void SetCharacterPosition(CharacterHandle, const Vector3&) override {}
+    void SetCharacterPosition(CharacterHandle, const WorldPosition&) override {}
 
     Vector3 GetCharacterLinearVelocity(CharacterHandle) const override { return {}; }
     void SetCharacterLinearVelocity(CharacterHandle, const Vector3&) override {}
@@ -170,6 +171,19 @@ void PhysicsWorld::ActivateBodiesInAABB(const AABB& worldBox)
         m_Backend->ActivateBodiesInAABB(worldBox);
 }
 
+void PhysicsWorld::GetDynamicBodiesInAABB(const AABB& worldBox, std::vector<BodyBounds>& outBodies) const
+{
+    if (m_Backend)
+        m_Backend->GetDynamicBodiesInAABB(worldBox, outBodies);
+    else
+        outBodies.clear();
+}
+
+float32 PhysicsWorld::GetContactDistance() const
+{
+    return m_Backend ? m_Backend->GetContactDistance() : 0.0f;
+}
+
 BodyHandle PhysicsWorld::CreateBody(const BodySettings& settings)
 {
     if (!m_Backend)
@@ -233,18 +247,13 @@ void PhysicsWorld::SetAngularVelocity(BodyHandle body, const Vector3& velocity)
         m_Backend->SetAngularVelocity(body, velocity);
 }
 
-Vector3 PhysicsWorld::GetCenterOfMassPosition(BodyHandle body) const
-{
-    return m_Backend ? m_Backend->GetCenterOfMassPosition(body) : Vector3{};
-}
-
 void PhysicsWorld::AddForce(BodyHandle body, const Vector3& force)
 {
     if (m_Backend)
         m_Backend->AddForce(body, force);
 }
 
-void PhysicsWorld::AddForceAtPosition(BodyHandle body, const Vector3& force, const Vector3& worldPosition)
+void PhysicsWorld::AddForceAtPosition(BodyHandle body, const Vector3& force, const WorldPosition& worldPosition)
 {
     if (m_Backend)
         m_Backend->AddForceAtPosition(body, force, worldPosition);
@@ -262,7 +271,7 @@ void PhysicsWorld::AddImpulse(BodyHandle body, const Vector3& impulse)
         m_Backend->AddImpulse(body, impulse);
 }
 
-void PhysicsWorld::AddImpulseAtPosition(BodyHandle body, const Vector3& impulse, const Vector3& worldPosition)
+void PhysicsWorld::AddImpulseAtPosition(BodyHandle body, const Vector3& impulse, const WorldPosition& worldPosition)
 {
     if (m_Backend)
         m_Backend->AddImpulseAtPosition(body, impulse, worldPosition);
@@ -289,7 +298,7 @@ Transform PhysicsWorld::GetCharacterTransform(CharacterHandle character) const
     return m_Backend ? m_Backend->GetCharacterTransform(character) : Transform{};
 }
 
-void PhysicsWorld::SetCharacterPosition(CharacterHandle character, const Vector3& position)
+void PhysicsWorld::SetCharacterPosition(CharacterHandle character, const WorldPosition& position)
 {
     if (m_Backend)
         m_Backend->SetCharacterPosition(character, position);

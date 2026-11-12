@@ -703,7 +703,7 @@ static int EditorMainImpl(int argc, char** argv) {
         }
         if (!app.Initialize()) {
             Logger::Log::Error("Editor failed to initialize");
-            return -1;
+            return GameEngine::Application::kInitializeFailedExitCode;
         }
         {
             auto tTotal = std::chrono::duration<double, std::milli>(

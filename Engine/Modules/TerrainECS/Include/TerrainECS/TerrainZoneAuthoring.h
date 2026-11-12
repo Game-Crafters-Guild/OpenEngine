@@ -30,15 +30,15 @@ struct ZoneAuthoringSettings
     uint32 MaxDim = 1024;
 };
 
-// Fit a fresh zone around the first brush dab: a square padded by the brush
-// radius, each half-extent clamped to MaxExtent.
+// Fit a fresh zone around the first brush dab: a square padded by the brush radius,
+// each half-extent clamped to MaxExtent. The edges snap outward to the world texel
+// lattice (multiples of 1 / TexelsPerMeter), so every texel sits on a lattice point.
 ZoneFootprint FitZoneToDab(float32 hitX, float32 hitZ, float32 brushRadius,
                            const ZoneAuthoringSettings& settings);
 
-// Grow `footprint` to include a new dab (brush circle). Returns false when the
-// grown footprint would exceed MaxExtent in either axis — the caller then
-// starts a new zone; on false, `footprint` is left unchanged. Returns true (and
-// mutates `footprint`) when the dab fits, whether or not growth was needed.
+// Grow `footprint` to include a new dab, with the edges on the same texel lattice.
+// Returns false, and leaves `footprint` unchanged, when a half-extent would exceed
+// MaxExtent: the caller then starts a new zone.
 bool GrowZoneToDab(ZoneFootprint& footprint, float32 hitX, float32 hitZ,
                    float32 brushRadius, const ZoneAuthoringSettings& settings);
 
@@ -51,11 +51,9 @@ uint32 PayloadDimForExtent(float32 extent, const ZoneAuthoringSettings& settings
 void WorldToPayloadTexel(const ZoneFootprint& footprint, uint32 width, uint32 height,
                          float32 worldX, float32 worldZ, float32& outTx, float32& outTz);
 
-// Reallocate `old` for a grown footprint, copying existing texels to their new
-// positions by matching world texel centers (design §3.2: "growth reallocates
-// the payload and offsets existing texels"). Density is constant, so old texels
-// land on an integer offset sub-block. Returns the new payload; DataVersion and
-// dirty state are reset (the caller re-marks the dab's rect).
+// Reallocate `old` for a grown footprint: each new texel takes the old texel nearest
+// its world center, and is zero outside the old footprint. On the texel lattice the
+// copy is exact. DataVersion and dirty state reset; the caller re-marks the dab's rect.
 TerrainZonePayload RegrowPayload(const TerrainZonePayload& old,
                                  const ZoneFootprint& oldFootprint,
                                  const ZoneFootprint& newFootprint, uint32 newWidth,

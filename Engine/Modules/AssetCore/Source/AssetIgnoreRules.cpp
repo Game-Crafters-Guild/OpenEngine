@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cctype>
 #include <fstream>
+#include <iterator>
 
 namespace GameEngine
 {
@@ -137,21 +138,39 @@ static bool StartsWith(std::string_view s, std::string_view prefix)
     return s.size() >= prefix.size() && s.substr(0, prefix.size()) == prefix;
 }
 
-// One directory-segment test for both the recursion check and the path check, so a
-// name rule and a name-prefix rule mean the same thing wherever a segment is read.
-// `foldedSegment` has already been through CaseFoldForMatch.
-static bool IsIgnoredDirectorySegment(const AssetIgnoreRules& rules, const std::string& foldedSegment)
+// One directory-segment test for every reader, so a name rule and a name-prefix rule mean the
+// same thing wherever a segment is read. Returns the name or the name prefix that matched, or
+// null. `foldedSegment` has already been through CaseFoldForMatch.
+static const std::string* FindIgnoredDirectorySegmentRule(const AssetIgnoreRules& rules,
+                                                          const std::string& foldedSegment)
 {
-    if (rules.ignoredDirNamesLower.find(foldedSegment) != rules.ignoredDirNamesLower.end())
-        return true;
+    const auto name = rules.ignoredDirNamesLower.find(foldedSegment);
+    if (name != rules.ignoredDirNamesLower.end())
+        return &*name;
 
     for (const std::string& namePrefix : rules.ignoredDirNamePrefixesLower)
     {
         if (StartsWith(foldedSegment, namePrefix))
-            return true;
+            return &namePrefix;
     }
 
-    return false;
+    return nullptr;
+}
+
+// The marker file that `directory` holds when it has a tool output name, or null. Reads the
+// disk only for a folder with one of the names. `foldedName` has been through CaseFoldForMatch.
+static const std::string* FindToolOutputMarker(const AssetIgnoreRules& rules, const std::string& foldedName,
+                                               const std::filesystem::path& directory)
+{
+    if (!rules.toolOutputDirNamesLower.Contains(foldedName))
+        return nullptr;
+    for (const std::string& marker : rules.toolOutputMarkerFileNames)
+    {
+        std::error_code ec;
+        if (std::filesystem::is_regular_file(directory / marker, ec))
+            return &marker;
+    }
+    return nullptr;
 }
 
 } // namespace
@@ -175,14 +194,8 @@ AssetIgnoreRules AssetIgnoreRules::CreateDefault()
         ".Cache",
         ".MyEngine",
         ".Editor",
-        "Generated",
         "CMakeFiles", // a CMake build tree's own sources (CMakeCXXCompilerId.cpp defines main)
         ".vcpkg",
-        "Library",
-        "build",
-        "out",
-        "bin",
-        "obj",
         "node_modules",
         "__pycache__",
         "site-packages",
@@ -203,6 +216,19 @@ AssetIgnoreRules AssetIgnoreRules::CreateDefault()
     // Directory-name prefixes. CLion writes one build tree per configuration
     // beside the sources it builds ("cmake-build-debug", "cmake-build-release").
     r.ignoredDirNamePrefixesLower.push_back(CaseFoldForMatch("cmake-build-"));
+
+    // Tool output folders. A game also uses these names for content ("Generated" world
+    // data, a "Library" scene), so only the root's own folders and marked folders are ignored.
+    const char* toolOutputDirs[] = {"Generated", "Library", "build", "out", "bin", "obj"};
+    for (const char* toolOutputDir : toolOutputDirs)
+    {
+        std::string name = CaseFoldForMatch(toolOutputDir);
+        r.toolOutputDirNamesLower.Insert(name);
+        name.push_back('/');
+        r.ignoredPrefixesLower.push_back(std::move(name));
+    }
+    std::sort(r.ignoredPrefixesLower.begin(), r.ignoredPrefixesLower.end());
+    r.toolOutputMarkerFileNames = {"CMakeCache.txt", "pyvenv.cfg"};
 
     // Files
     const char* files[] = {
@@ -406,7 +432,7 @@ bool AssetIgnoreRules::ShouldIgnoreCanonicalRelativePath(std::string_view canoni
     for (const auto& seg : p.parent_path())
     {
         const std::string s = CaseFoldForMatch(seg.string());
-        if (!s.empty() && IsIgnoredDirectorySegment(*this, s))
+        if (!s.empty() && FindIgnoredDirectorySegmentRule(*this, s))
             return true;
     }
 
@@ -427,7 +453,11 @@ bool AssetIgnoreRules::ShouldIgnoreDirectory(const std::filesystem::path& direct
     const std::string nameLower = CaseFoldForMatch(directoryPath.filename().string());
     if (!nameLower.empty() && nameLower[0] == '.')
         return true;
-    if (!nameLower.empty() && IsIgnoredDirectorySegment(*this, nameLower))
+    if (!nameLower.empty() && FindIgnoredDirectorySegmentRule(*this, nameLower))
+        return true;
+    const std::filesystem::path directoryOnDisk =
+        directoryPath.is_absolute() ? directoryPath : assetRoot / directoryPath;
+    if (!nameLower.empty() && FindToolOutputMarker(*this, nameLower, directoryOnDisk))
         return true;
 
     // Prefix ignore (root-relative)
@@ -455,6 +485,39 @@ bool AssetIgnoreRules::ShouldIgnoreFile(const std::filesystem::path& filePath,
     return ShouldIgnoreCanonicalRelativePath(rel);
 }
 
+std::optional<AssetIgnoreRules::IgnoredFolder> AssetIgnoreRules::FindIgnoredFolder(
+    std::string_view canonicalRel, const std::filesystem::path& assetRoot) const
+{
+    const std::string relativePath = NormalizeCanonicalPath(canonicalRel);
+    for (size_t slash = relativePath.find('/'); slash != std::string::npos; slash = relativePath.find('/', slash + 1))
+    {
+        const std::string folder = relativePath.substr(0, slash);
+        const size_t nameStart = folder.find_last_of('/') + 1;
+        const std::string name = folder.substr(nameStart);
+        if (name.empty() || name[0] == '.')
+            return std::nullopt;
+
+        const std::string foldedName = CaseFoldForMatch(name);
+        const std::filesystem::path folderOnDisk = assetRoot / folder;
+        if (const std::string* rule = FindIgnoredDirectorySegmentRule(*this, foldedName))
+        {
+            if (*rule == foldedName)
+                return IgnoredFolder{folderOnDisk, "the asset ignore rules skip every folder named '" + name + "'"};
+            return IgnoredFolder{folderOnDisk,
+                                 "the asset ignore rules skip every folder whose name starts with '" + *rule + "'"};
+        }
+        const std::string foldedFolder = CaseFoldForMatch(folder) + '/';
+        for (const std::string& prefix : ignoredPrefixesLower)
+        {
+            if (StartsWith(foldedFolder, prefix))
+                return IgnoredFolder{folderOnDisk, "the asset ignore rules skip '" + folder + "' under the asset root"};
+        }
+        if (const std::string* marker = FindToolOutputMarker(*this, foldedName, folderOnDisk))
+            return IgnoredFolder{folderOnDisk, "the folder holds " + *marker + ", so it is tool output"};
+    }
+    return std::nullopt;
+}
+
 uint64_t AssetIgnoreRules::Signature() const
 {
     // FNV-1a 64 over a deterministic, sorted, type-prefixed serialization
@@ -474,10 +537,10 @@ uint64_t AssetIgnoreRules::Signature() const
         return h;
     };
 
-    auto sortedFold = [&](uint64_t h, char prefix, const std::unordered_set<std::string>& set) noexcept
+    auto sortedFold = [&](uint64_t h, char prefix, const auto& set) noexcept
     {
         std::vector<std::string_view> sorted;
-        sorted.reserve(set.size());
+        sorted.reserve(static_cast<size_t>(std::distance(set.begin(), set.end())));
         for (const auto& s : set)
             sorted.emplace_back(s);
         std::sort(sorted.begin(), sorted.end());
@@ -496,6 +559,8 @@ uint64_t AssetIgnoreRules::Signature() const
     h = sortedFold(h, 'D', ignoredDirNamesLower);
     h = sortedFold(h, 'F', ignoredFileNamesLower);
     h = sortedFold(h, 'E', ignoredExtensionsLower);
+    h = sortedFold(h, 'T', toolOutputDirNamesLower);
+    h = sortedFold(h, 'M', toolOutputMarkerFileNames);
 
     // ignoredPrefixesLower is already a vector; preserve its existing order
     // so the signature is stable across sessions that read the same .assetignore

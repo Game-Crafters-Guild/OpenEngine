@@ -143,17 +143,18 @@ GatheredMembers GatherHlodMembers(GameEngine::ECS::World& world, const ModelReso
                 Fold(Fold(kFnvOffsetBasis, model->GetSourceContentHash()), submeshIndex);
             member.MeshHandleKey = Fold(GuidFold(kFnvOffsetBasis, modelGuid), submeshIndex);
 
+            const Mathematics::Matrix4x4 world = xf.ToMatrix4x4(xf.GetPosition() - Mathematics::WorldPosition{});
             for (int i = 0; i < 16; ++i)
-                member.WorldMatrix[i] = xf.matrix[i];
+                member.WorldMatrix[i] = world.Data()[i];
 
             Mathematics::AABB worldAabb;
             if (localBounds != nullptr) {
-                worldAabb = localBounds->Box.TransformToAABB(xf.matrix);
+                worldAabb = localBounds->Box.TransformToAABB(world.Data());
             } else {
                 const Mathematics::BoundingBox box = Mathematics::BoundingBox::FromMinMax(
                     Mathematics::Vector3{mesh.MinBounds[0], mesh.MinBounds[1], mesh.MinBounds[2]},
                     Mathematics::Vector3{mesh.MaxBounds[0], mesh.MaxBounds[1], mesh.MaxBounds[2]});
-                worldAabb = box.TransformToAABB(xf.matrix);
+                worldAabb = box.TransformToAABB(world.Data());
             }
             member.WorldAabbMin[0] = worldAabb.min.x;
             member.WorldAabbMin[1] = worldAabb.min.y;

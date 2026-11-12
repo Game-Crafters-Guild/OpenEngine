@@ -77,9 +77,12 @@ class HZBBuildNode final : public IRenderPipelineNode
     bool Initialize(std::string nodeId, std::string nodeJson, std::string* outError) override;
     void Declare(RenderPipelineInstance& instance, const PipelineDeclareContext& ctx) override;
     void DeclareForView(ViewDeclare& d) override;
+    void RequestPausedViewPipelines(const PausedViewPrewarm& prewarm) override;
 
   private:
     void LoadShaders(IDevice* device);
+    // True when the pyramid of a w x h depth source builds with the two-dispatch SPD path.
+    bool BuildsWithSpd(uint32_t w, uint32_t h) const;
     void LoadSpdShader(IDevice* device);
     // Slang-lane spike (GE_SHADER_SLANG_LANE=1): compile the staged
     // Shaders/Slang/hzb_build.slang through ShaderCompileService instead of

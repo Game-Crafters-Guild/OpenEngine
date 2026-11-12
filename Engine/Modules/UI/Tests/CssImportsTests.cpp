@@ -6,7 +6,7 @@
 #include <string_view>
 #include <vector>
 
-#include "../Source/Assets/CssImports.h"
+#include "../Source/Assets/CssImportsInternal.h"
 #include "AssetCore/GUID.h"
 
 using namespace GameEngine::UI;

@@ -3,6 +3,7 @@
 #include "Core/Application.h"
 #include "Core/ApplicationPaths.h"
 #include "Scripting/ScriptManager.h"
+#include "ECS/Systems.h"
 #include "ECSModules/Rendering/Systems/AnimationSystem.h"
 #include "ECSModules/Rendering/Systems/AnimationGraphSystem.h"
 #include "ECSModules/Rendering/Systems/AnimationGraphCompileFromModel.h"
@@ -24,7 +25,10 @@
 #include "ECSModules/Rendering/SkeletonStore.h"
 #include "ECSModules/Rendering/ClipStore.h"
 #include "Assets/AnimationClip.h"
+#include "Assets/AssetManager.h"
 #include "Assets/ModelAsset.h"
+#include "Assets/TimelineAsset.h"
+#include "Components/Animation/TimelinePlaybackState.h"
 #include "AssetCore/GUID.h"
 #include "Scripting/ScriptingABI.h"
 #include "Engine/Rendering/AnimationSampling.h"
@@ -40,10 +44,6 @@
 
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
-
-// GE_* no-op stubs come from Engine/Source/HotReloadNativeStubs.cpp, added to
-// this target via CMake to satisfy IncrementalCompilationTask's references
-// without requiring a live CLR.
 
 #include <nlohmann/json.hpp>
 
@@ -835,7 +835,73 @@ TEST(ClipAnimatorCommands, PauseStopSeek)
     fx.Shutdown();
 }
 
-TEST(ClipAnimatorCommands, SameClipPlayStateDoesNotRestartTime)
+TEST(ClipAnimatorCommands, SpeedScaleChangeAfterPlayAppliesOnTheNextTick)
+{
+    ClipCommandFixture fx;
+    ASSERT_TRUE(fx.Init());
+
+    ECS::World world;
+    Components::Animator animator{};
+    animator.PlayState(fx.clipAGuid);
+    const ECS::EntityHandle e = MakeClipEntity(world, animator);
+    Engine::Renderer::TimelinePlaybackSystem system(nullptr);
+    system.Update(world, 0.0f);
+
+    auto* cmd = world.GetComponentForWrite<Components::Animator>(e);
+    ASSERT_NE(cmd, nullptr);
+    cmd->speedScale = 2.0f;
+    system.Update(world, 0.0f);
+
+    const auto* ref = world.GetComponent<Components::AnimatorRef>(e);
+    ASSERT_NE(ref, nullptr);
+    Components::AnimatorRef ticked = *ref;
+    Engine::Renderer::TickAnimatorRef(ticked, Engine::Renderer::ClipStore::Instance(), 0.1f, nullptr);
+    EXPECT_NEAR(ticked.Time, 0.2f, 1e-5f) << "the clip advances at the new speedScale";
+
+    fx.Shutdown();
+}
+
+TEST(ClipAnimatorCommands, SpeedScaleSetAfterAnImmediateStartAppliesOnTheFirstTick)
+{
+    ClipCommandFixture fx;
+    ASSERT_TRUE(fx.Init());
+
+    ECS::World world;
+    Components::Animator animator{};
+    animator.PlayState(fx.clipAGuid);
+    const ECS::EntityHandle e = MakeClipEntity(world, animator);
+    Engine::Renderer::ProcessClipAnimatorCommands(world);
+    world.GetComponentForWrite<Components::Animator>(e)->speedScale = 2.0f;
+
+    Engine::Renderer::TimelinePlaybackSystem system(nullptr);
+    system.Update(world, 0.0f);
+    EXPECT_FLOAT_EQ(world.GetComponent<Components::AnimatorRef>(e)->Speed, 2.0f) << "the first tick";
+    system.Update(world, 0.0f);
+    EXPECT_FLOAT_EQ(world.GetComponent<Components::AnimatorRef>(e)->Speed, 2.0f) << "the second tick";
+
+    fx.Shutdown();
+}
+
+TEST(ClipAnimatorCommands, SpeedScaleSetAfterTheSceneStartAppliesOnTheFirstTick)
+{
+    ClipCommandFixture fx;
+    ASSERT_TRUE(fx.Init());
+
+    ECS::World world;
+    Components::Animator animator{};
+    animator.clipGuid.Set(fx.clipAGuid);
+    const ECS::EntityHandle e = MakeClipEntity(world, animator);
+    Engine::Renderer::BootstrapSceneAnimators(world);
+    ASSERT_EQ(world.GetComponent<Components::AnimatorRef>(e)->ClipIndex, fx.clipA);
+    world.GetComponentForWrite<Components::Animator>(e)->speedScale = 2.0f;
+
+    Engine::Renderer::TimelinePlaybackSystem(nullptr).Update(world, 0.0f);
+    EXPECT_FLOAT_EQ(world.GetComponent<Components::AnimatorRef>(e)->Speed, 2.0f);
+
+    fx.Shutdown();
+}
+
+TEST(ClipAnimatorCommands, SameClipPlayStateRestartsTime)
 {
     ClipCommandFixture fx;
     ASSERT_TRUE(fx.Init());
@@ -858,7 +924,7 @@ TEST(ClipAnimatorCommands, SameClipPlayStateDoesNotRestartTime)
     const auto* after = world.GetComponent<Components::AnimatorRef>(e);
     ASSERT_NE(after, nullptr);
     EXPECT_EQ(after->ClipIndex, fx.clipA);
-    EXPECT_FLOAT_EQ(after->Time, 0.55f);
+    EXPECT_FLOAT_EQ(after->Time, 0.0f);
 
     fx.Shutdown();
 }
@@ -883,6 +949,42 @@ TEST(ClipAnimatorCommands, TimelinePlaybackSystemConsumesClipCommands)
     ASSERT_NE(ref, nullptr);
     EXPECT_EQ(ref->ClipIndex, fx.clipB);
 
+    fx.Shutdown();
+}
+
+// The scheduler hands the timeline system a delta of 0 while the world clock is paused, so a
+// playing timeline holds its time.
+TEST(ClipAnimatorCommands, APausedClockHoldsThePlayingTimelineTime)
+{
+    ClipCommandFixture fx;
+    ASSERT_TRUE(fx.Init());
+    const GUID timelineGuid = GUID::Generate();
+    auto timeline = MakeShared<TimelineAsset>(timelineGuid, std::filesystem::path("Synthetic://Timeline"));
+    const std::string document = R"({"tracks": []})";
+    ASSERT_TRUE(timeline->LoadFromData(
+        std::span<const uint8>(reinterpret_cast<const uint8*>(document.data()), document.size())));
+    AssetManager& assets = EngineCore::GetInstance().GetAssetManager();
+    assets.RegisterLoadedAsset(timelineGuid, timeline);
+
+    ECS::World world;
+    Components::Animator animator{};
+    animator.source = Components::AnimatorPlaybackSource::Timeline;
+    animator.timelineGuid.Set(timelineGuid);
+    const ECS::EntityHandle e = world.CreateEntity();
+    world.AddComponentImmediate(e, animator);
+    ECS::SystemManager systems;
+    systems.AddSystem<Engine::Renderer::TimelinePlaybackSystem>(nullptr);
+    systems.Update(world, 0.1f);
+    const float32 held = world.GetComponent<Components::TimelinePlaybackState>(e)->timeSeconds;
+    ASSERT_GT(held, 0.0f);
+
+    world.GetSimulationClock().SetTimeScale(0.0);
+    for (int frame = 0; frame < 5; ++frame)
+        systems.Update(world, 0.1f);
+    EXPECT_EQ(world.GetComponent<Components::TimelinePlaybackState>(e)->timeSeconds, held)
+        << "a paused clock holds the timeline time";
+
+    assets.UnregisterLoadedAsset(timelineGuid);
     fx.Shutdown();
 }
 
@@ -1132,6 +1234,22 @@ std::unique_ptr<GameEngine::Animation::ClipPlayerNode> TranslationClipNode(float
     return clip;
 }
 
+// A graph character that plays a clip from x = 0 to x = 4 in one second.
+GraphCharacter AddPlayingTravelCharacter(ECS::World& world)
+{
+    auto clip = std::make_unique<GameEngine::Animation::ClipPlayerNode>();
+    clip->SetClip(MakeRootTravelClip());
+    const GraphCharacter character = AddPausedGraphCharacter(world, std::move(clip));
+    world.GetComponentForWrite<Components::Animator>(character.Entity)->graphPaused = false;
+    return character;
+}
+
+float32 PoseX(const GraphCharacter& character)
+{
+    const auto* runtime = Engine::Renderer::SkeletonStore::Instance().GetRuntime(character.RuntimeId);
+    return runtime && runtime->CompactSkinMatrices.size() >= 16u ? runtime->CompactSkinMatrices[12] : -1.0f;
+}
+
 } // namespace
 
 // Every palette notification advances the world's caster version, which re-arms the
@@ -1233,6 +1351,49 @@ TEST(AnimationGraphHost, PausedGraphThatStillChangesPoseIsReported)
     system.Update(world, 0.1f);
     system.Update(world, 0.1f);
     EXPECT_EQ(casterVersion(), before) << "the last state has no transition, so the pose holds";
+
+    graphStore.ClearForTest();
+}
+
+TEST(AnimationGraphHost, PausedClockHoldsThePoseAndResumesWhereItStopped)
+{
+    auto& graphStore = GameEngine::Animation::AnimationGraphStore::Instance();
+    graphStore.ClearForTest();
+    ECS::World world;
+    const GraphCharacter character = AddPlayingTravelCharacter(world);
+    ECS::SystemManager systems;
+    systems.AddSystem<Engine::Renderer::AnimationGraphSystem>(nullptr);
+    systems.Update(world, 0.1f);
+    const float32 held = PoseX(character);
+    ASSERT_GT(held, 0.0f);
+
+    world.GetSimulationClock().SetTimeScale(0.0);
+    for (int frame = 0; frame < 10; ++frame)
+    {
+        systems.Update(world, 0.1f);
+        EXPECT_EQ(PoseX(character), held) << "frame " << frame << " moved the pose while paused";
+    }
+    world.GetSimulationClock().SetTimeScale(1.0);
+    systems.Update(world, 0.1f);
+    EXPECT_NEAR(PoseX(character), held + 0.4f, 1e-4f) << "play resumes from the held pose";
+
+    graphStore.ClearForTest();
+}
+
+TEST(AnimationGraphHost, HalfTimeScaleAdvancesThePoseHalfAsFar)
+{
+    auto& graphStore = GameEngine::Animation::AnimationGraphStore::Instance();
+    graphStore.ClearForTest();
+    ECS::World world;
+    const GraphCharacter character = AddPlayingTravelCharacter(world);
+    ECS::SystemManager systems;
+    systems.AddSystem<Engine::Renderer::AnimationGraphSystem>(nullptr);
+    systems.Update(world, 0.1f);
+    const float32 start = PoseX(character);
+
+    world.GetSimulationClock().SetTimeScale(0.5);
+    systems.Update(world, 0.1f);
+    EXPECT_NEAR(PoseX(character), start + 0.2f, 1e-4f);
 
     graphStore.ClearForTest();
 }
@@ -1658,7 +1819,7 @@ TEST(AnimationGraphHost, RootMotionAppliesToTransformWithoutCharacter)
 
     const auto* transform = world.GetComponent<Components::Transform>(e);
     ASSERT_NE(transform, nullptr);
-    EXPECT_NEAR(transform->GetPosition().x, 1.0f, 1e-3f);
+    EXPECT_NEAR(transform->GetPosition().X, 1.0, 1e-3);
 
     graphStore.ClearForTest();
 }

@@ -4,41 +4,17 @@
 #include "Core/StandardPaths.h"
 #include "Scripting/PathResolver.h"
 #include "Rendering/Sky/SkyRenderer.h"
+#include "ScopedCurrentPath.h"
 #include "TestTempDir.h"
 
 #include <algorithm>
 #include <filesystem>
+#include <fstream>
 #include <string>
 
 namespace
 {
-// Save/chdir/restore, so a test can prove a path is independent of the process working
-// directory. Same shape as Tests/Editor/OpenSceneResolutionTests.cpp's guard.
-class ScopedCurrentPath
-{
-  public:
-    explicit ScopedCurrentPath(const std::filesystem::path& newCurrentPath)
-    {
-        std::error_code ec;
-        m_PreviousPath = std::filesystem::current_path(ec);
-        if (ec)
-            return;
-        std::filesystem::current_path(newCurrentPath, ec);
-        m_Active = !ec;
-    }
-    ~ScopedCurrentPath()
-    {
-        if (!m_Active)
-            return;
-        std::error_code ec;
-        std::filesystem::current_path(m_PreviousPath, ec);
-    }
-    bool IsActive() const { return m_Active; }
-
-  private:
-    std::filesystem::path m_PreviousPath;
-    bool m_Active{false};
-};
+using GameEngine::TestUtils::ScopedCurrentPath;
 
 static bool ContainsForbiddenChars(const std::string& s)
 {
@@ -308,6 +284,39 @@ TEST(Paths, EngineManagedDirectory_IsTheBundleManagedResourcesInsideAnAppBundle)
     EXPECT_EQ(GameEngine::ScriptingPaths::ResolveEngineManagedDirectoryFrom(flatDir), flatDir);
 
     fs::remove_all(root, ec);
+}
+
+// The native library resolves from the executable directory only: a library that happens to
+// sit in the working directory of a host launched from elsewhere is never picked up.
+TEST(Paths, NativeLibrary_IgnoresALibraryInTheWorkingDirectory)
+{
+    namespace fs = std::filesystem;
+#if defined(_WIN32)
+    constexpr const char* kLibraryName = "GameEngine.Native.dll";
+#elif defined(__APPLE__)
+    constexpr const char* kLibraryName = "libGameEngine.Native.dylib";
+#else
+    constexpr const char* kLibraryName = "libGameEngine.Native.so";
+#endif
+    const GameEngine::TestUtils::ScopedTempDir tree(
+        GameEngine::TestUtils::MakeUniqueTempDirectory("gameengine-native-library-cwd"));
+    const fs::path exeDir = tree.Path() / "bin" / "Tests";
+    const fs::path workingDir = tree.Path() / "work";
+    ASSERT_TRUE(fs::create_directories(exeDir));
+    ASSERT_TRUE(fs::create_directories(workingDir));
+    ASSERT_TRUE(std::ofstream(workingDir / kLibraryName).good());
+
+    {
+        ScopedCurrentPath cwdGuard(workingDir);
+        ASSERT_TRUE(cwdGuard.IsActive());
+        EXPECT_EQ(GameEngine::ScriptingPaths::ResolveNativeLibraryDirectoryFrom(exeDir), exeDir);
+        EXPECT_TRUE(GameEngine::ScriptingPaths::ResolveNativeLibraryPathFrom(exeDir).empty());
+    }
+
+    // Positive control: the same file name next to the executable is found, so the
+    // assertions above are not passing on a name the resolver never probes.
+    ASSERT_TRUE(std::ofstream(exeDir / kLibraryName).good());
+    EXPECT_EQ(GameEngine::ScriptingPaths::ResolveNativeLibraryPathFrom(exeDir), exeDir / kLibraryName);
 }
 
 #if defined(_WIN32)

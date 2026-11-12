@@ -18,7 +18,6 @@
 #include "Rendering/ShaderCache/ShaderPackageIO.h"
 #include "Rendering/ShaderCache/ShaderProgramIndex.h"
 #include "Shader/ShaderIncludeClosure.h"
-#include "Shader/ShaderSourceCache.h"
 
 #include <atomic>
 
@@ -78,14 +77,10 @@ std::optional<TextureSlotResolution> ResolveDeclaredSurfaceSlots(const GameEngin
 {
     const std::filesystem::path surfacePath =
         ShaderComposer::ResolveSurfaceShaderPath(doc.surfaceShader, materialDir, context);
-    const ShaderSourceCache::EntryPtr source =
-        ShaderSourceCache::Get().Read(surfacePath, ShaderSourceCache::NormalizedKey(surfacePath));
-    if (!source)
+    const std::shared_ptr<const TextureSlotResolution> slots = ShaderComposer::ResolveTextureSlotsOfFile(surfacePath);
+    if (!slots || slots->Rejected)
         return std::nullopt;
-    TextureSlotResolution slots = ShaderComposer::ResolveTextureSlots(source->Bytes);
-    if (slots.Rejected)
-        return std::nullopt;
-    return slots;
+    return *slots;
 }
 // A shader reference as the program index keys it: a file generated under the cache root (a graph
 // material's surface) by its path under that root, which a relocated or shipped cache keeps; any
@@ -102,17 +97,14 @@ std::string IndexedShaderReference(const std::string& reference, const MaterialB
     return "<cache>/" + relative.generic_string();
 }
 
-// The program index key of a build (MaterialBuildResult::programIndexKey): every input that decides
-// the program once the variant key is derived. The material's source identity stands for the
-// directory its references resolve from first; the derived key carries the pass keywords, the
-// layout, the alpha mode, the vertex modifier's form, the relief and the lighting model; the
-// references and the user keywords are composed as authored. Changing what enters here changes
-// which programs an index addresses: bump kShaderProgramIndexVersion with it.
+// The program index key of a build: the material's identity key (MaterialSourceIdentityKey), the
+// derived variant key, the custom vertex shader flag, and the references and user keywords as
+// authored. Bump kShaderProgramIndexVersion when an input changes.
 uint64_t ProgramIndexInputKey(const GameEngine::MaterialDocument& doc, const ShaderVariantKey& variantKey,
                               const std::filesystem::path& materialPath, const MaterialBuildContext& context)
 {
     uint64_t h = kShaderHashOffsetBasis;
-    h = HashShaderString(h, MaterialSourceIdentity(materialPath, context).generic_string());
+    h = HashShaderString(h, MaterialSourceIdentityKey(materialPath, context));
     h = HashShaderBytes(&variantKey.vertexFlags, sizeof(variantKey.vertexFlags), h);
     h = HashShaderBytes(&variantKey.materialKeywords, sizeof(variantKey.materialKeywords), h);
     h = HashShaderBytes(&variantKey.lightingModel, sizeof(variantKey.lightingModel), h);

@@ -16,12 +16,6 @@
 #include <random>
 #include <vector>
 
-#if defined(_MSC_VER)
-#pragma fp_contract(off)
-#else
-#pragma STDC FP_CONTRACT OFF
-#endif
-
 namespace
 {
 

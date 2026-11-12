@@ -208,7 +208,8 @@ void CBT_EvaluateNeighbors(uint currentID, uint bisectorID, out uint resX, out u
 //             sweeps geometry across the margin, so coarsening it to base and re-refining one level/
 //             frame IS the rotation churn (round-7 finding 1). Occupancy-managed by the caller: keep
 //             depth while the pool has headroom (no churn), coarsen to base only under pool pressure.
-// A triangle straddling the near plane is RELEVANT (genuinely close), never coarsened. This shapes
+// A triangle that crosses the eye plane is RELEVANT, never coarsened by the gate: the near-field bound
+// (CBT_NearFieldSplitWish) holds its density at any distance. This shapes
 // only the split/merge DEMAND — Split's compatibility chain still force-splits neighbors — so the
 // coarsening far field grades to base through the normal LEB merge and stays conforming.
 const int CBT_GATE_RELEVANT = 0;
@@ -241,8 +242,8 @@ float CBT_PlanarKeepBand(int step)
            exp2(-float(step - 1) / float(CBT_OFF_FRUSTUM_KEEP_STEPS_PER_OCTAVE));
 }
 const float CBT_OFF_FRUSTUM_BEHIND_NDC = 8.0; // fully-behind-eye "distance" — inside the full keep band
-// Distance floor (m) for the behind-the-eye as-if-visible edge metric: a facet at the eye itself
-// is the straddling case, bounded by the near-field world target, not by this.
+// Distance floor (m) for the as-if-visible edge metric of the near-field bound: a facet at the eye
+// itself is held by the near-field world target, not by this.
 const float CBT_BEHIND_EYE_MIN_DIST = 1.0;
 
 // Screen-area priority ordering (round-8c look-back). The split-demand projected-area floor reaches
@@ -284,8 +285,7 @@ const float CBT_LEB_PARENT_EDGE_SCALE = 1.41421356;
 // arm). So this rule keeps the same per-facet asymmetry the domain metric had, and can raise merge
 // demand for one sibling only.
 //
-// It is per-facet on purpose. The domain metric's merge runs the parent's split test
-// (CBT_PlanarParentMergeWish). A parent-edge merge here would move the near field.
+// The world-target term is per-facet on purpose: a parent-edge merge here would move the near field.
 //
 // Stability WITHIN this branch: split fires above nearTargetM and merge below nearTargetM/sqrt(2),
 // so a coarsened facet lands at sqrt(2) x its old edge — inside the dead band, never back across the
@@ -312,12 +312,12 @@ bool CBT_NearFieldWantMerge(float nearTargetM, float nearEdgeM)
 // The far end of the parent's split edge, read bit for bit from the sibling's stored corners: the even
 // child holds one end as corner0, the odd child the other as corner2. Classify reads frozen, cached
 // corners, so both siblings get the same edge. Returns false when the sibling is not a leaf.
-bool CBT_ParentSplitEdgeFar(uint slot, CBT_HEAPID_T h, CBTFrameParams fp, out vec3 parentFar)
+bool CBT_ParentSplitEdgeFar(uint slot, CBT_HEAPID_T h, CBTFrameParams fp, out vec3 parentFar, out uint sibling)
 {
     parentFar = vec3(0.0);
     bool oddChild = (uint(h) & 1u) != 0u;
     uvec4 neighbors = CBT_ReadCur(slot);
-    uint sibling = oddChild ? neighbors.y : neighbors.x;
+    sibling = oddChild ? neighbors.y : neighbors.x;
     if (sibling >= CBT_POOL_SIZE)
         return false;
 #if defined(GE_CBT_HEAP32)
@@ -331,9 +331,47 @@ bool CBT_ParentSplitEdgeFar(uint slot, CBT_HEAPID_T h, CBTFrameParams fp, out ve
     return true;
 }
 
+// The twin parent across the parent's split edge, as both children of the parent read it.
+const uint CBT_TWIN_NONE = 0u;  // the split edge is on the boundary: the parent merges alone
+const uint CBT_TWIN_LEAF = 1u;  // both twin children are leaves at this depth: the diamond merges as one
+const uint CBT_TWIN_FINER = 2u; // a twin child is split further or missing: Kernel_PrepareSimplify refuses the merge
+
+// Both children read the same two twin children (the even child's y neighbor and the odd child's x neighbor) and
+// the twin apex from the first of them, bit for bit: the even twin child holds it as corner2, the odd one as
+// corner0. `sibling` is this child's sibling, a leaf.
+uint CBT_TwinParent(uint slot, uint sibling, CBT_HEAPID_T h, CBTFrameParams fp, out vec3 twinApex)
+{
+    twinApex = vec3(0.0);
+    bool oddChild = (uint(h) & 1u) != 0u;
+    uvec4 evenNeighbors = CBT_ReadCur(oddChild ? sibling : slot);
+    uvec4 oddNeighbors = CBT_ReadCur(oddChild ? slot : sibling);
+    uint twinHigh = evenNeighbors.y;
+    uint twinLow = oddNeighbors.x;
+    if (twinHigh >= CBT_POOL_SIZE && twinLow >= CBT_POOL_SIZE)
+        return CBT_TWIN_NONE;
+    if (twinHigh >= CBT_POOL_SIZE || twinLow >= CBT_POOL_SIZE)
+        return CBT_TWIN_FINER;
+    CBT_HEAPID_T highH = CBT_LoadHeapID(twinHigh);
+    CBT_HEAPID_T lowH = CBT_LoadHeapID(twinLow);
+    uint depth = CBT_HeapIDDepth(h);
+    if (CBT_IsFreeSlot(highH) || CBT_IsFreeSlot(lowH) || CBT_HeapIDDepth(highH) != depth ||
+        CBT_HeapIDDepth(lowH) != depth)
+        return CBT_TWIN_FINER;
+    twinApex = CBT_FetchCorner(twinHigh, (uint(highH) & 1u) != 0u ? 0u : 2u, fp);
+    return CBT_TWIN_LEAF;
+}
+
+// The reflection of a render-origin-relative point through the eye plane (clip w = 0 under a perspective camera).
+vec3 CBT_MirrorThroughEyePlane(CBTFrameParams fp, vec3 relPos)
+{
+    vec3 rowW = vec3(fp.viewProjRel[0][3], fp.viewProjRel[1][3], fp.viewProjRel[2][3]);
+    float clipW = dot(rowW, relPos) + fp.viewProjRel[3][3];
+    return relPos - (2.0 * clipW / dot(rowW, rowW)) * rowW;
+}
+
 // View-priority coarsening factor at `distM` meters. Split and merge thresholds scale by this same factor,
 // so the dead band holds where both read it at one point: the planar split at its node's view depth bound,
-// the edge rule at the midpoint of the split edge. contention <= 0 returns exactly 1.0.
+// the area metric at the midpoint of the split edge. contention <= 0 returns exactly 1.0.
 float CBT_NearBiasCoarsen(CBTFrameParams fp, float contention, float distM)
 {
     if (contention <= 0.0)
@@ -380,7 +418,7 @@ int CBT_SplitGate(CBTFrameParams fp, vec3 wc0, vec3 wc1, vec3 wc2, vec2 p0, vec2
         return CBT_GATE_FRUSTUM; // fully behind the eye — not visible, occupancy-managed
     }
     if (!in0 || !in1 || !in2)
-        return CBT_GATE_RELEVANT; // straddles the near plane — genuinely close
+        return CBT_GATE_RELEVANT; // crosses the eye plane: the near-field bound holds it
     float M = CBT_SPLIT_NDC_MARGIN;
     vec2 n0 = vec2(p0.x / fp.screen.x, p0.y / fp.screen.y) * 2.0 - 1.0;
     vec2 n1 = vec2(p1.x / fp.screen.x, p1.y / fp.screen.y) * 2.0 - 1.0;
@@ -457,6 +495,9 @@ void Kernel_Reset()
     }
     gQueue.WorkQueue[CBT_WQ_ALLOC_CURSOR] = 0;
     gQueue.WorkQueue[CBT_WQ_FREE_COUNT] = int(pc.poolSize) - int(CBT_LiveCount());
+    if (pc.census != 0u)
+        for (uint w = CBT_WQ_CENSUS_BASE; w < CBT_WQ_CENSUS_CLASSES + CBT_CENSUS_CLASS_COUNT; ++w)
+            gQueue.WorkQueue[w] = 0;
     // The state both planar controllers read: the occupancy of the previous update's tail, the keep step
     // and the pressure step that update ran with.
     float occupancy = float(CBT_LiveCount()) / float(pc.poolSize);
@@ -494,6 +535,9 @@ void Kernel_Reset()
                 step = max(step - 1, 0);
         }
         gQueue.WorkQueue[CBT_WQ_PRESSURE_STEP] = step;
+        // A new pressure step changes what every keep step holds, so a failed probe no longer predicts a probe.
+        if (step != storedPressureStep)
+            gQueue.WorkQueue[CBT_WQ_KEEP_FAILED_STEP] = 0;
     }
     // Planar off-frustum keep step. The planar off-frustum gate is a loop through the pool: the band
     // it keeps sets the occupancy, and the occupancy sets the band. Read straight off occupancy, the
@@ -507,7 +551,9 @@ void Kernel_Reset()
     // a view that fits walks back to step 0, which is exactly the ungated field.
     // At rest the step goes to the lowest step whose quiet tree fits under the ceiling. Up (the floor goes above
     // it) when the tree is over the ceiling and merged nothing, or is over it without the leaves that want to merge.
-    // Down only at pressure step 0 under the ceiling: at once on the rest's first update (the probe), then from a quiet tree.
+    // Down only at pressure step 0 under the ceiling, once the rest has lasted (CBT_SETTLE_LASTED): the first step
+    // without a measured tree (the probe), then from a quiet tree. A probe that goes over is remembered across moves, and
+    // a rest does not probe that step again until the headroom has grown (CBT_WQ_KEEP_FAILED_STEP).
     {
         int keepStep = 0;
         int keepFloor = 0;
@@ -533,21 +579,52 @@ void Kernel_Reset()
 #endif
                 bool fitsAtPressureZero = storedPressureStep == 0 && !over;
                 keepFloor = max(storedFloor, 0);
+                int live = int(CBT_LiveCount());
+                int probeBase = gQueue.WorkQueue[CBT_WQ_KEEP_PROBE_BASE];
+                int failedStep = gQueue.WorkQueue[CBT_WQ_KEEP_FAILED_STEP] - 1;
+                // A quiet tree under the ceiling ends the probe of its step; at the failed step it shows the step fits now.
+                if (!arriving && !over && !merged && !split)
+                {
+                    probeBase = 0;
+                    if (keepStep == failedStep)
+                        gQueue.WorkQueue[CBT_WQ_KEEP_FAILED_STEP] = 0;
+                }
                 if (over && (!merged || overWithoutCandidates))
                 {
+                    if (probeBase > 0)
+                    {
+                        gQueue.WorkQueue[CBT_WQ_KEEP_FAILED_STEP] = keepStep + 1;
+                        gQueue.WorkQueue[CBT_WQ_KEEP_FAILED_ADDED] = max(live - probeBase, 0);
+                    }
+                    probeBase = 0;
                     keepFloor = min(max(keepFloor, keepStep + 1), int(CBT_OFF_FRUSTUM_KEEP_STEPS));
                     keepStep = keepFloor;
                 }
                 else if (fitsAtPressureZero && keepStep > keepFloor && (arriving || (!merged && !split)))
                 {
-                    keepStep = keepStep - 1;
-                    keepFloor = arriving ? CBT_KEEP_FLOOR_PROBING : keepFloor;
+                    // A step down waits for a rest that has lasted: the next move would undo it. A step down to the
+                    // step whose probe failed waits for the headroom that probe added, plus a margin.
+                    bool lasted = pc.settle >= CBT_SETTLE_LASTED;
+                    int headroom = int(keepCeil * float(pc.poolSize)) - live;
+                    int retryHeadroom = gQueue.WorkQueue[CBT_WQ_KEEP_FAILED_ADDED] +
+                                        int(pc.poolSize / CBT_KEEP_RETRY_MARGIN_DIVISOR);
+                    bool knownToFail = keepStep - 1 == failedStep && headroom < retryHeadroom;
+                    if (lasted && knownToFail)
+                        keepFloor = keepStep;
+                    else
+                    {
+                        probeBase = lasted ? live : probeBase;
+                        keepStep = lasted ? keepStep - 1 : keepStep;
+                        keepFloor = !lasted ? storedFloor : (arriving ? CBT_KEEP_FLOOR_PROBING : keepFloor);
+                    }
                 }
                 else if (probing && !(fitsAtPressureZero && !merged && !split))
                     keepFloor = CBT_KEEP_FLOOR_PROBING;
+                gQueue.WorkQueue[CBT_WQ_KEEP_PROBE_BASE] = probeBase;
             }
             else
             {
+                gQueue.WorkQueue[CBT_WQ_KEEP_PROBE_BASE] = 0;
                 // A move undoes a probe that has no measured tree, so alternate moves and rests do not walk the step.
                 if (storedFloor == CBT_KEEP_FLOOR_PROBING)
                     keepStep = min(keepStep + 1, int(CBT_OFF_FRUSTUM_KEEP_STEPS));
@@ -619,155 +696,6 @@ void Kernel_Reset()
     gDispatch.IndirectDispatch[CBT_DISPATCH_SLOT_LIVE * CBT_DISPATCH_SLOT_WORDS + 0u] = liveGroups;
     gDispatch.IndirectDispatch[CBT_DISPATCH_SLOT_LIVE * CBT_DISPATCH_SLOT_WORDS + 1u] = 1u;
     gDispatch.IndirectDispatch[CBT_DISPATCH_SLOT_LIVE * CBT_DISPATCH_SLOT_WORDS + 2u] = 1u;
-}
-
-// Geometric-error (crease) demand for a live SCULPT edit — the edit-driven retessellation term
-// (round-8b). The screen-space AREA metric reacts to a facet's projected SIZE, which is invariant
-// to what the facet APPROXIMATES: a coarse facet straddling a freshly-sculpted cliff keeps its
-// projected area (so the area metric never demands a split) while the flat triangle now mis-
-// represents a near-vertical wall — the jagged stair-step the user sees, which only heals when the
-// camera moves far (merge) and re-approaches (re-split against the new heights). This adds the
-// missing ROAM-style term: for a bisector whose split-edge midpoint or corners sit on a RESIDENT
-// sculpt page (user content exists there), sample the composed height at the split-edge midpoint,
-// compare against the LINEAR interpolation of the corner heights, and demand a split while that
-// deviation projects to more than the pixel error the area metric targets. Concentrates subdivision
-// exactly at the crease and nowhere else; self-limits once the projected error falls under the
-// threshold; bounded by maxDepth. Runs ONLY on the sphere, ONLY once edits exist
-// (pc.sphereSculptEnabled), and ONLY for facets overlapping an edited page — a smooth region and an
-// unedited planet cost one page-table read and skip. Residency (not a corner-height gradient) is the
-// gate precisely so an edit INTERIOR to a coarse facet, whose corners are both on the flat surround,
-// still gets its midpoint sampled and refined — the corner-gradient gate was blind to it.
-//
-// Isolated to the SCULPT layer (the composed corner height minus the closed-form base relief), NOT
-// the full composed height: an edited relief planet must keep refining its base relief by AREA
-// alone (the demand-bounded metric the #598/#599 audits tuned), so the crease term must fire only
-// where the USER cut a discontinuity the area metric cannot see — never on a smooth relief slope.
-// Returns 0 (no effect), 1 (force split — the crease is under-resolved), or 2 (hold: do not coarsen
-// a crease still above the merge band — the hysteresis that keeps a converged crease from
-// oscillating split<->merge against the area metric).
-const int CBT_CREASE_NONE = 0;
-const int CBT_CREASE_SPLIT = 1;
-const int CBT_CREASE_HOLD = 2;
-// World sculpt deviation below which the flat facet is treated as already approximating the sculpt
-// (no crease): the self-limit on the midpoint error, evaluated only on resident pages. Safely above
-// the fp32 length()-radius noise at planetary radius (~cm) and well below any real cliff/dab (metres).
-const float CBT_CREASE_GATE_M = 0.25;
-// Live-pool occupancy ceiling above which the crease term backs off (bounded-demand discipline).
-// A saturated pool cannot satisfy a crease split's compatibility-chain reservation, so firing there
-// only burns Split work on rolled-back demand; below it, the crease refines and the near-bias
-// coarsening keeps occupancy under the ceiling (the R=2000 oracle converges at ~0.95, under this).
-const float CBT_CREASE_OCC_CEIL = 0.98;
-// wc0/wc2 are the split-edge corners in the PLANET-CENTER frame, from the caller's
-// CBT_FetchCorners. The radius math below is planet-magnitude fp32 for both stores.
-int CBT_SculptCreaseDemand(CBTFrameParams fp, uint slot, CBT_HEAPID_T h, uint depth, uint maxDepth,
-                           vec3 origin, vec3 wc0, vec3 wc2)
-{
-    if (depth >= maxDepth)
-        return CBT_CREASE_NONE; // already at the decode cap — the term cannot ask for more
-
-    // The bisector's cube face (invariant under subdivision) selects the sculpt face; the split-edge
-    // midpoint face-UV is the exact average of the corner face-UVs (the cube->faceUV map is affine).
-    uint numSubdiv = depth - pc.baseDepth;
-    uint rootIndex = uint(h >> numSubdiv) - (1u << pc.baseDepth);
-    if (rootIndex >= CBT_SPHERE_ROOT_COUNT)
-        return CBT_CREASE_NONE;
-    uint face = CBT_FaceOfRoot(rootIndex);
-    vec2 fuv0 = vec2(gVertex.Vertex[slot].corner0.w, gVertex.Vertex[slot].meta.x);
-    vec2 fuv2 = vec2(gVertex.Vertex[slot].corner2.w, gVertex.Vertex[slot].meta.z);
-    vec2 midUV = 0.5 * (fuv0 + fuv2);
-
-    // Residency gate (round-8d). The old gate skipped any facet whose two CORNERS matched in height,
-    // which is exactly wrong for an edit INTERIOR to a coarse facet: a plateau smaller than the facet
-    // leaves both corners on the flat surround (equal heights) while the sculpt lives at the midpoint —
-    // the corner gate declared "flat" and never sampled the midpoint, so the facet never refined until
-    // camera motion shrank it enough to straddle the crease (her twice-reported complaint: a new/moved
-    // modifier does not re-tessellate until the camera moves). Instead, evaluate the midpoint whenever
-    // user content EXISTS on the sculpt page under the midpoint OR under either split-edge corner — the
-    // same page-table read the sampler does, without the texel fetch. Untouched terrain (no resident
-    // page anywhere under the facet) skips for three Table[] loads, cheaper than the two length() calls
-    // it replaces (no sqrt, no base-relief eval), and an un-edited planet has zero resident pages so
-    // every facet takes this skip. The corner taps carry the complementary coverage the midpoint tap
-    // misses: a facet whose midpoint lands OUTSIDE a disc but a corner INSIDE it (a disc-edge straddle)
-    // still fires, because the dab allocated the page under that corner — the old corner-gradient path,
-    // now expressed as residency (a corner that differs in sculpt height necessarily sits on a resident
-    // page) so it costs a table read instead of a length()+relief evaluation.
-    CBTSculptGeom geom = CBT_SculptGeomFromFrame(fp);
-    bool resident = CBT_SculptPageResident(face, midUV, geom) ||
-                    CBT_SculptPageResident(face, fuv0, geom) ||
-                    CBT_SculptPageResident(face, fuv2, geom);
-    // Analytic sphere modifiers (S2) allocate NO sculpt pages, so the residency gate extends to
-    // their closed-form footprint: page-resident OR analytic-footprint-covers (design §3.a).
-    // Without this the pad rim would never crease-refine — the exact shape would still render on
-    // coarse facets. S3 per-cell culling: the three test points' cell masks are OR'd first, so a
-    // facet outside every placement's support pays three UBO mask reads instead of the all-N
-    // covers loop (the measured N=1 -> 8 CBT.Update driver) — the normalizes + covers math run
-    // only when a placement can actually reach this facet.
-    if (!resident && CBT_SphereAnalyticTotal(fp) != 0u)
-    {
-        uint am = CBT_AnalyticCellMask(face, midUV) | CBT_AnalyticCellMask(face, fuv0) |
-                  CBT_AnalyticCellMask(face, fuv2);
-        if (am != 0u)
-        {
-            vec3 cdir0 = normalize(wc0);
-            vec3 cdir2 = normalize(wc2);
-            resident = CBT_SphereAnalyticCoversMasked(fp, am, cdir0) ||
-                       CBT_SphereAnalyticCoversMasked(fp, am, cdir2) ||
-                       CBT_SphereAnalyticCoversMasked(fp, am, normalize(cdir0 + cdir2));
-        }
-    }
-    if (!resident)
-        return CBT_CREASE_NONE; // no user edit under this facet — the common untouched skip
-
-    // A resident sculpt page is a superset of non-zero sculpt, so evaluate the error; the pixel threshold self-limits.
-    // Subtract the closed-form relief to isolate the sculpt layer. On the paged wide arm the corners hold page
-    // heights, so sc0 and sc2 also hold the page's difference from the closed form.
-    float radius = fp.planetParams.x;
-    float h0 = length(wc0) - radius; // composed corner heights (relief + sculpt), from VertexEval
-    float h2 = length(wc2) - radius;
-    float amp = fp.planetParams.y;
-    float freq = fp.planetParams.z;
-    uint oct = uint(max(fp.planetParams.w, 1.0));
-    vec3 dir0 = normalize(wc0);
-    vec3 dir2 = normalize(wc2);
-    float sc0 = h0 - CBT_PlanetRelief(dir0, amp, freq, oct);
-    float sc2 = h2 - CBT_PlanetRelief(dir2, amp, freq, oct);
-
-    vec3 midDir = normalize(dir0 + dir2);
-    float scMid = CBT_SampleSphereSculpt(face, midUV, geom); // the one sculpt sample the term costs
-    if (CBT_SphereAnalyticTotal(fp) != 0u)
-    {
-        // sc0 and sc2 hold the analytic term (VertexEval composed it), so the midpoint composes it at the
-        // closed-form relief; on the paged wide arm VertexEval composes it at the page height instead.
-        // Cell-masked (S3): midDir lies in midUV's cell, so the mask is an exact contributor superset.
-        uint am = CBT_AnalyticCellMask(face, midUV);
-        if (am != 0u)
-            scMid += CBT_SphereAnalyticOffsetMasked(fp, am, midDir,
-                                                    CBT_PlanetRelief(midDir, amp, freq, oct));
-    }
-    float scLerp = 0.5 * (sc0 + sc2);
-    float errM = abs(scMid - scLerp); // world-space sculpt deviation of the flat facet at its midpoint
-    if (errM <= CBT_CREASE_GATE_M)
-        return CBT_CREASE_NONE; // the flat facet already approximates the sculpt within a hair
-
-    // Project the deviation to pixels: a radial segment of length errM at the midpoint distance, so
-    // the threshold is a true screen-space error (perspective foreshortening handled by the same
-    // rebased projection the area metric uses). A midpoint at/behind the eye plane is left to the
-    // area metric's behind-eye force-split; the crease term does not add near-plane demand.
-    float hLerp = 0.5 * (h0 + h2);
-    vec2 baseP, tipP;
-    bool bIn = CBT_ProjectPixels(midDir * (radius + hLerp) - origin, fp, baseP);
-    bool tIn = CBT_ProjectPixels(midDir * (radius + hLerp + errM) - origin, fp, tipP);
-    if (!bIn || !tIn)
-        return CBT_CREASE_NONE;
-    float errPx = distance(baseP, tipP);
-    // fp.screen.z/.w are the split/merge pixel thresholds derived from TargetPixelError — reuse them
-    // so the crease resolves to the same pixel budget the area metric targets, with the same 2:1
-    // hysteresis dead-band that stops a converged crease oscillating split<->merge.
-    if (errPx > fp.screen.z)
-        return CBT_CREASE_SPLIT;
-    if (errPx > fp.screen.w)
-        return CBT_CREASE_HOLD;
-    return CBT_CREASE_NONE;
 }
 
 // #2 Classify — per slot (whole pool). Decides split/merge per bisector via the
@@ -1090,27 +1018,13 @@ bool CBT_DrawnFacetInFrustum(CBTFrameParams fp, CBTCornersWS c, vec2 uvMin, vec2
 }
 #endif
 
-// The near-field bound, for a facet with a split-edge endpoint at or behind the eye plane. Such a
-// facet is genuinely close, but a facet AT the eye plane needs no decode-cap detail: force-splitting
-// these to the cap is invisible over-refinement that saturates the walking pose (finding 2). Bound it
-// at the near-field world facet target: stop once the world-space split edge is that short.
-// distance(e0, e2) is the world split-edge length (render-origin-relative, fp32-precise). A target of 0
-// keeps the force-split-to-cap. Occupancy-gated (round-8e, CBT_NearFieldGateAllows): the invisible
-// near-plane grazing treadmill stops once the pool is under pressure, so the visible field keeps headroom.
-// The gate refuses a facet's own new split. The planar criterion (CBT_PlanarClassify) has no near-field
-// branch and no gate: its demand is bounded at the eye.
-//
-// A facet with all three corners behind the eye plane is unprojectable, not close: it must not inherit
-// the straddling facet's force-split to the world target. Its bound is the density the SCREEN metric
-// would give it in front (CBT_BehindEyeEdgePx) against the same coarsened thresholds the visible field
-// uses, so the near-bias and the water plane apply and shadow casters on the ALL stream keep a bounded
-// tessellation behind the camera. The straddling facet keeps the world target.
+// The near-field bound, for a facet with a split-edge end at or behind the eye plane: the split edge stops at
+// the world target (0 = the decode cap) and at the density the screen gives it in front (CBT_EyePlaneFacetEdgePx).
+// CBT_NearFieldGateAllows stops these splits under pool pressure; CBT_PlanarClassify has no near-field branch.
 
-// The world split edge of a facet behind the eye, in the pixels the perspective would give it in front:
-// scaled by the y focal length in pixels over its distance from the eye (an orthographic camera has no
-// behind).
-// Precise (no fused multiply-add), like every input of CBT_PlanarSplitWish.
-float CBT_BehindEyeEdgePx(CBTFrameParams fp, vec3 e0, vec3 e2, vec3 camRel)
+// The world split edge of an eye-plane facet, in the pixels the perspective gives it in front: scaled by the
+// y focal length in pixels over its distance from the eye (an orthographic camera has no eye plane).
+float CBT_EyePlaneFacetEdgePx(CBTFrameParams fp, vec3 e0, vec3 e2, vec3 camRel)
 {
     precise float focalPx = length(vec3(fp.viewProjRel[0][1], fp.viewProjRel[1][1], fp.viewProjRel[2][1])) *
                             0.5 * fp.screen.y;
@@ -1119,14 +1033,13 @@ float CBT_BehindEyeEdgePx(CBTFrameParams fp, vec3 e0, vec3 e2, vec3 camRel)
     return edgePx;
 }
 
-// The near-field split wish by the world target and the behind-eye bound, without the occupancy gate.
-bool CBT_NearFieldSplitWish(CBTFrameParams fp, float nearTargetM, float splitPx, vec3 e0, vec3 e2, vec3 camRel,
-                            bool allBehind)
+// The near-field split wish by the world target and the eye-plane bound, without the occupancy gate.
+bool CBT_NearFieldSplitWish(CBTFrameParams fp, float nearTargetM, float splitPx, vec3 e0, vec3 e2, vec3 camRel)
 {
     precise float nearEdgeM = distance(e0, e2);
     bool wantsByTarget = (nearTargetM <= 0.0 || nearEdgeM > nearTargetM);
-    if (allBehind && nearTargetM > 0.0)
-        wantsByTarget = wantsByTarget && (CBT_BehindEyeEdgePx(fp, e0, e2, camRel) > splitPx);
+    if (nearTargetM > 0.0)
+        wantsByTarget = wantsByTarget && (CBT_EyePlaneFacetEdgePx(fp, e0, e2, camRel) > splitPx);
     return wantsByTarget;
 }
 
@@ -1137,180 +1050,64 @@ bool CBT_NearFieldGateAllows(float occupancy)
     return pc.nearFieldGate == 0u || occupancy < CBT_NEAR_FIELD_OCC_CEIL;
 }
 
-// The near-field merge wish. behindEyeWantsMerge carries the behind-eye bound's own term past the
+// The near-field merge wish. eyePlaneFacetWantsMerge carries the eye-plane bound's own term past the
 // off-frustum keep gate (see its declaration in Kernel_Classify).
 bool CBT_NearFieldMergeWish(CBTFrameParams fp, float nearTargetM, float mergePx, vec3 e0, vec3 e2, vec3 camRel,
-                            bool allBehind, out bool behindEyeWantsMerge)
+                            out bool eyePlaneFacetWantsMerge)
 {
-    behindEyeWantsMerge = false;
+    eyePlaneFacetWantsMerge = false;
     bool wantMerge = CBT_NearFieldWantMerge(nearTargetM, distance(e0, e2));
-    if (allBehind && nearTargetM > 0.0)
+    if (nearTargetM > 0.0)
     {
-        behindEyeWantsMerge = CBT_BehindEyeEdgePx(fp, e0, e2, camRel) < mergePx;
-        wantMerge = wantMerge || behindEyeWantsMerge;
+        eyePlaneFacetWantsMerge = CBT_EyePlaneFacetEdgePx(fp, e0, e2, camRel) < mergePx;
+        wantMerge = wantMerge || eyePlaneFacetWantsMerge;
     }
     return wantMerge;
 }
 
-#if !defined(CBT_DECODE_INT32)
-// Content-aware split (planar, the bound unified height texture, which the paged resolve keeps bound
-// too; the atlas source keeps the screen-space rule alone, and so does an atlas-backed terrain on its
-// pages: it binds the 1x1 default at binding 15, so the range lookup returns nothing and only the
-// screen-space rule splits). A facet whose heights are flat at the screen's resolution gains nothing
-// from children, whatever its edge measures: it splits only while its height range (the pyramid's
-// low-high over its lattice cells, in meters) projects above flatPx at the NEAREST point of its 3D box
-// (the UV box in XZ, the range in Y). The midpoint would not do: a large facet's midpoint can sit
-// hundreds of meters away while its far corner is under the camera, and it would then veto the split of
-// relief right in front of the eye. Off when flatPx (waterPlane.w) is 0, the A/B arm.
-bool CBT_PlanarFlatTestOn(CBTFrameParams fp)
-{
-    return fp.waterPlane.w > 0.0 && fp.atlasParams1.z != 1.0;
-}
-
-// Whether the heights over a UV box, seen from the camera, project below limitPx (strictly below when
-// strict). The corners bound the range from below and the box from inside, so a box the corners already
-// decide needs no pyramid read; on relief that is most facets.
-bool CBT_PlanarRangeBelowPx(CBTFrameParams fp, vec3 origin, vec3 camRel, vec2 uvMin, vec2 uvMax,
-                            float cornerLow, float cornerHigh, float limitPx, bool strict)
-{
-    // Precise (no fused multiply-add), like every input of CBT_PlanarSplitWish.
-    precise float focalPx = length(vec3(fp.viewProjRel[0][1], fp.viewProjRel[1][1], fp.viewProjRel[2][1])) *
-                            0.5 * fp.screen.y;
-    precise vec2 originXZ = fp.terrainOrigin.xy - origin.xz;
-    precise vec2 xzMin = originXZ + uvMin * fp.terrainSize.xy;
-    precise vec2 xzMax = originXZ + uvMax * fp.terrainSize.xy;
-    precise float cornerDist = max(CBT_DistanceToBox(vec3(xzMin.x, cornerLow, xzMin.y),
-                                                     vec3(xzMax.x, cornerHigh, xzMax.y), camRel),
-                                   CBT_BEHIND_EYE_MIN_DIST);
-    precise float cornerPx = (cornerHigh - cornerLow) * focalPx / cornerDist;
-    vec2 range;
-    if (!(strict ? cornerPx < limitPx : cornerPx <= limitPx) || !CBT_HeightRangeOverUV(uvMin, uvMax, range))
-        return false;
-    precise float baseY = fp.terrainSize.w - origin.y;
-    precise float low = range.x * fp.terrainSize.z + baseY;
-    precise float high = range.y * fp.terrainSize.z + baseY;
-    precise float dist = max(CBT_DistanceToBox(vec3(xzMin.x, low, xzMin.y), vec3(xzMax.x, high, xzMax.y), camRel),
-                             CBT_BEHIND_EYE_MIN_DIST);
-    precise float rangePx = (high - low) * focalPx / dist;
-    return strict ? rangePx < limitPx : rangePx <= limitPx;
-}
-
-// A pair merges once the PARENT's range projects below half of flatPx at the nearest point
-// of the parent's box. Both siblings rebuild that box identically (their own corners plus the reflected
-// far endpoint), so they agree; and a parent that merged reads the same box at its own split test, so it
-// stays merged. The factor of two is the band that keeps a pair whose range sits near the threshold
-// from flipping on a small camera move.
-bool CBT_PlanarFlatParentMerges(CBTFrameParams fp, vec3 origin, vec3 camRel, CBT_HEAPID_T h, vec3 e0, vec3 e1,
-                                vec3 e2, vec2 uv0, vec2 uv1, vec2 uv2)
-{
-    vec2 uvFar = ((uint(h) & 1u) == 0u) ? (2.0 * uv1 - uv0) : (2.0 * uv1 - uv2);
-    vec2 uvMin = min(min(uv0, uv1), min(uv2, uvFar));
-    vec2 uvMax = max(max(uv0, uv1), max(uv2, uvFar));
-    return CBT_PlanarRangeBelowPx(fp, origin, camRel, uvMin, uvMax, min(e0.y, min(e1.y, e2.y)),
-                                  max(e0.y, max(e1.y, e2.y)), 0.5 * fp.waterPlane.w, true);
-}
-#endif
-
-// What the planar split test reads besides a triangle's corners: the per-update pool and view state
-// Kernel_Classify derives once per facet.
-struct CBTPlanarDemand
-{
-    vec3 Origin;         // render origin, world
-    vec3 CamRel;         // camera, render-origin-relative
-    float Contention;    // the near-bias contention ramp
-    float PressureScale; // the planar pool-pressure scale
-    float NearTargetM;   // the near-field world facet target
-};
-
-// The planar split wish of one triangle, from its render-origin-relative corners and their UVs alone:
-// the near-field bound when a split-edge endpoint is at or behind the eye plane, the screen-space edge
-// metric otherwise, and the content-aware veto on either. The depth cap, the near-field occupancy gate
-// (CBT_NearFieldGateAllows) and the off-frustum gate are the caller's; nearField reports which branch
-// decided. Kernel_Classify asks it on the planar arms the criterion does not decide (CBT_PlanarCriterionOn:
-// the atlas source, a lattice without a pyramid, the narrow heap).
-//
-// The wish uses a moving camera's thresholds while the camera holds still too. The screen-space merge
-// runs this test on the parent (CBT_PlanarParentMergeWish). The near-field merge measures the child's own
-// edge against CBT_NEAR_FIELD_MERGE_FRAC of the target, so it does not restate its split.
-//
-// Water plane: a triangle whose three corners all sit more than the margin below the calm water
-// surface is hidden by the water whenever the camera is above that surface (every view ray to it
-// crosses the plane first), so its thresholds are scaled by waterPlane.z and the seabed converges at
-// about z x the visible target. Corners within the margin (the shoreline, and the seabed still visible
-// through shallow water) refine normally; a camera below the surface sees everything.
-// CBT_ProjectPixels with every operation marked precise (SPIR-V NoContraction), so the driver cannot fuse
-// a multiply-add in one inlined copy and not in another.
-bool CBT_ProjectPixelsPrecise(vec3 relPos, CBTFrameParams fp, out vec2 pixels)
-{
-    precise vec4 clip = fp.viewProjRel * vec4(relPos, 1.0);
-    if (clip.w <= 1e-5)
-    {
-        pixels = vec2(0.0);
-        return false;
-    }
-    precise vec2 ndc = clip.xy / clip.w;
-    precise vec2 px = (ndc * 0.5 + 0.5) * fp.screen.xy;
-    pixels = px;
-    return true;
-}
-
-// The scale on the edge rule's thresholds for one triangle: the near-bias at its split-edge midpoint, the
-// pool pressure, and the water plane when all three corners are hidden below it.
-float CBT_PlanarEdgeCoarsen(CBTFrameParams fp, CBTPlanarDemand d, vec3 e0, vec3 e1, vec3 e2)
-{
-    float submergedCoarsen = 1.0;
-    if (fp.waterPlane.z > 1.0)
-    {
-        float surfaceRel = fp.waterPlane.x - d.Origin.y;
-        float hiddenBelow = surfaceRel - fp.waterPlane.y;
-        if (d.CamRel.y > surfaceRel && e0.y < hiddenBelow && e1.y < hiddenBelow && e2.y < hiddenBelow)
-            submergedCoarsen = fp.waterPlane.z;
-    }
-    precise float coarsen =
-        CBT_NearBiasCoarsen(fp, d.Contention, distance(0.5 * (e0 + e2), d.CamRel)) * d.PressureScale *
-        submergedCoarsen;
-    return coarsen;
-}
-
-bool CBT_PlanarSplitWish(CBTFrameParams fp, CBTPlanarDemand d, vec3 e0, vec3 e1, vec3 e2, vec2 uv0, vec2 uv1,
-                         vec2 uv2, out bool nearField)
-{
-    precise float splitPx = fp.screen.z * CBT_PlanarEdgeCoarsen(fp, d, e0, e1, e2);
-    vec2 p0, p1, p2;
-    bool v0In = CBT_ProjectPixelsPrecise(e0, fp, p0);
-    bool v1In = CBT_ProjectPixelsPrecise(e1, fp, p1);
-    bool v2In = CBT_ProjectPixelsPrecise(e2, fp, p2);
-    precise float edgePx = distance(p0, p2);
-    nearField = !v0In || !v2In;
-    bool wish = nearField ? CBT_NearFieldSplitWish(fp, d.NearTargetM, splitPx, e0, e2, d.CamRel, !v0In && !v1In && !v2In)
-                          : edgePx > splitPx;
-#if !defined(CBT_DECODE_INT32)
-    if (wish && CBT_PlanarFlatTestOn(fp))
-        wish = !CBT_PlanarRangeBelowPx(fp, d.Origin, d.CamRel, min(uv0, min(uv1, uv2)), max(uv0, max(uv1, uv2)),
-                                       min(e0.y, min(e1.y, e2.y)), max(e0.y, max(e1.y, e2.y)), fp.waterPlane.w,
-                                       false);
-#endif
-    return wish;
-}
-
-// The parent's split test at the merge threshold. Both tests measure one edge with one arithmetic, so the gap
-// between the two thresholds is a real dead band: a parent that splits cannot merge back until its edge falls
-// below the merge bound. parentProjects is false when an end of the parent's split edge is at or behind the eye plane.
-bool CBT_PlanarParentMergeWish(CBTFrameParams fp, CBTPlanarDemand d, CBT_HEAPID_T h, vec3 e0, vec3 e2,
-                               vec3 parentFar, out bool parentProjects)
+// The parent's corners from one child's split edge (e0, e2) and the parent's far corner (CBT_ParentSplitEdgeFar).
+// parent0 and parent2 end the parent's split edge; parent1 is its apex, which both children share.
+void CBT_ParentCorners(CBT_HEAPID_T h, vec3 e0, vec3 e2, vec3 parentFar, out vec3 parent0, out vec3 parent1,
+                       out vec3 parent2)
 {
     bool oddChild = (uint(h) & 1u) != 0u;
-    vec3 parent0 = oddChild ? e2 : parentFar;
-    vec3 parent1 = oddChild ? e0 : e2;
-    vec3 parent2 = oddChild ? parentFar : e0;
-    vec2 q0, q2;
-    bool q0In = CBT_ProjectPixelsPrecise(parent0, fp, q0);
-    bool q2In = CBT_ProjectPixelsPrecise(parent2, fp, q2);
-    parentProjects = q0In && q2In;
-    precise float edgePx = distance(q0, q2);
-    precise float mergeBoundPx =
-        fp.screen.w * CBT_PlanarEdgeCoarsen(fp, d, parent0, parent1, parent2) * CBT_LEB_PARENT_EDGE_SCALE;
-    return parentProjects && edgePx < mergeBoundPx;
+    parent0 = oddChild ? e2 : parentFar;
+    parent1 = oddChild ? e0 : e2;
+    parent2 = oddChild ? parentFar : e0;
+}
+
+// A split halves a flat parent's projected area, so the child's area merge bound restated on the parent is twice it.
+const float CBT_LEB_PARENT_AREA_SCALE = 2.0;
+
+// The parent's area merge test: it merges below 2 x mergePx^2/4. With a twin parent the diamond merges as one, on the
+// larger of the two areas, so no half-diamond flag stays raised. All four children measure from the shared split edge,
+// its lower pixel end first (same areas assumed, not shown); a corner that differs keeps the diamond split.
+bool CBT_AreaParentMergeWish(CBTFrameParams fp, CBT_HEAPID_T h, vec3 e0, vec3 e2, vec3 parentFar, bool hasTwin,
+                             vec3 twinApex, vec3 camRel, float contention, float pressureScale,
+                             out bool parentProjects)
+{
+    vec3 parent0, parent1, parent2;
+    CBT_ParentCorners(h, e0, e2, parentFar, parent0, parent1, parent2);
+    vec2 q0, q1, q2, q3;
+    bool q0In = CBT_ProjectPixels(parent0, fp, q0);
+    bool q1In = CBT_ProjectPixels(parent1, fp, q1);
+    bool q2In = CBT_ProjectPixels(parent2, fp, q2);
+    parentProjects = q0In && q1In && q2In;
+    bool swapEnds = q2.x < q0.x || (q2.x == q0.x && q2.y < q0.y);
+    vec2 edgeStart = swapEnds ? q2 : q0;
+    precise vec2 edge = (swapEnds ? q0 : q2) - edgeStart;
+    precise vec2 toApex = q1 - edgeStart;
+    precise float areaPx = 0.5 * abs(edge.x * toApex.y - edge.y * toApex.x);
+    if (hasTwin)
+    {
+        parentProjects = parentProjects && CBT_ProjectPixels(twinApex, fp, q3);
+        precise vec2 toTwinApex = q3 - edgeStart;
+        precise float twinAreaPx = 0.5 * abs(edge.x * toTwinApex.y - edge.y * toTwinApex.x);
+        areaPx = max(areaPx, twinAreaPx);
+    }
+    float mergePx = fp.screen.w * pressureScale *
+                    CBT_NearBiasCoarsen(fp, contention, distance(0.5 * (parent0 + parent2), camRel));
+    return parentProjects && areaPx < CBT_LEB_PARENT_AREA_SCALE * 0.25 * mergePx * mergePx;
 }
 
 #if !defined(CBT_DECODE_INT32)
@@ -1336,8 +1133,8 @@ struct CBTPlanarCriterion
 };
 
 // Whether the planar criterion decides this terrain: a unified or paged height texture with a pyramid
-// built for its lattice. The atlas source and a lattice too large for the pyramid keep the screen-space
-// edge rule (CBT_PlanarSplitWish), and so does the narrow-heap arm, which has no pyramid.
+// built for its lattice. The atlas source, a lattice too large for the pyramid and the narrow-heap arm, which
+// has no pyramid, take the projected-area metric of the sphere.
 bool CBT_PlanarCriterionOn(CBTFrameParams fp)
 {
     if (fp.atlasParams1.z == 1.0)
@@ -1346,25 +1143,33 @@ bool CBT_PlanarCriterionOn(CBTFrameParams fp)
     return dim.x >= 2 && dim.y >= 2 && gHeightRange.Range[0] == (uint(dim.x - 1) | (uint(dim.y - 1) << 16u));
 }
 
+// The planar view of the frame: the render-origin-relative view-projection's rows and the screen terms.
+CBTPlanarView CBT_MakePlanarView(CBTFrameParams fp)
+{
+    mat4 vp = fp.viewProjRel;
+    CBTPlanarView v;
+    v.RowX = vec4(vp[0][0], vp[1][0], vp[2][0], vp[3][0]);
+    v.RowY = vec4(vp[0][1], vp[1][1], vp[2][1], vp[3][1]);
+    v.RowW = vec4(vp[0][3], vp[1][3], vp[2][3], vp[3][3]);
+    precise float scaleX = length(v.RowX.xyz);
+    precise float scaleY = length(v.RowY.xyz);
+    v.FocalPx = scaleY * 0.5 * fp.screen.y;
+    v.ViewPerClipX = 1.0 / scaleX;
+    v.ViewPerClipY = 1.0 / scaleY;
+    precise float tanDiag2 = v.ViewPerClipX * v.ViewPerClipX + v.ViewPerClipY * v.ViewPerClipY;
+    v.Kappa = inversesqrt(1.0 + tanDiag2);
+    v.MarginTanX = CBT_SPLIT_NDC_MARGIN * v.ViewPerClipX;
+    v.MarginTanY = CBT_SPLIT_NDC_MARGIN * v.ViewPerClipY;
+    v.Margin = CBT_SPLIT_NDC_MARGIN;
+    v.Ortho = (v.RowW.x == 0.0 && v.RowW.y == 0.0 && v.RowW.z == 0.0) ? 1u : 0u;
+    return v;
+}
+
 CBTPlanarCriterion CBT_MakePlanarCriterion(CBTFrameParams fp, vec3 origin, vec3 camRel, float contention,
                                            float pressureScale)
 {
-    mat4 vp = fp.viewProjRel;
     CBTPlanarCriterion c;
-    c.View.RowX = vec4(vp[0][0], vp[1][0], vp[2][0], vp[3][0]);
-    c.View.RowY = vec4(vp[0][1], vp[1][1], vp[2][1], vp[3][1]);
-    c.View.RowW = vec4(vp[0][3], vp[1][3], vp[2][3], vp[3][3]);
-    precise float scaleX = length(c.View.RowX.xyz);
-    precise float scaleY = length(c.View.RowY.xyz);
-    c.View.FocalPx = scaleY * 0.5 * fp.screen.y;
-    c.View.ViewPerClipX = 1.0 / scaleX;
-    c.View.ViewPerClipY = 1.0 / scaleY;
-    precise float tanDiag2 = c.View.ViewPerClipX * c.View.ViewPerClipX + c.View.ViewPerClipY * c.View.ViewPerClipY;
-    c.View.Kappa = inversesqrt(1.0 + tanDiag2);
-    c.View.MarginTanX = CBT_SPLIT_NDC_MARGIN * c.View.ViewPerClipX;
-    c.View.MarginTanY = CBT_SPLIT_NDC_MARGIN * c.View.ViewPerClipY;
-    c.View.Margin = CBT_SPLIT_NDC_MARGIN;
-    c.View.Ortho = (c.View.RowW.x == 0.0 && c.View.RowW.y == 0.0 && c.View.RowW.z == 0.0) ? 1u : 0u;
+    c.View = CBT_MakePlanarView(fp);
     c.CamRel = camRel;
     c.OriginXZ = fp.terrainOrigin.xy - origin.xz;
     c.BaseY = fp.terrainSize.w - origin.y;
@@ -1479,19 +1284,22 @@ float CBT_PlanarBehindExcess(CBTPlanarView v, vec3 camRel, vec3 lo, vec3 hi)
     return CBT_OFF_FRUSTUM_BEHIND_NDC * (1.0 + 1.0 / max(widest, 1.0e-6)) * sqrt(distanceM / CBT_BEHIND_EYE_MIN_DIST);
 }
 
-// The off-frustum class of a node's box for the keep gate: CBT_GATE_FRUSTUM with ndcExcess how far past the
-// margin the whole box sits (CBT_PlanarBehindExcess and `behind` when wholly behind the eye), else
-// CBT_GATE_RELEVANT (in view, or reaching the eye plane). A sub-box sits at least as far out, so the gate nests.
-int CBT_PlanarBoxGate(CBTPlanarView v, vec3 camRel, vec3 lo, vec3 hi, out float ndcExcess, out bool behind)
+// The keep-gate class of a node's box: CBT_GATE_FRUSTUM with ndcExcess past the margin (`behind`: wholly behind the
+// eye, CBT_PlanarBehindExcess), else CBT_GATE_RELEVANT (in view, or `across` the eye plane). The gate nests: a sub-box
+// sits at least as far out.
+int CBT_PlanarBoxGate(CBTPlanarView v, vec3 camRel, vec3 lo, vec3 hi, out float ndcExcess, out bool behind,
+                      out bool across)
 {
     ndcExcess = 0.0;
+    across = false;
     behind = CBT_BoxRowMax(v.RowW, lo, hi) <= 1.0e-5;
     if (behind)
     {
         ndcExcess = CBT_PlanarBehindExcess(v, camRel, lo, hi);
         return CBT_GATE_FRUSTUM;
     }
-    if (CBT_BoxRowMin(v.RowW, lo, hi) <= 1.0e-5)
+    across = CBT_BoxRowMin(v.RowW, lo, hi) <= 1.0e-5;
+    if (across)
         return CBT_GATE_RELEVANT;
     float m = v.Margin;
     vec4 ex = vec4(3.0e38); // left, right, bottom, top: the least excess over the corners
@@ -1547,6 +1355,15 @@ void CBT_PlanarClassify(CBTPlanarCriterion c, CBTFrameParams fp, CBT_HEAPID_T h,
 }
 #endif
 
+// One live leaf into the pool census (CBT_WQ_CENSUS_*): its level in view or off view, and an off-view leaf's class.
+void CBT_CensusCount(uint depth, bool inView, uint offViewClass)
+{
+    uint level = min(depth, CBT_CENSUS_LEVELS - 1u);
+    atomicAdd(gQueue.WorkQueue[CBT_WQ_CENSUS_BASE + 2u * level + (inView ? 0u : 1u)], 1);
+    if (!inView)
+        atomicAdd(gQueue.WorkQueue[CBT_WQ_CENSUS_CLASSES + offViewClass], 1);
+}
+
 void Kernel_Classify()
 {
     // Indirect over the LIVE bisector count (arc slice S3 pool-scaling — reference Fig 6): the
@@ -1577,7 +1394,7 @@ void Kernel_Classify()
     // the frame boundary); a bisector CREATED this frame has none yet, but Bisect /
     // Simplify force-flag it CBT_FLAG_VIS_MOD, so it is always drawn the frame it
     // changes and frustum-tested from the next. Frustum visibility does NOT feed the
-    // split/merge decision below (that stays the screen-space edge metric), so the ALL
+    // split/merge decision below (the screen-space demand), so the ALL
     // stream and convergence are unchanged by culling.
     uint flags = CBT_FLAG_VISIBLE;
     if (pc.classifyMode == CBT_CLASSIFY_SCREEN_SPACE)
@@ -1609,6 +1426,17 @@ void Kernel_Classify()
                 flags = CBT_FLAG_VISIBLE;
         }
 #endif
+        // A tiled terrain's lattice covers whole tiles; it ends at its authored size. A triangle wholly
+        // past that edge leaves the VISIBLE stream; one across it draws and clips in the vertex modifier.
+        if (flags != 0u && pc.domainMode == CBT_DOMAIN_PLANAR)
+        {
+            vec2 extent = gParams.Params[pc.frameIndex % CBT_FRAME_RING].surfaceExtent.xy;
+            vec2 nearest = min(vec2(gVertex.Vertex[slot].corner0.w, gVertex.Vertex[slot].meta.x),
+                               min(vec2(gVertex.Vertex[slot].corner1.w, gVertex.Vertex[slot].meta.y),
+                                   vec2(gVertex.Vertex[slot].corner2.w, gVertex.Vertex[slot].meta.z)));
+            if (any(greaterThan(nearest, extent)))
+                flags = 0u;
+        }
 
         // Horizon (back-hemisphere) cull for the spherical planet (plan §planet-shading).
         // The material is double-sided (no GPU backface cull), so ~half the globe's triangles
@@ -1689,12 +1517,14 @@ void Kernel_Classify()
 
     bool wantSplit = false;
     bool wantMerge = false;
-    // The merge wish of a facet wholly behind the eye passes the keep gate below. The keep band is the yaw
-    // buffer for facets just outside the frustum, not behind the eye: a band that cancels this merge freezes
-    // the field behind the camera while the band is wider than the facet's ndcExcess.
-    bool behindEyeWantsMerge = false;
+    // The eye-plane bound's merge wish passes the keep gate below. The keep band is the yaw buffer for facets
+    // just outside the frustum, not behind the eye: a band that cancels this merge freezes the field behind
+    // the camera while the band is wider than the facet's ndcExcess.
+    bool eyePlaneFacetWantsMerge = false;
     // A rest update under the planar criterion counts its merge candidates (CBT_WQ_MERGE_CANDIDATE_COUNTER).
     bool countMergeCandidate = false;
+    // The census class of an off-view leaf that does not want a merge (CBT_CENSUS_CLASS_*).
+    uint censusClass = CBT_CENSUS_CLASS_IN_MARGIN_FRUSTUM;
     if (pc.classifyMode == CBT_CLASSIFY_SCREEN_SPACE)
     {
         // The LEB split edge is (corner0, corner2) — the triangle's longest edge,
@@ -1726,6 +1556,10 @@ void Kernel_Classify()
         bool v0In = CBT_ProjectPixels(e0, fp, p0);
         bool v1In = CBT_ProjectPixels(e1, fp, p1);
         bool v2In = CBT_ProjectPixels(e2, fp, p2);
+        // The gate's view of the leaf for the census: wholly behind the eye plane, or across it. The planar
+        // criterion's box gate replaces the triangle's corners.
+        bool gateBehind = !v0In && !v1In && !v2In;
+        bool gateAcross = !gateBehind && (!v0In || !v1In || !v2In);
         uint maxDepth = uint(max(fp.terrainOrigin.z, float(pc.baseDepth)));
 
         // Live-pool occupancy (sum-tree root, rebuilt at the previous frame's tail — a stable,
@@ -1761,25 +1595,18 @@ void Kernel_Classify()
                 : 0.0;
         vec3 camRel = fp.cameraPos.xyz - origin;
 
-        // Water plane. A planar bisector whose three corners all sit more than the margin below the
-        // calm water surface is hidden by the water whenever the camera is above that surface: every
-        // view ray to it crosses the plane first. Refining it to the pixel target spends the pool on
-        // triangles no pixel shows, so its split AND merge thresholds are scaled by waterPlane.z —
-        // the near-bias mechanism,
-        // both thresholds, so the hysteresis band is preserved and the seabed converges at ~z x the
-        // visible target. Corners within the margin (the shoreline, and the seabed still visible
-        // through shallow water) refine normally; a camera below the surface sees everything, so the
-        // term is off. Decided per facet on both sides: a pair the margin splits (one sibling
-        // submerged, the other not) merely holds — the submerged sibling asks to merge at its coarse
-        // threshold, the other does not, and a blocked merge is stable (nothing re-splits). Compared
-        // in the render-origin-relative frame like the metric. Planar only: a planet's ocean would be
-        // a sphere, not a plane.
+        // Water plane (planar, camera above it): a facet whose corners are all deeper than the margin is hidden, so its
+        // thresholds scale by waterPlane.z. The split reads the facet's corners, the merge the parent's (the split edge
+        // here, parentFar below): a hidden pair under a dry parent holds its level.
         float submergedCoarsen = 1.0;
+        bool splitEdgeHidden = false;
+        float hiddenBelow = 0.0;
         if (pc.domainMode != CBT_DOMAIN_SPHERICAL && fp.waterPlane.z > 1.0)
         {
             float surfaceRel = fp.waterPlane.x - origin.y;
-            float hiddenBelow = surfaceRel - fp.waterPlane.y;
-            if (camRel.y > surfaceRel && e0.y < hiddenBelow && e1.y < hiddenBelow && e2.y < hiddenBelow)
+            hiddenBelow = surfaceRel - fp.waterPlane.y;
+            splitEdgeHidden = camRel.y > surfaceRel && e0.y < hiddenBelow && e2.y < hiddenBelow;
+            if (splitEdgeHidden && e1.y < hiddenBelow)
                 submergedCoarsen = fp.waterPlane.z;
         }
         // Planar pool-pressure scale (Kernel_Reset): the base target the pool can afford. It multiplies
@@ -1793,10 +1620,8 @@ void Kernel_Classify()
             (pressureStep == 0)
                 ? 1.0
                 : exp2(float(pressureStep) / float(CBT_PRESSURE_STEPS_PER_OCTAVE));
-        float coarsen = CBT_NearBiasCoarsen(fp, contention, distance(0.5 * (e0 + e2), camRel)) * pressureScale *
-                        submergedCoarsen;
-        float splitPx = fp.screen.z * coarsen;
-        float mergePx = fp.screen.w * coarsen;
+        float viewCoarsen = CBT_NearBiasCoarsen(fp, contention, distance(0.5 * (e0 + e2), camRel)) * pressureScale;
+        float splitPx = fp.screen.z * viewCoarsen * submergedCoarsen;
 
         // Projected triangle area (px^2), hoisted so the round-8c priority floor + keep-large below can
         // read it. >= 0 only in the area branch (all three corners in front); a behind-eye / straddle
@@ -1807,11 +1632,54 @@ void Kernel_Classify()
         int gate = CBT_GATE_RELEVANT;
         float ndcExcess = 0.0;
         // How far outside the margin the keep band reads for the gate's merge: the facet's own box on
-        // the edge rule, the parent's box under the criterion (below).
+        // the area metric, the parent's box under the criterion (below).
         float keepExcess = 0.0;
         bool gateDecided = false;
+        bool planarCriterion = false;
 #if !defined(CBT_DECODE_INT32)
-        if (pc.domainMode != CBT_DOMAIN_SPHERICAL && CBT_PlanarCriterionOn(fp))
+        planarCriterion = pc.domainMode != CBT_DOMAIN_SPHERICAL && CBT_PlanarCriterionOn(fp);
+#endif
+        // A planar facet wholly behind the eye takes the area metric on its corners mirrored through the eye
+        // plane: ground behind the eye refines like the mirrored ground in view, so the screen bounds it and
+        // it still casts shadows into the view.
+        bool eyeMirrored = pc.domainMode != CBT_DOMAIN_SPHERICAL && !planarCriterion && !v0In && !v1In && !v2In;
+        // The keep gate's distance excess of a facet wholly behind the eye (CBT_PlanarBehindExcess over its
+        // corners) and of its parent's box (0 while the parent is not known to be wholly behind the eye).
+#if !defined(CBT_DECODE_INT32)
+        float behindExcess = 0.0;
+        float behindParentExcess = 0.0;
+        vec3 behindLo = vec3(0.0);
+        vec3 behindHi = vec3(0.0);
+        CBTPlanarView behindView;
+        bool behindGated = eyeMirrored && pc.behindEye != CBT_BEHIND_EYE_ALWAYS_KEEP;
+        if (behindGated)
+        {
+            behindView = CBT_MakePlanarView(fp);
+            behindLo = min(e0, min(e1, e2));
+            behindHi = max(e0, max(e1, e2));
+            behindExcess = CBT_PlanarBehindExcess(behindView, camRel, behindLo, behindHi);
+        }
+#endif
+        if (eyeMirrored)
+        {
+            e0 = CBT_MirrorThroughEyePlane(fp, e0);
+            e1 = CBT_MirrorThroughEyePlane(fp, e1);
+            e2 = CBT_MirrorThroughEyePlane(fp, e2);
+            v0In = CBT_ProjectPixels(e0, fp, p0);
+            v1In = CBT_ProjectPixels(e1, fp, p1);
+            v2In = CBT_ProjectPixels(e2, fp, p2);
+        }
+        // The parent's far corner, read once: the area metric always needs it, the near field only for the water
+        // term. The planar criterion reads neither. parentFar is in the unmirrored frame here.
+        vec3 parentFar = vec3(0.0);
+        uint sibling = 0u;
+        bool areaPath = v0In && v1In && v2In;
+        bool siblingIsLeaf = !planarCriterion && (areaPath || splitEdgeHidden) && depth > pc.baseDepth &&
+                             CBT_ParentSplitEdgeFar(slot, h, fp, parentFar, sibling);
+        bool parentHidden = splitEdgeHidden && siblingIsLeaf && parentFar.y < hiddenBelow;
+        float mergePx = fp.screen.w * viewCoarsen * (parentHidden ? fp.waterPlane.z : 1.0);
+#if !defined(CBT_DECODE_INT32)
+        if (planarCriterion)
         {
             // Planar: the monotone split criterion (CBT_PlanarClassify). It is the whole demand model
             // while the pool can serve it; the off-frustum gate below overrides it only once the pool
@@ -1825,8 +1693,11 @@ void Kernel_Classify()
             float boxRangeM;
             CBT_PlanarNodeBox(criterion, fp, min(uv0, min(uv1, uv2)), max(uv0, max(uv1, uv2)), lo, hi, boxRangeM);
             bool behind;
-            gate = CBT_PlanarBoxGate(criterion.View, criterion.CamRel, lo, hi, ndcExcess, behind);
-            behindEyeWantsMerge = behind && wantMerge;
+            bool across;
+            gate = CBT_PlanarBoxGate(criterion.View, criterion.CamRel, lo, hi, ndcExcess, behind, across);
+            gateBehind = behind;
+            gateAcross = across;
+            eyePlaneFacetWantsMerge = behind && wantMerge;
             gateDecided = true;
             countMergeCandidate = pc.settle != 0u;
             // The gate's merge reads the parent's box, which both children rebuild alike: a pair
@@ -1846,87 +1717,36 @@ void Kernel_Classify()
                 CBT_PlanarNodeBox(criterion, fp, min(p0, min(p1, p2)), max(p0, max(p1, p2)), parentLo, parentHi,
                                   parentRangeM);
                 bool parentBehind;
+                bool parentAcross;
                 float parentExcess;
                 int parentGate = CBT_PlanarBoxGate(criterion.View, criterion.CamRel, parentLo, parentHi, parentExcess,
-                                                   parentBehind);
+                                                   parentBehind, parentAcross);
                 keepExcess = parentGate == CBT_GATE_FRUSTUM ? parentExcess : 0.0;
             }
         }
         else
 #endif
-        if (pc.domainMode != CBT_DOMAIN_SPHERICAL)
-        {
-            // Planar without a height pyramid (the atlas source, a lattice too large for the pyramid,
-            // the narrow-heap arm): the screen-space edge-length metric (CBT_PlanarSplitWish), with
-            // the off-frustum gate below under pool pressure.
-            vec2 uv0 = vec2(gVertex.Vertex[slot].corner0.w, gVertex.Vertex[slot].meta.x);
-            vec2 uv1 = vec2(gVertex.Vertex[slot].corner1.w, gVertex.Vertex[slot].meta.y);
-            vec2 uv2 = vec2(gVertex.Vertex[slot].corner2.w, gVertex.Vertex[slot].meta.z);
-            CBTPlanarDemand demand =
-                CBTPlanarDemand(origin, camRel, contention, pressureScale, nearTargetM);
-            bool nearField;
-            wantSplit = (depth < maxDepth) && CBT_PlanarSplitWish(fp, demand, e0, e1, e2, uv0, uv1, uv2, nearField) &&
-                        (!nearField || CBT_NearFieldGateAllows(occupancy));
-            if (!v0In || !v2In)
-            {
-                wantMerge = CBT_NearFieldMergeWish(fp, nearTargetM, mergePx, e0, e2, camRel,
-                                                   !v0In && !v1In && !v2In, behindEyeWantsMerge);
-            }
-            else
-            {
-                // A merge decides the parent, so both children run the parent's split test: their own
-                // edges are the parent's two legs and can project 10x apart. A sibling that is not a leaf
-                // blocks the merge; a parent end behind the eye plane keeps the per-child answer.
-                vec3 parentFar;
-                bool siblingIsLeaf = depth > pc.baseDepth && CBT_ParentSplitEdgeFar(slot, h, fp, parentFar);
-                bool parentProjects = false;
-                bool parentMerges =
-                    siblingIsLeaf && CBT_PlanarParentMergeWish(fp, demand, h, e0, e2, parentFar, parentProjects);
-                wantMerge = (!siblingIsLeaf || parentProjects) ? parentMerges : (distance(p0, p2) < mergePx);
-            }
-#if !defined(CBT_DECODE_INT32)
-            if (!wantSplit && !wantMerge && depth > pc.baseDepth && CBT_PlanarFlatTestOn(fp))
-                wantMerge = CBT_PlanarFlatParentMerges(fp, origin, camRel, h, e0, e1, e2, uv0, uv1, uv2);
-#endif
-        }
-        else if (!v0In || !v2In)
+        if (!v0In || !v2In)
         {
             // A split-edge endpoint at or behind the eye plane: the near-field bound
             // (CBT_NearFieldSplitWish, CBT_NearFieldMergeWish).
-            bool allBehind = !v0In && !v1In && !v2In;
             wantSplit = (depth < maxDepth) && CBT_NearFieldGateAllows(occupancy) &&
-                        CBT_NearFieldSplitWish(fp, nearTargetM, splitPx, e0, e2, camRel, allBehind);
-            wantMerge = CBT_NearFieldMergeWish(fp, nearTargetM, mergePx, e0, e2, camRel, allBehind,
-                                               behindEyeWantsMerge);
+                        CBT_NearFieldSplitWish(fp, nearTargetM, splitPx, e0, e2, camRel);
+            wantMerge = CBT_NearFieldMergeWish(fp, nearTargetM, mergePx, e0, e2, camRel, eyePlaneFacetWantsMerge);
         }
         else
         {
-            // Reference-parity screen-space AREA metric (large_cbt targets ~49 px^2/triangle).
-            // PROJECTED TRIANGLE AREA, not split-edge length, is the demand driver: area bounds
-            // total demand by the screen budget (~screen_px / target, a few 10^4) and makes a
-            // foreshortened grazing/limb facet stop splitting (its projected area collapses to ~0
-            // while its edge stays long). The pure edge metric drove those limb facets to the
-            // decode cap and, together with the (now culled) far field, saturated the pool with
-            // ~10^5/frame demand while the visible screen justified ~10^4. splitPx/mergePx are the
-            // edge-space thresholds carrying the optional view-priority near-bias; a right-isoceles
-            // LEB facet has area = edge^2/4, so square them into the area dead-band (split >
-            // splitPx^2/4, merge < mergePx^2/4 — the same 4:1 hysteresis the edge 2:1 band gave).
-            // The merge threshold stays the lower bound (an edit must never coarsen — the dirtyOverlap
-            // MODIFIED binning above is separate). Apex behind the near plane => area undefined =>
-            // genuinely close => force split up to the cap. The AREA metric is spherical only — the
-            // demand audit that tuned it is the planet, and a bounded heightfield does not have the
-            // limb-inflation failure it cures; the planar domain keeps the edge metric below. (The
-            // off-frustum VISIBILITY gate is separate and runs in both domains — see the demand gate
-            // at the end of this branch.)
+            // The projected-area metric (px^2), for the sphere and a planar instance outside the criterion: a
+            // facet splits above splitPx^2/4 and its parent merges below 2 x mergePx^2/4 (CBT_AreaParentMergeWish).
+            // A grazing facet stops splitting: its area collapses while its edge stays long.
             if (!v1In)
             {
-                // Apex behind the near plane => genuinely close; same behind-eye bound + occupancy
-                // gate as above (round-8e: no near-plane force-split treadmill under pool pressure).
-                bool nearFieldAllows = pc.nearFieldGate == 0u || occupancy < CBT_NEAR_FIELD_OCC_CEIL;
-                float nearEdgeM = distance(e0, e2);
-                wantSplit = (depth < maxDepth) && nearFieldAllows &&
-                            (nearTargetM <= 0.0 || nearEdgeM > nearTargetM);
-                wantMerge = CBT_NearFieldWantMerge(nearTargetM, nearEdgeM);
+                // Apex behind the eye plane: the facet crosses it, so it takes the near-field bound and
+                // occupancy gate above. The bound's merge term does not pass the off-frustum gate here.
+                bool apexBoundMerges;
+                wantSplit = (depth < maxDepth) && CBT_NearFieldGateAllows(occupancy) &&
+                            CBT_NearFieldSplitWish(fp, nearTargetM, splitPx, e0, e2, camRel);
+                wantMerge = CBT_NearFieldMergeWish(fp, nearTargetM, mergePx, e0, e2, camRel, apexBoundMerges);
             }
             else
             {
@@ -1934,7 +1754,31 @@ void Kernel_Classify()
                 float splitArea = 0.25 * splitPx * splitPx;
                 float mergeArea = 0.25 * mergePx * mergePx;
                 wantSplit = (depth < maxDepth) && (areaPx > splitArea);
-                wantMerge = (areaPx < mergeArea);
+                // A merge decides the parent, so both children run the parent's area test: a midpoint off the
+                // parent's plane can put both children under the merge bound while the parent stays over the
+                // split bound. A sibling that is not a leaf blocks the merge.
+                vec3 twinApex;
+                uint twin = siblingIsLeaf ? CBT_TwinParent(slot, sibling, h, fp, twinApex) : CBT_TWIN_NONE;
+#if !defined(CBT_DECODE_INT32)
+                // The parent's corners are this facet's and the far end of its split edge.
+                vec3 parentLo = min(behindLo, parentFar);
+                vec3 parentHi = max(behindHi, parentFar);
+                if (behindGated && siblingIsLeaf && CBT_BoxRowMax(behindView.RowW, parentLo, parentHi) <= 1.0e-5)
+                    behindParentExcess = CBT_PlanarBehindExcess(behindView, camRel, parentLo, parentHi);
+#endif
+                if (eyeMirrored)
+                {
+                    parentFar = CBT_MirrorThroughEyePlane(fp, parentFar);
+                    twinApex = CBT_MirrorThroughEyePlane(fp, twinApex);
+                }
+                bool parentProjects = false;
+                bool parentMerges = siblingIsLeaf && CBT_AreaParentMergeWish(fp, h, e0, e2, parentFar,
+                                                                             twin == CBT_TWIN_LEAF, twinApex,
+                                                                             camRel, contention, pressureScale,
+                                                                             parentProjects);
+                wantMerge = (!siblingIsLeaf || parentProjects) ? parentMerges : (areaPx < mergeArea);
+                if (twin == CBT_TWIN_FINER)
+                    wantMerge = false;
                 // Flat-disc edge-rescue (finding 4): a near facet viewed at ~90deg (grazing/flattened)
                 // has its projected AREA collapse to ~0 while its projected LEB edge stays long, so the
                 // area metric starves it. Rescue-split while the projected edge is long AND the pool
@@ -1953,78 +1797,31 @@ void Kernel_Classify()
                 // diamond would oscillate. Hold the merge while the parent edge is still long. The
                 // parent's far end comes from the sibling's corners (CBT_ParentSplitEdgeFar), so both
                 // siblings measure the same edge, deep-sector storage included.
-                if (wantMerge && depth > pc.baseDepth && depth <= maxDepth &&
-                    fp.demandTuning.z > 0.0 && occupancy < fp.demandTuning.w)
+                if (wantMerge && siblingIsLeaf && depth <= maxDepth && fp.demandTuning.z > 0.0 &&
+                    occupancy < fp.demandTuning.w)
                 {
-                    vec3 parentFar;
-                    if (CBT_ParentSplitEdgeFar(slot, h, fp, parentFar))
+                    vec2 parentFarPx;
+                    if (CBT_ProjectPixels(parentFar, fp, parentFarPx))
                     {
-                        vec2 parentFarPx;
-                        if (CBT_ProjectPixels(parentFar, fp, parentFarPx))
-                        {
-                            vec2 parentHeldPx = ((uint(h) & 1u) != 0u) ? p2 : p0;
-                            if (distance(parentHeldPx, parentFarPx) > fp.demandTuning.z)
-                                wantMerge = false;
-                        }
+                        vec2 parentHeldPx = ((uint(h) & 1u) != 0u) ? p2 : p0;
+                        if (distance(parentHeldPx, parentFarPx) > fp.demandTuning.z)
+                            wantMerge = false;
                     }
                 }
             }
         }
 
-        // Screen-area priority FLOOR (round-8c look-back) — computed here so the crease gate below can
-        // relax against it and the frustum keep-large below can reuse it. Raises a projected-area cutoff
-        // on split DEMAND as the pool contends, along the WIDE occupancy ramp [priorityParams.y,
-        // CBT_PRIORITY_OCC_FULL] (low feedback gain, no oscillation — the near-bias discipline), so the
-        // largest-on-screen facets claim the fixed pool first and a look-back rebuilds biggest-facets-
-        // first instead of tiny far facets winning slots as often as the huge near blob. An unsaturated
-        // pool leaves it 0 (neutrality — TPE=8 unaffected). It is APPLIED after the crease term (so it
-        // orders crease demand too); the value is computed first only for the crease-gate composition.
+        // The smallest projected area a facet needs to split. It rises with pool occupancy along the ramp
+        // [priorityParams.y, CBT_PRIORITY_OCC_FULL], so the largest facets on screen get the pool first.
+        // It is 0 while the pool is not full; the frustum keep-large below reads it too.
         float priorityFloor = 0.0;
         if (fp.priorityParams.x != 0.0 && pc.domainMode == CBT_DOMAIN_SPHERICAL)
             priorityFloor = smoothstep(fp.priorityParams.y, CBT_PRIORITY_OCC_FULL, occupancy) *
                             max(fp.priorityParams.z, 0.0);
-        // Does this facet clear the floor? A facet that does is PRIORITIZED, so under saturation its
-        // split is satisfied rather than endlessly rolled back — which is what lets the crease term
-        // relax its occupancy ceiling for it (round-8c gate c). Needs a real projected area (areaPx >= 0).
-        bool clearsPriorityFloor = priorityFloor > 0.0 && areaPx >= priorityFloor;
 
-        // Edit-driven retessellation (round-8b): a live sculpt crease the area metric cannot see —
-        // a coarse facet straddling a freshly-cut cliff whose projected size did not change. Sample
-        // the composed height at the split-edge midpoint and demand a split while it projects past
-        // the pixel target, concentrating subdivision at the crease. Overrides the area metric's
-        // keep/merge (an under-resolved crease must never coarsen) but is itself overridden by the
-        // visibility gate below (an occluded or off-frustum crease is not worth the pool). Costs one
-        // sculpt sample for facets straddling a sculpt gradient only; free everywhere else.
-        //
-        // Occupancy-gated (the #598/#599 bounded-demand discipline): a crease split needs free pool
-        // slots (its compatibility chain reserves 2·depth−1). When the pool is SATURATED those splits
-        // roll back every frame — an unsatisfiable demand that burns Split work forever while the
-        // crease never refines (the R=50000/TargetPixelError=1 regime). Fire while the pool has headroom
-        // below the ceiling OR — round-8c composition (gate c) — when the facet is LARGE enough to clear
-        // the priority floor: under priority ordering a large-area crease split is prioritized and gets
-        // satisfied (not endlessly rolled back), so the ceiling that existed only to stop unsatisfiable
-        // SMALL-crease work can be relaxed for the large ones. The plateau rim then sharpens even at
-        // TargetPixelError=1, while tiny far creases stay gated (bounded demand held).
-        if (pc.domainMode == CBT_DOMAIN_SPHERICAL && pc.sphereSculptEnabled != 0u &&
-            pc.editRetessEnabled != 0u && (occupancy < CBT_CREASE_OCC_CEIL || clearsPriorityFloor))
-        {
-            int crease = CBT_SculptCreaseDemand(fp, slot, h, depth, maxDepth, origin, wc0, wc2);
-            if (crease == CBT_CREASE_SPLIT)
-            {
-                wantSplit = true;
-                wantMerge = false;
-            }
-            else if (crease == CBT_CREASE_HOLD)
-            {
-                wantMerge = false;
-            }
-        }
-
-        // Screen-area priority ordering (round-8c look-back): APPLY the floor. A facet under it yields
-        // its would-be split (from the area metric OR the crease term) to a bigger, more jarring one, so
-        // a saturated pool refines biggest-first. A tiny far crease yields to a big plateau; a large
-        // crease already cleared the floor above and keeps its split (the composition). Needs a real
-        // projected area (areaPx >= 0) so a genuinely-close behind-eye/straddle facet is never gated.
+        // APPLY the floor: a facet under it yields its would-be split to a bigger, more jarring one, so
+        // a saturated pool refines biggest-first. Needs a real projected area (areaPx >= 0) so a
+        // genuinely-close behind-eye/straddle facet is never gated.
         if (priorityFloor > 0.0 && wantSplit && areaPx >= 0.0 && areaPx < priorityFloor)
             wantSplit = false;
 
@@ -2038,6 +1835,9 @@ void Kernel_Classify()
         // chain still force-splits neighbors, so the shaped field grades to base via the normal LEB
         // merge (conformity held).
         bool spherical = pc.domainMode == CBT_DOMAIN_SPHERICAL;
+        // The area metric's off-frustum rule (the sphere and a planar instance outside the criterion): no split
+        // off the frustum and the occupancy-ramped keep band, so demand is what the screen resolves.
+        bool screenBounded = !gateDecided;
         if (!gateDecided)
         {
             gate = CBT_SplitGate(fp, wc0, wc1, wc2, p0, p1, p2, v0In, v1In, v2In, ndcExcess);
@@ -2067,7 +1867,7 @@ void Kernel_Classify()
             float keepCeil = fp.demandTuning.y;
             float keepBand = 0.0;
             bool poolUnderPressure = false;
-            if (keepCeil > 0.0 && spherical)
+            if (keepCeil > 0.0 && screenBounded)
             {
                 float ramp = clamp((keepCeil - occupancy) / CBT_KEEP_RAMP, 0.0, 1.0);
                 keepBand = ramp * CBT_OFF_FRUSTUM_KEEP_NDC;
@@ -2092,17 +1892,9 @@ void Kernel_Classify()
             if (spherical && fp.priorityParams.x != 0.0 && fp.priorityParams.w > 0.0 && areaPx >= 0.0 &&
                 ndcExcess <= fp.priorityParams.w && areaPx >= priorityFloor)
                 keepDepth = true;
-            // WHEN the shaping engages is the one domain difference (round-10 planar parity). The
-            // planet's off-frustum field is unboundedly large — it never fits the pool at any
-            // occupancy — so the sphere suppresses the off-frustum split UNCONDITIONALLY. A planar
-            // heightfield's off-frustum field is BOUNDED and affordable whenever the pool can serve
-            // it, and keeping it at depth means a yaw re-refines nothing, so a planar terrain that
-            // fits keeps its tessellation exactly. Planar therefore retains TOTALLY at keep step 0
-            // and rides the band the step collapses (CBT_PlanarKeepBand): the term switches on with
-            // only the far tail of the field past the widest band and grows step by step while the
-            // pool stays at the keep ceiling. A view that fits never reaches the ceiling, so its
-            // step stays 0. keepCeil <= 0 leaves planar entirely ungated (the "every DemandTuning
-            // field 0 => the pre-slice metric" contract).
+            // The sphere suppresses the off-frustum split always: its off-frustum field never fits the pool. The
+            // planar criterion's field is bounded, so it is shaped only at the keep ceiling, by the keep band
+            // (CBT_PlanarKeepBand); a view that fits stays at step 0, and keepCeil <= 0 leaves it ungated.
             if (!spherical && poolUnderPressure && gateDecided)
             {
                 // The criterion inside the band, merged outside it: the tree at a keep step depends
@@ -2110,7 +1902,7 @@ void Kernel_Classify()
                 wantSplit = wantSplit && ndcExcess <= keepBand;
                 wantMerge = (wantMerge || !keepDepth) && (depth > pc.baseDepth);
             }
-            else if (spherical || poolUnderPressure)
+            else if (screenBounded || poolUnderPressure)
             {
                 wantSplit = false;
                 // Only the bound's own term survives the gate, not the straddle branch's
@@ -2118,9 +1910,30 @@ void Kernel_Classify()
                 // nearTargetM close behind the eye holds its depth inside the band where it would
                 // merge below it — a density step at the band edge, not a freeze, because the
                 // bound's term converges on its own.
-                wantMerge = ((!keepDepth) || behindEyeWantsMerge) && (depth > pc.baseDepth);
+                wantMerge = ((!keepDepth) || eyePlaneFacetWantsMerge) && (depth > pc.baseDepth);
             }
         }
+#if !defined(CBT_DECODE_INT32)
+        // Ground wholly behind the eye takes the keep band at its distance excess: no split past the band, a merge
+        // when the parent is past it. One keep step moves the band's edge one octave, farthest first. A merge needs
+        // the whole diamond, so a leaf in view or across the eye plane holds its level.
+        if (behindGated && fp.demandTuning.y > 0.0)
+        {
+            float band = pc.behindEye == CBT_BEHIND_EYE_ALWAYS_RELEASE
+                             ? 0.0
+                             : CBT_PlanarKeepBand(gQueue.WorkQueue[CBT_WQ_OFF_FRUSTUM_KEEP_STEP]);
+            wantSplit = wantSplit && behindExcess <= band;
+            wantMerge = (wantMerge || behindParentExcess > band) && depth > pc.baseDepth;
+        }
+#endif
+        if (gate == CBT_GATE_HORIZON)
+            censusClass = CBT_CENSUS_CLASS_BEHIND_HORIZON;
+        else if (gateBehind)
+            censusClass = CBT_CENSUS_CLASS_BEHIND_EYE;
+        else if (gate == CBT_GATE_FRUSTUM)
+            censusClass = CBT_CENSUS_CLASS_BESIDE_FRUSTUM;
+        else if (gateAcross)
+            censusClass = CBT_CENSUS_CLASS_ACROSS_EYE_PLANE;
     }
     else
     {
@@ -2148,6 +1961,9 @@ void Kernel_Classify()
             CBT_QueuePush(CBT_WQ_SIMPLIFY_CLASS_COUNTER, CBT_WQ_SIMPLIFY_CLASS_QUEUE, slot);
     }
     gBisector.Bisector[slot].bisectorState = state;
+    if (pc.census != 0u)
+        CBT_CensusCount(depth, (gBisector.Bisector[slot].flags & CBT_FLAG_VISIBLE) != 0u,
+                        state == CBT_STATE_SIMPLIFY ? CBT_CENSUS_CLASS_MERGE_WANTED : censusClass);
 }
 
 // #3 PrepareIndirect — single thread. Promotes the counter selected by
@@ -3449,10 +3265,9 @@ void Kernel_VertexEval()
     if (i >= count)
         return;
 #if defined(GE_CBT_HEAP32)
-    // The narrow-heap arm runs on WebGPU, whose per-stage storage-buffer limit
-    // (10) this kernel already fills; the modified stream would be the 11th.
-    // The host never gates VertexEval on that arm (CBTInstance), so the walk
-    // is always the full live stream.
+    // The narrow-heap arm runs on WebGPU (8 storage buffers per stage by default; this kernel
+    // reads 8) and does not read the modified stream. The host never gates VertexEval
+    // on that arm (CBTInstance), so the walk is always the full live stream.
     uint slot = gIdxAll.IndicesAll[i];
 #else
     uint slot = pc.gateVertexEval != 0u ? gIdxMod.IndicesModified[i] : gIdxAll.IndicesAll[i];
@@ -3586,12 +3401,8 @@ void Kernel_VertexEval()
             return;
         }
         // Cube-sphere: barycentric -> cube-face position -> normalize -> displaced sphere
-        // point (cbt_domain.glsl). Relief = procedural base + the editable per-face sculpt
-        // layer (plan §planet-editing): all three corners lie on one cube face (= root/4),
-        // so the face-local UV is exact and the additive sculpt is crack-free (a shared
-        // cube-edge vertex has the same face-local UV from both faces -> same sampled
-        // offset when the cross-face edit wrote both bands). The sculpt sample is gated on
-        // pc.sphereSculptEnabled so the C7 default (no edits) is byte-identical + free.
+        // point (cbt_domain.glsl). All three corners lie on one cube face (= root/4), so
+        // the face-local UV is exact.
         uint sphereFace = CBT_FaceOfRoot(rootIndex);
         // Exact int64 numerators, shared by BOTH stores: the fp32 cube cast below (relief /
         // face-UV inputs, bit-identical to the pre-S2a decode) and the deep df64 decode.
@@ -3637,31 +3448,6 @@ void Kernel_VertexEval()
             relief0 = CBT_PlanetRelief(dir0, fp.planetParams.y, fp.planetParams.z, reliefOctaves);
             relief1 = CBT_PlanetRelief(dir1, fp.planetParams.y, fp.planetParams.z, reliefOctaves);
             relief2 = CBT_PlanetRelief(dir2, fp.planetParams.y, fp.planetParams.z, reliefOctaves);
-        }
-        if (pc.sphereSculptEnabled != 0u)
-        {
-            CBTSculptGeom sculptGeom = CBT_SculptGeomFromFrame(fp);
-            float sc0 = CBT_SampleSphereSculpt(sphereFace, fuv0, sculptGeom);
-            float sc1 = CBT_SampleSphereSculpt(sphereFace, fuv1, sculptGeom);
-            float sc2 = CBT_SampleSphereSculpt(sphereFace, fuv2, sculptGeom);
-            // Analytic sphere modifiers (S2): the closed-form set composes on the store sample at the corner's
-            // base height (relief*: the pages or the closed form), so a flatten pad lands on its target radius.
-            // Cell-masked (S3): a corner outside every placement pays one mask read. An empty set adds no float op.
-            if (CBT_SphereAnalyticTotal(fp) != 0u)
-            {
-                uint am0 = CBT_AnalyticCellMask(sphereFace, fuv0);
-                uint am1 = CBT_AnalyticCellMask(sphereFace, fuv1);
-                uint am2 = CBT_AnalyticCellMask(sphereFace, fuv2);
-                if (am0 != 0u)
-                    sc0 += CBT_SphereAnalyticOffsetMasked(fp, am0, dir0, relief0);
-                if (am1 != 0u)
-                    sc1 += CBT_SphereAnalyticOffsetMasked(fp, am1, dir1, relief1);
-                if (am2 != 0u)
-                    sc2 += CBT_SphereAnalyticOffsetMasked(fp, am2, dir2, relief2);
-            }
-            relief0 += sc0;
-            relief1 += sc1;
-            relief2 += sc2;
         }
         // corner.w = face-local uv.x, meta.xyz = face-local uv.y (per corner): Classify's
         // spherical (face,rect) reclassification reads these. meta.w = -1 stays the SPHERE

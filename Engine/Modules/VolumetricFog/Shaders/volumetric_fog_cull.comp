@@ -1,6 +1,11 @@
 #version 450
 
 #include "volumetric_fog_common.glsl"
+// The view parameters at binding 21: the light buffer holds positions relative to the view's render
+// origin, and the fog works in world space (view_origin.glsl).
+#define GE_VIEW_PARAMS_BINDING 21
+#include "Includes/view_params.glsl"
+#include "Includes/view_origin.glsl"
 
 // One list per 8x8x8 fog brick, independent of surface depth and view-Z
 // clusters. The consumer uses this same brick size, including partial bricks.
@@ -84,7 +89,7 @@ void main()
             else if (light.meta.z == 1u || light.meta.z == 2u) radius += emitterRadius;
             else radius += length(vec2(emitterRadius, 0.5 * height));
         }
-        if (distance(light.posRange.xyz, brickSphere.xyz) > radius + brickSphere.w)
+        if (distance(GE_ViewAbsolutePoint(light.posRange.xyz), brickSphere.xyz) > radius + brickSphere.w)
             continue;
         uint slot = atomicAdd(hitCount, 1u);
         if (slot < kCapacity)

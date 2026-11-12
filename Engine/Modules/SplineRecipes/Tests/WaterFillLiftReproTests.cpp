@@ -359,11 +359,12 @@ class WaterFillLiftRepro : public ::testing::Test
         if (!std::filesystem::exists(path))
             return false;
 
-        GameEngine::Scene::SceneReadOptions options;
-        options.clearWorldFirst = true;
-        if (!GameEngine::Scene::ReadSceneInto(m_World, path, options))
+        GameEngine::Scene::SceneInstantiateOptions options;
+        options.ClearWorldFirst = true;
+        const GameEngine::Scene::SceneInstantiateResult readResult = GameEngine::Scene::ReadSceneInto(m_World, path, {}, options);
+        if (!readResult)
         {
-            const auto& err = GameEngine::Scene::GetLastSceneIOError();
+            const GameEngine::Scene::SceneIOError& err = *readResult.Error;
             ADD_FAILURE() << "scene load failed: " << scenePath << " line " << err.line << ": "
                           << err.message;
             return false;
@@ -395,8 +396,7 @@ class WaterFillLiftRepro : public ::testing::Test
             EXPECT_NE(transform, nullptr);
             if (transform == nullptr)
                 return false;
-            // Transform is a column-major matrix; column 3 is the translation.
-            transform->matrix[13] += liftMetres;
+            transform->Position.Y += liftMetres;
         }
         hierarchy.Update(m_World, 0.0f);
         return true;
@@ -478,7 +478,7 @@ class WaterFillLiftRepro : public ::testing::Test
         worldMatrix.Data()[0] = worldMatrix.Data()[5] = worldMatrix.Data()[10] =
             worldMatrix.Data()[15] = 1.0f;
         if (const auto* wt = m_World.GetComponent<Components::WorldTransform>(m_River))
-            worldMatrix = Matrix4x4::FromColumnMajor(wt->matrix);
+            worldMatrix = wt->ToMatrix4x4(wt->GetPosition() - GameEngine::Mathematics::WorldPosition{});
 
         m_Recipe = *recipe;
         m_Stations = BuildWorldStations(*data, *recipe, worldMatrix);

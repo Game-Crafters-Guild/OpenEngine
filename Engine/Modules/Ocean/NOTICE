@@ -1,16 +1,19 @@
 Ocean module — third-party attribution
 =======================================
 
-The wave-spectrum, FFT, foam, and water-shading algorithms in this Ocean module
-are engine-native implementations whose behavior is modeled on the Crest ocean
-system by Wave Harmonic. The concentric patch types, patch placement, checkerboard
-triangulation, grid snapping, and smooth LOD-transition logic in the ocean surface
-mesh are adapted from Crest's OceanBuilder and OceanVertHelpers under the MIT
-License. Foam2.png and WaveNormals.png from the same pinned source are included as
-crest_foam.png and crest_wave_normals.png in Apps/Editor/Assets/Examples/Materials/Ocean.
-The foam relief, bubble parallax, and two-phase flow sampling in ocean_surface.glsl
-are adapted from Crest's OceanFoam.hlsl and OceanNormalMapping.hlsl under MIT.
-A copy of the license accompanies the example textures.
+The wave spectrum and the FFT in this Ocean module are ported from Crest's
+FFTSpectrum.compute, FFTCompute.compute and OceanWaveSpectrum under the MIT
+License (the ocean_fft_* shaders in Engine/Modules/Rendering/Shaders/Ocean).
+The foam and water-shading algorithms are engine-native implementations whose
+behavior is modeled on the Crest ocean system by Wave Harmonic. The concentric
+patch types, patch placement, checkerboard triangulation, grid snapping, and
+smooth LOD-transition logic in the ocean surface mesh are adapted from Crest's
+OceanBuilder and OceanVertHelpers under the MIT License. Foam2.png and
+WaveNormals.png from the same pinned source are included as crest_foam.png and
+crest_wave_normals.png in Apps/Editor/Assets/Examples/Materials/Ocean. The foam
+relief, bubble parallax, and two-phase flow sampling in ocean_surface.glsl are
+adapted from Crest's OceanFoam.hlsl and OceanNormalMapping.hlsl under MIT. A
+copy of the license accompanies the example textures.
 
 The temporal hard/soft shadow fields and continuous spline ribbon input model
 follow Crest's LodDataMgrShadow and spline-input concepts. Their render-graph,
@@ -48,3 +51,46 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+Wicked Engine
+=============
+
+Three effects follow the approach of Wicked Engine's water effects:
+
+- the god-ray shafts of the underwater composite (ocean_underwater.frag);
+- the waterline distortion of the underwater composite (ocean_underwater.frag);
+- the intersection foam at the waterline of the ocean surface
+  (ocean_surface.glsl).
+
+Both shader files are in Engine/Modules/Rendering/Shaders/Ocean.
+
+Reference:
+
+- Repository: https://github.com/turanszkij/WickedEngine
+- License text copied at commit: `86d57e9fdd3736e8d0b401f1ec03ad96f9125dab`
+- License: MIT
+
+Wicked Engine license
+---------------------
+
+The MIT License (MIT)
+
+Copyright (c) 2026 Turánszki János
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE
+OR OTHER DEALINGS IN THE SOFTWARE.

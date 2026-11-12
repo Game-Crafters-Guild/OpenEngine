@@ -1,0 +1,58 @@
+---
+title: Surface rules
+description: How the Surface Rules effect paints terrain materials by slope, height, noise and latitude, how rule sets replace the rows, and how undo restores them.
+---
+
+The **Surface Rules** effect paints the materials of a terrain from the shape of the ground. Each rule names a material and the conditions where it applies: rock on steep ground, snow on high ground, grass on gentle ground. You add the effect to a terrain volume with **Add Effect**. A new terrain gets a Surface Rules effect with a default set of rules.
+
+## Rules and conditions
+
+A rule has a **Material**, a **Mode** and a **Strength**:
+
+- **Blend** adds the rule's weight to its material, and the weights of all materials are then scaled to a sum of 1. **Replace** moves every material toward the rule's material: where the weight is full, the ground is that material alone.
+- **Strength** scales the rule's weight, from 0 to 1.
+
+A rule applies where all of its conditions apply: the weights of its conditions multiply. A rule with no condition applies everywhere. Click **Add Condition** to add a condition, and **Add Rule** to add a rule.
+
+Each condition has a **Measures** value, a **Band** and a **Feather**:
+
+- The **Band** is the range of the measure where the condition has full weight.
+- The **Feather** is the width past each edge of the band where the weight falls to 0. A feather of 0 is a hard edge. **Feather Shape** sets the falloff curve: **Linear** or **Smoothstep**.
+
+## Measures
+
+| Measure | What it reads | Domain |
+|---|---|---|
+| Slope (degrees) | The angle of the ground from horizontal. Use this measure to author slope. | 0° (flat) to 90° (vertical) |
+| Slope (0-1 raw) | 1 minus the cosine of the ground's angle from horizontal: 0 on flat ground, 1 on a vertical face. On a planet, flat ground faces the local up. It is not an angle: on a flat terrain the terrain's **Height Scale** changes it. | 0 to 1 |
+| Height (meters) | On a flat terrain, the meters above the terrain's base. On a planet, the meters above the planet's radius: below 0 in the lowlands. The band does not move when the terrain entity moves. | The terrain's height range |
+| Noise | Value noise from 0 to 1, with its own frequency and seed. It breaks up the bands that the other measures make. | 0 to 1 |
+| Latitude (degrees) | The angle from the equator: 0° at the equator, 90° at each pole. The poles are on the planet's up axis (+Y in the planet's space), so a rotated planet rotates its poles. Only a planet lists this measure. | 0° to 90° |
+
+The rules section shows the height range of the terrain under the rules. A rule whose Latitude band runs from 60° or more to 90° has the word "Polar" before its material in its heading, for example **Polar Snow**.
+
+:::note
+On a planet, the Surface Rules effect does not paint. The Inspector shows the notice "Surface rules do not paint a planet." The rows are saved with the scene. Shape a planet's ground with the Noise, Flatten and Stamp effects or with Sculpt zones.
+
+A planet's ground uses the planet's default rows: grass in the lowlands, dirt and snow with height, and rock on steep ground. The engine makes the material weights and the ground normal of the ground near the camera from the planet's height, and it makes them again when you sculpt. Until the ground near the camera is ready, that ground shows the first material.
+:::
+
+## Rule sets
+
+The control **Replace rules with...**, under **Add Rule**, lists the rule sets for the terrain type. Its tooltip describes each rule set.
+
+| Terrain | Rule set | Rules |
+|---|---|---|
+| Flat | Temperate | Grass on gentle ground, dirt on shoulders, rock on steep ground, snow on high ground. |
+| Planet | Temperate | Grass in the lowlands, dirt and snow with height, polar snow caps, rock on steep ground. |
+| Planet | Desert | Dirt everywhere, rock on summits and steep ground, no snow. |
+| Planet | Ice Moon | Snow everywhere, rock on steep ground. |
+| Planet | Barren | Rock everywhere, dirt in gentle lowlands. |
+
+When you select a rule set, it replaces every rule of the effect. The other fields of the effect stay. The rule set places its height bands in the terrain's height range. On a planet, the height range comes from the planet's relief.
+
+## Undo
+
+Replacing the rules is one undo step, named "Replace rules with" and the rule set's name. One undo restores the rules that you had before.
+
+The default rules of a new terrain follow the terrain's height range: when the range changes (a new heightmap or a new source), the bands move with it. When you edit a rule or replace the rules, the rules are yours and stay where you put them.

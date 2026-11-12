@@ -17,6 +17,7 @@
 #include "SceneView/SceneViewController.h"
 #include "UI/Controls/Label.h"
 #include "UI/StyleProperties.h"
+#include "UI/StyleUtil.h"
 
 #include <algorithm>
 #include <cmath>
@@ -47,11 +48,6 @@ constexpr float kReservedGap = 4.0f;
 bool InView(const Mathematics::Vector2& pixel, const SceneTools::ScenePointerEvent& view)
 {
     return pixel.x >= 0.0f && pixel.y >= 0.0f && pixel.x <= view.viewW && pixel.y <= view.viewH;
-}
-
-void SetShown(UIElement& element, bool shown)
-{
-    element.Style().Set(Style::Display, shown ? DisplayMode::Flex : DisplayMode::None);
 }
 
 // What one Collect reads per mark-up.
@@ -113,7 +109,8 @@ void AddVolumePlacement(const PlacementSource& source, ECS::EntityHandle entity,
 {
     if (source.Bridge.IsHidden(source.World, entity))
         return;
-    const std::optional<MarkupWorldVolume> volume = MarkupWorldVolumeFromMatrix(shape.Shape, transform.matrix);
+    const std::optional<MarkupWorldVolume> volume = MarkupWorldVolumeFromMatrix(
+        shape.Shape, transform.ToMatrix4x4(transform.GetPosition() - Mathematics::WorldPosition{}));
     if (!volume)
         return;
     AddPlacement(source, entity,
@@ -308,7 +305,7 @@ void MarkupLabelOverlay::AddPill(LabelLayer& layer, UIElement& container)
     title->AddClass("markup-label-title");
     auto unread = std::make_unique<UIElement>();
     unread->AddClass("markup-label-unread");
-    SetShown(*unread, false);
+    UIUtil::SetShown(*unread, false);
     Pill& entry = layer.Pills.emplace_back();
     entry.Anchor = UIElement::MakeWeakRef(anchor.get());
     entry.Body = UIElement::MakeWeakRef(pill.get());
@@ -319,7 +316,7 @@ void MarkupLabelOverlay::AddPill(LabelLayer& layer, UIElement& container)
     pill->AddChild(std::move(title));
     pill->AddChild(std::move(unread));
     anchor->AddChild(std::move(pill));
-    SetShown(*anchor, false);
+    UIUtil::SetShown(*anchor, false);
     container.AddChild(std::move(anchor));
 }
 
@@ -341,7 +338,7 @@ void MarkupLabelOverlay::Show(LabelLayer& layer, ECS::World& world)
             continue;
         }
         if (pill.Shown)
-            SetShown(*anchor, pill.Shown = false);
+            UIUtil::SetShown(*anchor, pill.Shown = false);
     }
 }
 
@@ -369,11 +366,11 @@ void MarkupLabelOverlay::ShowPill(Pill& pill, const Placement& placement, const 
     if (box.Hidden)
     {
         if (pill.Shown)
-            SetShown(*anchor, pill.Shown = false);
+            UIUtil::SetShown(*anchor, pill.Shown = false);
         return;
     }
     if (!pill.Shown)
-        SetShown(*anchor, pill.Shown = true);
+        UIUtil::SetShown(*anchor, pill.Shown = true);
     // The title is written, and copied, only when it changed.
     const std::string_view text = MarkupTitleView(world, placement.Entity);
     if (text != pill.Text)
@@ -406,7 +403,7 @@ void MarkupLabelOverlay::ShowPill(Pill& pill, const Placement& placement, const 
     if (placement.Unseen != pill.UnreadShown)
     {
         if (UIElement* unread = pill.UnreadDot.Get())
-            SetShown(*unread, placement.Unseen);
+            UIUtil::SetShown(*unread, placement.Unseen);
         pill.UnreadShown = placement.Unseen;
     }
     const float x = std::round(box.CenterX - kAnchorWidth * 0.5f);
@@ -466,7 +463,7 @@ void MarkupLabelOverlay::Hide(LabelLayer& layer)
     for (Pill& pill : layer.Pills)
     {
         if (UIElement* anchor = pill.Anchor.Get(); anchor && pill.Shown)
-            SetShown(*anchor, pill.Shown = false);
+            UIUtil::SetShown(*anchor, pill.Shown = false);
     }
 }
 

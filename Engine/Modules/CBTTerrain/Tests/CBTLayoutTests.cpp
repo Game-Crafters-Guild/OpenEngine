@@ -9,8 +9,10 @@
 #include "CBTTerrain/CBTDemandTuning.h"  // kOffFrustumKeepOcc (pressure recover mark)
 #include "CBTTerrain/CBTKernelSet.h"
 #include "CBTTerrain/CBTLayout.h"
+#include "CBTTerrain/CBTPoolCensus.h"
 #include "CBTTerrain/CBTPoolHealth.h"    // kCBTSaturatedOccupancy (pressure full mark)
 #include "CBTTerrain/CBTSphereRoots.h"
+#include "Mathematics/WorldPosition.h"
 #include "Terrain/TerrainMaterialRecord.h"
 #include "Terrain/TerrainTypes.h" // TerrainGPUParams — the C++ twin of TerrainParamsEntry
 
@@ -243,7 +245,7 @@ std::vector<MirrorSource> TerrainParamsMirrorSources()
     const std::string cbt = CBT_SHADER_SOURCE_DIR;
     const std::string grass = TERRAIN_GRASS_SHADER_SOURCE_DIR;
     return {
-        {"cbt_surface.glsl", cbt + "/cbt_surface.glsl"},
+        {"cbt_terrain_params.glsl", cbt + "/cbt_terrain_params.glsl"},
         {"terrain_grass_surface.glsl", grass + "/terrain_grass_surface.glsl"},
         {"terrain_grass_vertex_modifier.glsl", grass + "/terrain_grass_vertex_modifier.glsl"},
         {"terrain_grass_place.comp", grass + "/terrain_grass_place.comp"},
@@ -329,33 +331,30 @@ TEST(CBTLayout, StructSizesMatchStd430)
     EXPECT_EQ(offsetof(CBTVertexData, Meta), 48u);
     EXPECT_EQ(offsetof(CBTVertexData, Sector0), 64u);
     EXPECT_EQ(offsetof(CBTVertexData, DeepTag), 88u);
-    // The scalar vec4 block (mat4 + 13 vec4 = 256B, the water plane last) is followed by the
-    // analytic sphere-modifier set (1 count vec4 + 16 x 3 vec4 placements), the draw's height-chain
-    // vec4 and then the per-cell placement-cull mask tail (48 uvec4 = 768B). Every field before the
-    // water plane keeps its offset (the flag-off GLSL reads are byte-stable) — locked below.
-    EXPECT_EQ(sizeof(CBTFrameParams), 1920u); // mat4 + 13 vec4 + analytic set + height chain + cell masks + face rects
+    // The scalar vec4 block (mat4 + 13 vec4 = 256B, the water plane last) is followed by the page
+    // vec4, the draw's height-chain vec4, the six sphere dirty-face rects (6 vec4 = 96B) and the
+    // surface extent.
+    EXPECT_EQ(sizeof(CBTFrameParams), 400u); // mat4 + 13 vec4 + page + height chain + face rects + extent
     EXPECT_EQ(offsetof(CBTFrameParams, PriorityParams), 224u); // last field before the water plane
     EXPECT_EQ(offsetof(CBTFrameParams, WaterPlane), 240u);
-    EXPECT_EQ(offsetof(CBTFrameParams, AnalyticParams), 256u); // appended after the scalar block
-    EXPECT_EQ(offsetof(CBTFrameParams, SphereAnalytic), 272u); // vec4-aligned array (std140 stride 48)
-    EXPECT_EQ(offsetof(CBTFrameParams, HeightChain), 1040u);       // the draw's level rule, for the cull
-    EXPECT_EQ(offsetof(CBTFrameParams, AnalyticCellMask), 1056u); // S3 mask tail (uvec4[48] twin)
+    EXPECT_EQ(offsetof(CBTFrameParams, PageParams), 256u); // appended after the scalar block
+    EXPECT_EQ(offsetof(CBTFrameParams, HeightChain), 272u); // the draw's level rule, for the cull
+    EXPECT_EQ(offsetof(CBTFrameParams, SphereDirty), 288u);
+    EXPECT_EQ(offsetof(CBTFrameParams, SurfaceExtent), 384u); // CBTFrameSlot's last vec4
     EXPECT_EQ(offsetof(CBTBisectorData, Indices), 20u);
 }
 
 // The surface-params buffer is CBT domain state only: the material palette that used to ride in it
 // now lives in the terrain material table, which both terrain surfaces and the grass read. Lock
-// what remains — the analytic sphere-modifier tail's offsets (leading fields unmoved is what keeps
-// the GLSL mirror's reads byte-stable), that the struct still fits one ring slot, and the negative
-// that no compiled-in palette came back. Field-by-field C++ <-> GLSL agreement is
+// what remains — the planet page tail's offsets, that the struct still fits one ring slot, and the
+// negative that no compiled-in palette came back. Field-by-field C++ <-> GLSL agreement is
 // GlslSurfaceStructsMatchCppStd430's job.
 TEST(CBTLayout, SurfaceParamsCarriesNoMaterialPalette)
 {
-    // No palette: the analytic tail follows the leading scalar block directly (104 + 4 + 4 = 112,
-    // 16-aligned for the std430 vec4-struct array).
-    EXPECT_EQ(sizeof(CBTSurfaceParams), 1024u);
-    EXPECT_EQ(offsetof(CBTSurfaceParams, SphereAnalyticCount), 104u);
-    EXPECT_EQ(offsetof(CBTSurfaceParams, SphereAnalytic), 112u); // 16-aligned (std430 vec4 structs)
+    // No palette: the planet page tail follows the 96B scalar block directly.
+    EXPECT_EQ(sizeof(CBTSurfaceParams), 224u);
+    EXPECT_EQ(offsetof(CBTSurfaceParams, PageAnchors), 96u);
+    EXPECT_EQ(offsetof(CBTSurfaceParams, PageEye), 192u);
     EXPECT_LE(sizeof(CBTSurfaceParams), kCBTSurfaceParamsSlotStride); // still fits one ring slot
 
 #if defined(CBT_SHADER_SOURCE_DIR)
@@ -538,18 +537,18 @@ TEST(CBTLayout, TheGroundAndTheGrassReadTheSurfacePagesThroughOneLocate)
         StripLineComments(SlurpFile(std::string(CBT_SHADER_SOURCE_DIR) + "/cbt_surface.glsl"));
     const std::string grass =
         StripLineComments(SlurpFile(std::string(TERRAIN_GRASS_SHADER_SOURCE_DIR) + "/grass_surface_pages.glsl"));
-    const std::string placement =
-        StripLineComments(SlurpFile(std::string(TERRAIN_GRASS_SHADER_SOURCE_DIR) + "/terrain_grass_place.comp"));
+    const std::string groundHeight =
+        StripLineComments(SlurpFile(std::string(TERRAIN_GRASS_SHADER_SOURCE_DIR) + "/grass_ground_height.glsl"));
     ASSERT_FALSE(shared.empty()) << "cannot read cbt_surface_pages.glsl";
     ASSERT_FALSE(ground.empty()) << "cannot read cbt_surface.glsl";
     ASSERT_FALSE(grass.empty()) << "cannot read grass_surface_pages.glsl";
-    ASSERT_FALSE(placement.empty()) << "cannot read terrain_grass_place.comp";
+    ASSERT_FALSE(groundHeight.empty()) << "cannot read grass_ground_height.glsl";
 
     EXPECT_NE(shared.find("CBTSurfacePages CBT_SurfPagesAt("), std::string::npos)
         << "the shared include no longer owns the surface locate";
     for (const auto& [label, source] : {std::pair<const char*, const std::string*>{"cbt_surface.glsl", &ground},
-                                        std::pair<const char*, const std::string*>{"terrain_grass_place.comp",
-                                                                                   &placement}})
+                                        std::pair<const char*, const std::string*>{"grass_ground_height.glsl",
+                                                                                   &groundHeight}})
     {
         EXPECT_NE(source->find("#include \"cbt_surface_pages.glsl\""), std::string::npos)
             << label << " does not include the shared surface locate";
@@ -772,6 +771,19 @@ TEST(CBTLayout, GlslMirrorsTheTexturePresenceFlagBits)
 #else
     GTEST_SKIP() << "CBT_SHADER_SOURCE_DIR not defined";
 #endif
+}
+
+// The CBT draw has no instance record, so the vertex modifier sets the instance flags from the
+// terrain params row. CBTInstanceFlagsTests checks the mapping; this checks the wiring.
+TEST(CBTLayout, TheVertexModifierWritesTheFlagsFromTheTerrainRow)
+{
+    const std::string src =
+        StripLineComments(SlurpFile(std::string(CBT_SHADER_SOURCE_DIR) + "/cbt_vertex_modifier.glsl"));
+    ASSERT_FALSE(src.empty()) << "cannot read cbt_vertex_modifier.glsl";
+    EXPECT_NE(src.find("void ModifyVertex(inout VertexOutput v, inout InstanceData inst)"), std::string::npos)
+        << "the modifier cannot change the instance flags the adapter passes to the fragment";
+    EXPECT_NE(src.find("inst.flags = CBT_InstanceFlags(terrains[0].Flags);"), std::string::npos)
+        << "the modifier does not set the instance flags from the terrain params row";
 }
 
 // PROJECTION AXES of the triplanar normal blend, derived rather than transcribed.
@@ -1021,37 +1033,9 @@ TEST(CBTLayout, GlslSurfaceStructsMatchCppStd430)
     const std::string albedoIncludeSrc = StripLineComments(
         SlurpFile(std::string(RENDERING_SHADER_INCLUDES_DIR) + "/terrain_material_albedo.glsl"));
     ASSERT_FALSE(albedoIncludeSrc.empty()) << "cannot read terrain_material_albedo.glsl";
-    const std::string analyticSrc =
-        StripLineComments(SlurpFile(std::string(CBT_SHADER_SOURCE_DIR) + "/cbt_analytic.glsl"));
-    ASSERT_FALSE(analyticSrc.empty()) << "cannot read cbt_analytic.glsl";
-
-    // CBT_MAX_SPHERE_ANALYTIC sizes the analytic tail on both sides.
-    std::smatch cm;
-    ASSERT_TRUE(std::regex_search(
-        analyticSrc, cm, std::regex(R"(const\s+uint\s+CBT_MAX_SPHERE_ANALYTIC\s*=\s*([0-9]+)u?\s*;)")))
-        << "CBT_MAX_SPHERE_ANALYTIC not found in cbt_analytic.glsl";
-    const uint32_t glslMaxAnalytic = static_cast<uint32_t>(std::stoul(cm[1].str()));
-    EXPECT_EQ(glslMaxAnalytic, kMaxSphereAnalyticModifiers)
-        << "cbt_analytic.glsl CBT_MAX_SPHERE_ANALYTIC drifted from kMaxSphereAnalyticModifiers";
-    const std::map<std::string, uint32_t> constants{{"CBT_MAX_SPHERE_ANALYTIC", glslMaxAnalytic}};
-
+    const std::map<std::string, uint32_t> constants;
     std::map<std::string, Std430Layout> known;
     std::string err;
-
-    // CBTSphereAnalyticFlatten — the element type of the surface params' analytic tail. It has no
-    // named C++ twin (the CPU side stores the same bytes as a flat float array), so lock its size
-    // against kSphereAnalyticFloatsPerModifier.
-    std::vector<GlslField> analyticFields;
-    ASSERT_TRUE(ParseGlslStructFields(analyticSrc, "CBTSphereAnalyticFlatten", constants,
-                                      analyticFields, err))
-        << err;
-    Std430Layout analyticLayout;
-    ASSERT_TRUE(ComputeStd430(analyticFields, known, analyticLayout, err)) << err;
-    known["CBTSphereAnalyticFlatten"] = analyticLayout;
-    EXPECT_EQ(static_cast<size_t>(analyticLayout.Size),
-              kSphereAnalyticFloatsPerModifier * sizeof(float))
-        << "cbt_analytic.glsl CBTSphereAnalyticFlatten no longer matches "
-           "kSphereAnalyticFloatsPerModifier floats";
 
     auto checkFields = [](const char* glslName, const std::vector<GlslField>& parsed,
                           const Std430Layout& layout, const ExpectedField* expected, size_t count,
@@ -1118,11 +1102,6 @@ TEST(CBTLayout, GlslSurfaceStructsMatchCppStd430)
         {"ReliefAmplitude", "float", 1, offsetof(CBTSurfaceParams, ReliefAmplitude)},
         {"ReliefFrequency", "float", 1, offsetof(CBTSurfaceParams, ReliefFrequency)},
         {"ReliefOctaves", "uint", 1, offsetof(CBTSurfaceParams, ReliefOctaves)},
-        {"SphereSculptEnabled", "uint", 1, offsetof(CBTSurfaceParams, SphereSculptEnabled)},
-        {"SphereSculptVirtualDim", "uint", 1, offsetof(CBTSurfaceParams, SphereSculptVirtualDim)},
-        {"SphereSculptCap", "uint", 1, offsetof(CBTSurfaceParams, SphereSculptCap)},
-        {"SphereSculptPagesPerAxis", "uint", 1, offsetof(CBTSurfaceParams, SphereSculptPagesPerAxis)},
-        {"SphereSculptPoolPageCount", "uint", 1, offsetof(CBTSurfaceParams, SphereSculptPoolPageCount)},
         {"DebugMode", "uint", 1, offsetof(CBTSurfaceParams, DebugMode)},
         {"AtlasBacked", "uint", 1, offsetof(CBTSurfaceParams, AtlasBacked)},
         {"AtlasDim", "uint", 1, offsetof(CBTSurfaceParams, AtlasDim)},
@@ -1140,17 +1119,12 @@ TEST(CBTLayout, GlslSurfaceStructsMatchCppStd430)
         {"AtlasGrassCoarseBindless", "uint", 1, offsetof(CBTSurfaceParams, AtlasGrassCoarseBindless)},
         {"AtlasColorBindless", "uint", 1, offsetof(CBTSurfaceParams, AtlasColorBindless)},
         {"AtlasColorCoarseBindless", "uint", 1, offsetof(CBTSurfaceParams, AtlasColorCoarseBindless)},
-        {"SphereAnalyticCount", "uint", 1, offsetof(CBTSurfaceParams, SphereAnalyticCount)},
-        {"SphereAnalyticDabCount", "uint", 1, offsetof(CBTSurfaceParams, SphereAnalyticDabCount)},
-        {"SphereAnalytic", "CBTSphereAnalyticFlatten", kMaxSphereAnalyticModifiers,
-         offsetof(CBTSurfaceParams, SphereAnalytic)},
-        {"PageAnchors", "ivec4", kCubeFaceCount6, offsetof(CBTSurfaceParams, PageAnchors)},
-        {"PageEye", "vec4", 1, offsetof(CBTSurfaceParams, PageEye)},
-        {"PageEyeRelative", "vec4", 1, offsetof(CBTSurfaceParams, PageEyeRelative)},
         {"PlanetPaged", "uint", 1, offsetof(CBTSurfaceParams, PlanetPaged)},
         {"SurfacePageBase", "uint", 1, offsetof(CBTSurfaceParams, SurfacePageBase)},
         {"SurfacePagedPlanes", "uint", 1, offsetof(CBTSurfaceParams, SurfacePagedPlanes)},
-        {"PlanetPagePad2", "uint", 1, offsetof(CBTSurfaceParams, PlanetPagePad2)},
+        {"PageAnchors", "ivec4", kCubeFaceCount6, offsetof(CBTSurfaceParams, PageAnchors)},
+        {"PageEye", "vec4", 1, offsetof(CBTSurfaceParams, PageEye)},
+        {"PageEyeRelative", "vec4", 1, offsetof(CBTSurfaceParams, PageEyeRelative)},
     };
     std::vector<GlslField> surfaceFields;
     ASSERT_TRUE(
@@ -1395,11 +1369,9 @@ TEST(CBTLayout, PoolAndBaseDepth)
     EXPECT_EQ(kCBTBindingCount, 14u);            // SoA storage buffers
     EXPECT_EQ(kCBTFrameParamsBinding, 14u);      // C4 params UBO
     EXPECT_EQ(kCBTHeightTextureBinding, 15u);    // C4 height sampler
-    EXPECT_EQ(kCBTSphereSculptBinding, 16u);     // planet editing: sphere sculpt page POOL SSBO
-    EXPECT_EQ(kCBTAtlasRowsBinding, 17u);        // Phase E: atlas indirection SSBO
+    EXPECT_EQ(kCBTAtlasRowsBinding, 17u);       // Phase E: atlas indirection SSBO
     EXPECT_EQ(kCBTAtlasHeightBinding, 18u);      // Phase E: atlas height texture ring
     EXPECT_EQ(kCBTAtlasCoarseBinding, 19u);      // Risk 3: out-of-window coarse height field ring
-    EXPECT_EQ(kCBTSphereSculptPageTableBinding, 20u); // planet editing v2: sphere sculpt page TABLE SSBO
     EXPECT_EQ(kCBTPageTableBinding, 22u);        // paged height resolve: page table SSBO ring
     EXPECT_EQ(kCBTPageCacheBinding, 23u);        // paged height resolve: page cache texture ring
     EXPECT_EQ(kCBTHeightChainBinding, 24u);      // the draw's prefiltered height chain
@@ -1460,7 +1432,7 @@ TEST(CBTLayout, EveryUnifiedLatticeHasAPyramidAndChainRanges)
             const uint32_t chainTop = CBTHeightChainTopLevel(cells + 1u, cellsY + 1u);
             chainless += CBTHeightChainRangeLevels(cells + 1u, cellsY + 1u) != std::min(chainTop, top) ? 1u : 0u;
         }
-    EXPECT_EQ(missing, 0u) << "a unified lattice without a pyramid splits by the screen-space edge rule";
+    EXPECT_EQ(missing, 0u) << "a unified lattice without a pyramid splits by the projected-area metric";
     EXPECT_EQ(chainless, 0u) << "a unified lattice whose chain ranges do not fit vetoes on the level-0 range";
 }
 
@@ -1497,13 +1469,15 @@ TEST(CBTLayout, GlslHeightChainMirrorsCpp)
     ASSERT_TRUE(ParseGlslStructFields(layoutSrc, "CBTDrawLevelParamsData", {}, fields, err)) << err;
     Std430Layout layout;
     ASSERT_TRUE(ComputeStd430(fields, {}, layout, err)) << err;
-    ASSERT_EQ(fields.size(), 3u);
+    ASSERT_EQ(fields.size(), 4u);
     EXPECT_EQ(fields[0].Type, "vec4");
     EXPECT_EQ(fields[1].Type, "vec4");
     EXPECT_EQ(fields[2].Type, "uvec4");
+    EXPECT_EQ(fields[3].Type, "vec4");
     EXPECT_EQ(static_cast<size_t>(layout.Offsets[0]), offsetof(CBTDrawLevelParams, Eye));
     EXPECT_EQ(static_cast<size_t>(layout.Offsets[1]), offsetof(CBTDrawLevelParams, Height));
     EXPECT_EQ(static_cast<size_t>(layout.Offsets[2]), offsetof(CBTDrawLevelParams, Lattice));
+    EXPECT_EQ(static_cast<size_t>(layout.Offsets[3]), offsetof(CBTDrawLevelParams, SurfaceExtent));
     EXPECT_EQ(static_cast<size_t>(layout.Size), sizeof(CBTDrawLevelParams));
 #else
     GTEST_SKIP() << "CBT_SHADER_SOURCE_DIR not defined";
@@ -1539,11 +1513,10 @@ TEST(CBTLayout, GlslPageTableConstantsMatchCpp)
 #endif
 }
 
-// The atlas indirection cap (rows per ring slot) is hand-mirrored between the C++ kAtlasMaxTiles and
-// the GLSL CBT_ATLAS_MAX_TILES (single-sourced in cbt_atlas.glsl, which both the compute layout and the
-// surface include). No static_assert can bridge C++ <-> GLSL, so parse the GLSL literal and lock it to
-// the C++ constant — a future edit to one without the other fails here.
-TEST(CBTLayout, GlslAtlasMaxTilesMatchesCpp)
+// The atlas window side (tiles per axis of the indirection rows) is hand-mirrored between the C++
+// kAtlasWindowTilesPerAxis and the GLSL CBT_ATLAS_WINDOW_TILES_PER_AXIS in cbt_atlas.glsl. No
+// static_assert bridges C++ and GLSL, so parse the GLSL literal and lock it to the C++ constant.
+TEST(CBTLayout, GlslAtlasWindowMatchesCpp)
 {
 #if defined(CBT_SHADER_SOURCE_DIR)
     const std::string path = std::string(CBT_SHADER_SOURCE_DIR) + "/cbt_atlas.glsl";
@@ -1554,12 +1527,13 @@ TEST(CBTLayout, GlslAtlasMaxTilesMatchesCpp)
     const std::string src = ss.str();
 
     std::smatch m;
-    const std::regex re(R"(const\s+uint\s+CBT_ATLAS_MAX_TILES\s*=\s*([0-9]+)u?\s*;)");
-    ASSERT_TRUE(std::regex_search(src, m, re)) << "CBT_ATLAS_MAX_TILES not found in cbt_atlas.glsl";
+    const std::regex re(R"(const\s+uint\s+CBT_ATLAS_WINDOW_TILES_PER_AXIS\s*=\s*([0-9]+)u?\s*;)");
+    ASSERT_TRUE(std::regex_search(src, m, re))
+        << "CBT_ATLAS_WINDOW_TILES_PER_AXIS not found in cbt_atlas.glsl";
     const uint32_t glslValue = static_cast<uint32_t>(std::stoul(m[1].str()));
-    EXPECT_EQ(glslValue, kAtlasMaxTiles)
-        << "cbt_atlas.glsl CBT_ATLAS_MAX_TILES (" << glslValue << ") != C++ kAtlasMaxTiles ("
-        << kAtlasMaxTiles << ") — the atlas indirection cap drifted out of lockstep";
+    EXPECT_EQ(glslValue, kAtlasWindowTilesPerAxis)
+        << "cbt_atlas.glsl CBT_ATLAS_WINDOW_TILES_PER_AXIS (" << glslValue
+        << ") != C++ kAtlasWindowTilesPerAxis (" << kAtlasWindowTilesPerAxis << ")";
 #else
     GTEST_SKIP() << "CBT_SHADER_SOURCE_DIR not defined";
 #endif
@@ -1807,6 +1781,11 @@ TEST(CBTLayout, GlslPressureConstantsMirrorCpp)
     EXPECT_NE(kKeepFloorArriving, kKeepFloorProbing) << "the two rest phases must read apart";
     lockUint("CBT_WQ_MERGE_CANDIDATE_COUNTER", kWQMergeCandidateCounter);
     EXPECT_LT(kWQMergeCandidateCounter, kWQCounterSlots) << "the merge candidate count sits outside the counter block";
+    lockUint("CBT_WQ_KEEP_PROBE_BASE", kWQKeepProbeBase);
+    lockUint("CBT_WQ_KEEP_FAILED_STEP", kWQKeepFailedStep);
+    lockUint("CBT_WQ_KEEP_FAILED_ADDED", kWQKeepFailedAdded);
+    lockUint("CBT_KEEP_RETRY_MARGIN_DIVISOR", kKeepRetryMarginDivisor);
+    EXPECT_LT(kWQKeepFailedAdded, kWQCounterSlots) << "the failed-probe memory sits outside the counter block";
 #else
     GTEST_SKIP() << "CBT_SHADER_SOURCE_DIR not defined";
 #endif
@@ -1912,47 +1891,25 @@ TEST(CBTLayout, GlslDeepDecodeMirrorsCpp)
 #endif
 }
 
-// The sculpt page-table constants are hand-mirrored between C++ (CBTLayout.h kSculpt*) and GLSL
-// (cbt_sculpt.glsl CBT_SCULPT_*). Parse the GLSL literals and lock them to the C++ constants so a
-// future edit to one without the other fails here (the CPU/GPU page-resolve bit-lock).
-TEST(CBTLayout, GlslSculptPageConstantsMatchCpp)
+// The shaders keep their own sector-size literals. Each one must equal Mathematics::kWorldSectorSize.
+TEST(CBTLayout, GlslSectorConstantsMatchWorldSectorSize)
 {
-#if defined(CBT_SHADER_SOURCE_DIR)
-    const std::string path = std::string(CBT_SHADER_SOURCE_DIR) + "/cbt_sculpt.glsl";
-    std::ifstream file(path);
-    ASSERT_TRUE(file.is_open()) << "cannot open " << path;
-    std::stringstream ss;
-    ss << file.rdbuf();
-    const std::string src = ss.str();
-
-    auto glslConst = [&](const char* name) -> uint32_t {
-        std::smatch m;
-        const std::regex re(std::string("const\\s+uint\\s+") + name + "\\s*=\\s*([0-9]+)u?\\s*;");
-        EXPECT_TRUE(std::regex_search(src, m, re)) << name << " not found in cbt_sculpt.glsl";
-        return m.empty() ? 0u : static_cast<uint32_t>(std::stoul(m[1].str()));
-    };
-
-    EXPECT_EQ(glslConst("CBT_SCULPT_PAGE_DIM"), kSculptPageDim);
-    EXPECT_EQ(glslConst("CBT_SCULPT_MAX_PAGES_PER_FACE_AXIS"), kSculptMaxPagesPerFaceAxis);
-    // S4 adaptive page levels: the entry decode + level cap must stay in lockstep — the GPU
-    // sampler addresses escalated blocks from these three constants alone.
-    EXPECT_EQ(glslConst("CBT_SCULPT_PAGE_LEVEL_SHIFT"), kSculptPageLevelShift);
-    EXPECT_EQ(glslConst("CBT_SCULPT_MAX_PAGE_LEVEL"), kSculptMaxPageLevel);
-    // Hex literals matched separately.
-    std::smatch mn;
-    ASSERT_TRUE(std::regex_search(
-        src, mn, std::regex(R"(const\s+uint\s+CBT_SCULPT_NO_PAGE\s*=\s*(0x[0-9A-Fa-f]+)u?\s*;)")));
-    EXPECT_EQ(static_cast<uint32_t>(std::stoul(mn[1].str(), nullptr, 16)), kSculptNoPage);
-    ASSERT_TRUE(std::regex_search(
-        src, mn,
-        std::regex(R"(const\s+uint\s+CBT_SCULPT_PAGE_ID_MASK\s*=\s*(0x[0-9A-Fa-f]+)u?\s*;)")));
-    EXPECT_EQ(static_cast<uint32_t>(std::stoul(mn[1].str(), nullptr, 16)), kSculptPageIdMask);
-    // The fine-grid dim formula must exist verbatim on the GPU side (the (127*2^L + 1)^2
-    // endpoint-aligned block layout both sides address).
-    EXPECT_NE(src.find("127u * (1u << level) + 1u"), std::string::npos)
-        << "cbt_sculpt.glsl CBT_SculptFineDim lost the endpoint-aligned fine-grid formula";
+#if defined(CBT_SHADER_SOURCE_DIR) && defined(RENDERING_SHADER_INCLUDES_DIR)
+    const std::string instanceSector = SlurpFile(std::string(RENDERING_SHADER_INCLUDES_DIR) + "/instance_sector.glsl");
+    const std::string layout = SlurpFile(std::string(CBT_SHADER_SOURCE_DIR) + "/cbt_layout.glsl");
+    const std::string deep = SlurpFile(std::string(CBT_SHADER_SOURCE_DIR) + "/cbt_deep_decode.glsl");
+    std::smatch match;
+    const std::regex geRe(R"(const\s+float\s+GE_SECTOR_SIZE\s*=\s*([0-9.]+)\s*;)");
+    ASSERT_TRUE(std::regex_search(instanceSector, match, geRe)) << "GE_SECTOR_SIZE not found in instance_sector.glsl";
+    EXPECT_EQ(std::stod(match[1].str()), GameEngine::Mathematics::kWorldSectorSize);
+    const std::regex cbtRe(R"(const\s+float\s+CBT_SECTOR_SIZE\s*=\s*([0-9.]+)\s*;)");
+    ASSERT_TRUE(std::regex_search(layout, match, cbtRe)) << "CBT_SECTOR_SIZE not found in cbt_layout.glsl";
+    EXPECT_EQ(std::stod(match[1].str()), GameEngine::Mathematics::kWorldSectorSize);
+    const std::regex invRe(R"(const\s+float\s+CBT_DEEP_INV_SECTOR\s*=\s*1\.0\s*/\s*([0-9.]+)\s*;)");
+    ASSERT_TRUE(std::regex_search(deep, match, invRe)) << "CBT_DEEP_INV_SECTOR not found in cbt_deep_decode.glsl";
+    EXPECT_EQ(std::stod(match[1].str()), GameEngine::Mathematics::kWorldSectorSize);
 #else
-    GTEST_SKIP() << "CBT_SHADER_SOURCE_DIR not defined";
+    GTEST_SKIP() << "CBT_SHADER_SOURCE_DIR or RENDERING_SHADER_INCLUDES_DIR not defined";
 #endif
 }
 
@@ -1994,12 +1951,14 @@ TEST(CBTLayout, WorkQueuePayloadLanesAliasThreeLanes)
     EXPECT_NE(WQSplitQueueOffset(p), WQAllocateQueueOffset(p));
     EXPECT_NE(WQSimplifyClassQueueOffset(p), WQAllocateQueueOffset(p));
 
-    EXPECT_EQ(WQElementCount(p), kWQCounterSlots + 3u * p);
+    // The census follows the lanes.
+    EXPECT_EQ(WQCensusOffset(p), kWQCounterSlots + 3u * p);
+    EXPECT_EQ(WQElementCount(p), kWQCounterSlots + 3u * p + kCensusWords);
 }
 
 // The work-queue lane offsets are hand-mirrored between C++ (CBTLayout.h WQ*Offset) and GLSL
 // (cbt_layout.glsl CBT_WQ_*_QUEUE). No static_assert bridges C++ <-> GLSL, so parse each GLSL
-// lane multiplier and lock it to the C++ lane (the GlslAtlasMaxTilesMatchesCpp pattern) — a future
+// lane multiplier and lock it to the C++ lane (the GlslAtlasWindowMatchesCpp pattern) — a future
 // edit to one side without the other would silently mis-alias a queue and corrupt topology.
 TEST(CBTLayout, GlslWorkQueueLanesMatchCpp)
 {
@@ -2027,6 +1986,36 @@ TEST(CBTLayout, GlslWorkQueueLanesMatchCpp)
     EXPECT_EQ(glslLaneMultiplier("CBT_WQ_SIMPLIFY_CLASS_QUEUE"), cppLane(WQSimplifyClassQueueOffset(p)));
     EXPECT_EQ(glslLaneMultiplier("CBT_WQ_PROPAGATE_SIMPLIFY_QUEUE"), cppLane(WQPropagateSimplifyQueueOffset(p)));
     EXPECT_EQ(glslLaneMultiplier("CBT_WQ_ALLOCATE_QUEUE"), cppLane(WQAllocateQueueOffset(p)));
+    EXPECT_EQ(glslLaneMultiplier("CBT_WQ_CENSUS_BASE"), cppLane(WQCensusOffset(p)));
+#else
+    GTEST_SKIP() << "CBT_SHADER_SOURCE_DIR not defined";
+#endif
+}
+
+// The census constants of cbt_layout.glsl are hand copies of CBTLayout.h kCensus* and CBTCensusClass.
+// A changed class index puts the GPU counts in the wrong CBTPoolCensus::OffViewByClass entry.
+TEST(CBTLayout, GlslCensusMirrorsCpp)
+{
+#if defined(CBT_SHADER_SOURCE_DIR)
+    const std::string src = StripLineComments(SlurpFile(std::string(CBT_SHADER_SOURCE_DIR) + "/cbt_layout.glsl"));
+    ASSERT_FALSE(src.empty()) << "cannot read cbt_layout.glsl";
+
+    auto glslConstant = [&](const char* name) -> uint32_t {
+        std::smatch m;
+        const std::regex re(std::string("const\\s+uint\\s+") + name + "\\s*=\\s*([0-9]+)u\\s*;");
+        EXPECT_TRUE(std::regex_search(src, m, re)) << name << " not found in cbt_layout.glsl";
+        return m.empty() ? 0xFFFFFFFFu : static_cast<uint32_t>(std::stoul(m[1].str()));
+    };
+    auto cppClass = [](CBTCensusClass censusClass) { return static_cast<uint32_t>(censusClass); };
+
+    EXPECT_EQ(glslConstant("CBT_CENSUS_LEVELS"), kCensusLevels);
+    EXPECT_EQ(glslConstant("CBT_CENSUS_CLASS_COUNT"), kCensusClassCount);
+    EXPECT_EQ(glslConstant("CBT_CENSUS_CLASS_MERGE_WANTED"), cppClass(CBTCensusClass::MergeWanted));
+    EXPECT_EQ(glslConstant("CBT_CENSUS_CLASS_BEHIND_EYE"), cppClass(CBTCensusClass::BehindEye));
+    EXPECT_EQ(glslConstant("CBT_CENSUS_CLASS_BESIDE_FRUSTUM"), cppClass(CBTCensusClass::BesideFrustum));
+    EXPECT_EQ(glslConstant("CBT_CENSUS_CLASS_ACROSS_EYE_PLANE"), cppClass(CBTCensusClass::AcrossEyePlane));
+    EXPECT_EQ(glslConstant("CBT_CENSUS_CLASS_IN_MARGIN_FRUSTUM"), cppClass(CBTCensusClass::InMarginFrustum));
+    EXPECT_EQ(glslConstant("CBT_CENSUS_CLASS_BEHIND_HORIZON"), cppClass(CBTCensusClass::BehindHorizon));
 #else
     GTEST_SKIP() << "CBT_SHADER_SOURCE_DIR not defined";
 #endif
@@ -2103,7 +2092,7 @@ TEST(CBTLayout, PoolScaledBufferBytesAtDefaultPool)
 // The GLSL compute-branch binding numbers are hand-written literals in cbt_layout.glsl; nothing in
 // the C++ build reads them, so a renumber on one side silently misroutes every kernel access on the
 // other. Parse the declarations and lock each block to its CBTBinding ordinal (the
-// GlslAtlasMaxTilesMatchesCpp pattern). Only the compute branch is parsed — the graphics view
+// GlslAtlasWindowMatchesCpp pattern). Only the compute branch is parsed — the graphics view
 // re-declares two of the same block names against set 2.
 TEST(CBTLayout, GlslStorageBindingNumbersMatchCpp)
 {
@@ -2163,14 +2152,7 @@ TEST(CBTLayout, GlslStorageBindingNumbersMatchCpp)
 TEST(CBTLayout, PushConstantsWithinPolicy)
 {
     EXPECT_LE(sizeof(CBTPushConstants), 128u); // device push-constant policy
-    // 10 u32 + 4 f32 dirty rect + 1 u32 (SphereSculptEnabled — planet editing) +
-    // 1 u32 (GateVertexEval — planet-shading quiescence gate) + 1 u32 (EditRetessEnabled — the
-    // edit-driven-retess crease-term A/B toggle, round-8b) + 1 u32 (NearFieldGate — the near-field
-    // force-split occupancy gate A/B toggle, round-8e saturation-deadlock fix) + 1 u32 (RegionFreeMask
-    // — the far-field-drain region-reseed root bitmask, round-9) + 1 u32
-    // (PoolPressure — the planar pool-pressure scale's A/B arm; GLSL mirror pc.poolPressure) + 2 u32
-    // (the height build kernels' region; GLSL mirror pc.buildRegionMin / Extent) + 1 u32
-    // (Settle — the rest rule; GLSL mirror pc.settle).
+    // 23 words: the block and its GLSL mirror `pc` in cbt_layout.glsl.
     EXPECT_EQ(sizeof(CBTPushConstants), 92u);
 }
 
@@ -2178,7 +2160,7 @@ TEST(CBTLayout, PushConstantsWithinPolicy)
 // CBT_ROOT_TWIN table baked into cbt_layout.glsl (there is no per-planet upload of the twin links).
 // It MUST equal the cross-face twins BuildSphereRoots computes, or a reseeded root would link to the
 // wrong neighbor and Validate would flag non-reciprocity. Parse the GLSL literal and lock it to the
-// CPU (the GlslAtlasMaxTilesMatchesCpp pattern — no static_assert bridges C++ <-> GLSL).
+// CPU (the GlslAtlasWindowMatchesCpp pattern — no static_assert bridges C++ <-> GLSL).
 TEST(CBTLayout, GlslRootTwinTableMatchesCpp)
 {
 #if defined(CBT_SHADER_SOURCE_DIR)

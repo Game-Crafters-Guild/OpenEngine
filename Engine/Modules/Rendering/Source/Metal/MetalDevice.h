@@ -6,8 +6,11 @@
 
 #include "MetalArgumentBufferLayout.h"
 #include "MetalHdrOutput.h"
+#include "MetalShaderTranslator.h"
+#include "MetalShippedLibraries.h"
 #include "MetalSubmitQueue.h"
 #include "MetalTransientDescriptorArena.h"
+#include "Types/FlatMap.h"
 #include "Types/InlineVector.h"
 
 #include <Metal/Metal.hpp>
@@ -104,20 +107,21 @@ struct MetalDescriptorSet
     bool ownsArgumentBuffer = false;
     uint64_t* entries = nullptr;           // CPU view of the table (shared storage)
     uint32_t* sizeConstants = nullptr;     // CPU view of the sizes, one per resource slot
-    MetalArgumentBufferLayout layout;
+    // The device keeps one layout for each set layout desc. Every set made from that desc points at it.
+    const MetalArgumentBufferLayout* layout = nullptr;
     // Indexed by slot id; nullptr where nothing is bound (or for samplers,
     // which need no residency).
     InlineVector<MTL::Resource*, 8> residentResources;
     InlineVector<uint8_t, 8> residentWritable; // parallel: needs Write usage
-    // Parallel: a buffer created with BufferUsage::Indirect (draw records or
-    // counts).
+    // Parallel: a storage binding of a buffer created with BufferUsage::Indirect
+    // (draw records or counts), read-only or not.
     InlineVector<uint8_t, 8> residentIndirectArguments;
     // Compacted residents rebuilt lazily after updates so binding a sparse
     // bindless array doesn't walk thousands of empty slots.
     InlineVector<MetalCompactResident, 8> compactResidents;
-    // Rebuilt with compactResidents: a writable resident is an indirect-
-    // argument buffer, so a render pass that binds the set may rewrite draw
-    // records or counts.
+    // Rebuilt with compactResidents: a storage binding holds an indirect-argument buffer, so a render
+    // pass that binds the set may rewrite draw records or counts. A read-only binding counts too, so a
+    // layout that marks a written binding read-only does not make a later pass draw from stale counts.
     bool writesIndirectArguments = false;
     // Read-only residents that occupy no argument slot of their own: the BLAS
     // objects a bound TLAS instances. Metal makes neither the TLAS's children
@@ -136,7 +140,7 @@ struct MetalDescriptorSet
             if (residentResources[slot] != nullptr)
             {
                 compactResidents.PushBack({residentResources[slot], residentWritable[slot] != 0});
-                if (residentWritable[slot] != 0 && residentIndirectArguments[slot] != 0)
+                if (residentIndirectArguments[slot] != 0)
                 {
                     writesIndirectArguments = true;
                 }
@@ -147,6 +151,26 @@ struct MetalDescriptorSet
             compactResidents.PushBack({resource, false});
         }
         residentsDirty = false;
+    }
+
+    // Moves the storage of the residents and the name into an empty set, so that a later set
+    // with the same slot count can use it without an allocation.
+    MetalDescriptorSet ReleaseStorage()
+    {
+        MetalDescriptorSet released;
+        released.residentResources = std::move(residentResources);
+        released.residentWritable = std::move(residentWritable);
+        released.residentIndirectArguments = std::move(residentIndirectArguments);
+        released.compactResidents = std::move(compactResidents);
+        released.extraResidentReads = std::move(extraResidentReads);
+        released.debugName = std::move(debugName);
+        released.residentResources.Clear();
+        released.residentWritable.Clear();
+        released.residentIndirectArguments.Clear();
+        released.compactResidents.Clear();
+        released.extraResidentReads.clear();
+        released.debugName.clear();
+        return released;
     }
 };
 
@@ -187,9 +211,13 @@ struct MetalPipeline
     uint32_t localSizeY = 0;
     uint32_t localSizeZ = 0;
 
-    // The argument-buffer layouts this pipeline was translated against, by
-    // set index. Consumed by the GE_METAL_VALIDATE_BINDINGS bind-time check.
-    std::vector<MetalArgumentBufferLayout> setLayouts;
+    // The argument-buffer layouts this pipeline was translated against, by set index: the device's
+    // shared layouts, which sets made from the same desc point at too. Read by the
+    // GE_METAL_VALIDATE_BINDINGS bind-time check.
+    std::vector<const MetalArgumentBufferLayout*> setLayouts;
+    // Debug builds only: the storage bindings that a stage can write. A set bound with this pipeline must
+    // declare each one writable, because Metal does not track hazards for a write through a Read declaration.
+    std::vector<MetalWrittenBinding> writtenStorage;
 
     uint32_t pushConstantSize = 0;
     uint32_t pushConstantStagesMask = 0;
@@ -219,6 +247,14 @@ class MetalDevice : public IDevice
     const RenderingDeviceCapabilities& GetCapabilities() const override { return m_Capabilities; }
     GraphicsAPI GetAPI() const override { return GraphicsAPI::Metal; }
     std::string GetHardwareDescription() const override;
+
+    // Shader stages taken from the shipped libraries, and stages compiled from MSL here, since start.
+    struct StageLibraryCounts
+    {
+        uint32_t Shipped = 0;
+        uint32_t Compiled = 0;
+    };
+    StageLibraryCounts GetStageLibraryCounts() const;
 
     // Push constant introspection
     uint32_t GetPipelinePushConstantRangeCount(PipelineHandle pipeline) const override;
@@ -403,6 +439,9 @@ class MetalDevice : public IDevice
 
   private:
     static constexpr uint32_t kFramesInFlight = 3;
+    // Frames the GPU may still run when the main thread starts the next frame. One keeps a
+    // GPU-bound loop busy; each more adds one frame of input lag. Slots stay kFramesInFlight deep.
+    static constexpr uint32_t kFramesQueuedOnGpu = 1;
 
     // Null `resource` out of every live descriptor set's residency before its
     // deferred release. Descriptor sets hold residency as raw MTL::Resource*
@@ -414,18 +453,23 @@ class MetalDevice : public IDevice
     // per-update bookkeeping a reverse resource->sets index would cost.
     void ScrubResidency(MTL::Resource* resource);
 
+    // The argument-buffer layout of `desc`. It is computed on the first call for a desc and kept
+    // for the life of the device, so a set made from the same desc again allocates nothing for it.
+    // The caller holds m_ResourceMutex.
+    const MetalArgumentBufferLayout& ArgumentBufferLayoutForLocked(const DescriptorSetLayoutDesc& desc);
+
+    // Ends the frame: recycles the next slot, then moves the frame index to it.
     void SignalFrameCompletion();
+    // Waits for the frame pacing and for every command buffer stamped with `slot`, then releases
+    // the slot's deferred objects and transient sets. The main thread calls it at a frame's end.
+    void RecycleFrameSlot(uint32_t slot);
     void DrainDeferredReleases(uint32_t slot);
     MetalSwapchain* GetSwapchain(WindowTargetHandle target);
     const MetalSwapchain* GetSwapchain(WindowTargetHandle target) const;
     MetalSubmitQueue* GetSubmitQueue(QueueType queue);
-    // Tags `buffer` against the current frame slot before it is enqueued.
-    // BeginFrame blocks until a slot's tagged buffers all completed before
-    // recycling that slot's transient sets / deferred releases — the frame
-    // pacing semaphore alone only covers work enqueued before the present
-    // (late submissions like thumbnail views would otherwise still be
-    // executing when their resources recycle). A buffer on m_GraphicsQueue is
-    // also counted in m_GraphicsCbsInFlight.
+    // Stamps `buffer` with the current frame slot before it is enqueued. RecycleFrameSlot
+    // waits for all buffers stamped with a slot; the pacing semaphore sees only frame ends.
+    // A buffer on m_GraphicsQueue is also counted in m_GraphicsCbsInFlight.
     void TrackFrameCommandBuffer(MTL::CommandBuffer* buffer);
     // Completion handler of a tracked buffer (a Metal-owned thread).
     void RetireTrackedCommandBuffer(uint32_t slot, bool onGraphicsQueue);
@@ -437,6 +481,24 @@ class MetalDevice : public IDevice
     // commit, so newly-created device-address buffers are resident before the
     // next command buffer executes. No-op unless the residency-set path is on.
     void CommitResidencyIfDirty();
+
+    // Stage costs of one pipeline build, for GE_METAL_DUMP_PIPELINE_TIMING.
+    struct StageBuildTiming
+    {
+        double TranslateMs = 0.0;
+        double LibraryMs = 0.0;
+        uint32_t ShippedStages = 0;
+    };
+    // The function of one pipeline stage: from the shipped library for its translation inputs, or
+    // translated and compiled here.
+    MTL::Function* NewStageFunction(const std::vector<uint8_t>& source, MetalShaderStage stage, const char* rawEntry,
+                                    const std::vector<const DescriptorSetLayoutDesc*>& setLayouts,
+                                    const SpecializationConstants* specialization, const std::string& debugName,
+                                    StageBuildTiming& timing, MetalShaderTranslation& outTranslation);
+
+    MetalShippedLibraries m_ShippedLibraries;
+    std::atomic<uint32_t> m_ShippedStageCount{0};
+    std::atomic<uint32_t> m_CompiledStageCount{0};
 
     MTL::Device* m_Device = nullptr;        // owned (+1)
     MTL::CommandQueue* m_GraphicsQueue = nullptr; // owned (+1)
@@ -470,9 +532,13 @@ class MetalDevice : public IDevice
     RenderingDeviceCapabilities m_Capabilities{};
     bool m_Initialized = false;
 
-    // Frame pacing: BeginFrame blocks until a slot is free; the frame's
-    // closing command buffer (Present / FinalizeFrame) signals on completion.
+    // Frame pacing: a frame's end waits until at most kFramesQueuedOnGpu frames are on the GPU.
+    // Each frame's closing command buffer (Present / FinalizeFrame) signals on completion.
     dispatch_semaphore_t m_FrameSemaphore = nullptr;
+    // The last slot wait at a frame's end, and the slot's command buffers when it began.
+    // Main thread only. The frame end publishes the wait; BeginFrame traces both for the slot's frame.
+    double m_SlotWaitMs = 0.0;
+    uint32_t m_SlotCbsAtWait = 0;
     // Read from worker threads (SubmitTextureUploads / DeferRelease) while the
     // main thread advances it in SignalFrameCompletion, so it must be atomic —
     // a torn/UB read could index the kFramesInFlight-sized slot arrays out of
@@ -480,7 +546,8 @@ class MetalDevice : public IDevice
     // optimization, as a GPU page fault from recycling in-flight resources).
     std::atomic<uint32_t> m_FrameIndex{0};
     bool m_FrameSyncIssued = false;
-    bool m_FrameActive = false;
+    // Read by TrackFrameCommandBuffer, which worker threads also call.
+    std::atomic<bool> m_FrameActive{false};
     NS::AutoreleasePool* m_FramePool = nullptr;
 
     std::array<std::vector<NS::Object*>, kFramesInFlight> m_DeferredReleases;
@@ -493,6 +560,12 @@ class MetalDevice : public IDevice
     GenerationalVector<MetalPipeline> m_Pipelines;
     GenerationalVector<MetalSemaphore> m_Semaphores;
     GenerationalVector<MetalDescriptorSet> m_DescriptorSets;
+    // Keyed by HashDescriptorSetLayoutDesc and never erased. Sets point at the layouts, so each
+    // one has its own allocation and stays where it is when the map grows.
+    FlatMap<uint64_t, std::unique_ptr<const MetalArgumentBufferLayout>> m_ArgumentBufferLayouts;
+    // The storage of destroyed sets, keyed by slot count. CreateDescriptorSet takes it back, so the
+    // transient sets of a warm frame allocate no residents and no name.
+    FlatMap<uint32_t, std::vector<MetalDescriptorSet>> m_ReleasedDescriptorSets;
 
     // Transient descriptor sets are recycled by the backend when their frame
     // slot's GPU work completes (the engine never destroys them explicitly),

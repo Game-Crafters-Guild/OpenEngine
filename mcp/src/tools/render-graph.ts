@@ -13,7 +13,7 @@ export const tools: ToolDef[] = [
   proxyTool({
     name: "get_render_graph_passes",
     category: "rendergraph",
-    description: "List all render graph passes in execution order with phase, queue type, barrier count, and optionally resource accesses",
+    description: "List all render graph passes in execution order with phase, the declared queue (queue), the queue the pass runs on (executionQueue), the index of the submission that records it (submissionIndex), barrier count, and optionally resource accesses; then the submissions, each with its queue, its first scheduled index, its pass count and the waits at its start (each wait names the submission of this frame that signals it, or null for an earlier frame)",
     schema: {
       includeAccesses: z.coerce.boolean().optional().describe("Include per-pass resource access details (default false — set true for full info)"),
     },

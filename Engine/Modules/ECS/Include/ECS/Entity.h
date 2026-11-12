@@ -11,6 +11,7 @@
 #include "ECS/LifecycleEvents.h"
 #include "ECS/AutoRegistration.h"
 #include "ECS/QueryPolicy.h"
+#include "ECS/SimulationClock.h"
 #include "Logger/Logger.h"
 #include <algorithm>
 #include <atomic>
@@ -233,7 +234,7 @@ public:
 // Main world class with optimized storage
 class World {
 private:
-    // Archetype performs swap-and-pop defragmentation and must keep per-entity
+    // Archetype moves the table's last row into a removed slot and must keep per-entity
     // metadata (chunkIndex) consistent. World owns the metadata; Archetype updates
     // it via UpdateEntityLocationUnsafe under World's lock.
     friend class Archetype;
@@ -241,6 +242,8 @@ private:
     // Stable identifier for this World instance. Useful for associating
     // renderer views/cameras and other subsystems with a specific ECS world.
     uint64 m_WorldId = 0;
+
+    SimulationClock m_SimulationClock;
 
     // Entity storage. freeIndices is strictly LIFO (push_back/pop_back), so a
     // vector beats a deque: no per-block heap allocations during destroy
@@ -394,6 +397,9 @@ public:
     ~World();
 
     uint64 GetWorldId() const { return m_WorldId; }
+    /// The world's fixed-step clock (ECS/SimulationClock.h). SystemManager::Update advances it once per frame.
+    SimulationClock& GetSimulationClock() { return m_SimulationClock; }
+    const SimulationClock& GetSimulationClock() const { return m_SimulationClock; }
     /// The entity handle epoch (GetEntityHandleEpoch) of the world with id `worldId` (GetWorldId),
     /// or nullopt when no such world exists in this process. Main thread: the epoch is read
     /// without the world's lock.
@@ -988,8 +994,9 @@ public:
     // Prune empty archetypes (optional optimization)
     size_t PruneEmptyArchetypes();
 
-    // Compact empty chunks across all archetypes. Frees memory and updates entity metadata.
-    // Returns total chunks freed. Safe to call periodically (e.g. after ProcessCommands).
+    // Free the spare chunks of all archetypes: chunks that removals emptied, kept for reuse by
+    // later adds. No entity moves. Returns total chunks freed. Call it after a large drop in
+    // entity count (for example a level unload), never during iteration.
     size_t CompactAllChunks();
 
     // Configure archetype pruning
@@ -1048,13 +1055,9 @@ public:
     // GetGlobalSystemVersion() per the ChangeGate contract.
     uint64 GetEntityColumnVersion(EntityHandle entity, ComponentTypeId typeId) const;
 
-    // Record write grants for a batch of entities' `typeId` column — the same
-    // stamp GetComponentForWrite and a Write<T> query visit issue, for writers
-    // that mutate through pointers cached OUTSIDE the granting call (today:
-    // the transform hierarchy's node cache, whose WorldTransform pointers are
-    // captured once at topology rebuild). Without it the write is invisible to
-    // every Changed<T> consumer: stamping is what Changed<T> filters on, and
-    // the mutated bytes themselves carry no signal.
+    // Records the write grant for a writer whose pointer no grant covers: a read
+    // binding written only on change, or a pointer cached outside a query visit
+    // (the transform hierarchy, render extraction). Without it no Changed<T> sees the write.
     //
     // Batched deliberately — one lock and one version for the whole pass:
     // never slower than per-entity stamping, and entities moved together get

@@ -1,9 +1,11 @@
 #include "Providers/CancelToken.h"
 #include "Providers/ClaudeApiProvider.h"
 #include "Providers/ClaudeApiStream.h"
+#include "FakeApiKeyStore.h"
 #include "RecordingTurnEvents.h"
 #include "ScopedEnvironmentVariable.h"
 
+#include "LogCapture.h"
 #include "LoopbackServer.h"
 #include "Platform/HttpClient.h"
 
@@ -70,6 +72,19 @@ std::string ChunkedHead()
 {
     return "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n"
            "Connection: close\r\n\r\n";
+}
+
+// A provider that never touches the system's store; the models URL is unreachable unless given.
+ClaudeApiProvider Provider(const FakeApiKeyStore& keys, std::string modelsUrl = "http://127.0.0.1:1/v1/models")
+{
+    return ClaudeApiProvider(keys.Store(), std::move(modelsUrl));
+}
+
+void SendModels(SocketHandle client)
+{
+    const std::string body = R"({"data":[{"type":"model","id":"claude-opus-5-5"}],"has_more":true})";
+    LoopbackServer::Send(client, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " +
+                                     std::to_string(body.size()) + "\r\nConnection: close\r\n\r\n" + body);
 }
 
 std::string Chunk(std::string_view bytes)
@@ -261,8 +276,10 @@ TEST(ClaudeApiProviderTests, AReplyOneByteOverTheCapFailsWithTheProvidersMessage
 TEST(ClaudeApiProviderTests, TheEndpointIsTheFixedHttpsMessagesApi)
 {
     EXPECT_EQ(ClaudeApiProvider::kEndpoint, "https://api.anthropic.com/v1/messages");
-    EXPECT_FALSE(ClaudeApiProvider().Capabilities().OwnsTranscript);
-    EXPECT_TRUE(ClaudeApiProvider().Capabilities().NeedsKey);
+    EXPECT_EQ(ClaudeApiProvider::kModelsEndpoint, "https://api.anthropic.com/v1/models?limit=1");
+    const ClaudeApiProvider provider = Provider(FakeApiKeyStore{});
+    EXPECT_FALSE(provider.Capabilities().OwnsTranscript);
+    EXPECT_TRUE(provider.Capabilities().NeedsKey);
 }
 
 TEST(ClaudeApiProviderTests, RequestBodyStreamsTheSystemPromptHistoryAndUserTurn)
@@ -289,7 +306,7 @@ TEST(ClaudeApiProviderTests, RequestBodyStreamsTheSystemPromptHistoryAndUserTurn
     EXPECT_FALSE(body.contains("temperature"));
 }
 
-TEST(ClaudeApiProviderTests, WithoutTheEnvironmentKeyTheTurnIsRefusedNamingTheVariable)
+TEST(ClaudeApiProviderTests, WithoutAKeyTheTurnIsRefusedNamingTheSettingsPage)
 {
     const ScopedEnvironmentVariable noKey("ANTHROPIC_API_KEY", nullptr);
     AgentTurnRequest request;
@@ -297,11 +314,154 @@ TEST(ClaudeApiProviderTests, WithoutTheEnvironmentKeyTheTurnIsRefusedNamingTheVa
     RecordingTurnEvents events;
     CancelToken cancel;
 
-    ClaudeApiProvider().RunTurn(request, events, cancel);
+    Provider(FakeApiKeyStore{}).RunTurn(request, events, cancel);
 
     EXPECT_EQ(events.FinishedCount, 1);
     EXPECT_EQ(events.Result.Outcome, TurnOutcome::Failed);
-    EXPECT_NE(events.Result.Error.find("set ANTHROPIC_API_KEY"), std::string::npos) << events.Result.Error;
+    EXPECT_TRUE(events.Result.NotReady);
+    EXPECT_EQ(events.Result.Error, "No Claude API key is saved. Open Settings > AI Assistant, paste a key from the "
+                                   "Claude Console and click Save.");
+}
+
+TEST(ClaudeApiProviderTests, TheEnvironmentKeyPassesBothStepsAndNoFieldOrLogLineShowsIt)
+{
+    constexpr const char* kKey = "fixture-anthropic-key";
+    const ScopedEnvironmentVariable key("ANTHROPIC_API_KEY", kKey);
+    LoopbackServer models([](LoopbackServer&, SocketHandle client) { SendModels(client); });
+    std::vector<std::string> lines;
+    SetupStatus status;
+    {
+        const TestLog::ScopedLogCapture capture(&lines);
+        Logger::Log::Info("capture is live");
+        status = Provider(FakeApiKeyStore{}, models.Url("/v1/models")).CheckSetup({}, SetupSurface::SettingsPage, {});
+    }
+
+    ASSERT_EQ(status.Steps.size(), 2u);
+    EXPECT_EQ(status.Steps[0].Name, "API key");
+    EXPECT_EQ(status.Steps[0].State, SetupStepState::Passed);
+    EXPECT_EQ(status.Steps[0].Found, "Uses ANTHROPIC_API_KEY from the environment instead of a saved key.");
+    EXPECT_EQ(status.Steps[1].Name, "Key accepted");
+    EXPECT_EQ(status.Steps[1].State, SetupStepState::Passed);
+    EXPECT_EQ(status.Steps[1].Found, "The Claude API accepted the key.");
+    EXPECT_TRUE(status.Ready());
+    EXPECT_NE(models.LastRequest().find(std::string("x-api-key: ") + kKey), std::string::npos);
+    for (const SetupStep& step : status.Steps)
+        for (const std::string* field : {&step.Name, &step.Found, &step.Fix, &step.Program, &step.FirstOutput})
+            EXPECT_EQ(field->find(kKey), std::string::npos) << *field;
+    ASSERT_EQ(TestLog::CountLinesContaining(lines, "capture is live"), 1u);
+    EXPECT_EQ(TestLog::CountLinesContaining(lines, "AI Assistant setup: "), 2u);
+    EXPECT_EQ(TestLog::CountLinesContaining(lines, std::string_view(kKey).substr(0, 8)), 0u);
+}
+
+TEST(ClaudeApiProviderTests, ASavedKeyWorksWithoutTheEnvironmentVariable)
+{
+    const ScopedEnvironmentVariable noKey("ANTHROPIC_API_KEY", nullptr);
+    FakeApiKeyStore keys;
+    keys.Data->Saved = "fixture-saved-key";
+    LoopbackServer models([](LoopbackServer&, SocketHandle client) { SendModels(client); });
+
+    const SetupStatus status =
+        Provider(keys, models.Url("/v1/models")).CheckSetup({}, SetupSurface::SettingsPage, {});
+
+    ASSERT_EQ(status.Steps.size(), 2u);
+    EXPECT_EQ(status.Steps[0].Found, "A key is saved in the system's credential store.");
+    EXPECT_EQ(status.Steps[1].State, SetupStepState::Passed);
+    EXPECT_EQ(keys.Data->LastName, "GameEngine/Editor/ai-assistant/anthropic-api-key");
+    EXPECT_NE(models.LastRequest().find("x-api-key: fixture-saved-key"), std::string::npos);
+}
+
+// A set variable is read first, so the store (a Keychain prompt on macOS) is not read at all.
+TEST(ClaudeApiProviderTests, TheEnvironmentVariableWinsOverASavedKey)
+{
+    const ScopedEnvironmentVariable key("ANTHROPIC_API_KEY", "fixture-environment-key");
+    FakeApiKeyStore keys;
+    keys.Data->Saved = "fixture-saved-key";
+    LoopbackServer models([](LoopbackServer&, SocketHandle client) { SendModels(client); });
+
+    Provider(keys, models.Url("/v1/models")).CheckSetup({}, SetupSurface::SettingsPage, {});
+
+    EXPECT_EQ(keys.Data->Reads, 0);
+    EXPECT_NE(models.LastRequest().find("x-api-key: fixture-environment-key"), std::string::npos);
+    EXPECT_EQ(models.LastRequest().find("fixture-saved-key"), std::string::npos);
+}
+
+TEST(ClaudeApiProviderTests, WithoutAKeyOnlyTheKeyStepRunsAndItsFixNamesTheSurfacesControls)
+{
+    const ScopedEnvironmentVariable noKey("ANTHROPIC_API_KEY", nullptr);
+    std::vector<std::string> published;
+    const SetupStatus page = Provider(FakeApiKeyStore{}).CheckSetup(
+        {}, SetupSurface::SettingsPage, [&published](const SetupStep& step) { published.push_back(step.Name); });
+    const SetupStatus panel = Provider(FakeApiKeyStore{}).CheckSetup({}, SetupSurface::Panel, {});
+
+    EXPECT_EQ(published, std::vector<std::string>{"API key"});
+    ASSERT_EQ(page.Steps.size(), 1u);
+    EXPECT_EQ(page.Steps[0].State, SetupStepState::Failed);
+    EXPECT_EQ(page.Steps[0].Fix, "Paste a key from the Claude Console and click Save.");
+    ASSERT_EQ(panel.Steps.size(), 1u);
+    EXPECT_EQ(panel.Steps[0].Fix, "Open Settings > AI Assistant, paste a key from the Claude Console and click Save.");
+    EXPECT_FALSE(page.Ready());
+}
+
+TEST(ClaudeApiProviderTests, WithoutACredentialStoreTheFixIsTheEnvironmentVariable)
+{
+    const ScopedEnvironmentVariable noKey("ANTHROPIC_API_KEY", nullptr);
+    FakeApiKeyStore keys;
+    keys.Data->Refuse = Platform::SecretStoreStatus::NoStore;
+
+    const SetupStatus status = Provider(keys).CheckSetup({}, SetupSurface::SettingsPage, {});
+
+    ASSERT_EQ(status.Steps.size(), 1u);
+    EXPECT_EQ(status.Steps[0].Found,
+              "No Claude API key: this system has no credential store.");
+    EXPECT_EQ(status.Steps[0].Fix, "Set ANTHROPIC_API_KEY in the environment, then start the editor again.");
+}
+
+// Only a 401 says the key is wrong: another answer or no answer warns, and a turn may still run.
+TEST(ClaudeApiProviderTests, KeyAcceptedFailsOnlyOn401AndWarnsWhenTheApiCannotSay)
+{
+    const ScopedEnvironmentVariable noKey("ANTHROPIC_API_KEY", nullptr);
+    FakeApiKeyStore keys;
+    keys.Data->Saved = "fixture-saved-key";
+    const auto answer = [](std::string head) {
+        return [head](LoopbackServer&, SocketHandle client) { LoopbackServer::Send(client, head); };
+    };
+    LoopbackServer refused(answer("HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"));
+    LoopbackServer busy(answer("HTTP/1.1 529 Overloaded\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"));
+
+    const SetupStatus refusedStatus = Provider(keys, refused.Url()).CheckSetup({}, SetupSurface::SettingsPage, {});
+    const SetupStatus busyStatus = Provider(keys, busy.Url()).CheckSetup({}, SetupSurface::SettingsPage, {});
+    const SetupStatus unreachable = Provider(keys).CheckSetup({}, SetupSurface::SettingsPage, {});
+
+    ASSERT_EQ(refusedStatus.Steps.size(), 2u);
+    EXPECT_EQ(refusedStatus.Steps[1].State, SetupStepState::Failed);
+    EXPECT_EQ(refusedStatus.Steps[1].Found, "The Claude API refused the key (HTTP 401).");
+    EXPECT_EQ(refusedStatus.Steps[1].Fix, "Paste a new key from the Claude Console and click Save.");
+    EXPECT_FALSE(refusedStatus.Ready());
+    ASSERT_EQ(busyStatus.Steps.size(), 2u);
+    EXPECT_EQ(busyStatus.Steps[1].State, SetupStepState::Warning);
+    EXPECT_EQ(busyStatus.Steps[1].Found, "The Claude API answered HTTP 529, so the key is not checked.");
+    EXPECT_TRUE(busyStatus.Ready());
+    ASSERT_EQ(unreachable.Steps.size(), 2u);
+    EXPECT_EQ(unreachable.Steps[1].State, SetupStepState::Warning);
+    EXPECT_EQ(unreachable.Steps[1].Found.rfind("The Claude API could not be reached (", 0), 0u)
+        << unreachable.Steps[1].Found;
+}
+
+TEST(ClaudeApiProviderTests, TheStoreSavesRemovesAndRefusesAnEmptyKey)
+{
+    const ScopedEnvironmentVariable noKey("ANTHROPIC_API_KEY", nullptr);
+    FakeApiKeyStore fake;
+    const ApiKeyStore keys = fake.Store();
+
+    EXPECT_EQ(keys.Save(""), Platform::SecretStoreStatus::Failed);
+    EXPECT_FALSE(keys.HasSavedKey());
+    EXPECT_EQ(keys.Save("fixture-saved-key"), Platform::SecretStoreStatus::Done);
+    EXPECT_TRUE(keys.HasSavedKey());
+    EXPECT_EQ(keys.Read().From, ApiKeyStore::Source::Saved);
+    EXPECT_EQ(keys.Remove(), Platform::SecretStoreStatus::Done);
+    EXPECT_EQ(keys.Remove(), Platform::SecretStoreStatus::NotFound);
+    EXPECT_EQ(keys.Read().From, ApiKeyStore::Source::None);
+    EXPECT_EQ(keys.Read().StoreStatus, Platform::SecretStoreStatus::NotFound);
 }
 
 TEST(ClaudeApiProviderTests, RecordedReplyStreamedFromALoopbackServerYieldsTheSameTurn)
@@ -341,7 +501,9 @@ TEST(ClaudeApiProviderTests, ARefusedRequestFailsWithTheApiMessageAndTheFix)
     EXPECT_EQ(events.Result.Outcome, TurnOutcome::Failed);
     EXPECT_NE(events.Result.Error.find("HTTP 401, authentication_error: invalid x-api-key"), std::string::npos)
         << events.Result.Error;
-    EXPECT_NE(events.Result.Error.find("ANTHROPIC_API_KEY"), std::string::npos) << events.Result.Error;
+    EXPECT_NE(events.Result.Error.find("Check the key in Settings > AI Assistant, or ANTHROPIC_API_KEY when it is set."),
+              std::string::npos)
+        << events.Result.Error;
 }
 
 TEST(ClaudeApiProviderTests, CancellingMidStreamStopsTheTurnWithTheTextSoFar)

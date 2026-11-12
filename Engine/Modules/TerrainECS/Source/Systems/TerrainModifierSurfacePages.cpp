@@ -234,7 +234,7 @@ bool TerrainModifierSystem::BakeSurfaceSplatPage(const TerrainSurfaceBakeInputs&
     const uint32 tileW = config.TileConfig.HeightmapWidth;
     const uint32 tileH = config.TileConfig.HeightmapHeight;
     if (tileW < 2u || tileH < 2u || config.TilesPerAxisX == 0u || config.TilesPerAxisZ == 0u ||
-        !inputs.SplatBakeRangeValid || pageX >= level.PagesX || pageZ >= level.PagesZ)
+        !inputs.ResidentSplatsBaked || pageX >= level.PagesX || pageZ >= level.PagesZ)
         return false;
     constexpr PageStreaming::PageFieldFormat kFormat = PageStreaming::PageFieldFormat::Rgba8;
     const PageStreaming::PageSampleRect rect = SurfaceHeightRect(level, pageX, pageZ, kFormat);
@@ -260,8 +260,7 @@ bool TerrainModifierSystem::BakeSurfaceSplatPage(const TerrainSurfaceBakeInputs&
 
     // Zero is the unbaked base, as ResetSplatmap makes it.
     std::vector<uint8> splat(static_cast<std::size_t>(rect.Width()) * rect.Height() * 4u, 0u);
-    ApplySplatModifiers(splat, rect.Width(), rect.Height(), field, lattice, config.HeightScale, inputs.SplatBakeMinH,
-                        inputs.SplatBakeMaxH, inputs.Splat, 0, 0, kRegionUnbounded, kRegionUnbounded,
+    ApplySplatModifiers(splat, rect.Width(), rect.Height(), field, lattice, config.HeightScale, inputs.Splat, 0, 0, kRegionUnbounded, kRegionUnbounded,
                         inputs.LayerClampWarnings, inputs.UnaddressableRulesWarnings);
 
     // Cut the page's stride from the window. A stride sample outside the terrain takes the
@@ -359,9 +358,7 @@ std::shared_ptr<const TerrainSurfaceBakeInputs> TerrainModifierSystem::SnapshotS
     inputs->Config = tiled.Config;
     inputs->WorldOriginX = tiled.WorldOriginX;
     inputs->WorldOriginZ = tiled.WorldOriginZ;
-    inputs->SplatBakeMinH = tiled.SplatBakeMinH;
-    inputs->SplatBakeMaxH = tiled.SplatBakeMaxH;
-    inputs->SplatBakeRangeValid = tiled.SplatBakeRangeValid;
+    inputs->ResidentSplatsBaked = tiled.ResidentSplatsBaked;
     inputs->GroundWrite = write;
     CopyBakeStack(m_AppliedModifiers, *inputs, inputs->Splat);
     CopyBakeStack(m_GrassModifiers, *inputs, inputs->Grass);

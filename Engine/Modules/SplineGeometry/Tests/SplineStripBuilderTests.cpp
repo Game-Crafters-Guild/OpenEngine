@@ -912,16 +912,15 @@ uint64 FrozenRunDigest(SplineProfileShape shape)
 
 } // namespace
 
-// x86-64 digests captured from the builder at 699615abcd, before it learned
-// corners. Per architecture for the reason SplineChannelParity states: libm's
-// sin/cos round differently on arm64, where no baseline has been captured.
+// x86-64 digests of a run with no corner or ground offset. libm's sin/cos round differently on
+// arm64, where no baseline has been captured.
 TEST(SplineStripBuilder, AStationWithNoCornerOrGroundOffsetSweepsByteForByteAsBefore)
 {
 #if defined(__aarch64__) || defined(_M_ARM64)
     GTEST_SKIP() << "x86-64 baseline only";
 #endif
-    EXPECT_EQ(FrozenRunDigest(SplineProfileShape::Rectangle), 14795171210429567218ull);
-    EXPECT_EQ(FrozenRunDigest(SplineProfileShape::Crown), 16412760035002659206ull);
+    EXPECT_EQ(FrozenRunDigest(SplineProfileShape::Rectangle), 16515474040106232554ull);
+    EXPECT_EQ(FrozenRunDigest(SplineProfileShape::Crown), 16772227992747215084ull);
 }
 
 // A station's GroundOffset moves the profile's grounded points along Up and

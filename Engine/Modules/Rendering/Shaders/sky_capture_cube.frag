@@ -99,8 +99,8 @@ void main()
         dirView.y * uSky.cameraUpWS +
         (-dirView.z) * uSky.cameraForwardWS);
 
-    // Planet-relative up + east/north frame, identical to sky_render.frag's
-    // procedural path, so the oct UV indexes the LUT the same way.
+    // The east/north/up frame of sky_render.frag, so the UV indexes the LUT the
+    // same way. The capture's eye is the origin on top of the planet: up is +Y.
     vec3 planetCenter = vec3(0.0, -uAtmos.planetRadius, 0.0);
     vec3 camPos       = uSky.cameraPositionWS;
     float camR        = length(camPos - planetCenter);

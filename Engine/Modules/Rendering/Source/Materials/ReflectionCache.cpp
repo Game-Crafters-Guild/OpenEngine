@@ -1,23 +1,30 @@
 #include "Rendering/Materials/ReflectionCache.h"
+#include "Types/Fnv1a.h"
 #include <functional>
 #include <algorithm>
 #include <utility>
 
 namespace GameEngine { namespace Rendering {
 
-size_t ReflectionCacheKeyHash::operator()(const ReflectionCacheKey& k) const noexcept {
-    size_t h = 1469598103934665603ull;
-    auto mix = [&](uint64_t x){ h ^= x; h *= 1099511628211ull; };
-    for (auto& p : k.StagePaths) { for (char c : p) { mix((unsigned char)c); } mix(0xFF); }
-    for (auto& ep : k.StageEntryPoints) {
-        for (char c : ep.first) { mix((unsigned char)c); }
-        mix(0xFE);
-        for (char c : ep.second) { mix((unsigned char)c); }
-        mix(0xFD);
+namespace {
+// A separator byte after each string, so that two keys whose strings only split differently hash apart.
+constexpr uint8_t kStagePathEnd = 0xFF;
+constexpr uint8_t kStageNameEnd = 0xFE;
+constexpr uint8_t kEntryPointEnd = 0xFD;
+} // namespace
+
+size_t ReflectionCacheKeyHash::operator()(const ReflectionCacheKey& key) const noexcept {
+    using namespace GameEngine::Hashing;
+    uint64_t hash = kFnv1a64OffsetBasis;
+    for (const std::string& path : key.StagePaths) {
+        hash = Fnv1a64Value(Fnv1a64(path, hash), kStagePathEnd);
     }
-    for (auto id : k.SpecConstantIds) { mix(id); }
-    mix(k.ToolVersion);
-    return h;
+    for (const auto& [stage, entryPoint] : key.StageEntryPoints) {
+        hash = Fnv1a64Value(Fnv1a64(stage, hash), kStageNameEnd);
+        hash = Fnv1a64Value(Fnv1a64(entryPoint, hash), kEntryPointEnd);
+    }
+    hash = Fnv1a64Values(hash, key.SpecConstantIds);
+    return static_cast<size_t>(Fnv1a64Value(hash, key.ToolVersion));
 }
 
 const ShaderMeta* ReflectionCache::Find(const ReflectionCacheKey& key) const {

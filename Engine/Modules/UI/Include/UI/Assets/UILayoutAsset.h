@@ -13,7 +13,7 @@ public:
         : Asset(guid, AssetType::UILayout, path) {}
 
     bool Load() override;
-    bool LoadFromData(const Vector<uint8>& data) override;
+    bool LoadFromData(std::span<const uint8> data) override;
     void Unload() override;
 
     UITemplateNode* GetRoot() const { return m_Root.get(); }

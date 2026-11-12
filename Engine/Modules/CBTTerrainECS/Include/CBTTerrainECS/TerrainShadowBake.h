@@ -16,6 +16,11 @@ namespace GameEngine::Engine::Renderer
 class RenderServices;
 }
 
+namespace GameEngine::CBTTerrain
+{
+struct CBTFrameParams;
+}
+
 namespace GameEngine::CBTTerrainECS
 {
 
@@ -36,13 +41,17 @@ struct TerrainShadowSource
 struct TerrainShadowBakeInputs
 {
     TerrainShadowSource Source{};
-    // The terrain's corner (world X, Z), the world height of normalized 0, its extent in metres
-    // and metres per normalized height.
+    // The terrain's corner (world X, Z), the world height of normalized 0, the extent in meters the
+    // height texture spans (a tiled terrain's whole tiles) and meters per normalized height.
     double TerrainX = 0.0;
     double TerrainZ = 0.0;
     double BaseY = 0.0;
     float SizeX = 0.0f;
     float SizeZ = 0.0f;
+    // The authored extent in meters, inside SizeX x SizeZ: what casts, and what a receiver counts as
+    // on the terrain (TerrainShadowMap::ExtentX).
+    float CasterSizeX = 0.0f;
+    float CasterSizeZ = 0.0f;
     float HeightScale = 0.0f;
     // The draw's level scale for this view (TerrainShadowMap::DrawLevelScale); 0 without a height chain.
     float DrawLevelScale = 0.0f;
@@ -73,6 +82,11 @@ class TerrainShadowBake
     ~TerrainShadowBake();
     TerrainShadowBake(const TerrainShadowBake&) = delete;
     TerrainShadowBake& operator=(const TerrainShadowBake&) = delete;
+
+    // The bake's terrain geometry from the frame's CBT params: the corner, base height, height span,
+    // the authored extent (TerrainSize scaled by SurfaceExtent, at most the span), the height scale
+    // and the draw's level scale. The source, the edit rect and the upload pass stay unset.
+    static TerrainShadowBakeInputs GeometryOf(const CBTTerrain::CBTFrameParams& params);
 
     // Declares this frame's bake into `frame` (once per graph and frame, however many views call)
     // when its inputs changed, and publishes the map for `viewId`, whose world's primary

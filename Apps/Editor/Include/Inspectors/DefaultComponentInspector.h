@@ -2,7 +2,6 @@
 
 #include "ECS/Component/ComponentFieldRegistry.h"  // ECS::ComponentTypeId
 
-#include <functional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -10,7 +9,6 @@
 namespace GameEngine {
 
 struct InspectorContext;
-struct OverrideMenuTarget;
 class UIElement;
 
 namespace ECS {
@@ -44,10 +42,6 @@ bool RenderReflectedFieldRows(const InspectorContext& ctx, ECS::ComponentTypeId 
 // entity's name differs from the entity's source, and hides them when it does not. The header's
 // badge shows the answer's badge text ("Added" on an entity the instance added).
 void UpdateEntityNameOverrideMark(UIElement& header, UIElement& nameField, ECS::World& world, ECS::EntityHandle entity);
-
-// Opens, on a right-click on `element`, the entries InspectorRegistry::QueryOverrideMenu gives `target`, and
-// runs `refresh` after the chosen entry. A right-click opens nothing while the target has no entries.
-void AttachOverrideMenu(UIElement& element, const OverrideMenuTarget& target, std::function<void()> refresh);
 
 // The row label of a reflected field, as the Inspector shows it: its "// @ge-label" text, otherwise
 // its identifier as words.

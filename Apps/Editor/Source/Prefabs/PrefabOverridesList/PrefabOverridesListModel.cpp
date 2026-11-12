@@ -97,16 +97,16 @@ std::string AssetNameOf(const GUID& guid)
     return std::filesystem::path(metadata.Path).stem().string();
 }
 
-// The Inspector's label of the Transform row for a scene key of Transform.
+// The row label of a Transform field for its scene key: "Transform: " and the Inspector's label of the field.
 std::string TransformLabelOf(std::string_view key)
 {
     if (EqualsIgnoreCase(key, "position"))
-        return "Local Position";
+        return "Transform: Local Position";
     if (EqualsIgnoreCase(key, "rotation"))
-        return "Local Rotation";
+        return "Transform: Local Rotation";
     if (EqualsIgnoreCase(key, "scale"))
-        return "Local Scale";
-    return "Transform . " + IdentifierToWords(key);
+        return "Transform: Local Scale";
+    return "Transform: " + IdentifierToWords(key);
 }
 
 void DescribeTransformValue(const ECS::World& prefabWorld, ECS::EntityHandle prefabEntity, std::string_view key,
@@ -117,7 +117,7 @@ void DescribeTransformValue(const ECS::World& prefabWorld, ECS::EntityHandle pre
         return;
     if (EqualsIgnoreCase(key, "position"))
     {
-        const Vector3 position = transform->GetPosition();
+        const Vector3 position = transform->GetPosition() - Mathematics::WorldPosition{};
         row.PrefabValue = FormatAxes(std::array{position.x, position.y, position.z});
     }
     else if (EqualsIgnoreCase(key, "rotation"))
@@ -191,44 +191,69 @@ void DescribeReflectedValue(const ECS::World& prefabWorld, const ECS::FieldInfo&
     }
 }
 
-// The label and the prefab value of a changed field. The template entity holds the prefab's values.
-void DescribeField(ECS::World& world, ECS::EntityHandle entity, const Scene::PrefabOverride& entry,
-                   PrefabOverrideRow& row)
+// The value of the changed field `entry` of `entity` as the Inspector shows it, in row.PrefabValue and
+// row.PrefabColor.
+void DescribeFieldValue(const ECS::World& world, ECS::EntityHandle entity, const Scene::PrefabOverride& entry,
+                        PrefabOverrideRow& row)
 {
-    const Scene::PrefabTemplateEntity prefab = Scene::FindPrefabTemplateEntity(world, entity);
     if (EqualsIgnoreCase(entry.Component, kTransformToken))
     {
-        row.Label = TransformLabelOf(entry.Field);
-        if (prefab.World)
-            DescribeTransformValue(*prefab.World, prefab.Entity, entry.Field, row);
+        DescribeTransformValue(world, entity, entry.Field, row);
         return;
     }
     if (EqualsIgnoreCase(entry.Component, kNameToken))
     {
-        row.Label = "Name";
-        const auto* name = prefab.World ? prefab.World->GetComponent<Components::Name>(prefab.Entity) : nullptr;
-        if (name)
-            row.PrefabValue = std::format("\"{}\"", name->View());
+        if (const auto* name = world.GetComponent<Components::Name>(entity))
+            row.PrefabValue = std::format("'{}'", name->View());
         return;
     }
-    row.Label = IdentifierToWords(entry.Component) + " . " + IdentifierToWords(entry.Field);
     const Scene::ISceneComponentSchema* schema = Scene::SceneSchemaRegistry::Find(entry.Component);
     if (!schema)
         return;
     const ECS::ComponentTypeId type = Scene::SceneSchemaRegistry::ComponentTypeForSchema(*schema);
-    const std::string_view fieldName = ReflectedFieldForSceneKey(type, entry.Field);
+    const std::string_view fieldName = InspectorFieldForSceneKey(type, entry.Field);
+    // A key with an index names an array element, which has no value of its own here.
+    if (fieldName.empty() || !EqualsIgnoreCase(entry.Field, fieldName))
+        return;
     for (const ECS::FieldInfo& field : ECS::ComponentFieldRegistry::Get(type))
     {
-        if (fieldName.empty() || field.Name != fieldName)
-            continue;
-        row.Label = IdentifierToWords(entry.Component) + " . " + FieldDisplayName(field);
-        // A key with an index names an array element, which has no value of its own here.
         std::vector<std::uint8_t> bytes;
-        if (EqualsIgnoreCase(entry.Field, field.Name) && prefab.World &&
-            prefab.World->CaptureComponentBytes(prefab.Entity, type, bytes))
-            DescribeReflectedValue(*prefab.World, field, bytes, row);
-        return;
+        if (field.Name == fieldName && world.CaptureComponentBytes(entity, type, bytes))
+            DescribeReflectedValue(world, field, bytes, row);
     }
+}
+
+// The row label of the changed field `entry`.
+std::string FieldLabelOf(const Scene::PrefabOverride& entry)
+{
+    if (EqualsIgnoreCase(entry.Component, kTransformToken))
+        return TransformLabelOf(entry.Field);
+    if (EqualsIgnoreCase(entry.Component, kNameToken))
+        return "Name";
+    if (const Scene::ISceneComponentSchema* schema = Scene::SceneSchemaRegistry::Find(entry.Component))
+    {
+        const ECS::ComponentTypeId type = Scene::SceneSchemaRegistry::ComponentTypeForSchema(*schema);
+        const std::string_view fieldName = InspectorFieldForSceneKey(type, entry.Field);
+        for (const ECS::FieldInfo& field : ECS::ComponentFieldRegistry::Get(type))
+            if (!fieldName.empty() && field.Name == fieldName)
+                return IdentifierToWords(entry.Component) + ": " + FieldDisplayName(field);
+    }
+    return IdentifierToWords(entry.Component) + ": " + IdentifierToWords(entry.Field);
+}
+
+// The label and the prefab value of a changed field. The template entity holds the prefab's values.
+void DescribeField(ECS::World& world, ECS::EntityHandle entity, const Scene::PrefabOverride& entry,
+                   PrefabOverrideRow& row)
+{
+    row.Label = FieldLabelOf(entry);
+    const Scene::PrefabTemplateEntity prefab = Scene::FindPrefabTemplateEntity(world, entity);
+    if (!prefab.World)
+        return;
+    DescribeFieldValue(*prefab.World, prefab.Entity, entry, row);
+    PrefabOverrideRow instance;
+    DescribeFieldValue(world, entity, entry, instance);
+    // A field that keeps a record can hold the prefab's value.
+    row.SameAsPrefab = !row.PrefabValue.empty() && instance.PrefabValue == row.PrefabValue;
 }
 
 // The name of the prefab's entity at `address` in the prefab of the instance that holds `entity`; the address when
@@ -277,7 +302,7 @@ std::string DescribeStaleLine(const Scene::SceneDegradation::Skip& skip)
         return TransformLabelOf(skip.field);
     if (EqualsIgnoreCase(skip.component, kNameToken))
         return "Name";
-    return IdentifierToWords(skip.component) + " . " + IdentifierToWords(skip.field);
+    return IdentifierToWords(skip.component) + ": " + IdentifierToWords(skip.field);
 }
 
 // True for an orphaned override that the load recorded on the instance's root. A line under a child that the

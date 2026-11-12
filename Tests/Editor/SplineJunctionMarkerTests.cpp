@@ -85,7 +85,7 @@ class SplineJunctionMarkerTests : public ::testing::Test
             data->AddPoint(point, 1.0f);
         splines.RebuildCache(handle);
         ECS::Entity entity = m_World->Create();
-        entity.Set(Components::Transform::FromTRS(Vector3(0.0f, 0.0f, 0.0f), Mathematics::Quaternion(1.0f, 0.0f, 0.0f, 0.0f),
+        entity.Set(Components::Transform::FromTRS(Mathematics::WorldPosition{}, Mathematics::Quaternion(1.0f, 0.0f, 0.0f, 0.0f),
                                                   Vector3(1.0f, 1.0f, 1.0f)));
         entity.Set(Components::WorldTransform{});
         Components::SplineComponent spline{};

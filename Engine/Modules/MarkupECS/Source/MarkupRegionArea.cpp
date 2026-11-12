@@ -22,10 +22,10 @@ namespace
 {
 
 // The ground-plane position of the entity-local point (x, y, z) under the column-major `matrix`.
-Vector2 PlaceXZ(const float32 (&matrix)[16], float32 x, float32 y, float32 z)
+Vector2 PlaceXZ(const Mathematics::Matrix4x4& matrix, float32 x, float32 y, float32 z)
 {
-    return Vector2(matrix[0] * x + matrix[4] * y + matrix[8] * z + matrix[12],
-                   matrix[2] * x + matrix[6] * y + matrix[10] * z + matrix[14]);
+    return Vector2(matrix[0].x * x + matrix[1].x * y + matrix[2].x * z + matrix[3].x,
+                   matrix[0].z * x + matrix[1].z * y + matrix[2].z * z + matrix[3].z);
 }
 
 void FitBounds(MarkupFootprint& footprint)
@@ -46,7 +46,7 @@ void FitBounds(MarkupFootprint& footprint)
 }
 
 std::optional<MarkupFootprint> RegionFootprint(const ECS::World& world, ECS::EntityHandle entity,
-                                               const float32 (&matrix)[16])
+                                               const Mathematics::Matrix4x4& matrix)
 {
     const auto* spline = world.GetComponent<Components::SplineComponent>(entity);
     const SplineECS::SplineService* service = SplineECS::SplineService::TryGet();
@@ -77,7 +77,7 @@ std::optional<MarkupFootprint> RegionFootprint(const ECS::World& world, ECS::Ent
 }
 
 // A box's scale is its full extents: the unit cube's corners at +-0.5.
-MarkupFootprint BoxFootprint(const float32 (&matrix)[16])
+MarkupFootprint BoxFootprint(const Mathematics::Matrix4x4& matrix)
 {
     Vector2 corners[8];
     for (int corner = 0; corner < 8; ++corner)
@@ -89,11 +89,12 @@ MarkupFootprint BoxFootprint(const float32 (&matrix)[16])
 }
 
 // A sphere's scale.x is its diameter.
-MarkupFootprint SphereFootprint(const float32 (&matrix)[16])
+MarkupFootprint SphereFootprint(const Mathematics::Matrix4x4& matrix)
 {
     MarkupFootprint footprint;
-    footprint.Center = Vector2(matrix[12], matrix[14]);
-    footprint.Radius = 0.5f * std::sqrt(matrix[0] * matrix[0] + matrix[1] * matrix[1] + matrix[2] * matrix[2]);
+    footprint.Center = Vector2(matrix[3].x, matrix[3].z);
+    footprint.Radius =
+        0.5f * std::sqrt(matrix[0].x * matrix[0].x + matrix[0].y * matrix[0].y + matrix[0].z * matrix[0].z);
     return footprint;
 }
 
@@ -127,13 +128,15 @@ std::optional<MarkupFootprint> ReadMarkupFootprint(const ECS::World& world, ECS:
     const auto* transform = world.GetComponent<Components::WorldTransform>(entity);
     if (!transform)
         return std::nullopt;
+    const Mathematics::Matrix4x4 worldMatrix =
+        transform->ToMatrix4x4(transform->GetPosition() - Mathematics::WorldPosition{});
     std::optional<MarkupFootprint> footprint;
     if (world.GetComponent<Components::MarkupRegion>(entity))
-        footprint = RegionFootprint(world, entity, transform->matrix);
+        footprint = RegionFootprint(world, entity, worldMatrix);
     else if (world.GetComponent<Components::MarkupVolume>(entity)->Shape == Components::MarkupVolumeShape::Sphere)
-        footprint = SphereFootprint(transform->matrix);
+        footprint = SphereFootprint(worldMatrix);
     else
-        footprint = BoxFootprint(transform->matrix);
+        footprint = BoxFootprint(worldMatrix);
     // A zero scale collapses the shape: it covers nothing.
     if (!footprint || (footprint->IsCircle() ? footprint->Radius <= 0.0f : footprint->Ring.size() < 3))
         return std::nullopt;
@@ -147,7 +150,9 @@ MarkupFootprintKey ReadMarkupFootprintKey(const ECS::World& world, ECS::EntityHa
     const auto* transform = world.GetComponent<Components::WorldTransform>(entity);
     if (!IsMarkupWithShape(world, entity) || !transform)
         return key;
-    std::memcpy(key.Matrix, transform->matrix, sizeof(key.Matrix));
+    const Mathematics::Matrix4x4 worldMatrix =
+        transform->ToMatrix4x4(transform->GetPosition() - Mathematics::WorldPosition{});
+    std::memcpy(key.Matrix, worldMatrix.Data(), sizeof(key.Matrix));
     if (world.GetComponent<Components::MarkupRegion>(entity))
     {
         key.Shape = MarkupFootprintKey::Kind::Region;

@@ -70,7 +70,6 @@ TEST(PreExposureSourceContract, EveryWriterStoresItsRadianceAtThePreExposure)
         "Engine/Modules/Rendering/Shaders/Ocean/ocean_spray_gpu.frag",
         "Engine/Modules/Rendering/Shaders/lens_flare.frag",
         "Engine/Modules/Rendering/Shaders/sun_glare.frag",
-        "Engine/Modules/Rendering/Shaders/forwardplus_lighting.frag",
         "Packages/fidelityfx-dof/Assets/Shaders/ffx_dof_composite.comp",
     };
     for (const char* path : writers)
@@ -160,7 +159,6 @@ TEST(PreExposureSourceContract, EveryFullscreenPassOnAPreExposureShaderBindsTheE
         "Shaders/fog_glow_prefilter.shaderpkg",      "Shaders/fog_glow_downsample.shaderpkg",
         "Shaders/bloom_threshold.shaderpkg",         "Shaders/halation_prefilter.shaderpkg",
         "Shaders/hdr_color_fx.shaderpkg",            "Shaders/tonemap.shaderpkg",
-        "Shaders/forwardplus_lighting.shaderpkg",
     };
     const nlohmann::json graph = ReadGraph("Engine/Assets/RenderPipelines/ForwardPlus.rendergraph");
     int bound = 0;
@@ -175,8 +173,8 @@ TEST(PreExposureSourceContract, EveryFullscreenPassOnAPreExposureShaderBindsTheE
         EXPECT_EQ(pass["bufferUsages"]["uExposure"], "Storage");
         ++bound;
     }
-    EXPECT_EQ(bound, 17) << "fog glow fast and prefilter, 7 fog glow downsamples, 2 bloom thresholds, halation, "
-                            "colour FX, tonemap, cloud layer, clouds composite, forward+ lighting";
+    EXPECT_EQ(bound, 16) << "fog glow fast and prefilter, 7 fog glow downsamples, 2 bloom thresholds, halation, "
+                            "colour FX, tonemap, cloud layer, clouds composite";
 }
 
 TEST(PreExposureSourceContract, TheExposureHistoryLayoutIsDeclaredOnce)

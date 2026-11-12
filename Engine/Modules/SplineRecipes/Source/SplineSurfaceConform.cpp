@@ -3,6 +3,7 @@
 #include "Assets/AssetManager.h"
 #include "Components/Rendering/MeshRenderer.h"
 #include "Components/RuntimeOnlyEntity.h"
+#include "Components/Spline/SplineExtrude.h"
 #include "Components/Spline/SplinePlacement.h"
 #include "Components/Terrain/Terrain.h"
 #include "Components/Transform.h"
@@ -18,7 +19,9 @@
 #include "Scene/SceneRaycast.h"
 #include "Scene/SceneTlas.h"
 #include "SplineECS/SplineService.h"
+#include "SplineSurfaceConformInternal.h"
 #include "TerrainECS/TerrainModifierSystem.h"
+#include "TerrainECS/SurfaceHeightQuery.h"
 #include "TerrainECS/TerrainService.h"
 #include "Types/Fnv1a.h"
 #include "Types/Types.h"
@@ -27,6 +30,7 @@
 #include <cmath>
 #include <cstring>
 #include <format>
+#include <limits>
 
 namespace GameEngine::SplineRecipes
 {
@@ -74,37 +78,44 @@ uint64 FloatBits(float32 value)
     return static_cast<uint64>(bits);
 }
 
-// Whether a terrain's footprint, widened by kConformHoldMarginMetres, meets `run` in XZ. The
-// footprint comes from the transform and the size, so a terrain that is not loaded has one. A planet
-// is centered on the world origin and reaches HeightScale above PlanetRadius.
+// Whether a terrain's footprint, widened by `marginMetres`, meets `run` in XZ. The footprint comes
+// from the transform and the size, so a terrain that is not loaded has one. A planet is centered on
+// the world origin and reaches HeightScale above PlanetRadius.
 bool TerrainNearRun(const Components::Terrain& terrain, const Components::WorldTransform& worldXf,
-                    const Mathematics::AABB& run)
+                    const Mathematics::AABB& run, float32 marginMetres)
 {
     if (terrain.Domain == Components::TerrainDomain::Spherical)
     {
         const float32 nearestX = std::clamp(0.0f, run.min.x, run.max.x);
         const float32 nearestY = std::clamp(0.0f, run.min.y, run.max.y);
         const float32 nearestZ = std::clamp(0.0f, run.min.z, run.max.z);
-        const float32 reach = terrain.PlanetRadius + std::abs(terrain.HeightScale) + kConformHoldMarginMetres;
+        const float32 reach = terrain.PlanetRadius + std::abs(terrain.HeightScale) + marginMetres;
         return nearestX * nearestX + nearestY * nearestY + nearestZ * nearestZ <= reach * reach;
     }
-    const float32 halfX = terrain.SizeX * 0.5f + kConformHoldMarginMetres;
-    const float32 halfZ = terrain.SizeZ * 0.5f + kConformHoldMarginMetres;
-    const Mathematics::Vector3 center = worldXf.GetPosition();
+    const float32 halfX = terrain.SizeX * 0.5f + marginMetres;
+    const float32 halfZ = terrain.SizeZ * 0.5f + marginMetres;
+    const Mathematics::Vector3 center = worldXf.GetPosition() - Mathematics::WorldPosition{};
     const float32 centerX = center.x;
     const float32 centerZ = center.z;
     return centerX - halfX <= run.max.x && centerX + halfX >= run.min.x && centerZ - halfZ <= run.max.z &&
            centerZ + halfZ >= run.min.z;
 }
 
+// Which terms of a tiled terrain's height pages a revision folds.
+enum class PageTerms : uint8
+{
+    SourceOnly,         // the page source's identity
+    SourceOverlayStamp, // also the overlay's version and the page stamp
+};
+
 // Folds every input TerrainPicking turns into a world-space hit, besides the samples: the
 // translation, the size, the height scale and the domain, as bit patterns. A terrain without
 // modifiers never bakes, so its heightfield version stays the same when it moves.
 void FoldTerrainRevision(uint64& revision, TerrainECS::TerrainService& terrainService, uint64 appliedGroundRevision,
-                         ECS::EntityHandle entity, const Components::Terrain& terrain,
+                         PageTerms pageTerms, ECS::EntityHandle entity, const Components::Terrain& terrain,
                          const Components::WorldTransform& worldXf)
 {
-    const Mathematics::Vector3 position = worldXf.GetPosition();
+    const Mathematics::Vector3 position = worldXf.GetPosition() - Mathematics::WorldPosition{};
     FoldRevision(revision, FloatBits(position.x));
     FoldRevision(revision, FloatBits(position.y));
     FoldRevision(revision, FloatBits(position.z));
@@ -126,30 +137,55 @@ void FoldTerrainRevision(uint64& revision, TerrainECS::TerrainService& terrainSe
         TerrainECS::TiledTerrainHandle{terrain.TiledTerrainHandle, terrain.TiledTerrainGeneration});
     if (!tiled)
         return;
-    // The tile versions cover only the resident tiles. The applied ground revision covers an
-    // edit away from the camera, which changes the composed ground and no resident tile.
+    // A conform ray reads the height pages and the overlay, never the tiles. The applied ground
+    // revision covers an edit that changes the composed ground.
     FoldRevision(revision, appliedGroundRevision);
-    for (const auto& entry : tiled->Tiles)
-    {
-        const auto& tile = entry.second;
-        if (!tile || tile->LodState == TerrainECS::TileLodState::Empty)
-            continue;
-        // The coordinate goes with the version, so an evicted tile and an arrived tile at the
-        // same version do not cancel.
-        FoldRevision(revision, (static_cast<uint64>(static_cast<uint32>(entry.first.X)) << 32) |
-                                   static_cast<uint32>(entry.first.Z));
-        FoldRevision(revision, tile->HeightfieldVersion);
-    }
+    const TerrainECS::SurfaceHeightQuery pages = terrainService.SurfaceQuery(terrain, worldXf);
+    FoldRevision(revision, pages.Edits().Source);
+    if (pageTerms == PageTerms::SourceOnly)
+        return;
+    FoldRevision(revision, pages.Edits().OverlayVersion);
+    const TerrainECS::SurfaceHeightPageStamp stamp = pages.PageStamp();
+    FoldRevision(revision, stamp.Epoch);
+    FoldRevision(revision, stamp.Change);
 }
 
-// A planar terrain has its data handle and a tiled terrain the other one. A terrain with
-// neither is declared but not loaded yet.
-bool TerrainProvisioned(TerrainECS::TerrainService& terrainService, const Components::Terrain& terrain)
+uint64 FoldGroundRevision(ECS::World& world, const TerrainECS::TerrainModifierSystem* modifierSystem,
+                          const Mathematics::AABB& reach, PageTerms pageTerms)
 {
-    return terrainService.GetTerrainData(
-               TerrainECS::TerrainHandle{terrain.TerrainDataHandle, terrain.TerrainDataGeneration}) != nullptr ||
-           terrainService.GetTiledTerrainData(
-               TerrainECS::TiledTerrainHandle{terrain.TiledTerrainHandle, terrain.TiledTerrainGeneration}) != nullptr;
+    auto* terrainService = TerrainECS::TerrainService::TryGet();
+    if (!terrainService)
+        return 0u;
+
+    const uint64 appliedGroundRevision = modifierSystem ? modifierSystem->GetAppliedGroundRevisionIn(reach) : 0u;
+
+    uint64 revision = 0u;
+    FoldRevision(revision, terrainService->PlanetLayerVersion());
+
+    // The same query TerrainPicking marches, so the digest covers the terrains a conform ray in
+    // the reach can hit: a terrain the pick ignores, or one away from the reach, must not be able
+    // to schedule a rebuild.
+    world.Query<ECS::Read<Components::Terrain>, ECS::Read<Components::WorldTransform>>().Each(
+        [&](ECS::EntityHandle entity, const Components::Terrain& terrain, const Components::WorldTransform& worldXf)
+        {
+            if (TerrainNearRun(terrain, worldXf, reach, /*marginMetres*/ 0.0f))
+                FoldTerrainRevision(revision, *terrainService, appliedGroundRevision, pageTerms, entity, terrain,
+                                    worldXf);
+        });
+    return revision;
+}
+
+// A planar terrain has its data handle, and a tiled terrain the other one and a page source: a conform
+// ray reads a tiled terrain's height pages. A terrain with neither handle is declared but not loaded yet.
+bool TerrainProvisioned(TerrainECS::TerrainService& terrainService, const Components::Terrain& terrain,
+                        const Components::WorldTransform& worldXf)
+{
+    if (terrainService.GetTerrainData(
+            TerrainECS::TerrainHandle{terrain.TerrainDataHandle, terrain.TerrainDataGeneration}) != nullptr)
+        return true;
+    return terrainService.GetTiledTerrainData(
+               TerrainECS::TiledTerrainHandle{terrain.TiledTerrainHandle, terrain.TiledTerrainGeneration}) != nullptr &&
+           terrainService.SurfaceQuery(terrain, worldXf).HasPageSource();
 }
 
 // Adds the entity when its model is not loaded. A runtime-only entity, a primitive and a null
@@ -162,7 +198,7 @@ void AddPendingConformTarget(ECS::World& world, const AssetManager& assets, ECS:
     if (model.IsNull() || Engine::Renderer::PrimitiveGenerator::IsPrimitive(model) || assets.IsAssetLoaded(model) ||
         world.HasComponent<Components::RuntimeOnlyEntity>(entity))
         return;
-    targets.push_back({transform.GetPosition(), model, assets.IsLoadSuppressed(model)});
+    targets.push_back({transform.GetPosition() - Mathematics::WorldPosition{}, model, assets.IsLoadSuppressed(model)});
 }
 
 } // namespace
@@ -219,10 +255,14 @@ bool ConformRayDown(ECS::World& world, const Mathematics::Vector3& sample,
     }
     const Scene::PickResult result = Scene::RaycastScene(ray, world, options);
     if (tally)
+    {
         tally->Record(result.Hit, result.MeshBvhPending, sample);
+        if (result.Hit && result.Best.CoarseHeight)
+            ++tally->CoarseHeights;
+    }
     if (!result.Hit)
         return false;
-    outHit = result.Best.WorldPosition;
+    outHit = result.Best.Point;
     if (outNormal)
         *outNormal = result.Best.WorldNormal;
     return true;
@@ -274,27 +314,36 @@ const TerrainECS::TerrainModifierSystem* ResolveTerrainModifierSystem()
     return systems ? systems->GetSystem<TerrainECS::TerrainModifierSystem>() : nullptr;
 }
 
-uint64 ConformSurfaceRevision(ECS::World& world,
-                              const TerrainECS::TerrainModifierSystem* modifierSystem)
+uint64 ConformTerrainSetRevision(ECS::World& world, const TerrainECS::TerrainModifierSystem* modifierSystem,
+                                 const Mathematics::AABB& reach)
 {
-    auto* terrainService = TerrainECS::TerrainService::TryGet();
-    if (!terrainService)
-        return 0u;
+    return FoldGroundRevision(world, modifierSystem, reach, PageTerms::SourceOnly);
+}
 
-    const uint64 appliedGroundRevision =
-        modifierSystem ? modifierSystem->GetAppliedGroundRevision() : 0u;
+uint64 ConformSurfaceRevision(ECS::World& world, const TerrainECS::TerrainModifierSystem* modifierSystem,
+                              const Mathematics::AABB& reach)
+{
+    return FoldGroundRevision(world, modifierSystem, reach, PageTerms::SourceOverlayStamp);
+}
 
-    uint64 revision = 0u;
-    FoldRevision(revision, terrainService->SphereSculptVersion());
+float32 ExtrudeGroundReach(const Components::SplineExtrude& recipe)
+{
+    const float32 halfStrip = recipe.Width * 0.5f + recipe.ShoulderWidth + recipe.VergeWidth + std::abs(recipe.LateralOffset);
+    return std::max(halfStrip, recipe.MaxHalfWidth) + kGroundReadSlackMetres;
+}
 
-    // The same query TerrainPicking marches, so the digest covers exactly the
-    // terrains a conform ray can hit: a terrain the pick ignores must not be
-    // able to schedule a rebuild.
-    world.Query<ECS::Read<Components::Terrain>, ECS::Read<Components::WorldTransform>>().Each(
-        [&](ECS::EntityHandle entity, const Components::Terrain& terrain, const Components::WorldTransform& worldXf)
-        { FoldTerrainRevision(revision, *terrainService, appliedGroundRevision, entity, terrain, worldXf); });
+Mathematics::AABB GroundReach(const Mathematics::AABB& runBounds, float32 reachMetres)
+{
+    Mathematics::AABB reach = runBounds;
+    reach.Inflate(Mathematics::Vector3(reachMetres, 0.0f, reachMetres));
+    return reach;
+}
 
-    return revision;
+Mathematics::AABB UnboundedConformRun()
+{
+    constexpr float32 kLowest = std::numeric_limits<float32>::lowest();
+    constexpr float32 kMax = std::numeric_limits<float32>::max();
+    return {{kLowest, kLowest, kLowest}, {kMax, kMax, kMax}};
 }
 
 uint64 ObservedSurfaceRevision(bool readsSurface, uint64 worldDigest)
@@ -313,10 +362,10 @@ ConformSurfaceReadiness ConformSurfaceState(ECS::World& world, const Mathematics
     world.Query<ECS::Read<Components::Terrain>, ECS::Read<Components::WorldTransform>>()
         .Each([&](const Components::Terrain& terrain, const Components::WorldTransform& worldXf)
         {
-            if (!TerrainNearRun(terrain, worldXf, runBounds))
+            if (!TerrainNearRun(terrain, worldXf, runBounds, kConformHoldMarginMetres))
                 return;
             anyTerrain = true;
-            anyUnprovisioned = anyUnprovisioned || !TerrainProvisioned(*terrainService, terrain);
+            anyUnprovisioned = anyUnprovisioned || !TerrainProvisioned(*terrainService, terrain, worldXf);
         });
 
     if (!anyTerrain)
@@ -344,7 +393,7 @@ bool RefreshSceneConformDigest(ECS::World& world, Scene::SceneTlas& tlas, const 
     if (tlas.CheckRequest(world) != Scene::SceneTlas::Readiness::Ready)
         return false;
     const uint64 tlasVersion = tlas.Version();
-    if (tlasVersion == digest.TlasVersion && std::memcmp(&runBounds, &digest.RunBounds, sizeof(runBounds)) == 0)
+    if (tlasVersion == digest.TlasVersion && runBounds == digest.RunBounds)
         return false;
     digest.TlasVersion = tlasVersion;
     digest.RunBounds = runBounds;

@@ -1,22 +1,34 @@
 #include "Engine/Rendering/Camera.h"
 
 #include "Components/Transform.h"
+#include "Engine/Rendering/RenderOrigin.h"
 #include "Engine/Rendering/ViewRegistry.h"
 #include "ECS/ECSTemplates.h"
 #include "Mathematics/Angle.h"
 #include "Mathematics/MatrixOps.h"
+#include "Logger/Logger.h"
 #include "Rendering/Common/Math.h"
 
 #include <algorithm>
+#include <atomic>
 
 namespace GameEngine::Engine::Renderer { using namespace ::GameEngine::Rendering; }
 
 namespace GameEngine::Engine::Renderer {
 using namespace ::GameEngine::Rendering;
 
+void Camera::SetPose(const Mathematics::Matrix4x4& basis, const Mathematics::WorldPosition& eye)
+{
+    m_WorldTransform = basis;
+    m_WorldTransform[3][0] = static_cast<float>(eye.X);
+    m_WorldTransform[3][1] = static_cast<float>(eye.Y);
+    m_WorldTransform[3][2] = static_cast<float>(eye.Z);
+    m_Eye = eye;
+}
+
 Mathematics::Matrix4x4 Camera::ComputeViewMatrix() const
 {
-    return Mathematics::Inverse(worldTransform);
+    return Mathematics::Inverse(m_WorldTransform);
 }
 
 Mathematics::Matrix4x4 Camera::ComputeProjectionMatrix(float aspectRatio,
@@ -55,14 +67,27 @@ Rendering::CameraData Camera::ToCameraData(float aspectRatio,
     data.proj = projM;
     data.viewProj = viewProjM;
 
-    // Extract camera world position from the worldTransform translation column.
-    const float* wt = worldTransform.Data();
-    data.cameraPos.x = wt[12];
-    data.cameraPos.y = wt[13];
-    data.cameraPos.z = wt[14];
     data.cameraPos.w = 0.0f;
+    Engine::Renderer::SetCameraEye(data, m_Eye);
 
     return data;
+}
+
+Rendering::CameraRanges Camera::ToCameraRanges() const
+{
+    if (params.NearZ > 0.0f && params.FarZ > params.NearZ)
+        return {params.NearZ, params.FarZ};
+
+    // The game camera calls this every frame: report each entity once, not once per frame.
+    static std::atomic<uint32> s_LastReportedEntity{ECS::kInvalidEntity};
+    const Components::Camera defaults{};
+    if (s_LastReportedEntity.exchange(entity.id) != entity.id)
+    {
+        Logger::Log::Error("Camera on entity={} has NearZ {} and FarZ {}: NearZ must be above 0 and FarZ above "
+                           "NearZ. Set them in the Camera component; until then it draws with NearZ {} and FarZ {}.",
+                           entity.id, params.NearZ, params.FarZ, defaults.NearZ, defaults.FarZ);
+    }
+    return {defaults.NearZ, defaults.FarZ};
 }
 
 std::optional<Camera> FindActiveCamera(ECS::World& world)
@@ -83,12 +108,14 @@ std::optional<Camera> FindActiveCamera(ECS::World& world)
         const bool hasLocal = world.HasComponent<Components::Transform>(e);
         if (worldXf && (worldXf->Version != 0u || !hasLocal))
         {
-            result.worldTransform = Mathematics::Matrix4x4::FromColumnMajor(worldXf->matrix);
+            result.SetPose(worldXf->ToMatrix4x4(Mathematics::Vector3{}), worldXf->GetPosition());
         }
         else if (hasLocal)
         {
             if (auto* xf = world.GetComponent<Components::Transform>(e))
-                result.worldTransform = Mathematics::Matrix4x4::FromColumnMajor(xf->matrix);
+            {
+                result.SetPose(xf->ToMatrix4x4(Mathematics::Vector3{}), xf->GetPosition());
+            }
         }
         result.params = cam;
         result.entity = e;
@@ -106,6 +133,14 @@ void DeclareGameCameraView(ViewRegistry& views, Rendering::ViewId view, const Ca
         return;
     views.RequestViewFrame(view);
     views.SetViewRenderLayerMask(view, activeCamera->params.VisibleLayers);
+    views.SetViewWorldPaused(view, activeCamera->params.WorldDrawingPaused);
+    views.SetViewWorldPauseFollowsActiveCamera(view);
+}
+
+void ApplyActiveCameraWorldPause(ViewRegistry& views, ECS::World& world)
+{
+    if (const std::optional<Camera> activeCamera = FindActiveCamera(world))
+        views.SetActiveCameraViewsWorldPaused(world.GetWorldId(), activeCamera->params.WorldDrawingPaused);
 }
 
 } // namespace GameEngine::Engine::Renderer

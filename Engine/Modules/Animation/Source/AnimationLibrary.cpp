@@ -47,7 +47,7 @@ bool AnimationLibrary::Load()
     return ParseJson(text);
 }
 
-bool AnimationLibrary::LoadFromData(const Vector<uint8>& data)
+bool AnimationLibrary::LoadFromData(std::span<const uint8> data)
 {
     SetState(AssetState::Loading);
     const std::string text(reinterpret_cast<const char*>(data.data()), data.size());

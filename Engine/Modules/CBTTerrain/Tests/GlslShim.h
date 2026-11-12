@@ -20,6 +20,9 @@
 //     residue does the fold itself; this shim does not paper over it.
 //   * uint arithmetic wraps modulo 2^32 in both languages.
 
+#include "Mathematics/MulAdd.h"
+#include "Mathematics/Transcendental.h"
+
 #include <cassert>
 #include <cmath>
 #include <cstdint>
@@ -158,6 +161,8 @@ struct mat2
     friend vec2 operator*(const mat2& m, vec2 v) { return {m.c0.x * v.x + m.c1.x * v.y, m.c0.y * v.x + m.c1.y * v.y}; }
 };
 
+// GLSL fma() rounds once here, as the C++ code it mirrors does through Math::MulAdd.
+inline float fma(float a, float b, float c) { return Math::MulAdd(a, b, c); }
 inline float floor(float v) { return std::floor(v); }
 inline vec2 floor(vec2 v) { return {std::floor(v.x), std::floor(v.y)}; }
 inline float fract(float v) { return v - std::floor(v); }
@@ -191,17 +196,19 @@ inline float smoothstep(float edge0, float edge1, float x)
 }
 inline float acos(float v) { return std::acos(v); }
 // GLSL has both arities: atan(y_over_x) is the principal value in [-pi/2, pi/2], atan(y, x) is the
-// full-circle form std::atan2 computes. GLSL leaves atan(0, 0) undefined, so a block that can reach
-// the origin guards the call instead of relying on std::atan2 answering 0 there.
-inline float atan(float v) { return std::atan(v); }
-inline float atan(float y, float x) { return std::atan2(y, x); }
+// full-circle form Math::Atan2 computes. GLSL leaves atan(0, 0) undefined, so a block that can reach
+// the origin guards the call instead of relying on Math::Atan2 answering 0 there.
+inline float atan(float v) { return Math::Atan(v); }
+inline float atan(float y, float x) { return Math::Atan2(y, x); }
 inline int abs(int v) { return v < 0 ? -v : v; }
 inline float abs(float v) { return std::fabs(v); }
 // GLSL mod() is floored, unlike std::fmod which truncates. They agree only for a non-negative
 // dividend, and the hex rotation feeds it negative angles.
 inline float mod(float v, float m) { return v - m * std::floor(v / m); }
-inline float sin(float v) { return std::sin(v); }
-inline vec2 sin(vec2 v) { return {std::sin(v.x), std::sin(v.y)}; }
-inline float cos(float v) { return std::cos(v); }
+// sin, cos and atan are the engine's own: the CPU code that a block mirrors calls them, so both
+// sides give the same bits.
+inline float sin(float v) { return Math::Sin(v); }
+inline vec2 sin(vec2 v) { return {Math::Sin(v.x), Math::Sin(v.y)}; }
+inline float cos(float v) { return Math::Cos(v); }
 
 } // namespace GameEngine::GlslShim

@@ -24,8 +24,8 @@ namespace GameEngine::TerrainECS
 // reaches 0.000129 in that domain against a 0.1667 threshold — a 1292x shortfall.
 // SlopeDegrees has no such dependence, and these rows are placed against a
 // MEASURED distribution (TerrainDefaultSurfaceRulesTests asserts every band still
-// falls inside it). The snow row is the one normalized band, for the scale reason
-// given on its constants.
+// falls inside it). The snow row is placed in meters from the terrain's own
+// height range, for the scale reason given on its constants.
 //
 // ROW ORDER IS LOAD-BEARING. CompositeSplatTexel renormalizes as each row lands,
 // so where two rows are both live the LATER one dominates. The order is base
@@ -46,25 +46,21 @@ inline constexpr float32 kDefaultRockSlopeFeather = 9.0f;   // blending in from 
 
 // Snow: an altitude cap, with a slope limit so it does not cling to cliff faces.
 //
-// NORMALIZED, not metres, and that is a deliberate exception to "defaults author
-// in absolute units". A default ships on every new terrain, and new terrains do
-// not share a height scale — the editor's presets are HeightScale 128 and 512
-// (TerrainProvisioning.cpp) while the island content is 60 — so a snow line in
-// metres would sit near the summit on one and underwater on the next. The
-// normalized band chases the terrain's own range and reads correctly at any
-// scale. Changing a terrain's snow line to true metres is a one-line Kind edit
-// in the condition widget, which is the right place for a per-terrain decision.
-// Measured normalized height: p50 0.597, p75 0.709, p90 0.798, p95 0.849.
-inline constexpr float32 kDefaultSnowHeightMin = 0.85f;     // full snow above the p95
-inline constexpr float32 kDefaultSnowHeightFeather = 0.15f; // blending down to the p75
+// New terrains do not share a height range, so one fixed snow line in meters would
+// sit at the summit on one terrain and under water on the next. The row is placed
+// in meters at these fractions of the terrain's height range, at creation and again
+// while the rows are untouched (PlaceProvisionedSurfaceRules); after an edit it is an
+// ordinary meters row. Measured fraction: p50 0.597, p75 0.709, p90 0.798, p95 0.849.
+inline constexpr float32 kDefaultSnowRangeFractionMin = 0.85f;     // full snow above the p95
+inline constexpr float32 kDefaultSnowRangeFractionFeather = 0.15f; // blending down to the p75
 inline constexpr float32 kDefaultSnowSlopeMax = 25.0f;
 inline constexpr float32 kDefaultSnowSlopeFeather = 8.0f;
 
 // The far edge of a one-sided band. A band is [Min, Max] with ramps OUTSIDE each
 // edge, so a one-sided band puts its unused edge past the domain: slope cannot
-// exceed 90 degrees, and no terrain is this tall.
+// exceed 90 degrees, and no terrain is this tall (meters).
 inline constexpr float32 kDefaultSlopeDomainMax = 90.0f;
-inline constexpr float32 kDefaultNormalizedHeightDomainMax = 1.0f;
+inline constexpr float32 kDefaultHeightDomainMaxMeters = 100000.0f;
 
 // Splat channels, in the order the shipped default palette binds them
 // (Terrain::kDefaultTerrainMaterials): 0 grass, 1 rock, 2 dirt, 3 snow.
@@ -84,11 +80,10 @@ inline Components::TerrainRuleCondition SlopeBand(float32 minDeg, float32 maxDeg
     return c;
 }
 
-inline Components::TerrainRuleCondition NormalizedHeightBand(float32 min, float32 max,
-                                                             float32 feather)
+inline Components::TerrainRuleCondition HeightBandMeters(float32 min, float32 max, float32 feather)
 {
     Components::TerrainRuleCondition c{};
-    c.Kind = Components::TerrainRuleConditionKind::HeightNormalized;
+    c.Kind = Components::TerrainRuleConditionKind::HeightMeters;
     c.FalloffCurve = Components::TerrainRuleFalloffCurve::ClampedLinear;
     c.Min = min;
     c.Max = max;
@@ -96,12 +91,15 @@ inline Components::TerrainRuleCondition NormalizedHeightBand(float32 min, float3
     return c;
 }
 
-// The rows themselves. Returns the whole effect rather than a row array so the
-// caller cannot forget RuleCount.
-inline Components::TerrainSurfaceRulesEffect MakeDefaultTerrainSurfaceRules()
+/// The default rows for a terrain whose height range is [minHeightMeters, maxHeightMeters]
+/// above its base (TerrainService::GetHeightRangeMeters). Returns the whole effect so the
+/// caller cannot forget RuleCount. The effect is marked ProvisionedDefaults.
+inline Components::TerrainSurfaceRulesEffect MakeDefaultTerrainSurfaceRules(float32 minHeightMeters,
+                                                                            float32 maxHeightMeters)
 {
     Components::TerrainSurfaceRulesEffect fx{};
     fx.RuleCount = 4;
+    fx.ProvisionedDefaults = true;
 
     // 0 · Grass — the base coverage. Everything flat enough to hold soil.
     fx.Rules[0].MaterialSlot = kDefaultGrassSlot;
@@ -127,11 +125,71 @@ inline Components::TerrainSurfaceRulesEffect MakeDefaultTerrainSurfaceRules()
     // Last, so the summit reads as snow over whatever else is live there.
     fx.Rules[3].MaterialSlot = kDefaultSnowSlot;
     fx.Rules[3].ConditionCount = 2;
-    fx.Rules[3].Conditions[0] = NormalizedHeightBand(
-        kDefaultSnowHeightMin, kDefaultNormalizedHeightDomainMax, kDefaultSnowHeightFeather);
+    const float32 heightRange = maxHeightMeters - minHeightMeters;
+    fx.Rules[3].Conditions[0] =
+        HeightBandMeters(minHeightMeters + kDefaultSnowRangeFractionMin * heightRange,
+                         kDefaultHeightDomainMaxMeters, kDefaultSnowRangeFractionFeather * heightRange);
     fx.Rules[3].Conditions[1] =
         SlopeBand(0.0f, kDefaultSnowSlopeMax, kDefaultSnowSlopeFeather);
 
+    return fx;
+}
+
+// The planet's default rows equal a slope-and-altitude blend (its oracle is in
+// TerrainPlanetSurfaceRulesTests.cpp): with Replace rows in the order grass, dirt, snow, rock,
+// rock = r, snow = (1 - r) s, dirt = (1 - r)(1 - s) d, grass = the rest. The height bands
+// are fractions of the planet's relief range in meters, measured from its lowest ground.
+inline constexpr float32 kPlanetDirtRangeFractionMin = 0.70f;
+inline constexpr float32 kPlanetDirtRangeFractionFeather = 0.25f;
+inline constexpr float32 kPlanetSnowRangeFractionMin = 0.90f;
+inline constexpr float32 kPlanetSnowRangeFractionFeather = 0.175f;
+inline constexpr float32 kPlanetRockSlopeMin = 0.65f;
+inline constexpr float32 kPlanetRockSlopeFeather = 0.35f;
+
+inline Components::TerrainRuleCondition PlanetBandCondition(Components::TerrainRuleConditionKind kind,
+                                                            float32 min, float32 max, float32 feather)
+{
+    Components::TerrainRuleCondition c{};
+    c.Kind = kind;
+    c.FalloffCurve = Components::TerrainRuleFalloffCurve::Smoothstep;
+    c.Min = min;
+    c.Max = max;
+    c.Feather = feather;
+    return c;
+}
+
+// A Replace row with one Smoothstep band: the shape of every planet default row.
+inline Components::TerrainSurfaceRule PlanetBandRule(uint32 materialSlot,
+                                                     Components::TerrainRuleConditionKind kind,
+                                                     float32 min, float32 max, float32 feather)
+{
+    Components::TerrainSurfaceRule rule{};
+    rule.MaterialSlot = materialSlot;
+    rule.Replace = true;
+    rule.ConditionCount = 1;
+    rule.Conditions[0] = PlanetBandCondition(kind, min, max, feather);
+    return rule;
+}
+
+/// The default rows for a planet whose relief spans [minHeightMeters, maxHeightMeters] about
+/// its radius (PlanetHeightRangeMeters).
+inline Components::TerrainSurfaceRulesEffect MakeDefaultPlanetSurfaceRules(float32 minHeightMeters,
+                                                                           float32 maxHeightMeters)
+{
+    using Kind = Components::TerrainRuleConditionKind;
+    const float32 heightRange = maxHeightMeters - minHeightMeters;
+    Components::TerrainSurfaceRulesEffect fx{};
+    fx.RuleCount = 4;
+    fx.Rules[0].MaterialSlot = kDefaultGrassSlot;
+    fx.Rules[0].Replace = true;
+    fx.Rules[1] = PlanetBandRule(kDefaultDirtSlot, Kind::HeightMeters,
+                                 minHeightMeters + kPlanetDirtRangeFractionMin * heightRange,
+                                 kDefaultHeightDomainMaxMeters, kPlanetDirtRangeFractionFeather * heightRange);
+    fx.Rules[2] = PlanetBandRule(kDefaultSnowSlot, Kind::HeightMeters,
+                                 minHeightMeters + kPlanetSnowRangeFractionMin * heightRange,
+                                 kDefaultHeightDomainMaxMeters, kPlanetSnowRangeFractionFeather * heightRange);
+    fx.Rules[3] = PlanetBandRule(kDefaultRockSlot, Kind::SlopeNormalized, kPlanetRockSlopeMin,
+                                 1.0f, kPlanetRockSlopeFeather);
     return fx;
 }
 

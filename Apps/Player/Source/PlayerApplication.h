@@ -2,8 +2,8 @@
 
 #include "Core/Application.h"
 #include "Engine/Build/GameConfig.h"
-#include "Engine/Rendering/SceneResolveService.h"
 #include "Engine/Rendering/ViewReadbackUtils.h"
+#include "Events/Event.h"
 #include "PlayerStartupReadiness.h"
 #include "UI/UITextureSpace.h"
 #if GE_PLAYER_MOVIE_RECORDER
@@ -25,6 +25,7 @@ namespace Rendering::RenderGraph { struct RGResourceDesc; }
 class RuntimeFrameReadback;
 class RuntimeHost;
 struct RuntimeHostDesc;
+class SceneLoadInstantiated;
 
 class PlayerApplication : public Application
 {
@@ -56,11 +57,17 @@ private:
     // The host's settings from game.config; the window size from the application
     // config, which the movie recorder may have clamped.
     RuntimeHostDesc MakeRuntimeHostDesc() const;
-    // Each frame until the startup scene is ready: polls its batch, then its spline recipes.
+    // Each frame until the startup scene is ready: waits for its reveal, then its spline recipes.
     void FinishStartupResolve(ECS::World& world, float64 deltaTime);
-    // Once the startup scene's resolve batch completes: logs it and starts the
-    // scene's autoplay animators. Each frame until then.
-    void FinishStartupBatch(ECS::World& world);
+    // Loads the game config's startup scene through the engine's scene loader.
+    void LoadStartupScene();
+    // The startup scene is in the world: adds the default camera if it has none, and registers
+    // the managed system bridge.
+    void OnStartupSceneInstantiated(SceneLoadInstantiated& instantiated);
+    // The startup scene is revealed: logs the resolve totals and starts its autoplay animators.
+    void OnStartupSceneRevealed();
+    // The startup scene did not load: the Player exits.
+    void OnStartupSceneFailed();
     // The startup line: the time to ready, the failed spline recipes with their reasons, and
     // the recipe wait that ended at its budget.
     void LogStartupSceneReady(ECS::World& world);
@@ -138,15 +145,12 @@ private:
     // An unattended way to see what the shipped Player actually renders (the swapchain
     // has no movie/screen-capture path on this branch).
     std::string m_ScreenshotPath;
-    // The startup scene's resolve batch on the engine's resolve service, pending
-    // until every entity and standalone material of the scene has bound or missed.
-    Engine::Renderer::SceneResolveBatch m_StartupResolve = Engine::Renderer::SceneResolveBatch::None;
-    bool m_StartupResolvePending = false;
-    // Pending from the startup scene's open until the scene is ready: its batch is complete and
-    // its spline recipes are settled. The startup line and --screenshot wait for it.
+    // The startup load's Revealed and Failed handlers.
+    std::vector<EventSubscription> m_StartupLoadSubscriptions;
+    bool m_StartupSceneRevealed = false;
+    // Pending from the startup scene's load until the scene is ready: it is revealed and its
+    // spline recipes are settled. The startup line and --screenshot wait for it.
     PlayerStartupReadiness m_StartupScene;
-    std::chrono::steady_clock::time_point m_StartupResolveStart{};
-    uint32_t m_StartupResolveFrames = 0;
     bool m_ScreenshotWritten = false;
     uint32_t m_ScreenshotWarmupFrames = 0;
     std::shared_ptr<Rendering::RGReadbackTicket> m_ScreenshotTicket;

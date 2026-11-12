@@ -1,5 +1,6 @@
 #include "UI/UIManager.h"
 #include "UIManager_Internal.h"
+#include "../BorderPaint.h"
 
 #include "UI/Controls/Mount.h"
 #include "UI/Controls/ScrollView.h"
@@ -18,6 +19,7 @@
 #include "Logger/Logger.h"
 #include "Rendering/Text/FontAtlas.h"
 #include "Rendering/Text/TextLayout.h"
+#include "Types/FlatSet.h"
 #include "Types/Fnv1a.h"
 
 #include <algorithm>
@@ -27,6 +29,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <functional>
+#include <mutex>
 #include <string_view>
 
 using namespace GameEngine::UIParsing;
@@ -1286,6 +1289,34 @@ bool UIManager::ResolveCascadeForElement(UIElement* el,
     return sharedFromCache;
 }
 
+namespace
+{
+
+// Two border colors that meet at a rounded corner do not split on the corner's
+// diagonal (AppendBorderSidesInOtherColors). Warns once per class list, so the
+// entries of one rule warn once; an element without a class warns once per id.
+void WarnRoundedCornerBetweenBorderColors(const UIElement& el)
+{
+    static std::mutex mutex;
+    static FlatSet<uint64_t> warned;
+    uint64_t key = Hashing::kFnv1a64OffsetBasis;
+    for (const std::string& name : el.GetClasses())
+        key = Hashing::Fnv1a64(std::string_view(name), Hashing::Fnv1a64Value(key, '.'));
+    if (el.GetClasses().empty())
+        key = Hashing::Fnv1a64(std::string_view(el.GetId()), Hashing::Fnv1a64Value(key, '#'));
+    {
+        std::lock_guard lock(mutex);
+        if (!warned.Insert(key))
+            return;
+    }
+    Logger::Log::Warning("[UI] {} has border sides in two colors that meet at a rounded corner. There the later side "
+                         "(top, right, bottom, left) paints over the other, and the colors do not split on the "
+                         "corner's diagonal. Set border-radius: 0 where the corner must split exactly.",
+                         DescribeElementForLog(el));
+}
+
+} // namespace
+
 // The last write to an element's ResolvedStyle before the Yoga push: the `style` attribute on top of
 // the cascade, then Style(), which wins, then the used values no single declaration decides
 // (border-style and border-width arrive in declaration order, so neither applier settles the pair).
@@ -1309,6 +1340,13 @@ void UIManager::FinalizeElementStyle(UIElement* el)
     ApplyOverridesToResolvedStyle(el->GetMutableResolvedStyle(), el->Style());
 
     ResolveUsedBorderWidths(el->GetMutableResolvedStyle());
+
+    // The warning reads the resolved style, so it runs on a style change and never on a paint pass.
+    const ResolvedStyle& style = el->GetResolvedStyle();
+    if (style.Visual.BorderStyle == GameEngine::BorderStyle::Solid &&
+        UI::RoundedCornerJoinsTwoBorderColors(style.Layout.BorderWidth, style.Visual.BorderColor,
+                                              style.Visual.BorderRadius))
+        WarnRoundedCornerBetweenBorderColors(*el);
 
     el->Style().ClearDirty();
 }

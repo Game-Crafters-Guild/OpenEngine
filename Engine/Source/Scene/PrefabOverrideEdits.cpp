@@ -15,6 +15,7 @@
 #include "Logger/Logger.h"
 #include "Scene/AssetManagerSceneResolver.h"
 #include "Scene/PrefabLibrary.h"
+#include "Scene/PrefabOverrideRecords.h"
 #include "Scene/PrefabOverrideWriter.h"
 #include "Scene/SceneDoc.h"
 #include "Scene/SceneSchemaRegistry.h"
@@ -137,19 +138,11 @@ const ComponentText* FindText(const std::vector<ComponentText>& texts, std::stri
     return it == texts.end() ? nullptr : &*it;
 }
 
-// The key of a "Component.field = value" line: the text before the first '=', without the spaces
-// around it. A key has no '=', so a value with one keeps its key.
-std::string_view LineKey(std::string_view line)
-{
-    const std::vector<std::string_view> fields = Split(line, '=');
-    return fields.empty() ? std::string_view() : TrimWhitespaceView(fields.front());
-}
-
 // The line of `text` whose key is `key`, case-insensitively; null when it has none.
 const std::string* FindLine(const std::vector<std::string>& lines, std::string_view key)
 {
-    const auto it = std::find_if(lines.begin(), lines.end(),
-                                 [key](const std::string& line) { return EqualsIgnoreCase(LineKey(line), key); });
+    const auto it = std::find_if(lines.begin(), lines.end(), [key](const std::string& line)
+                                 { return EqualsIgnoreCase(PrefabOverrideRecords::LineKey(line), key); });
     return it == lines.end() ? nullptr : &*it;
 }
 
@@ -184,9 +177,8 @@ struct LineContexts
         Save.Resolver = &Resolver;
         Save.Unresolved = world.TryGetUnresolvedComponents();
         Save.WriteEveryField = true;
-        Options.clearWorldFirst = false;
-        Options.assetResolver = &Resolver;
-        Options.assetRootOverride = Resolver.GetAssetRoot();
+        Options.Read.AssetResolver = &Resolver;
+        Options.Read.AssetRootOverride = Resolver.GetAssetRoot();
         Load = MakeDocumentLoadContext(world, File, SceneDoc{}, Options);
     }
 
@@ -194,7 +186,7 @@ struct LineContexts
     AssetManagerSceneResolver Resolver;
     std::filesystem::path File;
     SceneWriteContext Save;
-    SceneReadOptions Options;
+    SceneLoadOptions Options;
     SceneReadContext Load;
 };
 
@@ -228,13 +220,15 @@ void RemoveComponent(ECS::World& world, ECS::EntityHandle entity, std::string_vi
         schema->Remove(world, entity);
 }
 
-// Gives the instance entity the new prefab values it does not override: a field changed in the
-// prefab where the instance keeps the old value, a component the prefab added, and a component the
-// prefab removed. A component the instance removed stays removed. Returns true when it changed the entity.
+// Gives the instance entity the prefab's new fields and components that it does not override. A field
+// kept because it differs from the old prefab gets a record, so it stays an override when the new value
+// equals it. Returns true when it changed the entity.
 bool PropagateToMember(ECS::World& world, const SceneReadContext& context, ECS::EntityHandle entity, bool isRoot,
                        const std::vector<ComponentText>& instance, const std::vector<ComponentText>& before,
                        const std::vector<ComponentText>& after)
 {
+    PrefabOverrideRecords& records = PrefabOverrideRecords::Get();
+    const std::vector<std::string> recorded = records.Find(world, entity);
     bool changedEntity = false;
     for (const ComponentText& next : after)
     {
@@ -258,11 +252,15 @@ bool PropagateToMember(ECS::World& world, const SceneReadContext& context, ECS::
         {
             if (std::find(previous->lines.begin(), previous->lines.end(), line) != previous->lines.end())
                 continue;
-            const std::string_view key = LineKey(line);
+            const std::string_view key = PrefabOverrideRecords::LineKey(line);
             const std::string* previousLine = FindLine(previous->lines, key);
             const std::string* currentLine = FindLine(current->lines, key);
+            if (currentLine && PrefabOverrideRecords::HoldsLine(recorded, *currentLine))
+                continue;
             if (!currentLine || (previousLine && *currentLine == *previousLine))
                 changed.push_back(line);
+            else if (previousLine)
+                records.Record(world, entity, next.token, key.substr(next.token.size() + 1)); // the key is "token.field"
         }
         if (!changed.empty())
         {
@@ -500,10 +498,10 @@ struct SectionLines
     // Puts `line` in place of the body line with its key, or after the last body line.
     void Set(const std::string& line)
     {
-        const std::string_view key = LineKey(line);
+        const std::string_view key = PrefabOverrideRecords::LineKey(line);
         for (std::size_t index = Header + 1; index < End; ++index)
         {
-            if (EqualsIgnoreCase(LineKey(Lines[index]), key))
+            if (EqualsIgnoreCase(PrefabOverrideRecords::LineKey(Lines[index]), key))
             {
                 Lines[index] = line;
                 return;
@@ -601,6 +599,7 @@ bool RevertPrefabOverride(ECS::World& world, ECS::EntityHandle entity, const Pre
     if (prefabOverride.Kind == PrefabOverrideKind::AddedComponent)
     {
         RemoveComponent(world, entity, prefabOverride.Component);
+        PrefabOverrideRecords::Get().Forget(world, entity, prefabOverride.Component, {});
         return true;
     }
     if (prefabOverride.Kind != PrefabOverrideKind::Field && prefabOverride.Kind != PrefabOverrideKind::RemovedComponent)
@@ -636,7 +635,32 @@ bool RevertPrefabOverride(ECS::World& world, ECS::EntityHandle entity, const Pre
         return false;
     }
     ApplyLines(world, contexts.Load, entity, component->token, std::span(line, 1));
+    PrefabOverrideRecords::Get().Forget(world, entity, component->token, prefabOverride.Field);
     return true;
+}
+
+std::vector<PrefabOverrideTarget> RecordPrefabOverrides(const ECS::World& world,
+                                                        std::span<const PrefabOverrideTarget> targets)
+{
+    PrefabOverrideRecords& records = PrefabOverrideRecords::Get();
+    std::vector<PrefabOverrideTarget> recorded;
+    for (const PrefabOverrideTarget& target : targets)
+        if (target.Override.Kind == PrefabOverrideKind::Field &&
+            records.Record(world, target.Entity, target.Override.Component, target.Override.Field))
+            recorded.push_back(target);
+    return recorded;
+}
+
+std::vector<PrefabOverrideTarget> ForgetPrefabOverrides(const ECS::World& world,
+                                                        std::span<const PrefabOverrideTarget> targets)
+{
+    PrefabOverrideRecords& records = PrefabOverrideRecords::Get();
+    std::vector<PrefabOverrideTarget> forgotten;
+    for (const PrefabOverrideTarget& target : targets)
+        if (target.Override.Kind == PrefabOverrideKind::Field &&
+            records.Forget(world, target.Entity, target.Override.Component, target.Override.Field))
+            forgotten.push_back(target);
+    return forgotten;
 }
 
 PrefabTemplateEntity FindPrefabTemplateEntity(ECS::World& world, ECS::EntityHandle entity)
@@ -845,6 +869,8 @@ bool ApplyPrefabOverrides(ECS::World& world, std::span<const PrefabOverrideTarge
     }
     // One rebuild for all written files, so each instance takes the new prefab values once.
     library->RebuildFiles(written);
+    // The prefab holds each applied value now, so the applying entity keeps no record of it.
+    ForgetPrefabOverrides(world, targets);
     return wroteAll;
 }
 

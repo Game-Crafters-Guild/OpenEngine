@@ -60,13 +60,13 @@ struct RegionPlacement
     Components::Transform Local;
     Components::WorldTransform World;
 };
-RegionPlacement NewRegionPlacement(std::span<const Mathematics::Vector2> knots, const float32 (&parentWorld)[16],
-                                   float32 groundY);
+RegionPlacement NewRegionPlacement(std::span<const Mathematics::Vector2> knots,
+                                   const Mathematics::Matrix4x4& parentWorld, float32 groundY);
 // Makes `entity`, placed by `transform` (local) and `worldMatrix`, a region: its closed spline
 // of `type` holds `knots` (world x, z) entity-local, knot radius 0, and its MarkupRegion has
 // `extrudeHeight` and no members. The entity's WorldTransform is set to `worldMatrix`, so the
 // area reads right before the next transform pass.
-void AddRegionParts(ECS::World& world, ECS::EntityHandle entity, const float32 (&worldMatrix)[16],
+void AddRegionParts(ECS::World& world, ECS::EntityHandle entity, const Mathematics::Matrix4x4& worldMatrix,
                     std::span<const Mathematics::Vector2> knots, Spline::SplineType type, float32 extrudeHeight);
 // Replaces the region's knots with `knots` (world x, z) placed by its current placement, and
 // its type when `type` is set; empty `knots` keeps the knots. The entity stays where it is.

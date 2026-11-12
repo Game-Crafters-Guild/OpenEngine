@@ -9,11 +9,17 @@
 #include <atomic>
 #include <filesystem>
 #include <functional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace GameEngine {
+
+namespace Rendering
+{
+struct MetalLibraryCompileJob;
+}
 
 namespace NativeScripting
 {
@@ -21,6 +27,7 @@ class NativeScriptManager;
 }
 
 struct ShippedScriptSources;
+struct DesktopMaterialCookInputs;
 
 struct BuildSettings
 {
@@ -114,8 +121,8 @@ struct BuildStep
 ///  7. hooks: PreAssetCopy    — receives mutable AssetManifest& (baking hooks go here)
 ///  8. CopyAssets             — copies files listed in manifest
 ///  9. CopyEngineShaders      — engine shaders (not GUID-tracked)
-///     9a. CookMaterialVariants — MaterialVariantCook's packages for every material of the project and
-///     its enabled packages and for the engine's built-in ones into the content root's
+///     9a. CookMaterialVariants — MaterialVariantCook's packages for every material the export staged,
+///     every material of its enabled packages and the engine's built-in ones into the content root's
 ///     `.Cache/Shaders`, the read-only shader cache the packaged game probes first
 /// 10. hooks: PostAssetCopy
 /// 11. CopyRuntimeDependencies — Player.exe, DLLs, managed assemblies
@@ -249,14 +256,22 @@ private:
                                   const std::filesystem::path& dotnetExe);
     bool CopyAssets(const std::filesystem::path& stagingDir, const AssetManifest& manifest);
     bool CopyEngineShaders(const std::filesystem::path& stagingDir);
+    // The material cook's inputs for this export. The Metal library step finds the SPIR-V of its
+    // recorded stages in the same folders.
+    DesktopMaterialCookInputs MakeMaterialCookInputs(const std::filesystem::path& contentRoot,
+                                                     const BuildSettings& s) const;
     bool CookMaterialVariants(const std::filesystem::path& contentRoot, const BuildSettings& s);
+    bool CompileMetalLibraries(const std::filesystem::path& contentRoot, const BuildSettings& s);
+#if defined(__APPLE__)
+    // Runs the Metal compiler with @p flags for each job; false when the export was cancelled.
+    bool RunMetalCompileJobs(std::span<const Rendering::MetalLibraryCompileJob> jobs, std::span<const std::string> flags,
+                             const std::filesystem::path& jobList);
+#endif
     bool CopyThirdPartyNotices(const std::filesystem::path& contentRoot, const BuildSettings& s);
     bool CopyRuntimeDependencies(const std::filesystem::path& stagingDir, const BuildSettings& s);
     bool WriteGameConfig(const std::filesystem::path& stagingDir, const BuildSettings& s);
     bool StageAssetManifest(const std::filesystem::path& contentRoot, const AssetManifest& manifest);
     bool CookMeshLODs(const std::filesystem::path& contentRoot, const AssetManifest& manifest);
-    void StageTerrainBakes(const std::filesystem::path& contentRoot, const BuildSettings& s,
-                           const AssetManifest& manifest);
     bool RunCustomSteps(BuildStep::Phase phase, BuildContext& ctx);
     bool FinalizeOutput(const std::filesystem::path& stagingDir, const std::filesystem::path& outputDir);
 

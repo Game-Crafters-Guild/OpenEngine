@@ -8,10 +8,9 @@
 #include "Components/UI/UIDocument.h"
 #include "Engine/GameUI/GameplayUI.h"
 #include "UI/Controls/Label.h"
-#include "UI/StyleProperties.h"
+#include "UI/Controls/ProgressBar.h"
 #include "UI/UIElement.h"
 #include "UI/UIEvents.h"
-#include "UI/UIStyle.h"
 
 #include <algorithm>
 #include <memory>
@@ -45,14 +44,15 @@ struct HpBarSystem : GameEngine::ECS::SystemBase
     static void ApplyHp(uint64_t entityId, int hp)
     {
         using namespace GameEngine;
-        if (UIElement* fill = FindInDocument(entityId, "hp-fill"_sid))
+        if (auto* bar = dynamic_cast<ProgressBar*>(FindInDocument(entityId, "hp"_sid)))
         {
-            fill->Style().Set(Style::Width, StyleLength::Percent(static_cast<float>(hp)));
+            // The layout sets max="100"; the bar clamps the value to its range.
+            bar->SetValue(static_cast<float>(hp));
             // State goes on as a CSS class; the stylesheet owns what it looks like.
             if (hp <= kLowHealthPercent)
-                fill->AddClass("low-health");
+                bar->AddClass("low-health");
             else
-                fill->RemoveClass("low-health");
+                bar->RemoveClass("low-health");
         }
         if (auto* label = dynamic_cast<Label*>(FindInDocument(entityId, "hp-label"_sid)))
             label->SetText(std::to_string(hp) + " / 100");

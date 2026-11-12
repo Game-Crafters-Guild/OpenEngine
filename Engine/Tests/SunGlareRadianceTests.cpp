@@ -38,7 +38,10 @@
 
 #include "Platform/Shell.h"
 #include "Components/Rendering/LightPhotometry.h"
+#include "Engine/Rendering/SunGlareRenderFeature.h"
+#include "Mathematics/Vector3.h"
 #include "Rendering/Sky/AtmosphereTransmittance.h"
+#include "Rendering/Sky/SkySettings.h"
 
 #include "TestDeviceHelper.h"
 
@@ -48,6 +51,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <numbers>
 #include <sstream>
 #include <string>
@@ -1026,45 +1030,61 @@ TEST(SunGlareSourceContract, TheProbeReadsThePostWorldDepthAttachmentWithNoResol
         << "the variant is no longer selected from the attachment's own sample count";
 }
 
-// The skyline term is a CPU march against the terrain heightfield, and the two properties that
-// make it the right fix are both in the node: it does not consult the sun's screen position, and
-// it is faded over the SUN'S OWN angular radius rather than a chosen width.
-TEST(SunGlareSourceContract, TheSkylineTermIsIndependentOfWhereTheCameraPoints)
+namespace
 {
-    const std::string node = LoadRepoFileWithoutComments(
-        "Engine/Source/Engine/Rendering/Pipeline/Nodes/SunGlareRenderNode.cpp");
-    ASSERT_FALSE(node.empty());
+// A unit vector toward a sun whose elevation has the tangent `elevationTangent`, at the azimuth
+// `azimuthRad` around +Y.
+Mathematics::Vector3 SunAtElevationTangent(float elevationTangent, float azimuthRad)
+{
+    const float horizontal = 1.0f / std::sqrt(1.0f + elevationTangent * elevationTangent);
+    return {horizontal * std::cos(azimuthRad), elevationTangent * horizontal, horizontal * std::sin(azimuthRad)};
+}
+} // namespace
 
-    EXPECT_NE(node.find("GetSkylineTangent(d.View.id)"), std::string::npos)
-        << "the node no longer reads the terrain skyline, so a sun behind a hill and off frame "
-           "is unoccludable";
-    // The march itself is on the terrain side, because the renderer cannot depend on TerrainECS
-    // (TerrainECS owns a render feature, so the dependency runs the other way). Pin that the
-    // publisher exists and marches along the SUN's azimuth rather than the camera's.
-    const std::string publisher = LoadRepoFileWithoutComments(
-        "Engine/Modules/TerrainECS/Source/Systems/TerrainExtractionSystem.cpp");
-    ASSERT_FALSE(publisher.empty());
-    EXPECT_NE(publisher.find("Skyline.Tangent("), std::string::npos)
-        << "nothing marches the terrain skyline any more";
-    EXPECT_NE(publisher.find("settings.scatteringSunDir[0], settings.scatteringSunDir[2]"),
-              std::string::npos)
-        << "the skyline is no longer marched along the SUN's azimuth";
-    // Gated on the terrain being resolvable, NOT on the sun being on screen: the whole point is
-    // that this term survives the sun leaving the frame.
-    EXPECT_EQ(CountOccurrences(node, "onScreen ? horizonVisibility"), 0u)
-        << "the skyline term is gated on the sun being on screen, which is the hole it exists "
-           "to close";
-    EXPECT_EQ(CountOccurrences(node, "onScreen && horizonVisibility"), 0u);
-    // The fade width is the sun's own angular radius, so it is geometry rather than a dial.
-    EXPECT_NE(node.find("2.0f * radiusTangent"), std::string::npos)
-        << "the skyline fade is no longer spanned by the sun's angular diameter";
-    // Three uses: the kernel core width, the visibility disc both probes sample, and the
-    // skyline fade width. A fourth occurrence is probably a new constant in disguise.
-    EXPECT_EQ(CountOccurrences(node, "kSunAngularRadiusRad"), 3u);
-    // The sun's angular radius is named once, in SkySettings.h, and the glare and the sky read
-    // the same name. A local definition here is the duplication coming back.
-    EXPECT_EQ(CountOccurrences(node, "kSunAngularRadiusRad ="), 0u)
-        << "the glare node redefines the sun's angular radius instead of using the shared one";
+// The skyline term fades the disc over its own diameter: hidden when the skyline is one sun radius
+// above the disc's center, half hidden at the center, clear one radius below. The term reads only
+// the sun and the published skyline, so the answer is the same at every azimuth.
+TEST(SunGlareSkyline, TheDiscFadesOverItsOwnDiameterAcrossThePublishedSkyline)
+{
+    using ::GameEngine::Engine::Renderer::SunGlareRenderFeature;
+    constexpr uint32_t kViewId = 7u;
+    constexpr float kSkylineTangent = 0.0875f; // a ridge about 5 degrees above the horizontal
+    const SunGlareRenderFeature::ViewSkyline skyline{kViewId, kSkylineTangent};
+    SunGlareRenderFeature feature;
+    feature.SetSkylines(&skyline, 1u);
+
+    for (const float azimuth : {0.0f, 1.3f, 3.0f, 4.7f})
+    {
+        EXPECT_NEAR(feature.GetSkylineVisibility(
+                        kViewId, SunAtElevationTangent(kSkylineTangent + kSunAngularRadiusRad, azimuth)),
+                    1.0f, 1e-3f)
+            << "a disc one radius clear of the skyline is not fully visible, azimuth " << azimuth;
+        EXPECT_NEAR(feature.GetSkylineVisibility(kViewId, SunAtElevationTangent(kSkylineTangent, azimuth)), 0.5f,
+                    1e-2f)
+            << "a disc centered on the skyline is not half visible, azimuth " << azimuth;
+        EXPECT_NEAR(feature.GetSkylineVisibility(
+                        kViewId, SunAtElevationTangent(kSkylineTangent - kSunAngularRadiusRad, azimuth)),
+                    0.0f, 1e-3f)
+            << "a disc one radius below the skyline is not hidden, azimuth " << azimuth;
+    }
+}
+
+// A view with no published skyline, or with an entry that has nothing to say (no skyline or NaN),
+// has no terrain to report on. That reads as fully visible, never as flat ground that hides a
+// setting sun.
+TEST(SunGlareSkyline, AViewWithNoSkylineSeesTheWholeDisc)
+{
+    using ::GameEngine::Engine::Renderer::SunGlareRenderFeature;
+    const SunGlareRenderFeature::ViewSkyline skylines[] = {
+        {1u, 0.5f}, {2u, SunGlareRenderFeature::kNoSkyline}, {4u, std::numeric_limits<float>::quiet_NaN()}};
+    SunGlareRenderFeature feature;
+    feature.SetSkylines(skylines, std::size(skylines));
+    const Mathematics::Vector3 lowSun = SunAtElevationTangent(-0.01f, 0.0f);
+
+    EXPECT_NEAR(feature.GetSkylineVisibility(1u, lowSun), 0.0f, 1e-3f) << "the published ridge does not hide the sun";
+    EXPECT_EQ(feature.GetSkylineVisibility(2u, lowSun), 1.0f);
+    EXPECT_EQ(feature.GetSkylineVisibility(3u, lowSun), 1.0f) << "an unpublished view reads as flat ground";
+    EXPECT_EQ(feature.GetSkylineVisibility(4u, lowSun), 1.0f) << "a NaN skyline does not read as fully visible";
 }
 
 // The probe ring must not reach far past the disc. At three sun radii the taps on the occluded

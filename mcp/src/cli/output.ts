@@ -60,9 +60,8 @@ export function stripPngFromResult(result: any): any {
  * `editor` is the `host:port` that answered, or null when the tool reached no
  * editor. Reported on success, not only on failure: a call answered by another
  * session's editor succeeds and reads as correct, and the endpoint is the only
- * part of the response that separates the two. Plain mode puts it on stderr, so
- * stdout holds only the answer and, when the tool names one, the next call as
- * its last line (`next: <command>`).
+ * part of the response that separates the two. Plain mode puts it and the next
+ * call (`next: <command>`) on stderr, so stdout holds only the answer.
  */
 export function renderOutput(tool: string, out: ToolOutput, opts: RenderOptions, editor: string | null = null): void {
   let savedTo: string | undefined;
@@ -76,7 +75,7 @@ export function renderOutput(tool: string, out: ToolOutput, opts: RenderOptions,
 
   if (out.summary) console.log(out.summary);
   else console.log(JSON.stringify(out.data, null, 2));
-  if (next) console.log(`next: ${next}`);
+  if (next) console.error(`next: ${next}`);
 
   if (savedTo && !out.summary?.includes(savedTo) && !opts.quiet) console.error(`Saved ${savedTo}`);
   if (editor && !opts.quiet) console.error(`[editor ${editor}]`);

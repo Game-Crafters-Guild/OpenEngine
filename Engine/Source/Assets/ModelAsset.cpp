@@ -221,6 +221,57 @@ Mesh CreateMorphedMesh(const Mesh& sourceMesh, const float* weights, size_t weig
     return out;
 }
 
+uint64 ComputeMeshContentHash(const Mesh& mesh)
+{
+    using Hashing::Fnv1a64;
+    using Hashing::Fnv1a64Value;
+    using Hashing::Fnv1a64Values;
+    uint64 h = Hashing::kFnv1a64OffsetBasis;
+    h = Fnv1a64Value(h, static_cast<uint32>(mesh.PrimitiveTopology));
+    h = Fnv1a64Value(h, mesh.MinBounds);
+    h = Fnv1a64Value(h, mesh.MaxBounds);
+    h = Fnv1a64Value(h, static_cast<uint64>(mesh.Vertices.size()));
+    if (!mesh.Vertices.empty())
+        h = Fnv1a64(mesh.Vertices.data(), mesh.Vertices.size() * sizeof(Vertex), h);
+    h = Fnv1a64Values(h, mesh.Indices);
+    h = Fnv1a64Value(h, static_cast<uint64>(mesh.ExtraLODs.size()));
+    for (const auto& lod : mesh.ExtraLODs)
+        h = Fnv1a64Values(h, lod);
+    // The LOD errors, sloppy flags and coverages select the LOD thresholds, so a change to them alone
+    // must re-upload.
+    h = Fnv1a64Values(h, mesh.ExtraLODErrors);
+    if (!mesh.ExtraLODSloppy.empty())
+        h = Fnv1a64(mesh.ExtraLODSloppy.data(), mesh.ExtraLODSloppy.size() * sizeof(uint8), h);
+    // AuthoredLODs selects the threshold table, so equal bytes with a different provenance do not match.
+    h = Fnv1a64Value(h, mesh.AuthoredLODs);
+    h = Fnv1a64Value(h, static_cast<uint64>(mesh.ExtraLODVertices.size()));
+    for (const auto& block : mesh.ExtraLODVertices)
+    {
+        h = Fnv1a64Value(h, static_cast<uint64>(block.size()));
+        if (!block.empty())
+            h = Fnv1a64(block.data(), block.size() * sizeof(Vertex), h);
+    }
+    h = Fnv1a64Values(h, mesh.ExtraLODCoverage);
+    h = Fnv1a64Values(h, mesh.Color0);
+    if (!mesh.ExtraLODColor0.empty())
+    {
+        h = Fnv1a64Value(h, static_cast<uint64>(mesh.ExtraLODColor0.size()));
+        for (const auto& colors : mesh.ExtraLODColor0)
+            h = Fnv1a64Values(h, colors);
+    }
+    h = Fnv1a64Values(h, mesh.TexCoords1);
+    h = Fnv1a64Value(h, static_cast<uint64>(mesh.ExtraTexCoords.size()));
+    for (const auto& uv : mesh.ExtraTexCoords)
+        h = Fnv1a64Values(h, uv);
+    h = Fnv1a64Values(h, mesh.Joints0);
+    h = Fnv1a64Values(h, mesh.Weights0);
+    h = Fnv1a64Values(h, mesh.Joints1);
+    h = Fnv1a64Values(h, mesh.Weights1);
+    h = Fnv1a64Value(h, mesh.Skinned);
+    h = Fnv1a64Value(h, static_cast<uint64>(mesh.MorphTargets.size()));
+    return h;
+}
+
 // Optional importer libraries
 #if defined(GE_HAVE_TINYOBJ)
   #include <tiny_obj_loader.h>
@@ -332,7 +383,7 @@ bool ModelAsset::Load() {
     }
 
     // Read file data
-    Vector<uint8> fileData;
+    ByteBuffer fileData;
     if (!ReadFileBytesShared(GetPath(), fileData)) {
         Logger::Log::Error("Failed to read model file: {}", GetPath().string());
         SetState(AssetState::Failed);
@@ -342,7 +393,7 @@ bool ModelAsset::Load() {
     return LoadFromData(fileData);
 }
 
-bool ModelAsset::LoadFromData(const Vector<uint8>& data) {
+bool ModelAsset::LoadFromData(std::span<const uint8> data) {
     if (GetState() == AssetState::Loaded) {
         return true;
     }
@@ -425,6 +476,9 @@ bool ModelAsset::LoadFromData(const Vector<uint8>& data) {
             SetState(AssetState::Failed);
             return false;
     }
+    // A reload writes the joint counts of the skeleton that live runtimes use.
+    if (m_SkeletonId != 0)
+        Engine::Renderer::SkeletonStore::Instance().JointCountsWritten();
 
     if (success) {
         // Fold `_LOD<N>` submesh families into authored LOD chains before bounds /
@@ -432,7 +486,7 @@ bool ModelAsset::LoadFromData(const Vector<uint8>& data) {
         // operates on the assembled submesh names every loader produced).
         ConsumeLodSuffixFamilies(m_Meshes);
         for (EmbeddedImage& image : m_EmbeddedImages)
-            image.ContentHash = Hashing::Fnv1a64(image.Data.data(), image.Data.size());
+            image.ContentHash = Hashing::Fnv1a64(image.Data.Data(), image.Data.Size());
         CalculateBoundingBox();
         CalculateCounts();
         SetState(AssetState::Loaded);
@@ -656,6 +710,7 @@ std::filesystem::path PlayerLodCacheFile(AssetManager* assetManager, const GUID&
 } // namespace
 
 uint32 ModelAsset::GenerateLODs(const MeshLODConfig& config, bool generateSkinned) {
+    m_MeshContentHashes.clear(); // the meshes change, so a registration hashes them itself
     const auto lodStart = std::chrono::steady_clock::now();
     uint32 maxLods = 1;
     size_t sourceTris = 0;
@@ -821,6 +876,12 @@ void ModelAsset::PostLoad() {
     // hot-reload (idempotent — a demoted material is no longer Mask).
     DemoteInferredMaskMaterials();
 
+    // The meshes are final here. Hash them in the load, so their GPU registration on the main thread does not.
+    m_MeshContentHashes.clear();
+    m_MeshContentHashes.reserve(m_Meshes.size());
+    for (const Mesh& mesh : m_Meshes)
+        m_MeshContentHashes.push_back(ComputeMeshContentHash(mesh));
+
     // Record the final materials (after the demotion above, so the record matches
     // what registration converts) in the derived cache, where consumers that need
     // them without importing the model read them. Unchanged materials write nothing.
@@ -830,15 +891,17 @@ void ModelAsset::PostLoad() {
             WriteImportedMaterialCache(*file, m_Materials);
     }
 
-    // Auto-import HumanoidRig sidecar for skinned models. The sidecar is
-    // what HumanoidRetargetSystem ingests as the source / target rig — the
-    // ModelAsset itself never carries humanoid metadata. Skip cleanly for
-    // non-skinned models. assets.model.rigKind=none opts the file out.
+    // Write the HumanoidRig sidecar that HumanoidRetargetSystem reads. Only a model with skin joints,
+    // a skinned mesh or an animation is a candidate: the loaders give a static model a node skeleton too.
+    // assets.model.rigKind=none opts the file out.
     if (m_SkeletonId == 0) return;
 
     auto& skStore = ::GameEngine::Engine::Renderer::SkeletonStore::Instance();
     const auto* skel = skStore.Get(m_SkeletonId);
     if (!skel || skel->BoneCount == 0) return;
+    const bool hasSkinnedMesh = std::any_of(m_Meshes.begin(), m_Meshes.end(),
+                                            [](const Mesh& mesh) { return mesh.IsSkinned(); });
+    if (skel->SkinJointCount == 0 && !hasSkinnedMesh && !m_HasAnimations) return;
 
     AssetManager* assetManager = AssetManager::GetThreadCurrent();
     if (!assetManager) {
@@ -889,9 +952,9 @@ void ModelAsset::PostLoad() {
     // bytes would only report a change to the file watcher (the Assets panel
     // lists the folder again) and touch a committed file.
     Vector<uint8> derived;
-    Vector<uint8> existing;
+    ByteBuffer existing;
     const bool unchanged = sidecarExists && rig.SaveToData(derived) &&
-                           ReadFileBytesShared(sidecar, existing) && existing == derived;
+                           ReadFileBytesShared(sidecar, existing) && std::ranges::equal(existing, derived);
     if (!unchanged)
     {
         if (!rig.SaveToPath(sidecar)) {
@@ -926,6 +989,7 @@ static void CopySkeletonStoreEntry(uint32 dstId, uint32 srcId)
     if (!dst)
         return;
     *dst = *src;
+    store.JointCountsWritten();
 }
 
 bool ModelAsset::AdoptReloadedPayload(Asset& staged) {
@@ -944,6 +1008,7 @@ bool ModelAsset::AdoptReloadedPayload(Asset& staged) {
     const uint32 stagedSkeletonId = other->m_SkeletonId;
     std::swap(m_Format, other->m_Format);
     std::swap(m_Meshes, other->m_Meshes);
+    std::swap(m_MeshContentHashes, other->m_MeshContentHashes);
     std::swap(m_Materials, other->m_Materials);
     std::swap(m_EmbeddedImages, other->m_EmbeddedImages);
     std::swap(m_Cameras, other->m_Cameras);
@@ -993,6 +1058,7 @@ void ModelAsset::SetExtras(std::shared_ptr<const ModelExtras> extras) {
 
 void ModelAsset::Unload() {
     m_Meshes.clear();
+    m_MeshContentHashes.clear();
     m_Materials.clear();
     m_EmbeddedImages.clear();
     m_Cameras.clear();
@@ -1019,7 +1085,7 @@ void ModelAsset::Unload() {
     Logger::Log::Debug("Model unloaded: {}", GetName());
 }
 
-bool ModelAsset::LoadOBJ(const Vector<uint8>& data) {
+bool ModelAsset::LoadOBJ(std::span<const uint8> data) {
 #if defined(GE_HAVE_TINYOBJ)
     // Use tinyobjloader when available for robustness and speed
     tinyobj::attrib_t attrib;

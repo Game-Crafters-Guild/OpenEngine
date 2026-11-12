@@ -6,6 +6,7 @@
 #include "Components/HierarchyQueries.h"
 #include "Components/Rendering/MeshRenderer.h"
 #include "Components/Terrain/Terrain.h"
+#include "Components/Terrain/TerrainPlanetRelief.h"
 #include "Components/Transform.h"
 #include "Core/Engine.h"
 #include "ECS/Query.h"
@@ -115,6 +116,12 @@ class ItemWriter
     uint32 m_VertexCount = 0;
     NavigationBounds m_Bounds;
 };
+
+// The navigation bake reads collider poses as float matrices relative to the world origin.
+Mathematics::Matrix4x4 NarrowedWorldMatrix(const Components::WorldTransform& wt)
+{
+    return wt.ToMatrix4x4(wt.GetPosition() - Mathematics::WorldPosition{});
+}
 
 void AppendBox(NavigationStaticGeometry& geometry, const float32 world[16], const BakeSource& source,
                const Components::BoxColliderShape& box)
@@ -254,28 +261,29 @@ void SnapshotColliders(ECS::World& world, NavigationStaticGeometry& geometry)
         .Each([&](ECS::EntityHandle e, const WorldTransform& wt, const PhysicsCollider& collider,
                   const Components::BoxColliderShape& box, const PhysicsColliderOwner* owner) {
             if (IsBakedCollider(world, e, collider, owner))
-                AppendBox(geometry, wt.matrix, ColliderSource(e), box);
+                AppendBox(geometry, NarrowedWorldMatrix(wt).Data(), ColliderSource(e), box);
         });
     world.Query<ECS::Read<WorldTransform>, ECS::Read<PhysicsCollider>, ECS::Read<Components::SphereColliderShape>,
                 ECS::Optional<PhysicsColliderOwner>>()
         .Each([&](ECS::EntityHandle e, const WorldTransform& wt, const PhysicsCollider& collider,
                   const Components::SphereColliderShape& sphere, const PhysicsColliderOwner* owner) {
             if (IsBakedCollider(world, e, collider, owner))
-                AppendRound(geometry, wt.matrix, ColliderSource(e), sphere.radius, 0.0f, 1);
+                AppendRound(geometry, NarrowedWorldMatrix(wt).Data(), ColliderSource(e), sphere.radius, 0.0f, 1);
         });
     world.Query<ECS::Read<WorldTransform>, ECS::Read<PhysicsCollider>, ECS::Read<Components::CapsuleColliderShape>,
                 ECS::Optional<PhysicsColliderOwner>>()
         .Each([&](ECS::EntityHandle e, const WorldTransform& wt, const PhysicsCollider& collider,
                   const Components::CapsuleColliderShape& capsule, const PhysicsColliderOwner* owner) {
             if (IsBakedCollider(world, e, collider, owner))
-                AppendRound(geometry, wt.matrix, ColliderSource(e), capsule.radius, capsule.halfHeight, capsule.axis);
+                AppendRound(geometry, NarrowedWorldMatrix(wt).Data(), ColliderSource(e), capsule.radius,
+                            capsule.halfHeight, capsule.axis);
         });
     world.Query<ECS::Read<WorldTransform>, ECS::Read<PhysicsCollider>, ECS::Read<Components::PlaneColliderShape>,
                 ECS::Optional<PhysicsColliderOwner>>()
         .Each([&](ECS::EntityHandle e, const WorldTransform& wt, const PhysicsCollider& collider,
                   const Components::PlaneColliderShape& plane, const PhysicsColliderOwner* owner) {
             if (IsBakedCollider(world, e, collider, owner))
-                AppendPlane(geometry, wt.matrix, ColliderSource(e), plane);
+                AppendPlane(geometry, NarrowedWorldMatrix(wt).Data(), ColliderSource(e), plane);
         });
 }
 
@@ -372,8 +380,7 @@ class MeshInstanceWriter
         if (!admission)
             return;
         const BakeSource source{e, BakeSourceKind::Mesh, *admission};
-        // The component holds its matrix as 16 column-major floats.
-        const auto worldMatrix = Mathematics::Matrix4x4::FromColumnMajor(wt.matrix);
+        const Mathematics::Matrix4x4 worldMatrix = NarrowedWorldMatrix(wt);
 
         if (renderer.modelAssetGuid.IsNull())
         {
@@ -658,22 +665,49 @@ bool NavigationTerrainSource::OverlapsXZ(float32 minX, float32 minZ, float32 max
            originZ + Query.FootprintSizeZ() >= minZ;
 }
 
+bool NavigationTerrainSource::ReachesPlanetRelief(const NavigationBounds& bounds) const
+{
+    if (!Spherical || bounds.Empty)
+        return false;
+    // The box holds a point of the relief when its nearest point to the center is inside the outer
+    // radius and its farthest point is outside the inner radius.
+    float64 nearestSquared = 0.0;
+    float64 farthestSquared = 0.0;
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        const float64 low = bounds.Min[axis];
+        const float64 high = bounds.Max[axis];
+        const float64 nearest = std::clamp(0.0, low, high);
+        const float64 farthest = std::max(std::abs(low), std::abs(high));
+        nearestSquared += nearest * nearest;
+        farthestSquared += farthest * farthest;
+    }
+    const float64 inner = PlanetRelief.Inner;
+    const float64 outer = PlanetRelief.Outer;
+    return nearestSquared <= outer * outer && farthestSquared >= inner * inner;
+}
+
 NavigationTerrainSource ResolveNavigationTerrainSource(ECS::World& world,
                                                        const Components::WorldTransform* surfaceTransform)
 {
     NavigationTerrainSource source;
-    source.Query = TerrainECS::ResolveSurfaceHeightQuery(
-        world, surfaceTransform ? surfaceTransform->GetPosition() : Mathematics::Vector3{});
-    if (!source.Query.IsValid())
+    const Mathematics::Vector3 origin =
+        surfaceTransform ? surfaceTransform->GetPosition() - Mathematics::WorldPosition{} : Mathematics::Vector3{};
+    source.Query = TerrainECS::ResolveSurfaceHeightQuery(world, origin);
+    const TerrainECS::SurfaceHeightTerrain terrain = TerrainECS::FindSurfaceHeightTerrain(world, origin);
+    source.Spherical = terrain.Terrain && terrain.Terrain->Domain == Components::TerrainDomain::Spherical;
+    if (source.Spherical)
+    {
+        source.PlanetRelief = TerrainECS::PlanetReliefShellOf(
+            terrain.Terrain->PlanetRadius, terrain.Relief ? *terrain.Relief : Components::TerrainPlanetRelief{});
+    }
+    if (!source.Query.IsValid() && !source.Spherical)
     {
         bool first = true;
         world.Query<ECS::Read<Components::Terrain>, ECS::Read<Components::WorldTransform>>().Each(
-            [&](const Components::Terrain& terrain, const Components::WorldTransform&) {
+            [&](const Components::Terrain& other, const Components::WorldTransform&) {
                 if (first)
-                {
-                    source.Spherical = terrain.Domain == Components::TerrainDomain::Spherical;
-                    source.Loading = !source.Spherical;
-                }
+                    source.Loading = other.Domain != Components::TerrainDomain::Spherical;
                 first = false;
             });
     }
@@ -687,14 +721,14 @@ NavigationBounds NavigationSurfaceBounds(const Components::NavigationSurface& su
     NavigationBounds bounds;
     if (!surface.FitBounds)
     {
-        const float32 position[3] = {transform ? transform->matrix[12] : 0.0f, transform ? transform->matrix[13] : 0.0f,
-                                     transform ? transform->matrix[14] : 0.0f};
-        const float32 center[3] = {surface.Center.x, surface.Center.y, surface.Center.z};
-        const float32 extent[3] = {std::abs(surface.Extent.x), std::abs(surface.Extent.y), std::abs(surface.Extent.z)};
-        for (int axis = 0; axis < 3; ++axis)
+        const Mathematics::Vector3 origin =
+            transform ? transform->GetPosition() - Mathematics::WorldPosition{} : Mathematics::Vector3{};
+        const Mathematics::Vector3 center = origin + surface.Center;
+        const Mathematics::Vector3 extent(std::abs(surface.Extent.x), std::abs(surface.Extent.y), std::abs(surface.Extent.z));
+        for (std::size_t axis = 0; axis < 3; ++axis)
         {
-            bounds.Min[axis] = position[axis] + center[axis] - extent[axis];
-            bounds.Max[axis] = position[axis] + center[axis] + extent[axis];
+            bounds.Min[axis] = center[axis] - extent[axis];
+            bounds.Max[axis] = center[axis] + extent[axis];
         }
         bounds.Empty = !(extent[0] > 0.0f && extent[2] > 0.0f);
         return bounds;
@@ -702,9 +736,12 @@ NavigationBounds NavigationSurfaceBounds(const Components::NavigationSurface& su
     if (terrain.Query.IsValid())
     {
         const auto& query = terrain.Query;
-        const float32 low[3] = {query.FootprintOriginX(), query.OriginY(), query.FootprintOriginZ()};
-        const float32 high[3] = {low[0] + query.FootprintSizeX(), query.OriginY() + query.HeightScale(),
-                                 low[2] + query.FootprintSizeZ()};
+        // The heights the terrain holds, which reach below its transform where it is lowered.
+        float32 lowY = 0.0f;
+        float32 highY = 0.0f;
+        query.HeightRange(lowY, highY);
+        const float32 low[3] = {query.FootprintOriginX(), lowY, query.FootprintOriginZ()};
+        const float32 high[3] = {low[0] + query.FootprintSizeX(), highY, low[2] + query.FootprintSizeZ()};
         bounds.Include(low);
         bounds.Include(high);
         return bounds;

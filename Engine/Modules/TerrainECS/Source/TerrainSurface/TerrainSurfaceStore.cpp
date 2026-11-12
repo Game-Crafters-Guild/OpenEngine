@@ -1,6 +1,8 @@
 #include "TerrainECS/TerrainSurface/TerrainSurfaceStore.h"
+#include "TerrainSurface/TerrainSurfaceSessionStore.h"
 
 #include "TerrainECS/TerrainService.h"
+#include "FileSystem/ScopedFileLock.h"
 #include "Types/Fnv1a.h"
 
 #include <algorithm>
@@ -130,6 +132,41 @@ std::vector<SceneSurfaceStore> SceneSurfaceStores(const std::filesystem::path& d
         return a.Terrain != b.Terrain ? a.Terrain < b.Terrain : a.Plane < b.Plane;
     });
     return stores;
+}
+
+std::filesystem::path SessionStoreRoot(const std::filesystem::path& cacheDirectory)
+{
+    return cacheDirectory / "Session";
+}
+
+std::filesystem::path SessionStoreDirectory(const std::filesystem::path& cacheDirectory, const GUID& session)
+{
+    return SessionStoreRoot(cacheDirectory) / session.ToString();
+}
+
+std::filesystem::path SessionStoreLock(const std::filesystem::path& cacheDirectory, const GUID& session)
+{
+    return SessionStoreRoot(cacheDirectory) / (session.ToString() + ".lock");
+}
+
+void RemoveOrphanSessionStores(const std::filesystem::path& cacheDirectory)
+{
+    std::error_code error;
+    const std::filesystem::path root = SessionStoreRoot(cacheDirectory);
+    std::vector<std::filesystem::path> sessions;
+    for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(root, error))
+        if (entry.is_directory(error))
+            sessions.push_back(entry.path());
+    for (const std::filesystem::path& session : sessions)
+    {
+        std::filesystem::path lockFile = session;
+        lockFile += ".lock";
+        const FileSystem::ScopedFileLock lock(lockFile, FileSystem::ScopedFileLock::Mode::Exclusive, false);
+        if (!lock.IsLocked())
+            continue;
+        std::filesystem::remove_all(session, error);
+        std::filesystem::remove(lockFile, error);
+    }
 }
 
 } // namespace GameEngine::TerrainECS

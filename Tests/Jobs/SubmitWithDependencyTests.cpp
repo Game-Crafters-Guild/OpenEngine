@@ -155,9 +155,10 @@ TEST(SubmitWithDependencyTest, AlreadyTerminalDependenciesRunDependent)
 // Cancelled to its graph dependents, synchronously on the cancelling thread.
 TEST(SubmitWithDependencyTest, CancelCascadesToLambdaDependents)
 {
+    // Declared before the pool: the held job can still read it after the release.
+    std::atomic<bool> release{false};
     JobSystem::WorkStealingThreadPool pool(1);
 
-    std::atomic<bool> release{false};
     pool.EnqueueWork(
         [&release]
         {
@@ -192,9 +193,10 @@ TEST(SubmitWithDependencyTest, CancelCascadesToLambdaDependents)
 // body never runs.
 TEST(SubmitWithDependencyTest, FailureCascadesFromLambdaDependency)
 {
+    // Declared before the pool: the held job can still read it after the release.
+    std::atomic<bool> release{false};
     JobSystem::WorkStealingThreadPool pool(1);
 
-    std::atomic<bool> release{false};
     pool.EnqueueWork(
         [&release]
         {
@@ -223,9 +225,10 @@ TEST(SubmitWithDependencyTest, FailureCascadesFromLambdaDependency)
 // the parked payload is retired, the dependency still completes normally.
 TEST(SubmitWithDependencyTest, CancelOfParkedDependentIsInherited)
 {
+    // Declared before the pool: the held job can still read it after the release.
+    std::atomic<bool> release{false};
     JobSystem::WorkStealingThreadPool pool(1);
 
-    std::atomic<bool> release{false};
     pool.EnqueueWork(
         [&release]
         {
@@ -255,9 +258,10 @@ TEST(SubmitWithDependencyTest, CancelOfParkedDependentIsInherited)
 // graph-task handle (natively tracked) gate the same dependent.
 TEST(SubmitWithDependencyTest, MixedPlainAndGraphDependencies)
 {
+    // Declared before the pool: the held job can still read it after the release.
+    std::atomic<bool> release{false};
     JobSystem::WorkStealingThreadPool pool(1);
 
-    std::atomic<bool> release{false};
     pool.EnqueueWork(
         [&release]
         {
@@ -371,12 +375,15 @@ TEST(SubmitWithDependencyTest, DepsOverloadRacingShutdownNeverStrands)
 // in the window every iteration.
 TEST(SubmitWithDependencyTest, GraphDepCascadeRetireRaceDoesNotStrandDependent)
 {
+    // Declared before the pool: a root can still read it after an ASSERT ends the round.
+    std::atomic<bool> releaseRoot{false};
     JobSystem::WorkStealingThreadPool pool(2);
 
     constexpr int kIterations = 25;
     for (int i = 0; i < kIterations; ++i)
     {
-        std::atomic<bool> releaseRoot{false};
+        // The last round's root is done: its dependents passed PollDone.
+        releaseRoot.store(false);
         auto root = pool.Submit(
             [&releaseRoot]
             {

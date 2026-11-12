@@ -11,6 +11,7 @@
 #include "Engine/Rendering/DDGIMaterialUpdates.h"
 #include "Engine/Rendering/Material.h"
 #include "Engine/Rendering/MaterialSystem.h"
+#include "Engine/Rendering/RenderOrigin.h"
 #include "Logger/Logger.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/GPUScene.h"
@@ -293,18 +294,16 @@ DDGISceneService::PlanHashes DDGISceneService::SweepScene()
     m_PlanParticipants.reserve(instances.size());
     for (const Rendering::GPUInstance& instance : instances)
     {
-        // Sector-tagged (camera-relative) instances are unhandled by either
-        // lane yet. Skinned instances participate: each gets its OWN plan
-        // slot below (a shared slot cannot hold two different poses), whose
-        // pooled BVH range the per-tick GPU refit re-poses
-        // (ddgi_bvh_refit.comp) — the software twin of the hardware lane's
-        // per-instance posed BLASes.
-        if ((instance.sectorPacked[0] | instance.sectorPacked[1]) != 0u)
-            continue;
+        // Skinned instances participate: each gets its OWN plan slot below (a
+        // shared slot cannot hold two different poses), whose pooled BVH range
+        // the per-tick GPU refit re-poses (ddgi_bvh_refit.comp) — the software
+        // twin of the hardware lane's per-instance posed BLASes.
         if (!DDGITracesInstance(instance))
             continue;
         const bool isSkinned = instance.skinPaletteOffset != 0u && instance.runtimeId != 0u;
-        if (!IsSaneTransform(instance.transform, instance.boundingRadius))
+        const Mathematics::Matrix4x4 worldMatrix =
+            ComposeWorldModelMatrix(instance.transform, instance.sectorPacked[0], instance.sectorPacked[1]);
+        if (!IsSaneTransform(worldMatrix, instance.boundingRadius))
             continue;
 
         // The material rides on the instance record, so a plan slot is per MESH
@@ -374,7 +373,7 @@ DDGISceneService::PlanHashes DDGISceneService::SweepScene()
         if (planSlot == kUnresolvedMeshSlot)
             continue;
         m_PlanParticipants.push_back(
-            Participant{instance.transform, instance.meshIndex, planSlot, materialSlot,
+            Participant{worldMatrix, instance.meshIndex, planSlot, materialSlot,
                         (instance.flags & Rendering::kInstanceFlagGIEmitter) != 0u});
     }
 

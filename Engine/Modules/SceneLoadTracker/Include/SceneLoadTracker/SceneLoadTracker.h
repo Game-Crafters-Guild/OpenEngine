@@ -50,6 +50,8 @@ class SceneLoadTracker
         std::string_view Id;    // owner-prefixed and stable, for example "shader.variant"
         std::string_view Label; // what a loading screen may show
         CostUnit Unit = CostUnit::Items;
+        // The wall seconds one unit takes until the tracker measures this machine's rate. 0 uses 0.1 s.
+        double DefaultSecondsPerUnit = 0.0;
     };
 
     enum class GateState : uint8_t
@@ -84,7 +86,8 @@ class SceneLoadTracker
         WorkTicket& operator=(const WorkTicket&) = delete;
         ~WorkTicket();
 
-        /// Queued to running.
+        /// Queued to running. The category's measured rate counts the time from Start to Complete,
+        /// not the time in the queue.
         void Start();
         void Complete();
 
@@ -165,6 +168,9 @@ class SceneLoadTracker
         uint64_t Done = 0;   // in the session
         uint64_t Failed = 0; // in the session; abandoned tickets included
         double RemainingUnits = 0.0;
+        // The wall seconds the category's Frame work still needs: the slowest of its registrations
+        // and its waiting gates.
+        double SecondsRemaining = 0.0;
         uint32_t WaitingGates = 0;
         std::size_t GatePending = 0;
         std::string_view Reason; // the first waiting gate's
@@ -180,6 +186,9 @@ class SceneLoadTracker
         /// No category moved forward for kStallSeconds while not ready.
         bool Stalled = false;
         double SecondsWithoutProgress = 0.0;
+        /// The estimate of the wall seconds until ready to show: the largest SecondsRemaining of
+        /// the categories, which run at once (docs/scripting/scene-loader.mdx, Show load progress).
+        double SecondsRemaining = 0.0;
         std::vector<CategoryStatus> Categories;
     };
 
@@ -225,6 +234,7 @@ class SceneLoadTracker
     std::shared_ptr<TrackerState> m_State;
     LoadStatus m_Status;
     uint64_t m_RowsGeneration = 0;
+    std::chrono::steady_clock::time_point m_LastTick{};
     std::chrono::steady_clock::time_point m_LastProgress{};
     uint64_t m_LastSettledCount = 0;
     std::size_t m_LastGatePending = 0;

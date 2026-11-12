@@ -1,7 +1,7 @@
 // GPUScene::RemoveInstances (batched removal) — HLOD prerequisite P1.
 //
 // The batched path must be observationally identical to N single-index
-// RemoveInstance calls: same instance rows, same 32 B scatter-hot mirror, same
+// RemoveInstance calls: same instance rows, same 40 B scatter-hot mirror, same
 // free-slot set, same BatchRegistry counts, same live count. It must also fold
 // duplicate indices, skip out-of-range / already-free indices, run the trailing
 // trim exactly once, and evict a large cluster without the single path's

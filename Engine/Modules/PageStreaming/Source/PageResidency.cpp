@@ -21,10 +21,18 @@ namespace
 // for a reader that reads the record every frame.
 constexpr std::size_t kCpuChangeRecordLength = 4096;
 
-// True when page `page` reads a level-0 sample of one of `rects`.
-bool ReadsAnyRect(const PageAddress& page, std::span<const PageSampleRect> rects)
+// True when `commit` names page `page`: the page is of its level or coarser and reads its rect, with the
+// samples up to `marginSamples` past its owned area (PageReadsLevel0Rect).
+bool CommitNames(const PageStoreCommit& commit, const PageAddress& page, uint32 marginSamples)
 {
-    return std::ranges::any_of(rects, [&page](const PageSampleRect& rect) { return PageReadsLevel0Rect(page, rect); });
+    return page.Level >= commit.Level && PageReadsLevel0Rect(page, commit.Level0Rect, marginSamples);
+}
+
+// True when one of `commits` names page `page` of a plane stream, which reads its apron.
+bool AnyCommitNames(std::span<const PageStoreCommit> commits, const PageAddress& page)
+{
+    return std::ranges::any_of(commits, [&page](const PageStoreCommit& commit)
+                               { return CommitNames(commit, page, kPageApronSamples); });
 }
 
 std::span<const PageStoreLevel> LevelsOf(const PageSource& source)
@@ -33,6 +41,8 @@ std::span<const PageStoreLevel> LevelsOf(const PageSource& source)
         return source.Store->Layout().Levels;
     if (!source.Planes.empty())
         return source.Planes.front()->Levels();
+    if (source.GeneratedPlanes)
+        return source.GeneratedPlanes->Levels;
     if (source.Generated)
         return source.Generated->Levels();
     return {};
@@ -60,6 +70,8 @@ uint32 FaceCountOf(const PageSource& source)
         return source.Store->Layout().Header.FaceCount;
     if (!source.Planes.empty())
         return source.Planes.front()->FaceCount();
+    if (source.GeneratedPlanes)
+        return source.GeneratedPlanes->FaceCount;
     return source.Generated ? source.Generated->FaceCount() : 1u;
 }
 
@@ -67,6 +79,14 @@ uint32 TopLevelOf(const PageSource& source)
 {
     const std::span<const PageStoreLevel> levels = LevelsOf(source);
     return levels.empty() ? 0u : static_cast<uint32>(levels.size()) - 1u;
+}
+
+// True when `address` names a page of `source`'s pyramid.
+bool PageInPyramid(const PageSource& source, const PageAddress& address)
+{
+    const std::span<const PageStoreLevel> levels = LevelsOf(source);
+    return address.Face < FaceCountOf(source) && address.Level < levels.size() &&
+           address.X < levels[address.Level].PagesX && address.Z < levels[address.Level].PagesZ;
 }
 
 // A page's sort key in its stream: face, level, column and row, so equal pages sort together.
@@ -125,9 +145,9 @@ void PageResidencyManager::Configure(uint32 stream, uint32 field, PageSource sou
     state.PlaneVersions.clear();
     for (const std::shared_ptr<const PageStoreAccess>& plane : state.Source.Planes)
         state.PlaneVersions.push_back(plane->Version());
-    state.EntriesPerFace = static_cast<uint32>(DensePageCount(LevelsOf(state.Source)));
     // The CPU directory is built by the stream's first RequestCpu: a stream with no CPU reader holds none.
-    state.CpuDirectory.clear();
+    state.CpuDirectory.Clear();
+    state.HasCpuDirectory = false;
     state.CpuChanges.assign(kCpuChangeRecordLength, PageAddress{});
     state.KeptCpuWindow.clear(); // the old source's window
 }
@@ -175,9 +195,11 @@ void PageResidencyManager::RequestCpu(uint32 stream, uint32 firstPinnedLevel, st
     assert(state.Source.Planes.empty() && "RequestCpu on a stream over a PageStoreAccess: read its pages through Request, on workers");
     if (!state.Source.Planes.empty())
         return;
-    // The CPU readers (SurfaceHeightQuery) read planar terrain: the pins and fetches walk face 0 only.
-    assert(FaceCountOf(state.Source) == 1u && "CPU height pages of a stream with more than one face");
-    if (state.CpuDirectory.empty())
+    // The readers (SurfaceHeightQuery) walk the pyramid through the directory: an entry only for a page
+    // the CPU holds or knows is absent. A stream over faces pins no level; its page bodies read by address.
+    [[maybe_unused]] const bool multiFace = FaceCountOf(state.Source) > 1u;
+    assert((!multiFace || firstPinnedLevel >= LevelsOf(state.Source).size()) && "a stream over faces pins no CPU level");
+    if (!state.HasCpuDirectory)
         BuildCpuDirectory(state);
     if (state.CpuPinnedLevel != firstPinnedLevel)
     {
@@ -212,7 +234,7 @@ CpuPageDirectory PageResidencyManager::CpuPages(uint32 stream) const
     if (it == m_Streams.end())
         return CpuPageDirectory{};
     // A read before the first RequestCpu gets an empty directory: every page is Missing.
-    assert((!it->second.CpuDirectory.empty() || LevelsOf(it->second.Source).empty()) &&
+    assert((it->second.HasCpuDirectory || LevelsOf(it->second.Source).empty()) &&
            "CpuPages before the stream's first RequestCpu: request the CPU pages first");
     return DirectoryOf(it->second);
 }
@@ -225,35 +247,37 @@ std::span<const PageAddress> PageResidencyManager::CpuWindow(uint32 stream) cons
 
 CpuPageDirectory PageResidencyManager::DirectoryOf(const Stream& stream)
 {
-    const bool empty = stream.CpuDirectory.empty();
-    return CpuPageDirectory{LevelsOf(stream.Source), stream.CpuDirectory, stream.EntriesPerFace,
-                            empty ? 0u : stream.Epoch, stream.CpuChanges, empty ? nullptr : &stream.CpuChangeCount,
+    if (!stream.HasCpuDirectory)
+        return CpuPageDirectory{nullptr, 0u, stream.CpuChanges, nullptr, stream.PageBytes};
+    return CpuPageDirectory{&stream.CpuDirectory, stream.Epoch, stream.CpuChanges, &stream.CpuChangeCount,
                             stream.PageBytes};
 }
 
 void PageResidencyManager::BuildCpuDirectory(Stream& stream)
 {
-    const std::span<const PageStoreLevel> levels = LevelsOf(stream.Source);
-    assert((levels.empty() || (levels.front().SamplesX <= kCpuDirectoryMaxSamplesPerAxis &&
-                               levels.front().SamplesZ <= kCpuDirectoryMaxSamplesPerAxis)) &&
-           "a store past the CPU directory's limit is refused before it streams");
-    stream.CpuDirectory.assign(static_cast<std::size_t>(FaceCountOf(stream.Source)) * stream.EntriesPerFace, CpuPageEntry{});
-    const CpuPageDirectory directory = DirectoryOf(stream);
+    // A source with no levels has no page: its directory stays empty.
+    stream.HasCpuDirectory = !LevelsOf(stream.Source).empty();
+    stream.CpuDirectory.Clear();
+    stream.CpuDirectory.Reserve(stream.Loaded.Size() + stream.Absent.size());
     for (const auto& [address, page] : stream.Loaded)
-        stream.CpuDirectory[directory.Index(address)] = CpuPageEntry{page.Bytes->data(), CpuPageState::Resident};
+        stream.CpuDirectory.InsertOrAssign(CpuPageDirectory::Key(address), ResidentEntry(page.Bytes->data()));
     for (const PageAddress& address : stream.Absent)
-        stream.CpuDirectory[directory.Index(address)] = CpuPageEntry{nullptr, CpuPageState::Absent};
+        stream.CpuDirectory.InsertOrAssign(CpuPageDirectory::Key(address), CpuPageEntry::Absent);
 }
 
-void PageResidencyManager::SetCpuEntry(Stream& stream, const PageAddress& address, const CpuPageEntry& entry)
+void PageResidencyManager::SetCpuEntry(Stream& stream, const PageAddress& address, CpuPageEntry entry)
 {
-    if (stream.CpuDirectory.empty())
+    if (!stream.HasCpuDirectory)
         return; // no CPU reader yet: BuildCpuDirectory takes the loaded pages when one asks
-    const std::size_t index = DirectoryOf(stream).Index(address);
-    assert(index < stream.CpuDirectory.size() && "a page outside its stream's pyramid");
-    if (index >= stream.CpuDirectory.size())
+    const bool inPyramid = PageInPyramid(stream.Source, address);
+    assert(inPyramid && "a page outside its stream's pyramid");
+    if (!inPyramid)
         return;
-    stream.CpuDirectory[index] = entry;
+    // A Missing page has no entry.
+    if (entry == CpuPageEntry::Missing)
+        stream.CpuDirectory.Erase(CpuPageDirectory::Key(address));
+    else
+        stream.CpuDirectory.InsertOrAssign(CpuPageDirectory::Key(address), entry);
     // The ring overwrites its oldest change: a reader further behind than the ring answers anew.
     stream.CpuChanges[stream.CpuChangeCount % stream.CpuChanges.size()] = address;
     ++stream.CpuChangeCount;
@@ -283,9 +307,16 @@ void PageResidencyManager::DrainCompletions(uint64 frameIndex)
         if (done.Tag.Cpu)
             --m_CpuInFlightCount;
         const auto it = m_Streams.find(done.Tag.Stream);
-        if (it == m_Streams.end() || it->second.Epoch != done.Tag.Epoch)
-            continue; // a load of a stream since forgotten or restarted
+        if (it == m_Streams.end())
+            continue; // a load of a stream since forgotten
+        if (done.Outcome.Bytes)
+            ++it->second.PagesProduced;
+        if (it->second.Epoch != done.Tag.Epoch)
+            continue; // a load of a stream since restarted
         it->second.InFlight.Erase(done.Outcome.Address);
+        // A commit wrote the page after its load began: the page is fetched again.
+        if (it->second.OutdatedLoads.Erase(done.Outcome.Address))
+            continue;
         // Absent at an older version of a store being baked: the page is fetched again.
         if (done.Outcome.Absent && done.Tag.SourceVersion != it->second.SourceVersion)
             continue;
@@ -303,7 +334,7 @@ void PageResidencyManager::Land(Stream& stream, uint64 frameIndex, PageFetchOutc
             m_Fetcher.Reuse(std::move(page.Bytes)); // a reloaded page's old bytes
         page = LoadedPage{std::move(outcome.Bytes), std::max(page.LastWantedFrame, frameIndex)};
         assert(page.Bytes->size() == stream.PageBytes && "a loaded page holds its source's page bytes");
-        SetCpuEntry(stream, outcome.Address, CpuPageEntry{page.Bytes->data(), CpuPageState::Resident});
+        SetCpuEntry(stream, outcome.Address, ResidentEntry(page.Bytes->data()));
         stream.Failures.erase(outcome.Address);
         m_ChangedFields.Insert(stream.Field);
         if (inserted)
@@ -313,7 +344,7 @@ void PageResidencyManager::Land(Stream& stream, uint64 frameIndex, PageFetchOutc
     if (outcome.Absent)
     {
         stream.Absent.insert(outcome.Address);
-        SetCpuEntry(stream, outcome.Address, CpuPageEntry{nullptr, CpuPageState::Absent});
+        SetCpuEntry(stream, outcome.Address, CpuPageEntry::Absent);
         return;
     }
     LoadFailure& failure = stream.Failures[outcome.Address];
@@ -339,27 +370,49 @@ void PageResidencyManager::RetryAbsentPages()
     {
         if (stream.Source.Planes.empty() || stream.Source.PlanesVersion() == stream.SourceVersion)
             continue;
-        m_ReadableRects.clear();
+        m_ReadableCommits.clear();
         bool whole = false;
         uint64 reached = 0;
         for (std::size_t plane = 0; plane < stream.Source.Planes.size(); ++plane)
         {
             uint64& version = stream.PlaneVersions[plane];
-            version = stream.Source.Planes[plane]->ReadableSince(version, m_ReadableRects, whole);
+            version = stream.Source.Planes[plane]->ReadableSince(version, m_ReadableCommits, whole);
             reached += version;
         }
         stream.SourceVersion = reached;
         const std::size_t absent = stream.Absent.size();
         if (whole)
             stream.Absent.clear();
-        else if (!m_ReadableRects.empty())
+        else if (!m_ReadableCommits.empty())
         {
             m_Visits += static_cast<uint32>(absent);
             std::erase_if(stream.Absent,
-                          [this](const PageAddress& page) { return ReadsAnyRect(page, m_ReadableRects); });
+                          [this](const PageAddress& page) { return AnyCommitNames(m_ReadableCommits, page); });
         }
+        // A commit wrote its pages again: a resident page that the commit names (CommitNames) reloads,
+        // of any face, as the absent pages do. A publication changes no page, so `whole` refreshes none.
+        for (const PageStoreCommit& commit : m_ReadableCommits)
+            MarkStale(id, stream, std::nullopt, commit);
+        DropOutdatedLoads(id, stream);
         m_LoadsChanged = m_LoadsChanged || stream.Absent.size() != absent;
     }
+}
+
+void PageResidencyManager::DropOutdatedLoads(uint32 streamId, Stream& stream)
+{
+    if (m_ReadableCommits.empty())
+        return;
+    m_Visits += static_cast<uint32>(stream.InFlight.Size() + stream.Loaded.Size());
+    for (const PageAddress& address : stream.InFlight)
+        if (AnyCommitNames(m_ReadableCommits, address))
+            stream.OutdatedLoads.Insert(address);
+    // A plane stream has no CPU readers: a loaded page that is not resident waits for its upload only.
+    const PageCache& cache = m_Fields.at(stream.Field);
+    const std::size_t dropped = stream.Loaded.EraseIf([&](const PageAddress& address, const LoadedPage&) {
+        return cache.SlotOf(CachedPage{streamId, address}) == kNoResidentSlot && AnyCommitNames(m_ReadableCommits, address);
+    });
+    m_CpuBytes -= static_cast<uint64>(dropped) * stream.PageBytes;
+    m_LoadsChanged = m_LoadsChanged || dropped != 0;
 }
 
 void PageResidencyManager::DropUploadedPlaneBytes()
@@ -378,7 +431,7 @@ void PageResidencyManager::ListUploadedPlanePages()
 {
     for (const auto& [field, cache] : m_Fields)
         for (const PageUploadRequest& upload : cache.Uploads())
-            if (!m_Streams.at(upload.Page.Stream).Source.Planes.empty())
+            if (const PageSource& source = m_Streams.at(upload.Page.Stream).Source; !source.Planes.empty() || source.GeneratedPlanes)
                 m_UploadedPlanePages.push_back(upload.Page);
 }
 
@@ -386,7 +439,15 @@ void PageResidencyManager::FetchNow(Stream& stream, uint64 frameIndex, const Pag
 {
     assert(stream.Source.Planes.empty() && "a store being baked is read on workers: a read here waits on the bake");
     PageFetchOutcome outcome = FetchPage(stream.Source, address);
+    if (outcome.Bytes)
+        ++stream.PagesProduced;
     Land(stream, frameIndex, outcome);
+}
+
+uint64 PageResidencyManager::PagesProduced(uint32 stream) const
+{
+    const auto it = m_Streams.find(stream);
+    return it == m_Streams.end() ? 0u : it->second.PagesProduced;
 }
 
 bool PageResidencyManager::FetchCpuPage(uint32 streamId, const PageAddress& address)
@@ -409,7 +470,7 @@ void PageResidencyManager::FetchCpuNow(uint64 frameIndex, std::chrono::steady_cl
         if (stream.CpuPinnedLevel == ~0u)
             continue;
         const std::span<const PageStoreLevel> levels = LevelsOf(stream.Source);
-        if (!levels.empty())
+        if (stream.CpuPinnedLevel < levels.size())
             for (uint32 z = 0; z < levels.back().PagesZ; ++z)
                 for (uint32 x = 0; x < levels.back().PagesX; ++x)
                 {
@@ -420,19 +481,19 @@ void PageResidencyManager::FetchCpuNow(uint64 frameIndex, std::chrono::steady_cl
         for (const PageAddress& address : stream.CpuWindow)
             if (LoadedPage* page = stream.Loaded.Find(address))
                 page->LastWantedFrame = frameIndex;
-        longest = std::max(longest, stream.CpuWindow.size());
+        if (FaceCountOf(stream.Source) == 1u)
+            longest = std::max(longest, stream.CpuWindow.size());
     }
-    // Every stream's first window page, then every stream's second, and so on: a second terrain
-    // shares the frame's synchronous fetches with the first. The first fetch starts while the clock
-    // is under the deadline; each later one only when the last fetch's cost, added to the time spent,
-    // still ends under it (a generated page takes about 0.36 ms, so one a frame; a store page read
-    // from the file cache about 8 us, so the page cap).
+    // Planar streams take turns, one window page each, under the deadline: a fetch starts only when the
+    // last fetch's cost still ends under it. A planet's window pages load on workers; its page bodies
+    // wait for them, so the frame does not.
     uint32 fetched = 0;
     std::chrono::steady_clock::time_point lastStart{};
     for (std::size_t rank = 0; rank < longest; ++rank)
         for (auto& [id, stream] : m_Streams)
         {
-            if (rank >= stream.CpuWindow.size() || !NeedsLoad(stream, stream.CpuWindow[rank], frameIndex))
+            if (rank >= stream.CpuWindow.size() || FaceCountOf(stream.Source) != 1u ||
+                !NeedsLoad(stream, stream.CpuWindow[rank], frameIndex))
                 continue;
             const std::chrono::steady_clock::time_point now = m_Clock();
             const std::chrono::steady_clock::duration lastCost =
@@ -524,15 +585,77 @@ void PageResidencyManager::Refresh(uint32 streamId, uint8 face, const PageSample
     const auto it = m_Streams.find(streamId);
     if (it == m_Streams.end())
         return;
+    MarkStale(streamId, it->second, face, PageStoreCommit{level0Rect, 0u});
+}
+
+void PageResidencyManager::ChangePlanes(uint32 streamId, PageSource source)
+{
+    const auto it = m_Streams.find(streamId);
+    assert(it != m_Streams.end() && "ChangePlanes on a stream that was not configured");
+    if (it == m_Streams.end())
+        return;
     Stream& stream = it->second;
+    assert(!stream.Source.Planes.empty() && !source.Planes.empty() && PlanesShareLattice(source) &&
+           "ChangePlanes keeps a stream over planes");
+    ReplaceSource(stream, std::move(source));
+    const PageStoreLevel& level0 = LevelsOf(stream.Source).front();
+    MarkStale(streamId, stream, std::nullopt,
+              PageStoreCommit{PageSampleRect{0u, 0u, level0.SamplesX - 1u, level0.SamplesZ - 1u}, 0u});
+}
+
+void PageResidencyManager::ChangeGeneratedPlanes(uint32 streamId, PageSource source)
+{
+    const auto it = m_Streams.find(streamId);
+    assert(it != m_Streams.end() && "ChangeGeneratedPlanes on a stream that was not configured");
+    if (it == m_Streams.end())
+        return;
+    assert(it->second.Source.GeneratedPlanes && source.GeneratedPlanes &&
+           "ChangeGeneratedPlanes keeps a stream over generated planes");
+    ReplaceSource(it->second, std::move(source));
+}
+
+void PageResidencyManager::ReplaceSource(Stream& stream, PageSource source)
+{
+    assert(LevelsOf(source).size() == LevelsOf(stream.Source).size() &&
+           FaceCountOf(source) == FaceCountOf(stream.Source) && "a stream changes its source on its lattice");
+    // The old source's loads end cancelled and, of an older epoch, never land.
+    stream.Cancel->store(true);
+    stream.Cancel = std::make_shared<std::atomic<bool>>(false);
+    stream.Epoch = m_NextEpoch++;
+    stream.InFlight.Clear();
+    stream.OutdatedLoads.Clear();
+    m_CpuBytes -= static_cast<uint64>(stream.Loaded.Size()) * stream.PageBytes;
+    stream.Loaded.Clear();
+    stream.Absent.clear();
+    stream.Failures.clear();
+    stream.Source = std::move(source);
+    stream.PageBytes = stream.Source.PayloadBytes();
+    stream.SourceVersion = stream.Source.PlanesVersion();
+    stream.PlaneVersions.clear();
+    for (const std::shared_ptr<const PageStoreAccess>& plane : stream.Source.Planes)
+        stream.PlaneVersions.push_back(plane->Version());
+    m_LoadsChanged = true;
+}
+
+bool PageResidencyManager::Refreshing(uint32 streamId) const
+{
+    const auto it = m_Streams.find(streamId);
+    return it != m_Streams.end() && !it->second.Stale.Empty();
+}
+
+void PageResidencyManager::MarkStale(uint32 streamId, Stream& stream, std::optional<uint8> face,
+                                     const PageStoreCommit& commit)
+{
+    const uint32 margin = stream.Source.GeneratedPlanes ? stream.Source.GeneratedPlanes->MarginSamples : kPageApronSamples;
     for (const CachedPage& page : m_Fields.at(stream.Field).Resident())
     {
-        if (page.Stream != streamId || page.Address.Face != face || !PageReadsLevel0Rect(page.Address, level0Rect))
+        if (page.Stream != streamId || (face && page.Address.Face != *face) ||
+            !CommitNames(commit, page.Address, margin))
             continue;
         if (PageSampleRect* stale = stream.Stale.Find(page.Address))
-            *stale = Union(*stale, level0Rect);
+            *stale = Union(*stale, commit.Level0Rect);
         else
-            stream.Stale.InsertOrAssign(page.Address, level0Rect);
+            stream.Stale.InsertOrAssign(page.Address, commit.Level0Rect);
     }
 }
 
@@ -672,7 +795,7 @@ void PageResidencyManager::TrimCpuPages(uint64 frameIndex)
         if (LoadedPage* page = stream.Loaded.Find(candidate.Address); page && stream.Source.Store)
             m_Fetcher.Reuse(std::move(page->Bytes));
         stream.Loaded.Erase(candidate.Address);
-        SetCpuEntry(stream, candidate.Address, CpuPageEntry{});
+        SetCpuEntry(stream, candidate.Address, CpuPageEntry::Missing);
         m_CpuBytes -= stream.PageBytes;
     }
 }

@@ -81,3 +81,11 @@ TEST(Vector3Tests, NormalizeOrGivesAUnitVectorOrTheFallbackForTinyLengths)
         EXPECT_TRUE(isFallback || std::abs(n.Length() - 1.0f) < 1e-6f) << "length " << length;
     }
 }
+
+// (1 + 2^-12)^2 - (1 + 2^-11) is 2^-24 exactly, and 0 if the product rounds first. Dot fuses the
+// x product with the y product as its addend, then the z product on top: the same on every platform.
+TEST(Vector3Tests, DotRoundsEachFusedProductOnce)
+{
+    EXPECT_EQ(Vector3::Dot(Vector3(0x1.001p0f, -0x1.002p0f, 0.0f), Vector3(0x1.001p0f, 1.0f, 0.0f)), 0x1p-24f);
+    EXPECT_EQ(Vector3::Dot(Vector3(-0x1.002p0f, 0.0f, 0x1.001p0f), Vector3(1.0f, 0.0f, 0x1.001p0f)), 0x1p-24f);
+}

@@ -17,6 +17,9 @@
 #include "Engine/GameUI/GameplayUI.h"
 #include "Engine/Hosting/RuntimeFrameReadback.h"
 #include "Engine/Hosting/RuntimeHost.h"
+#include "Engine/Loading/SceneLoadInstantiated.h"
+#include "Engine/Loading/SceneLoader.h"
+#include "Engine/Rendering/SceneResolveService.h"
 #include "UI/UITextureSpace.h"
 #include "Engine/Rendering/AnimatorScenePlayback.h"
 #include "Engine/Rendering/FrameOrchestrator.h"
@@ -60,6 +63,8 @@ namespace
 {
 // The most failed spline recipes the startup line names, each with its reason.
 constexpr size_t kStartupFailuresLogged = 16;
+// The exit code when the startup scene does not load: the code of a failed Initialize.
+constexpr int kStartupFailedExitCode = -1;
 
 #if GE_PLAYER_MOVIE_RECORDER
 constexpr size_t kMaxPendingMovieReadbacks = 4;
@@ -406,12 +411,10 @@ bool PlayerApplication::Initialize()
     if (!m_Host->InitRendering())
         return false;
 
-    // The Player has no PlayModeDriver (that is editor-side); ManagedSystemBridge
-    // is the ONLY thing that ever calls GameSystemRunner.Initialize/Tick here.
-    // Must run after InitRendering (the RenderingLoop owns the SystemManager);
-    // the execution plan is already frozen by now, so the bridge lands in a
-    // trailing wave (see SystemManager::AddSystem).
-    if (m_TickManagedSystems)
+    // ManagedSystemBridge is the Player's only caller of GameSystemRunner.Initialize/Tick. It needs
+    // InitRendering (the RenderingLoop owns the SystemManager) and joins a trailing wave of the frozen
+    // plan. With a startup scene, OnInstantiated registers it, so C# systems start on the scene.
+    if (m_TickManagedSystems && m_GameConfig.startupScene.empty())
         RegisterManagedSystemBridge();
 
     if (m_AllowRuntimeHdrToggle)
@@ -437,10 +440,6 @@ bool PlayerApplication::Initialize()
     Scene::EnsureBuiltInSchemasRegistered();
     Scene::EnsureTerrainSceneSchemasRegistered();
     Scene::EnsureTerrainGrassSceneSchemasRegistered();
-
-    // Scene entities reference editor GUIDs from the authoritative asset DB. Wait for
-    // the project source scan so registry lookups succeed before mesh/material setup.
-    EngineCore::GetInstance().GetAssetManager().WaitForStartupScan(kAssetSourceAliasProject);
 
     // Load the editor-built native user scripts BEFORE the scene so entities carrying user
     // components deserialize against a populated registry. The project root is the parent of the
@@ -474,29 +473,16 @@ bool PlayerApplication::Initialize()
         return false;
     }
 
-    if (m_GameConfig.startupScene.empty())
-        Logger::Log::Warning("Player: No startup scene specified in game config");
-    else if (!m_Host->OpenScene(m_GameConfig.startupScene))
-        return false;
+    // The Player is always "playing": user C++ systems start once (OnStart), tick each frame
+    // (Update) and stop at Shutdown (OnDestroy). With a startup scene the loader starts them
+    // when the scene is instantiated.
+    if (!m_GameConfig.startupScene.empty())
+        LoadStartupScene();
     else
-        m_StartupScene.Begin(m_GameConfig.waitForSplineRecipes);
-
-    m_StartupResolve = m_Host->GetSceneResolveBatch();
-    m_StartupResolvePending = m_StartupResolve != Engine::Renderer::SceneResolveBatch::None;
-    m_StartupResolveStart = std::chrono::steady_clock::now();
-
-    if (auto* world = EngineCore::GetInstance().GetPrimaryWorld())
     {
-        // An autoplay start applies only to entities whose skeleton is bound, which
-        // follows their model's resolve: with the startup scene still resolving, the
-        // animators start once its batch completes (FinishStartupResolve).
-        if (!m_StartupResolvePending)
-            Engine::Renderer::BootstrapSceneAnimators(*world);
-        // The Player is always "playing": start user C++ systems now (OnStart), tick them each
-        // frame (Update), stop them at Shutdown (OnDestroy) — same lifecycle the editor's
-        // PlayModeManager drives, minus the edit/play toggle. What OnStart spawns resolves
-        // beside the scene.
-        GameEngine::NativeScripting::StartUserSystems(*world);
+        Logger::Log::Warning("Player: No startup scene specified in game config");
+        if (auto* world = EngineCore::GetInstance().GetPrimaryWorld())
+            GameEngine::NativeScripting::StartUserSystems(*world);
     }
 
     Logger::Log::Info("Player: Initialized successfully (game='{}')", m_GameConfig.gameName);
@@ -505,8 +491,10 @@ bool PlayerApplication::Initialize()
 
 void PlayerApplication::Shutdown()
 {
-    // Stop user C++ systems (OnDestroy) while the world is still alive.
-    if (auto* world = EngineCore::GetInstance().GetPrimaryWorld())
+    // Stop user C++ systems (OnDestroy) while the world is still alive. A Player that exits
+    // before its startup scene is instantiated never started them.
+    if (auto* world = EngineCore::GetInstance().GetPrimaryWorld();
+        world && GameEngine::NativeScripting::AreUserSystemsStarted(*world))
         GameEngine::NativeScripting::StopUserSystems(*world);
     GameUI::NotifyGameplayStopped();
 
@@ -638,39 +626,50 @@ bool PlayerApplication::ApplyRuntimeHdrOutput(Rendering::HdrOutputMode mode)
 
 void PlayerApplication::FinishStartupResolve(ECS::World& world, float64 deltaTime)
 {
-    FinishStartupBatch(world);
-    // A run with no render device has no batch, so its batch term reads as complete.
-    if (m_StartupScene.Update(!m_StartupResolvePending, SplineRecipes::IsSceneSettled(world), deltaTime))
+    if (m_StartupScene.Update(m_StartupSceneRevealed, SplineRecipes::IsSceneSettled(world), deltaTime))
         LogStartupSceneReady(world);
 }
 
-void PlayerApplication::FinishStartupBatch(ECS::World& world)
+void PlayerApplication::LoadStartupScene()
 {
-    if (!m_StartupResolvePending)
-        return;
-    auto* loop = EngineCore::GetInstance().GetRenderingLoop();
-    if (!loop)
-        return;
-    const Engine::Renderer::SceneResolveService& resolves = loop->GetSceneResolveService();
-    ++m_StartupResolveFrames;
-    if (!resolves.IsBatchComplete(m_StartupResolve))
-        return;
-    m_StartupResolvePending = false;
+    m_StartupScene.Begin();
+    SceneLoadOperation load = EngineCore::GetInstance().GetSceneLoader().Load(MakeStartupSceneLoadRequest(
+        m_GameConfig.startupScene,
+        [this](SceneLoadInstantiated& instantiated) { OnStartupSceneInstantiated(instantiated); }));
+    m_StartupLoadSubscriptions.push_back(load.Revealed() += [this] { OnStartupSceneRevealed(); });
+    m_StartupLoadSubscriptions.push_back(load.Failed() += [this](std::string_view) { OnStartupSceneFailed(); });
+}
 
-    const Engine::Renderer::SceneResolveBatchProgress progress = resolves.BatchProgress(m_StartupResolve);
-    const Engine::Renderer::SceneResolveCounts counts = resolves.Counts();
-    const double seconds =
-        std::chrono::duration<double>(std::chrono::steady_clock::now() - m_StartupResolveStart).count();
-    Logger::Log::Info("Player: startup scene resolved: {} item(s) in {:.2f} s over {} frame(s); session totals: "
-                      "{} entities bound, {} missed, {} models registered, {} standalone materials registered, "
-                      "{} missed",
-                      progress.Total, seconds, m_StartupResolveFrames, counts.ResolvedEntities,
-                      counts.MissedEntities, counts.RegisteredModels, counts.RegisteredMaterials,
-                      counts.MissedMaterials);
+void PlayerApplication::OnStartupSceneInstantiated(SceneLoadInstantiated& instantiated)
+{
+    m_Host->EnsureCamera(instantiated.World());
+    if (m_TickManagedSystems)
+        RegisterManagedSystemBridge();
+}
+
+void PlayerApplication::OnStartupSceneRevealed()
+{
+    m_StartupSceneRevealed = true;
+    if (auto* loop = EngineCore::GetInstance().GetRenderingLoop())
+    {
+        const Engine::Renderer::SceneResolveCounts counts = loop->GetSceneResolveService().Counts();
+        Logger::Log::Info("Player: startup scene revealed; session totals: {} entities bound, {} missed, {} models "
+                          "registered, {} standalone materials registered, {} missed",
+                          counts.ResolvedEntities, counts.MissedEntities, counts.RegisteredModels,
+                          counts.RegisteredMaterials, counts.MissedMaterials);
+    }
     LogProgramIndexCounts();
-    // The skeleton binder bound the batch's skinned entities on the frame each
-    // completed, before this tick, so the autoplay starts find their skeletons.
-    Engine::Renderer::BootstrapSceneAnimators(world);
+    // The skeleton binder bound the scene's skinned entities before the reveal, so the
+    // autoplay starts find their skeletons.
+    if (auto* world = EngineCore::GetInstance().GetPrimaryWorld())
+        Engine::Renderer::BootstrapSceneAnimators(*world);
+}
+
+void PlayerApplication::OnStartupSceneFailed()
+{
+    // The loader logged the reason.
+    Logger::Log::Error("Player: cannot start: the startup scene '{}' did not load", m_GameConfig.startupScene);
+    RequestGameExit(kStartupFailedExitCode);
 }
 
 void PlayerApplication::LogStartupSceneReady(ECS::World& world)
@@ -709,11 +708,10 @@ void PlayerApplication::Update(float64 deltaTime)
     if (auto* world = EngineCore::GetInstance().GetPrimaryWorld())
         FinishStartupResolve(*world, deltaTime);
 
-    // Tick user C++ systems each frame (the Player runs them for the whole session).
-    if (auto* world = EngineCore::GetInstance().GetPrimaryWorld())
-    {
+    // Tick user C++ systems each frame once they have started.
+    if (auto* world = EngineCore::GetInstance().GetPrimaryWorld();
+        world && GameEngine::NativeScripting::AreUserSystemsStarted(*world))
         GameEngine::NativeScripting::TickUserSystems(*world, static_cast<float>(deltaTime));
-    }
 
     ApplyPointerLock();
 

@@ -47,7 +47,7 @@ The `ease` is a smoothstep over the volume's own falloff weight, applied to gras
 | **Color**, default dark brown | `Color`, linear RGB, each `[0,1]`, default (0.10, 0.075, 0.045) | The color the ground moves toward. The scene stores it as `colorR`, `colorG` and `colorB`. |
 | **Strength**, 0-100%, default 50% | `Strength`, `[0,1]`, default 0.5 | How far the ground moves toward the color, times the volume's falloff and **Weight**. At 100% the ground is the color alone and loses its material's pattern. |
 
-The effect writes the terrain's color map, which the ground and the blade roots read as `ground × (1 − weight) + color × weight`. It composes over the grass's **Darken Ground** soil and over color zones and Color effects of lower priority. It writes no height and no material, so a color edit does not bake the ground again. A drag on **Strength** updates the map when you release it. Planar terrains only.
+The effect writes the terrain's color map, which the ground and the blade roots read as `ground × (1 − weight) + color × weight`. It composes over the grass's **Darken Ground** soil and over color zones and Color effects of lower priority. It writes no height and no material, so a color edit does not bake the ground again. A drag on **Strength** updates the map when you release it. Only planar terrains of 1025 samples a side or fewer draw it.
 
 ## Ownership and invalidation
 
@@ -68,6 +68,8 @@ Recomposition covers the union of a moved volume's old and new bounds. A change 
 That upload gate costs an author nothing in the normal case. A control texture created during extraction is published in the same tick, because the extraction clock still holds the previous tick's value while the registrar runs and the upload pass stamped that same value when it declared during the previous frame. Adding, disabling, re-enabling, and deleting a volume were each measured at **zero** suppressed ticks. The upload gate fires only when the terrain upload pass has not declared since the previous extraction tick (a render pipeline with no such pass, or the frame one is swapped in), which is the case it exists for. `get_terrain_debug` (through the debug port) reports `grassControlSuppressedTicks`, so the question has a number rather than a screenshot.
 
 The compositor runs off the frame. When the stack changes, the modifier update copies what the compose needs and hands it to the engine job pool, and the result swaps into the field at the start of the first update after the job finishes. Until then an edited terrain keeps drawing its previous field, so an edit shows up when its compose lands rather than in the frame it was made. A terrain that has no field yet, such as one in a scene that just opened, places no grass until its first field lands, because an uncomposed field would read as "no volumes" and draw grass where a volume removes it. `grassControlSuppressedTicks` counts that wait as well. A stack with no grass volumes has nothing to compose and lands in the same update, and without a job pool (headless) every compose runs in place.
+
+A terrain of more than 1025 samples a side streams its surface in pages. It stores the control field in the grass store, a page file in the project's cache, and grass placement reads a page of it while the page is loaded on the GPU. An edit shows a few frames after it ends. Only the grass pages under the edited area bake again, and the Color pages under it when **Darken Ground** is above 0. The first grass volume on such a terrain makes the grass store and bakes all its pages, which takes seconds on a large terrain; its grass shows when they are baked. Removing the last volume deletes the store. When Play mode stops after a grass edit, the grass store bakes again from the scene's volumes, also when the edit changed no visible grass; this takes seconds on a large terrain. Such a terrain does not draw the Color effect, so a Grass Area cannot give bare ground on it.
 
 ## Placement
 
@@ -95,7 +97,7 @@ Entering or leaving the active atlas budget resizes the slot window and therefor
 - Targets are bounded by `1`: a volume can only reduce, never exceed the terrain's authored profile or its candidate budget.
 - Coarse controls outside tile residency are an approximation of the native samples, not a promise of native precision.
 - Grass reads the surface pages of one terrain, the drawn one. On a terrain drawn from surface pages, the placement reads the control from the page's grass plane, at the level the ground reads.
-- An atlas-backed terrain places no grass where no surface page answers: before its surface is baked, while it is unsaved, and on the compat (web) profile.
+- An atlas-backed terrain places no grass where it has no surface page: before its surface is baked, and on the compat (web) profile.
 - Height and density only. There is no per-volume grass profile, no alternative blade mesh or card, and no general object scatter: a volume scales the terrain's grass, it cannot swap the artwork.
 - The pre-existing culling bound uses the global blade height without placement's random, clump, and card multipliers, so it can already underestimate blade height. The volumes' scales are bounded by one and cannot widen that gap.
 

@@ -4,6 +4,7 @@
 // culling submission. Numbering follows the rg2 slice-2 plan §5 (retired 2026-07-29, in git history); T7 (AllocUpload
 // offsets) is covered by RGUploadRingTests semantics and not repeated here.
 
+#include "Memory/AllocationCountScope.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/BarrierMapping.h"
 #include "Rendering/Core/GPUCulling.h"
@@ -24,6 +25,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <initializer_list>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -725,6 +727,189 @@ TEST(RGGpuDriven, ScheduleUnifiedScatterPublishesOrderingWithTransferInDstScope)
     EXPECT_TRUE(transferInDst)
         << "the exec OPENS with Transfer-stage slot fills — the declared CopyDst write "
            "must put Transfer in the pass's barrier dst scope";
+
+    dev->DestroyBuffer(visPhys);
+}
+
+namespace
+{
+// The counts of the last of several warm frames of one builder.
+struct WarmScatterCounts
+{
+    uint64_t scheduleAllocations   = 0; // ScheduleUnifiedScatter, on this thread
+    uint64_t recordAllocations     = 0; // the frame's record pass, on every thread
+    uint64_t deviceSetAllocations  = 0; // one transient scatter set and its batch write, on this thread
+    size_t   ranges                = 0;
+    size_t   rangeInsertsBeforeEnd = 0;
+};
+
+// Registers one color slice of view 1 for each of `cascades`, in that order, and schedules
+// `registry` on each of `frameCount` frames.
+WarmScatterCounts CountWarmScatter(IDevice& device, GPUScene& scene, BufferHandle visibility,
+                                   const BatchRegistry& registry, std::span<const uint8_t> cascades,
+                                   uint32_t frameCount)
+{
+    using GameEngine::Memory::AllocationCountScope;
+    using GameEngine::Memory::CountWindow;
+    GPUDrawStreamBuilder builder(&device);
+    EXPECT_TRUE(builder.Initialize());
+    FramePools pools(&device);
+    const DescriptorSetDesc setDesc{GPUDrawStreamBuilder::MakeScatterDescriptorSetLayout(), "GPUDrawScatter_DS0", true};
+    std::vector<DescriptorWrite> writes(setDesc.layout.bindings.size());
+    for (uint32_t b = 0; b < writes.size(); ++b)
+    {
+        writes[b].Binding = b;
+        writes[b].Type    = DescriptorType::StorageBuffer;
+        writes[b].Buffer  = visibility;
+    }
+    WarmScatterCounts counts;
+    for (uint32_t f = 0; f < frameCount; ++f)
+    {
+        RGFrame frame(&device, &pools.Persistent, &pools.Transient, &pools.Ring);
+        frame.BeginFrame(f);
+        {
+            const AllocationCountScope set(CountWindow::ThisThread);
+            device.WriteDescriptorSet(device.CreateDescriptorSet(setDesc), writes);
+            counts.deviceSetAllocations = set.Count();
+        }
+        const RGBuffer vis = frame.ImportExternalBuffer("Vis", visibility);
+        const GPUScene::GPUSceneFrameRG sceneRG = scene.ImportFrameResources(frame);
+        builder.BeginArenaFrame();
+        for (const uint8_t cascade : cascades)
+        {
+            GPUDrawStreamBuilder::SliceRegistration slice{};
+            slice.viewId                 = 1u;
+            slice.cascadeIndex           = cascade;
+            slice.disableVisibilityCheck = true;
+            builder.RegisterSlice(slice);
+        }
+        const AllocationCountScope schedule(CountWindow::ThisThread);
+        const RGBuffer ordering = builder.ScheduleUnifiedScatter(
+            frame, "Warm", /*rgPassPhase=*/0, vis, sceneRG.Instances, sceneRG.ScatterHot, sceneRG.Meshes,
+            registry, /*materialDepthClass=*/{}, /*materialColorClass=*/{}, /*meshPoolOrdered=*/{},
+            /*orderedToGroup=*/{}, 8u, static_cast<uint32_t>(scene.GetMeshes().size()));
+        counts.scheduleAllocations   = schedule.Count();
+        counts.ranges                = builder.GetRangeCount();
+        counts.rangeInsertsBeforeEnd = builder.GetRangeInsertsBeforeEnd();
+        frame.MarkOutput(ordering);
+        const AllocationCountScope record(CountWindow::Process);
+        frame.Execute();
+        counts.recordAllocations = record.Count();
+        device.WaitForIdle();
+    }
+    builder.Shutdown();
+    return counts;
+}
+
+// False when the scatter shader package is not staged.
+bool ScatterPipelineAvailable(IDevice& device)
+{
+    GPUDrawStreamBuilder probe(&device);
+    EXPECT_TRUE(probe.Initialize());
+    const bool ready = probe.GetOrCreateScatterPipeline().IsValid();
+    probe.Shutdown();
+    return ready;
+}
+
+// A 4 KiB storage buffer that stands in for the visibility buffer.
+BufferHandle MakeVisibilityStandIn(IDevice& device)
+{
+    BufferDesc desc;
+    desc.size  = 4096;
+    desc.usage = static_cast<uint32_t>(BufferUsage::Storage);
+    return device.CreateBuffer(desc);
+}
+
+constexpr uint32_t kWarmFrameCount = 6u;
+constexpr uint32_t kWarmMaterials  = 64u;
+} // namespace
+
+// On a warm frame, a published consumer range takes no heap allocation: the range map
+// and the published-slice set keep their storage from frame to frame.
+TEST(RGGpuDriven, WarmScheduleAllocatesNothingPerPublishedRange)
+{
+    RG_REQUIRE_DEVICE(dev);
+    GPUScene::SetCullingShaderLoader(&TestShaderLoader);
+    GPUDrawStreamBuilder::SetShaderLoader(&TestShaderLoader);
+    auto scene = GPUSceneFactory::CreateSmallScene(dev.get());
+    if (!ScatterPipelineAvailable(*dev))
+        GTEST_SKIP() << "draw_command_scatter.shaderpkg unavailable";
+    const BufferHandle visPhys = MakeVisibilityStandIn(*dev);
+    ASSERT_TRUE(visPhys.IsValid());
+
+    BatchRegistry oneBatch;
+    oneBatch.OnInstanceAdded(/*materialIndex=*/0u, /*meshIndex=*/0u, /*mirrored=*/false);
+    BatchRegistry manyBatches;
+    for (uint32_t m = 0; m < kWarmMaterials; ++m)
+        manyBatches.OnInstanceAdded(m, /*meshIndex=*/0u, /*mirrored=*/false);
+
+    constexpr std::array<uint8_t, 1> kColorSlice{GPUDrawStreamBuilder::kCascadeIndexNone};
+    const WarmScatterCounts one  = CountWarmScatter(*dev, *scene, visPhys, oneBatch, kColorSlice, kWarmFrameCount);
+    const WarmScatterCounts many = CountWarmScatter(*dev, *scene, visPhys, manyBatches, kColorSlice, kWarmFrameCount);
+    ASSERT_EQ(one.ranges, 1u);
+    ASSERT_EQ(many.ranges, kWarmMaterials);
+    RecordProperty("AllocationsOneRange", static_cast<int>(one.scheduleAllocations));
+    RecordProperty("AllocationsManyRanges", static_cast<int>(many.scheduleAllocations));
+    // The bound leaves room for the per-call input record, which grows with the table bytes. A range
+    // map that frees its storage on each frame regrows it on each frame and goes above the bound.
+    constexpr uint64_t kInputRecordGrowth = 5u;
+    EXPECT_LE(many.scheduleAllocations, one.scheduleAllocations + kInputRecordGrowth)
+        << "a warm schedule of " << kWarmMaterials << " ranges allocates " << many.scheduleAllocations
+        << " times, one range " << one.scheduleAllocations << " times";
+
+    dev->DestroyBuffer(visPhys);
+}
+
+// The engine registers a view's color slice before its shadow cascades, but the color slice's keys
+// sort after theirs. The slices publish in key order, so no range insert moves the ranges after it.
+TEST(RGGpuDriven, ScatterPublishesTheSlicesOfAViewInKeyOrder)
+{
+    RG_REQUIRE_DEVICE(dev);
+    GPUScene::SetCullingShaderLoader(&TestShaderLoader);
+    GPUDrawStreamBuilder::SetShaderLoader(&TestShaderLoader);
+    auto scene = GPUSceneFactory::CreateSmallScene(dev.get());
+    if (!ScatterPipelineAvailable(*dev))
+        GTEST_SKIP() << "draw_command_scatter.shaderpkg unavailable";
+    const BufferHandle visPhys = MakeVisibilityStandIn(*dev);
+    ASSERT_TRUE(visPhys.IsValid());
+
+    BatchRegistry manyBatches;
+    for (uint32_t m = 0; m < kWarmMaterials; ++m)
+        manyBatches.OnInstanceAdded(m, /*meshIndex=*/0u, /*mirrored=*/false);
+    constexpr std::array<uint8_t, 5> kEngineOrder{GPUDrawStreamBuilder::kCascadeIndexNone, 0u, 1u, 2u, 3u};
+    const WarmScatterCounts counts = CountWarmScatter(*dev, *scene, visPhys, manyBatches, kEngineOrder, 2u);
+    ASSERT_EQ(counts.ranges, kWarmMaterials * kEngineOrder.size());
+    EXPECT_EQ(counts.rangeInsertsBeforeEnd, 0u);
+
+    dev->DestroyBuffer(visPhys);
+}
+
+// On a warm frame, the scatter record pass allocates per slice only what the device allocates
+// for one transient set and one batch write. A per-binding update adds three vectors per binding.
+TEST(RGGpuDriven, WarmScatterRecordAllocatesOnlyTheDeviceSetPerSlice)
+{
+    RG_REQUIRE_DEVICE(dev);
+    GPUScene::SetCullingShaderLoader(&TestShaderLoader);
+    GPUDrawStreamBuilder::SetShaderLoader(&TestShaderLoader);
+    auto scene = GPUSceneFactory::CreateSmallScene(dev.get());
+    if (!ScatterPipelineAvailable(*dev))
+        GTEST_SKIP() << "draw_command_scatter.shaderpkg unavailable";
+    const BufferHandle visPhys = MakeVisibilityStandIn(*dev);
+    ASSERT_TRUE(visPhys.IsValid());
+
+    BatchRegistry oneBatch;
+    oneBatch.OnInstanceAdded(/*materialIndex=*/0u, /*meshIndex=*/0u, /*mirrored=*/false);
+    constexpr std::array<uint8_t, 1> kOneSlice{GPUDrawStreamBuilder::kCascadeIndexNone};
+    constexpr std::array<uint8_t, 5> kFiveSlices{GPUDrawStreamBuilder::kCascadeIndexNone, 0u, 1u, 2u, 3u};
+    const WarmScatterCounts one  = CountWarmScatter(*dev, *scene, visPhys, oneBatch, kOneSlice, kWarmFrameCount);
+    const WarmScatterCounts five = CountWarmScatter(*dev, *scene, visPhys, oneBatch, kFiveSlices, kWarmFrameCount);
+    RecordProperty("RecordAllocationsOneSlice", static_cast<int>(one.recordAllocations));
+    RecordProperty("RecordAllocationsFiveSlices", static_cast<int>(five.recordAllocations));
+    RecordProperty("DeviceSetAllocations", static_cast<int>(five.deviceSetAllocations));
+    const uint64_t extraSlices = kFiveSlices.size() - kOneSlice.size();
+    EXPECT_LE(five.recordAllocations, one.recordAllocations + extraSlices * five.deviceSetAllocations)
+        << "the record pass of five slices allocates " << five.recordAllocations << " times, of one slice "
+        << one.recordAllocations << " times; one device set allocates " << five.deviceSetAllocations << " times";
 
     dev->DestroyBuffer(visPhys);
 }

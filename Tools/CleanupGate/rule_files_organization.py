@@ -1,8 +1,9 @@
 """Class 04, files and organization: one-function files, files named for a function, free-function headers beside a hub, and helpers
 copied into another file with the same name and body.
 
-The counts are a structural approximation: a class is a struct or class definition line, a free function is a function head at
-namespace scope. Helper names shared by several files are reported, not gated: a shared name is often a different function. Tiny
+The counts are a structural approximation: a class is a struct or class definition line, a free function is a function head (on
+one line or over several) that is not Class::Method. The head match does not track scope, so a call statement in a function body
+can also match. Helper names shared by several files are reported, not gated: a shared name is often a different function. Tiny
 struct files, files over 1500 lines and headers with many classes are listed by the inventory but not gated.
 
 A loose feature file (loose_feature_file) is a file of a feature that sits in a flat folder, not in the folder named for the
@@ -54,6 +55,20 @@ kFeatureFolderPiece = "the folder "
 kCommonNames = {"main", "WinMain", "DllMain", "operator", "Register", "Initialize", "Shutdown", "Update", "Create", "Destroy", "Get", "Set", "Describe", "Tick", "Reset", "Clear", "Apply", "Render", "Draw", "Build", "Load", "Save", "Begin", "End", "Run", "Stop", "Start", "Add", "Remove", "Find", "Compile", "Flush", "Resize", "Poll"}
 
 
+def _function_head(code_lines, index):
+    """Returns the kFunctionHead match for the head that starts at code_lines[index] and the index of the head's last line. A head
+    whose parentheses do not close on its first line continues on the next lines until they close; a `;` or `{` before they close
+    ends the search with no match."""
+    code = code_lines[index][1]
+    last = index
+    while code.count("(") > code.count(")"):
+        if last + 1 == len(code_lines) or ";" in code or "{" in code:
+            return None, index
+        last += 1
+        code += " " + code_lines[last][1].strip()
+    return kFunctionHead.match(code), last
+
+
 def _opens_body_on_next_line(code_lines, index):
     """True when the next line with code after code_lines[index] starts with `{`: the Allman form of a function definition."""
     for _, code, _ in code_lines[index + 1:]:
@@ -91,6 +106,7 @@ def _analyze(code_lines):
     defines_member = False
     depth = 0
     class_stack = []
+    head_end = -1
     for index, (line_number, code, _) in enumerate(code_lines):
         stripped = code.strip()
         if not stripped or stripped.startswith("#"):
@@ -102,13 +118,16 @@ def _analyze(code_lines):
             class_stack.append(depth)
         if "enum" in code and kEnumDefinition.match(code) and not stripped.endswith(";"):
             enums += 1
-        head = kFunctionHead.match(code) if "(" in code else None
+        # A line inside a head that wraps belongs to that head and is not matched again.
+        head, last = _function_head(code_lines, index) if "(" in code and index > head_end else (None, index)
+        if head:
+            head_end = last
         if head and not class_stack:
             name = head.group(1)
             # An m_ name is a member initializer before an Allman constructor body, never a free function.
             if name.split("::")[-1] not in kControlWords and not name.startswith(("operator", "m_")):
                 ending = head.group(3)
-                has_body = ending == "{" or (ending is None and _opens_body_on_next_line(code_lines, index))
+                has_body = ending == "{" or (ending is None and _opens_body_on_next_line(code_lines, last))
                 if "::" not in name:
                     functions.append((name, line_number, has_body, _body_text(code_lines, index) if has_body else None))
                 elif has_body:

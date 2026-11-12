@@ -79,24 +79,17 @@ target_include_directories(AssetDatabaseSqlite
         Source
 )
 
-# Mirrors AssetDatabase's own public deps (AssetCore brings GUID + DepEdge;
-# AssetDatabase's headers provide AssetRecord + IAssetDbCache). We deliberately
-# do NOT link the AssetDatabase OBJECT library here — that would splice its
-# .obj files (and their file-scope statics) into this static lib, and since
-# editor targets link BOTH Engine.dll (which already owns those objects) and
-# AssetDatabaseSqlite, that produces duplicate-symbol / split-singleton bugs.
-# The implementation only needs AssetDatabase's HEADERS, so propagate just its
-# include dirs via the OBJECT target's INTERFACE_INCLUDE_DIRECTORIES.
-target_link_libraries(AssetDatabaseSqlite
-    PUBLIC
-        Logger
-        AssetCore
-        Types
-)
+# Headers and definitions only from the Logger, AssetCore and AssetDatabase OBJECT libraries:
+# Engine.dll owns their objects, and a copy in this library gives duplicate symbols or split
+# singletons in every consumer.
+target_link_libraries(AssetDatabaseSqlite PUBLIC Types)
 target_include_directories(AssetDatabaseSqlite
     PUBLIC
+        $<TARGET_PROPERTY:Logger,INTERFACE_INCLUDE_DIRECTORIES>
+        $<TARGET_PROPERTY:AssetCore,INTERFACE_INCLUDE_DIRECTORIES>
         $<TARGET_PROPERTY:AssetDatabase,INTERFACE_INCLUDE_DIRECTORIES>
 )
+target_compile_definitions(AssetDatabaseSqlite PUBLIC $<TARGET_PROPERTY:Logger,INTERFACE_COMPILE_DEFINITIONS>)
 
 find_package(SQLite3 REQUIRED)
 target_link_libraries(AssetDatabaseSqlite PRIVATE SQLite::SQLite3 nlohmann_json::nlohmann_json)

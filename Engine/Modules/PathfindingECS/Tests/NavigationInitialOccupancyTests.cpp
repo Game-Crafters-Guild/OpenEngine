@@ -92,10 +92,7 @@ class InitialOccupancy : public ::testing::Test
         state.DestinationZ = goalZ;
         Components::Transform local{};
         Components::WorldTransform global{};
-        for (int i : {0, 5, 10, 15})
-            local.matrix[i] = global.matrix[i] = 1.0f;
-        local.matrix[12] = global.matrix[12] = x;
-        local.matrix[14] = global.matrix[14] = z;
+        local.Position = global.Position = Mathematics::WorldPosition{x, 0.0, z};
         // Identical bundles keep both actors in the same archetype. Query order
         // is still measured explicitly instead of assuming creation order.
         return world->Create(agent, state, local, global);
@@ -172,7 +169,8 @@ class InitialOccupancy : public ::testing::Test
         const auto* agent = actor.Get<Components::NavigationAgent>();
         const auto* xf = actor.Get<Components::WorldTransform>();
         auto* state = actor.GetForWrite<Components::NavigationAgentState>();
-        StampNavigationAgentOccupancy(*agent, *state, xf->matrix[12], xf->matrix[14], 0.0f);
+        const Mathematics::Vector3 position = xf->GetPosition() - Mathematics::WorldPosition{};
+        StampNavigationAgentOccupancy(*agent, *state, position.x, position.z, 0.0f);
     }
 
     std::unique_ptr<ECS::World> world;
@@ -283,7 +281,7 @@ TEST_F(InitialOccupancy, NativeMovingCorridorSurvivesAnotherActorsFirstRequest)
     auto peer = Actor(kPeerId, 2.5f, 2.5f, true, 12.5f, 2.5f);
     pathfinding.Update(*world, kDt);
     movement.Update(*world, kDt);
-    ASSERT_GT(peer.Get<Components::WorldTransform>()->matrix[12], 2.5f);
+    ASSERT_GT(peer.Get<Components::WorldTransform>()->GetPosition().X, 2.5f);
     ASSERT_TRUE(peer.Get<Components::NavigationAgentState>()->HasDestination);
     ASSERT_FALSE(peer.Get<Components::NavigationAgentState>()->PathDirty);
     struct Cell
@@ -414,8 +412,8 @@ TEST_F(InitialOccupancy, DirectPeerChangingCellsReplacesItsFormerBody)
     auto requester = Actor(kRequesterId, 2.5f, 5.5f, true);
     auto peer = Peer(PeerKind::Direct);
     PreStamp(peer);
-    peer.GetForWrite<Components::WorldTransform>()->matrix[12] = 9.5f;
-    peer.GetForWrite<Components::Transform>()->matrix[12] = 9.5f;
+    peer.GetForWrite<Components::WorldTransform>()->Position.X = 9.5;
+    peer.GetForWrite<Components::Transform>()->Position.X = 9.5;
     pathfinding.Update(*world, kDt);
     EXPECT_EQ(map->GetCellReservation(7, 5).AgentId, 0u);
     ExpectBody(9, 5, kPeerId);
@@ -458,8 +456,8 @@ TEST_F(InitialOccupancy, DirtyReplannerDropsOnlyItsOwnNativeCorridor)
     auto steady = Actor(303, 2.5f, 8.5f, true, 12.5f, 8.5f);
     pathfinding.Update(*world, kDt);
     movement.Update(*world, kDt);
-    ASSERT_GT(dirty.Get<Components::WorldTransform>()->matrix[12], 2.5f);
-    ASSERT_GT(steady.Get<Components::WorldTransform>()->matrix[12], 2.5f);
+    ASSERT_GT(dirty.Get<Components::WorldTransform>()->GetPosition().X, 2.5f);
+    ASSERT_GT(steady.Get<Components::WorldTransform>()->GetPosition().X, 2.5f);
     ASSERT_EQ(map->GetCellReservation(4, 2).AgentId, kPeerId);
     ASSERT_EQ(map->GetCellReservation(4, 2).Occupancy, 0u);
     const auto other = map->GetCellReservation(4, 8);

@@ -5,6 +5,7 @@
 // either passes every check below or is refused before any of its accessors is
 // read.
 
+#include "Types/ByteBuffer.h"
 #include "Types/Types.h"
 
 #include <algorithm>
@@ -21,7 +22,7 @@ struct cgltf_data;
 
 namespace GameEngine {
 
-using GltfExternalBufferStorage = std::unordered_map<std::filesystem::path, Vector<uint8>>;
+using GltfExternalBufferStorage = std::unordered_map<std::filesystem::path, ByteBuffer>;
 
 /// Frees the parsed document, then the external file bytes it read from the disk for its buffers.
 struct GltfDocumentRelease
@@ -67,7 +68,7 @@ using GltfDocument = std::unique_ptr<cgltf_data, GltfDocumentRelease>;
  *
  * @return The document, or an empty one when the file is refused.
  */
-GltfDocument OpenGltfDocument(const Vector<uint8>& bytes, const std::filesystem::path& path);
+GltfDocument OpenGltfDocument(std::span<const uint8> bytes, const std::filesystem::path& path);
 
 struct Mesh;
 

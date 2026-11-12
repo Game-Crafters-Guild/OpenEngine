@@ -41,6 +41,7 @@ inline PagedTiledTerrain CreatePagedTiledTerrain(TerrainService& service, float3
     config.WorldSizeZ = worldSizeZ;
     config.HeightScale = heightScale;
     config.SamplesPerMeter = 1.0f;
+    config.Base.Noise = Terrain::TerrainNoiseStack{};
     paged.Tiled = service.CreateTiledTerrain(config);
     TiledTerrainData* tiled = service.GetTiledTerrainData(paged.Tiled);
 
@@ -61,7 +62,7 @@ inline PagedTiledTerrain CreatePagedTiledTerrain(TerrainService& service, float3
     lattice.TileSamples = tiled->Config.TileConfig.HeightmapWidth;
     lattice.TilesX = tiled->Config.TilesPerAxisX;
     lattice.TilesZ = tiled->Config.TilesPerAxisZ;
-    lattice.Noise = {kTileNoiseFrequency, kTileNoiseAmplitude, kTileNoiseOctaves, kTileNoiseSeed};
+    lattice.Noise = *tiled->Config.Base.Noise;
     PagedTerrainRequest& request = paged.Request;
     request.Terrain = render.Index;
     request.TerrainGeneration = render.Generation;

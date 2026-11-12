@@ -7,10 +7,16 @@
 
 #include "Engine/Rendering/Material.h"
 #include "Engine/Rendering/MaterialSystem.h"
+#include "Engine/Rendering/Pipeline/Nodes/EngineNodeTypes.h"
+#include "Engine/Rendering/Pipeline/RenderPipeline.h"
 #include "Engine/Rendering/PipelineVariantCache.h"
 #include "JobSystem/WorkStealingThreadPool.h"
 #include "Rendering/Materials/MaterialDocument.h"
 #include "Rendering/Materials/MaterialBuildService.h"
+#include "Rendering/Core/RenderGraph/RGFrame.h"
+#include "Rendering/Core/RenderGraph/RGResourcePool.h"
+#include "Rendering/Core/RenderGraph/RGTransientPool.h"
+#include "Rendering/Core/RenderGraph/RGUploadRing.h"
 #include "SceneLoadTracker/SceneLoadTracker.h"
 #include "SceneLoadTrackerTestAccess.h"
 #include "StagedTestPaths.h"
@@ -55,6 +61,34 @@ class WorkerHold
     int m_Workers = 0;
 };
 
+// The count of jobs queued on each lane of the engine's pool. While every worker is held, a job
+// that the compile gate dispatches stays in the queue of its lane.
+struct LaneQueues
+{
+    uint32_t Normal = 0;
+    uint32_t Awaited = 0;
+    uint32_t Background = 0;
+
+    static LaneQueues Now()
+    {
+        const JobSystem::JobSystemStatistics stats = EngineCore::GetInstance().GetJobSystem().GetStatistics();
+        return {stats.Normal.Queued, stats.Awaited.Queued, stats.Background.Queued};
+    }
+};
+
+// Polls the lanes until a job joins the Awaited lane, for at most 10 s.
+LaneQueues WaitForAnAwaitedJob(const LaneQueues& before)
+{
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    LaneQueues now = LaneQueues::Now();
+    while (now.Awaited == before.Awaited && std::chrono::steady_clock::now() < deadline)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        now = LaneQueues::Now();
+    }
+    return now;
+}
+
 // Releases `hold` when a held compile task is destroyed unrun (its count of completed tasks moves
 // past `completedBefore`), or after 10 s. Runs on a thread of its own: every pool worker is held.
 void ReleaseAfterTheFirstCancel(const MaterialSystem& materials, WorkerHold& hold, uint64_t completedBefore)
@@ -72,6 +106,16 @@ MaterialDocument StandardDocument(const char* name)
     doc.lightingModel = "StandardPBR";
     doc.surfaceShader = "Surfaces/standard_pbr.glsl";
     return doc;
+}
+
+// One HDR color target over a D32 depth.
+PipelineFormatKey HdrTargetFormats()
+{
+    PipelineFormatKey formats{};
+    formats.ColorCount = 1;
+    formats.ColorFormats[0] = TextureFormat::R16G16B16A16_FLOAT;
+    formats.DepthFormat = TextureFormat::D32_FLOAT;
+    return formats;
 }
 
 class CompileLoadReportTest : public Testing::HeldAssetImportFixture
@@ -130,6 +174,20 @@ class CompileLoadReportTest : public Testing::HeldAssetImportFixture
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
         return false;
+    }
+
+    // Waits until the material system's count of returned tasks reaches `completed`, for at most 10 s. It does not
+    // tick the tracker, so no frame boundary comes between the request and the end of its task.
+    bool WaitForCompletedTasks(uint64_t completed) const
+    {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (m_Renderer->Materials().GetPrewarmProgress().completed < completed)
+        {
+            if (std::chrono::steady_clock::now() >= deadline)
+                return false;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        return true;
     }
 
     SceneLoadTracker m_Tracker;
@@ -208,6 +266,210 @@ TEST_F(CompileLoadReportTest, ADrawVariantCompileCountsOnceInShaderVariantUnderI
     EXPECT_EQ(Row("shader.variant").WaitingGates, 1u) << "the compiled variant is not published yet";
     variants.ApplyPendingVariantPublishes();
     EXPECT_FALSE(Row("shader.variant").HoldsReady()) << m_Tracker.Describe();
+}
+
+// A frame waits for a draw's variant compile, so the compile queues on the Normal lane. The pool
+// runs the Background lane last, and the bulk work of a load (a navigation bake) uses it.
+TEST_F(CompileLoadReportTest, ADrawVariantCompileQueuesOnTheNormalLane)
+{
+    Material* material = Materials().RegisterMaterialFromDocument(GUID::Generate(), StandardDocument("HeldVariantLane"));
+    ASSERT_NE(material, nullptr);
+    Materials().FlushAsyncMaterialCompiles();
+    Materials().ReportLoadingWork(m_Tracker);
+
+    PipelineFormatKey formats{};
+    formats.ColorCount = 1;
+    formats.ColorFormats[0] = TextureFormat::R16G16B16A16_FLOAT;
+    formats.DepthFormat = TextureFormat::D32_FLOAT;
+    PipelineVariantCache& variants = Materials().Variants();
+    WorkerHold hold;
+    ASSERT_TRUE(hold.AllHeld());
+    const LaneQueues before = LaneQueues::Now();
+    variants.WarmColorVariant(*material, VertexAttributeFlags::StandardMesh | VertexAttributeFlags::HasColor,
+                              PrimitiveTopology::TriangleList,
+                              MaterialKeyword::ForwardPlus | MaterialKeyword::Instanced | MaterialKeyword::Shadows,
+                              FrontFace::CounterClockwise, formats);
+    variants.SubmitPendingVariantCompiles();
+
+    ASSERT_EQ(Row("shader.variant").Queued, 1u);
+    const LaneQueues after = LaneQueues::Now();
+    EXPECT_GE(after.Normal, before.Normal + 1) << "the variant compile is not queued on the Normal lane";
+    EXPECT_EQ(after.Background, before.Background) << "the variant compile is queued on the Background lane";
+
+    hold.Release();
+    EXPECT_TRUE(WaitUntilDone("shader.variant", 1)) << m_Tracker.Describe();
+}
+
+// A frame waits for a device pipeline build, so the build queues on the Normal lane through the
+// material system's dispatcher. The pool runs the Background lane last.
+TEST_F(CompileLoadReportTest, ADevicePipelineBuildQueuesOnTheNormalLane)
+{
+    Material* material = Materials().RegisterMaterialFromDocument(GUID::Generate(), StandardDocument("HeldPipeline"));
+    ASSERT_NE(material, nullptr);
+    Materials().FlushAsyncMaterialCompiles();
+    ASSERT_TRUE(material->GetGraphicsPipelineId().IsValid());
+    Materials().ReportLoadingWork(m_Tracker);
+
+    WorkerHold hold;
+    ASSERT_TRUE(hold.AllHeld());
+    const LaneQueues before = LaneQueues::Now();
+    ASSERT_EQ(m_Device->RequestGraphicsPipeline(material->GetGraphicsPipelineId(), HdrTargetFormats()),
+              Rendering::PipelineBuildState::Pending);
+
+    ASSERT_EQ(Row("gpu.pipeline").Queued, 1u);
+    const LaneQueues after = LaneQueues::Now();
+    EXPECT_GE(after.Normal, before.Normal + 1) << "the pipeline build is not queued on the Normal lane";
+    EXPECT_EQ(after.Background, before.Background) << "the pipeline build is queued on the Background lane";
+
+    hold.Release();
+    EXPECT_TRUE(WaitUntilDone("gpu.pipeline", 1)) << m_Tracker.Describe();
+}
+
+// A frame that asked for a pipeline still building skipped those draws. The build can land before the next
+// frame boundary, and that boundary still holds ready-to-show. One frame that finds the pipeline warm releases it.
+TEST_F(CompileLoadReportTest, ALandedBuildHoldsReadyToShowUntilAFrameFindsItsPipelineWarm)
+{
+    Material* material = Materials().RegisterMaterialFromDocument(GUID::Generate(), StandardDocument("SkippedDraw"));
+    ASSERT_NE(material, nullptr);
+    Materials().FlushAsyncMaterialCompiles();
+    const Rendering::GraphicsPipelineId pipeline = material->GetGraphicsPipelineId();
+    ASSERT_TRUE(pipeline.IsValid());
+    Materials().ReportLoadingWork(m_Tracker);
+
+    WorkerHold hold;
+    ASSERT_TRUE(hold.AllHeld());
+    const uint64_t completedBefore = Materials().GetPrewarmProgress().completed;
+    ASSERT_EQ(m_Device->RequestGraphicsPipeline(pipeline, HdrTargetFormats()), Rendering::PipelineBuildState::Pending);
+    hold.Release();
+    ASSERT_TRUE(WaitForCompletedTasks(completedBefore + 1)) << "the pipeline build did not return in 10 s";
+
+    const SceneLoadTracker::CategoryStatus& landed = Row("gpu.pipeline");
+    EXPECT_EQ(landed.Queued + landed.Running, 0u) << "the pipeline build is still open";
+    EXPECT_FALSE(m_Tracker.IsReadyToShow()) << "the last frame skipped a draw whose pipeline was building";
+
+    ASSERT_EQ(m_Device->RequestGraphicsPipeline(pipeline, HdrTargetFormats()), Rendering::PipelineBuildState::Warm);
+    Row("gpu.pipeline");
+    EXPECT_TRUE(m_Tracker.IsReadyToShow()) << m_Tracker.Describe();
+}
+
+// A frame that probes for a pipeline still building, after an earlier frame asked for it, also skipped the draw:
+// the boundary after the build lands holds ready-to-show too.
+TEST_F(CompileLoadReportTest, AWarmProbeOfABuildingPipelineHoldsReadyToShowAfterTheBuildLands)
+{
+    Material* material = Materials().RegisterMaterialFromDocument(GUID::Generate(), StandardDocument("ProbedDraw"));
+    ASSERT_NE(material, nullptr);
+    Materials().FlushAsyncMaterialCompiles();
+    const Rendering::GraphicsPipelineId pipeline = material->GetGraphicsPipelineId();
+    ASSERT_TRUE(pipeline.IsValid());
+    Materials().ReportLoadingWork(m_Tracker);
+
+    WorkerHold hold;
+    ASSERT_TRUE(hold.AllHeld());
+    const uint64_t completedBefore = Materials().GetPrewarmProgress().completed;
+    ASSERT_EQ(m_Device->RequestGraphicsPipeline(pipeline, HdrTargetFormats()), Rendering::PipelineBuildState::Pending);
+    ASSERT_EQ(Row("gpu.pipeline").Queued, 1u);
+    EXPECT_FALSE(m_Device->TryGetWarmGraphicsPipeline(pipeline, HdrTargetFormats()).IsValid());
+    hold.Release();
+    ASSERT_TRUE(WaitForCompletedTasks(completedBefore + 1)) << "the pipeline build did not return in 10 s";
+
+    const SceneLoadTracker::CategoryStatus& landed = Row("gpu.pipeline");
+    EXPECT_EQ(landed.Queued + landed.Running, 0u) << "the pipeline build is still open";
+    EXPECT_FALSE(m_Tracker.IsReadyToShow()) << "the last frame skipped a draw whose pipeline was building";
+
+    EXPECT_TRUE(m_Device->TryGetWarmGraphicsPipeline(pipeline, HdrTargetFormats()).IsValid());
+    Row("gpu.pipeline");
+    EXPECT_TRUE(m_Tracker.IsReadyToShow()) << m_Tracker.Describe();
+}
+
+// A view paused from its first frame holds ready-to-show while the pipelines of its first live frame
+// build: the pipeline instance asks for them during the pause, and each build is a gpu.pipeline ticket.
+TEST_F(CompileLoadReportTest, APausedViewHoldsReadyToShowWhileItsNodePipelinesBuild)
+{
+    using namespace GameEngine::Engine::Renderer::Pipeline;
+    namespace RG = GameEngine::Rendering::RenderGraph;
+    Materials().FlushAsyncMaterialCompiles();
+    Materials().ReportLoadingWork(m_Tracker);
+    ViewRegistry& views = m_Renderer->Views();
+    const ViewId viewId = views.AllocateView("PausedReadyView", views.AllocateCamera("PausedReadyCam"));
+    views.SetViewRenderLayerMask(viewId, RenderLayerMask::Default());
+    ViewClearConfig clear{};
+    clear.clearColor = true;
+    views.SetViewTargets(viewId, 0, 0, 0, clear);
+    views.SetViewWorldPaused(viewId, true);
+
+    RenderPipelineNodeRegistry registry;
+    Nodes::RegisterEngineNodeTypes(registry);
+    RenderPipelineBlueprint bp;
+    bp.pipelineName = "PausedReady";
+    bp.resources.push_back(
+        {"Source",
+         R"({"kind":"texture","scope":"perView","format":"rgba8_unorm","extent":{"scale":[1,1]},"usage":["renderTarget","shaderResource"]})"});
+    RenderPipelineBlueprint::Pass pass;
+    pass.id = "Final";
+    pass.type = "FullscreenShader";
+    pass.perView = true;
+    pass.passJson =
+        R"({"id":"Final","type":"FullscreenShader","inputs":{"uTex":"Source"},"output":"View.Resolve","shaderPkg":"Shaders/copy.shaderpkg"})";
+    bp.passes.push_back(pass);
+    bp.outputs.push_back({"FinalColor", "View.Resolve"});
+    RenderPipelineInstance instance(*m_Renderer, registry);
+    instance.SetBlueprint(bp);
+
+    RG::RGResourcePool persistent(m_Device.get());
+    RG::RGTransientPool transient(m_Device.get());
+    RG::RGUploadRing ring(m_Device.get(), 2, 262144);
+    RG::RGFrame frame(m_Device.get(), &persistent, &transient, &ring);
+    TextureDesc colorDesc{};
+    colorDesc.width = 64;
+    colorDesc.height = 64;
+    colorDesc.depth = 1;
+    colorDesc.mipLevels = 1;
+    colorDesc.arrayLayers = 1;
+    colorDesc.format = static_cast<uint32_t>(TextureFormat::RGBA8_UNORM);
+    colorDesc.usage = static_cast<uint32_t>(TextureUsage::RenderTarget);
+    WorkerHold hold;
+    ASSERT_TRUE(hold.AllHeld());
+    frame.BeginFrame(0);
+    const RG::RGTexture color = frame.ImportPersistentTexture("PausedReady.Color", colorDesc);
+    m_Renderer->BeginWorldDrawFrame();
+    const std::vector<ViewTargetsRG> targets = {ViewTargetsRG{viewId, color, {}, {}}};
+    const std::vector<ViewDesc> viewDescs(views.GetViews().begin(), views.GetViews().end());
+    instance.Declare(frame, targets, viewDescs);
+
+    EXPECT_EQ(Row("gpu.pipeline").Queued, 1u) << "the paused view asks for the pipeline of its fullscreen node";
+    EXPECT_FALSE(m_Tracker.IsReadyToShow()) << m_Tracker.Describe();
+    hold.Release();
+    EXPECT_TRUE(WaitUntilDone("gpu.pipeline", 1)) << m_Tracker.Describe();
+    EXPECT_TRUE(m_Tracker.IsReadyToShow()) << m_Tracker.Describe();
+}
+
+// A thread waits for a Blocking device pipeline build, so the material system's dispatcher queues
+// the build on the Awaited lane, which every worker takes first.
+TEST_F(CompileLoadReportTest, ABlockingDevicePipelineBuildQueuesOnTheAwaitedLane)
+{
+    Material* material = Materials().RegisterMaterialFromDocument(GUID::Generate(), StandardDocument("WaitedPipeline"));
+    ASSERT_NE(material, nullptr);
+    Materials().FlushAsyncMaterialCompiles();
+    const GraphicsPipelineId id = material->GetGraphicsPipelineId();
+    ASSERT_TRUE(id.IsValid());
+
+    PipelineFormatKey formats{};
+    formats.ColorCount = 1;
+    formats.ColorFormats[0] = TextureFormat::R16G16B16A16_FLOAT;
+    formats.DepthFormat = TextureFormat::D32_FLOAT;
+    WorkerHold hold;
+    ASSERT_TRUE(hold.AllHeld());
+    const LaneQueues before = LaneQueues::Now();
+    PipelineHandle built;
+    std::thread waiter([this, id, &formats, &built] { built = m_Device->GetOrCreateGraphicsPipeline(id, formats); });
+    // No ASSERT until the join: the waiter returns only after the hold is released.
+    const LaneQueues queued = WaitForAnAwaitedJob(before);
+    hold.Release();
+    waiter.join();
+
+    EXPECT_EQ(queued.Awaited, before.Awaited + 1) << "the waited build is not queued on the Awaited lane";
+    EXPECT_EQ(queued.Background, before.Background) << "the waited build is queued on the Background lane";
+    EXPECT_TRUE(built.IsValid());
 }
 
 // A quit during a cold start cancels the queued compiles on purpose: no compile is logged as

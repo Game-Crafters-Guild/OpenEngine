@@ -100,13 +100,13 @@ struct StyleLength
 };
 
 // Per-edge border colors (ARGB 0xAARRGGBB), stored in TRBL order for consistency
-// with Box4 (top/right/bottom/left). Default alpha==0 means "unset" (transparent).
+// with Box4 (top/right/bottom/left). The default is transparent black.
 struct BorderColorsTRBL
 {
-    uint32_t Top = 0x000000FFu;
-    uint32_t Right = 0x000000FFu;
-    uint32_t Bottom = 0x000000FFu;
-    uint32_t Left = 0x000000FFu;
+    uint32_t Top = 0x00000000u;
+    uint32_t Right = 0x00000000u;
+    uint32_t Bottom = 0x00000000u;
+    uint32_t Left = 0x00000000u;
     bool operator==(const BorderColorsTRBL&) const = default;
 };
 
@@ -1037,10 +1037,12 @@ struct CSSRule
 };
 
 // A stylesheet's tier in the cascade (CSS Cascade 4, "Cascade Sorting Order"): every UserAgent
-// declaration loses to every Author declaration before specificity or source order is compared.
+// declaration loses to every other declaration before specificity or source order is compared.
+// Control and Author compare after specificity: on equal specificity, Author wins.
 enum class StyleOrigin : uint8_t
 {
     UserAgent, // the UI module's default stylesheet
+    Control,   // a control's own stylesheet; loses every specificity tie to an Author sheet
     Author,    // themes and documents
 };
 

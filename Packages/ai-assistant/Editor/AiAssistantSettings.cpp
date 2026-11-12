@@ -1,15 +1,14 @@
 #include "AiAssistantSettings.h"
 
-#include "AiAssistantLoginStatusRow.h"
 #include "ModelDisplayName.h"
 #include "Providers/ClaudeApiProvider.h"
 #include "Providers/ClaudeSessionProvider.h"
 #include "Providers/CodexSessionProvider.h"
+#include "Setup/AiAssistantSetupPage.h"
 
 #include "Editor/Settings/EditorSettingsRegistry.h"
 #include "Editor/Settings/SettingsStore.h"
 #include "Logger/Logger.h"
-#include "Platform/SpeechInput.h"
 
 #include <algorithm>
 #include <atomic>
@@ -43,10 +42,9 @@ constexpr AssistantMode kInitialMode = AssistantMode::Auto;
 // The effort a Claude session turn asks for until the user chooses one.
 constexpr std::string_view kInitialClaudeSessionEffort = ClaudeSessionProvider::kEffortLevels[2];
 
-using Field = Editor::SettingsFieldDescriptor;
-
 std::atomic<uint64_t> s_ProviderGeneration{0};
 std::atomic<uint64_t> s_ModelGeneration{0};
+std::atomic<uint64_t> s_SetupGeneration{0};
 
 // Serializes the read-modify-write of a project's per-user settings: a turn's thread
 // stores the session it ran while the panel stores the session's mode.
@@ -71,6 +69,22 @@ void WritePreference(const char* key, const std::string& value)
     prefs.Save();
 }
 
+// An executable never set or set empty is the program's name, searched for on PATH.
+std::string ReadExecutable(const char* key, std::string_view programName)
+{
+    std::string executable = ReadPreference(key, {});
+    return executable.empty() ? std::string(programName) : executable;
+}
+
+// Stores an executable and moves s_SetupGeneration when it changed, so the setup is checked again.
+void WriteExecutable(const char* key, const std::string& current, const std::string& value)
+{
+    if (value == current)
+        return;
+    WritePreference(key, value);
+    s_SetupGeneration.fetch_add(1, std::memory_order_relaxed);
+}
+
 // The per-project key of a connection's last session.
 std::string SessionKey(std::string_view providerId)
 {
@@ -84,10 +98,20 @@ std::string SessionModeKey(std::string_view providerId)
     return "aiAssistant.sessionMode." + std::string(providerId);
 }
 
-constexpr AiAssistantSettings::Choice kProviderChoices[] = {
-    {ClaudeSessionProvider::kId, "Claude (local session)"},
-    {CodexSessionProvider::kId, "Codex (local session)"},
-    {ClaudeApiProvider::kId, "Claude (API)"},
+constexpr AiAssistantSettings::AssistantChoice kAssistantChoices[] = {
+    {"Claude", "Anthropic's assistant. Can act in the editor when you sign in with your subscription."},
+    {"Codex", "OpenAI's assistant. On Windows it answers in the panel but cannot act in the editor."},
+};
+
+// Grouped by assistant, the method chosen with the assistant first.
+constexpr AiAssistantSettings::ProviderChoice kProviderChoices[] = {
+    {ClaudeSessionProvider::kId, "Claude (Subscription)", "Claude", "Subscription",
+     "Your Claude account, through Claude Code.", "Needs Claude Code 2.1.259 or later, logged in. Can act in the editor."},
+    {ClaudeApiProvider::kId, "Claude (API key)", "Claude", "API key", "A key from the Claude Console, billed per use.",
+     "Conversation only: the assistant cannot act in the editor."},
+    {CodexSessionProvider::kId, "Codex (Subscription)", "Codex", "Subscription",
+     "Your ChatGPT account, through Codex.",
+     "Needs Codex, logged in."},
 };
 
 // The CLI's family aliases, each the latest model of its family, the initial choice
@@ -153,92 +177,53 @@ bool Contains(std::span<const AiAssistantSettings::Choice> choices, std::string_
                        [id](const AiAssistantSettings::Choice& choice) { return choice.Id == id; });
 }
 
-std::vector<Field::DropdownField::Option> DropdownOptions(std::span<const AiAssistantSettings::Choice> choices)
+const AiAssistantSettings::ProviderChoice* FindProviderChoice(std::string_view id)
 {
-    std::vector<Field::DropdownField::Option> options;
-    for (const AiAssistantSettings::Choice& choice : choices)
-        options.push_back({std::string(choice.Id), std::string(choice.Label)});
-    return options;
+    for (const AiAssistantSettings::ProviderChoice& choice : kProviderChoices)
+        if (choice.Id == id)
+            return &choice;
+    return nullptr;
 }
 
 bool IsKnownProvider(std::string_view id)
 {
-    for (const AiAssistantSettings::Choice& choice : kProviderChoices)
-        if (choice.Id == id)
-            return true;
-    return false;
+    return FindProviderChoice(id) != nullptr;
 }
 
-Field DropdownRow(std::string label, std::string tooltip, const char* key, std::string defaultValue,
-                  std::vector<Field::DropdownField::Option> options)
-{
-    Field field;
-    field.Label = std::move(label);
-    field.Tooltip = std::move(tooltip);
-    Field::DropdownField control;
-    control.OptionsProvider = [options = std::move(options)] { return options; };
-    control.DefaultValue = defaultValue;
-    control.Get = [key, defaultValue] { return ReadPreference(key, defaultValue); };
-    control.Set = [key](const std::string& value) { WritePreference(key, value); };
-    field.Control = std::move(control);
-    return field;
-}
-
-// A model row: the connection's ModelChoices(), each under its ModelLabel(), read and
-// stored through Model() and SetModel() so the panel's button follows it.
-Field ModelRow(std::string label, std::string tooltip, std::string_view providerId)
-{
-    Field field;
-    field.Label = std::move(label);
-    field.Tooltip = std::move(tooltip);
-    Field::DropdownField control;
-    control.OptionsProvider = [providerId]
-    {
-        std::vector<Field::DropdownField::Option> options;
-        for (const AiAssistantSettings::Choice& choice : AiAssistantSettings::ModelChoices(providerId))
-            options.push_back({std::string(choice.Id), AiAssistantSettings::ModelLabel(providerId, choice.Id)});
-        return options;
-    };
-    control.DefaultValue = std::string(AiAssistantSettings::ModelChoices(providerId).front().Id);
-    control.Get = [providerId] { return AiAssistantSettings::Model(providerId); };
-    control.Set = [providerId](const std::string& value) { AiAssistantSettings::SetModel(providerId, value); };
-    field.Control = std::move(control);
-    return field;
-}
-
-Field EffortRow()
-{
-    Field field;
-    field.Label = "Claude session effort";
-    field.Tooltip = "How much a Claude (local session) turn reasons before it answers. The panel's model button "
-                    "changes it too.";
-    Field::DropdownField control;
-    control.OptionsProvider = [] { return DropdownOptions(kClaudeSessionEfforts); };
-    control.DefaultValue = std::string(kInitialClaudeSessionEffort);
-    control.Get = [] { return AiAssistantSettings::Effort(ClaudeSessionProvider::kId); };
-    control.Set = [](const std::string& value) { AiAssistantSettings::SetEffort(ClaudeSessionProvider::kId, value); };
-    field.Control = std::move(control);
-    return field;
-}
-
-Field ExecutableRow(std::string label, std::string tooltip, const char* key, std::string defaultValue)
-{
-    Field field;
-    field.Label = std::move(label);
-    field.Tooltip = std::move(tooltip);
-    Field::PathField control;
-    control.PathKind = Field::PathField::Kind::File;
-    control.DefaultValue = defaultValue;
-    control.Get = [key, defaultValue] { return ReadPreference(key, defaultValue); };
-    control.Set = [key](const std::string& value) { WritePreference(key, value); };
-    field.Control = std::move(control);
-    return field;
-}
 } // namespace
 
-std::span<const AiAssistantSettings::Choice> AiAssistantSettings::ProviderChoices()
+std::span<const AiAssistantSettings::AssistantChoice> AiAssistantSettings::AssistantChoices()
+{
+    return kAssistantChoices;
+}
+
+std::span<const AiAssistantSettings::ProviderChoice> AiAssistantSettings::ProviderChoices()
 {
     return kProviderChoices;
+}
+
+std::vector<AiAssistantSettings::ProviderChoice> AiAssistantSettings::MethodChoices(std::string_view assistant)
+{
+    std::vector<ProviderChoice> methods;
+    for (const ProviderChoice& choice : kProviderChoices)
+        if (choice.Assistant == assistant)
+            methods.push_back(choice);
+    return methods;
+}
+
+const AiAssistantSettings::ProviderChoice& AiAssistantSettings::ProviderChoiceOf(std::string_view providerId)
+{
+    const ProviderChoice* choice = FindProviderChoice(providerId);
+    return choice ? *choice : *FindProviderChoice(ClaudeSessionProvider::kId);
+}
+
+void AiAssistantSettings::SetAssistant(std::string_view assistant)
+{
+    if (ProviderChoiceOf(Provider()).Assistant == assistant)
+        return;
+    const std::vector<ProviderChoice> methods = MethodChoices(assistant);
+    if (!methods.empty())
+        SetProvider(std::string(methods.front().Id));
 }
 
 std::string AiAssistantSettings::Provider()
@@ -253,6 +238,7 @@ void AiAssistantSettings::SetProvider(const std::string& providerId)
         return;
     WritePreference(kPrefProvider, providerId);
     s_ProviderGeneration.fetch_add(1, std::memory_order_relaxed);
+    s_SetupGeneration.fetch_add(1, std::memory_order_relaxed);
 }
 
 uint64_t AiAssistantSettings::ProviderGeneration()
@@ -286,6 +272,14 @@ std::string AiAssistantSettings::Model(std::string_view providerId)
 
 void AiAssistantSettings::SetModel(std::string_view providerId, std::string_view modelId)
 {
+    if (providerId == CodexSessionProvider::kId)
+    {
+        if (modelId == Model(providerId))
+            return;
+        WritePreference(kPrefCodexModel, std::string(modelId));
+        s_ModelGeneration.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
     const char* key = ModelKey(providerId);
     if (!key || !Contains(ModelChoices(providerId), modelId) || modelId == Model(providerId))
         return;
@@ -358,6 +352,16 @@ void AiAssistantSettings::SetEffort(std::string_view providerId, std::string_vie
     s_ModelGeneration.fetch_add(1, std::memory_order_relaxed);
 }
 
+uint64_t AiAssistantSettings::SetupGeneration()
+{
+    return s_SetupGeneration.load(std::memory_order_relaxed);
+}
+
+void AiAssistantSettings::CheckSetupAgain()
+{
+    s_SetupGeneration.fetch_add(1, std::memory_order_relaxed);
+}
+
 uint64_t AiAssistantSettings::ModelGeneration()
 {
     return s_ModelGeneration.load(std::memory_order_relaxed);
@@ -365,17 +369,32 @@ uint64_t AiAssistantSettings::ModelGeneration()
 
 std::string AiAssistantSettings::ClaudeExecutable()
 {
-    return ReadPreference(kPrefClaudeExecutable, std::string(ClaudeSessionProvider::kDefaultExecutable));
+    return ReadExecutable(kPrefClaudeExecutable, ClaudeSessionProvider::kDefaultExecutable);
 }
 
 std::string AiAssistantSettings::CodexExecutable()
 {
-    return ReadPreference(kPrefCodexExecutable, {});
+    return ReadExecutable(kPrefCodexExecutable, CodexSessionProvider::kDefaultExecutable);
 }
 
 std::string AiAssistantSettings::NodeExecutable()
 {
-    return ReadPreference(kPrefNodeExecutable, kDefaultNodeExecutable);
+    return ReadExecutable(kPrefNodeExecutable, kDefaultNodeExecutable);
+}
+
+void AiAssistantSettings::SetClaudeExecutable(const std::string& executable)
+{
+    WriteExecutable(kPrefClaudeExecutable, ClaudeExecutable(), executable);
+}
+
+void AiAssistantSettings::SetCodexExecutable(const std::string& executable)
+{
+    WriteExecutable(kPrefCodexExecutable, CodexExecutable(), executable);
+}
+
+void AiAssistantSettings::SetNodeExecutable(const std::string& executable)
+{
+    WriteExecutable(kPrefNodeExecutable, NodeExecutable(), executable);
 }
 
 float AiAssistantSettings::TextSize()
@@ -504,80 +523,12 @@ Editor::SettingsCategoryDescriptor AiAssistantSettings::BuildCategory()
     category.Title = "AI Assistant";
     category.Group = Editor::SettingsCategoryGroup::UserSettings;
     category.TreeRowClass = "ai-assistant-row";
-    category.SearchKeywords = "ai assistant agent claude codex model login session provider";
-    category.Description =
-        "Claude (local session) and Codex (local session) run your own claude and codex logins on this "
-        "machine. Claude (API) reads ANTHROPIC_API_KEY from the editor's environment when a turn starts: set "
-        "it before starting the editor. The editor never stores a key.";
-
-    Field provider = DropdownRow("Provider", "The connection the AI Assistant panel talks to.", kPrefProvider,
-                                 std::string(ClaudeSessionProvider::kId), DropdownOptions(kProviderChoices));
-    // Through SetProvider, so an open panel follows the choice.
-    std::get<Field::DropdownField>(provider.Control).Set = [](const std::string& value) { SetProvider(value); };
-    category.Fields.push_back(std::move(provider));
-    // Through SetModel and SetEffort, so the panel's model button follows the choice.
-    category.Fields.push_back(ModelRow(
-        "Claude session model",
-        "The model a Claude (local session) turn asks for: the latest of the family, named by its version once "
-        "one has answered. The panel's model button changes it too.",
-        ClaudeSessionProvider::kId));
-    category.Fields.push_back(EffortRow());
-    category.Fields.push_back(ModelRow("Claude API model", "The model a Claude (API) turn asks for.",
-                                       ClaudeApiProvider::kId));
-
-    Field codexModel;
-    codexModel.Label = "Codex model";
-    codexModel.Tooltip = "The model a Codex (local session) turn asks for, as Codex names it; empty uses "
-                         "Codex's own default.";
-    Field::StringField codexModelControl;
-    codexModelControl.Get = [] { return ReadPreference(kPrefCodexModel, {}); };
-    codexModelControl.Set = [](const std::string& value) { WritePreference(kPrefCodexModel, value); };
-    codexModel.Control = std::move(codexModelControl);
-    category.Fields.push_back(std::move(codexModel));
-
-    std::vector<Field::DropdownField::Option> modes;
-    for (const AssistantModeChoice& choice : AssistantModeChoices())
-        modes.push_back({std::string(choice.Id), std::string(choice.Label)});
-    category.Fields.push_back(DropdownRow(
-        "Mode for new conversations",
-        "What the assistant may do in the editor when a new conversation starts; the panel's mode control "
-        "changes it, and a resumed session keeps its own.",
-        kPrefLastMode, std::string(DescribeAssistantMode(kInitialMode).Id), std::move(modes)));
-
-    if (Platform::SpeechInput::IsAvailable())
-    {
-        Field hold;
-        hold.Label = "Hold the microphone to speak";
-        hold.Tooltip = "Press and hold the microphone beside Send to dictate; releasing it stops. Off: a click "
-                       "starts dictation and a second click stops it.";
-        hold.Control = Field::ToggleField{false, [] { return HoldToSpeak(); }, [](bool on) { SetHoldToSpeak(on); }};
-        category.Fields.push_back(std::move(hold));
-        Field send;
-        send.Label = "Send when the microphone stops";
-        send.Tooltip = "Stopping the microphone sends the dictated prompt once its last words arrive. Typing "
-                       "while dictating never sends.";
-        send.Control =
-            Field::ToggleField{false, [] { return SendWhenMicStops(); }, [](bool on) { SetSendWhenMicStops(on); }};
-        category.Fields.push_back(std::move(send));
-    }
-
-    category.Fields.push_back(ExecutableRow(
-        "Claude executable", "The claude program: a name found on PATH or a full path to claude.exe.",
-        kPrefClaudeExecutable, std::string(ClaudeSessionProvider::kDefaultExecutable)));
-    category.Fields.push_back(ExecutableRow(
-        "Codex executable", "The full path to the codex program; Codex is usually not on PATH.",
-        kPrefCodexExecutable, {}));
-    category.Fields.push_back(ExecutableRow(
-        "Node executable",
-        "The node program that runs the editor's tools for the assistant (Node 20 or later): a name found on "
-        "PATH or a full path to node.exe.",
-        kPrefNodeExecutable, kDefaultNodeExecutable));
-
-    Field login;
-    login.Label = "Login status";
-    login.Tooltip = "Asks the chosen local session's CLI whether it is logged in.";
-    login.Control = Field::CustomField{[] { return std::unique_ptr<UIElement>(std::make_unique<AiAssistantLoginStatusRow>()); }};
-    category.Fields.push_back(std::move(login));
+    // The page's own rows are not registry fields, so their names are search words here.
+    category.SearchKeywords =
+        "ai assistant agent claude codex subscription api key provider setup check login session model effort "
+        "codex model mode for new conversations claude code executable codex executable node executable "
+        "hold the microphone to speak send when the microphone stops";
+    category.CreateContent = [] { return std::unique_ptr<UIElement>(std::make_unique<AiAssistantSetupPage>()); };
     return category;
 }
 

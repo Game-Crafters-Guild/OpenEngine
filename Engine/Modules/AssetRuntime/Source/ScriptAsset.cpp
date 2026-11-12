@@ -9,7 +9,7 @@ bool ScriptAsset::Load()
 {
     try
     {
-        Vector<uint8> bytes;
+        ByteBuffer bytes;
         if (!ReadFileBytesShared(GetPath(), bytes))
         {
             SetState(AssetState::Failed);
@@ -25,7 +25,7 @@ bool ScriptAsset::Load()
     }
 }
 
-bool ScriptAsset::LoadFromData(const Vector<uint8>& data)
+bool ScriptAsset::LoadFromData(std::span<const uint8> data)
 {
     try
     {

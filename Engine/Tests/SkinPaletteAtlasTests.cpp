@@ -61,7 +61,7 @@ class SkinPaletteAtlasTest : public ::testing::Test
 TEST_F(SkinPaletteAtlasTest, MultipleUploads_GetContiguousOffsets)
 {
     m_pool.BeginFrame(0);
-    m_atlas.BeginFrame(m_pool);
+    m_atlas.BeginFrame(m_pool, 96);
 
     auto pal1 = MakeIdentityPalette(32);
     auto pal2 = MakeIdentityPalette(64);
@@ -83,7 +83,7 @@ TEST_F(SkinPaletteAtlasTest, MultipleUploads_GetContiguousOffsets)
 TEST_F(SkinPaletteAtlasTest, Upload_NullDataOrZeroBones_ReturnsInvalid)
 {
     m_pool.BeginFrame(0);
-    m_atlas.BeginFrame(m_pool);
+    m_atlas.BeginFrame(m_pool, 0);
 
     EXPECT_FALSE(m_atlas.Upload(nullptr, 64).valid);
     float dummy = 0.0f;

@@ -19,11 +19,14 @@
 #include "ECS/ECSTemplates.h"
 #include "ECSModules/Rendering/Systems/TransformHierarchySystem.h"
 #include "JobSystem/WorkStealingThreadPool.h"
+#include "Mathematics/MatrixOps.h"
+#include "DeathTestChild.h"
 
 using namespace GameEngine;
 using namespace GameEngine::Components;
 using GameEngine::Mathematics::Quaternion;
 using GameEngine::Mathematics::Vector3;
+using GameEngine::Mathematics::WorldPosition;
 
 namespace
 {
@@ -41,41 +44,37 @@ namespace
 	    constexpr float kMatrixEpsilon   = 1e-4f;
 	    constexpr float kPositionEpsilon = 1e-4f;
 	    constexpr float kScaleEpsilon    = 1e-4f;
-
-	    // Local copy of the column-major 4x4 multiply used by TransformHierarchySystem.
-	    inline void MultiplyColumnMajor4x4Test(const float32* a,
-	                                           const float32* b,
-	                                           float32* out)
-	    {
-	        for (int col = 0; col < 4; ++col)
-	        {
-	            for (int row = 0; row < 4; ++row)
-	            {
-	                out[col * 4 + row] =
-	                    a[0 * 4 + row] * b[col * 4 + 0] +
-	                    a[1 * 4 + row] * b[col * 4 + 1] +
-	                    a[2 * 4 + row] * b[col * 4 + 2] +
-	                    a[3 * 4 + row] * b[col * 4 + 3];
-	            }
-	        }
-	    }
 }
 
 namespace
 {
+    // The pose as a float matrix with the translation relative to the world origin.
+    template <typename Pose>
+    Mathematics::Matrix4x4 PoseMatrix(const Pose& pose)
+    {
+        return pose.ToMatrix4x4(pose.GetPosition() - WorldPosition{});
+    }
+
+    template <typename PoseA, typename PoseB>
+    void ExpectPoseMatrixNear(const PoseA& a, const PoseB& b, float epsilon)
+    {
+        const Mathematics::Matrix4x4 matrixA = PoseMatrix(a);
+        const Mathematics::Matrix4x4 matrixB = PoseMatrix(b);
+        for (int i = 0; i < 16; ++i)
+        {
+            EXPECT_NEAR(matrixA.Data()[i], matrixB.Data()[i], epsilon) << "matrix element " << i;
+        }
+    }
+
     Vector3 MulPoint(const Transform& t, const Vector3& p)
     {
-        const float* m = t.matrix;
-        return Vector3(
-            m[0] * p.x + m[4] * p.y + m[8] * p.z + m[12],
-            m[1] * p.x + m[5] * p.y + m[9] * p.z + m[13],
-            m[2] * p.x + m[6] * p.y + m[10] * p.z + m[14]);
+        return PoseMatrix(t).TransformPoint(p);
     }
 }
 
 TEST(TransformMathTests, Identity_PlusZIsEntityForward)
 {
-    const Transform t = Transform::FromTRS(Vector3(0.0f, 0.0f, 0.0f), Quaternion{}, Vector3(1.0f, 1.0f, 1.0f));
+    const Transform t = Transform::FromTRS(WorldPosition{}, Quaternion{}, Vector3(1.0f, 1.0f, 1.0f));
     const Vector3 forward = MulPoint(t, Vector3(0.0f, 0.0f, 1.0f));
     EXPECT_NEAR(forward.x, 0.0f, 1e-4f);
     EXPECT_NEAR(forward.y, 0.0f, 1e-4f);
@@ -85,7 +84,7 @@ TEST(TransformMathTests, Identity_PlusZIsEntityForward)
 TEST(TransformMathTests, DefaultSunEuler_PlusZShinesDownward)
 {
     const Quaternion q = QuaternionFromEulerXYZDegrees(50.0f, -30.0f, 0.0f);
-    const Transform t = Transform::FromTRS(Vector3(0.0f, 0.0f, 0.0f), q, Vector3(1.0f, 1.0f, 1.0f));
+    const Transform t = Transform::FromTRS(WorldPosition{}, q, Vector3(1.0f, 1.0f, 1.0f));
     const Vector3 shine = MulPoint(t, Vector3(0.0f, 0.0f, 1.0f));
     const Vector3 viaQuat = q.Rotate(Vector3(0.0f, 0.0f, 1.0f));
     EXPECT_LT(shine.y, 0.0f);
@@ -98,7 +97,7 @@ TEST(TransformMathTests, FromTRS_YawPositiveSendsZTowardX)
 {
     const float kHalfPi = 1.57079632679f;
     const Quaternion q = Quaternion::FromAxisAngle(Vector3(0.0f, 1.0f, 0.0f), kHalfPi);
-    const Transform t = Transform::FromTRS(Vector3(0.0f, 0.0f, 0.0f), q, Vector3(1.0f, 1.0f, 1.0f));
+    const Transform t = Transform::FromTRS(WorldPosition{}, q, Vector3(1.0f, 1.0f, 1.0f));
     const Vector3 rotated = MulPoint(t, Vector3(0.0f, 0.0f, 1.0f));
     const Vector3 viaQuat = q.Rotate(Vector3(0.0f, 0.0f, 1.0f));
     EXPECT_NEAR(rotated.x, 1.0f, 1e-4f);
@@ -109,22 +108,27 @@ TEST(TransformMathTests, FromTRS_YawPositiveSendsZTowardX)
     EXPECT_NEAR(rotated.z, viaQuat.z, 1e-4f);
 }
 
-TEST(TransformMathTests, FromTRSRH_YawPositiveSendsZTowardMinusX)
+// A projective matrix has no transform: FromMatrix4x4 asserts with the fix in the message.
+TEST(TransformMathTests, FromMatrix4x4_RefusesAProjectiveBottomRow)
 {
-    const float kHalfPi = 1.57079632679f;
-    const Quaternion q = Quaternion::FromAxisAngle(Vector3(0.0f, 1.0f, 0.0f), kHalfPi);
-    const Transform t = Transform::FromTRSRH(Vector3(0.0f, 0.0f, 0.0f), q, Vector3(1.0f, 1.0f, 1.0f));
-    const Vector3 rotated = MulPoint(t, Vector3(0.0f, 0.0f, 1.0f));
-    EXPECT_NEAR(rotated.x, -1.0f, 1e-4f);
-    EXPECT_NEAR(rotated.y, 0.0f, 1e-4f);
-    EXPECT_NEAR(rotated.z, 0.0f, 1e-4f);
+    Mathematics::Matrix4x4 projective = Mathematics::Matrix4x4::Identity();
+    projective[2][3] = 1.0f;
+    projective[3][3] = 0.0f;
+    EXPECT_DEBUG_DEATH(
+        {
+            TestUtils::SuppressCrtDialogsInDeathTestChild();
+            [[maybe_unused]] const Transform t = Transform::FromMatrix4x4(projective);
+        },
+        "affine");
+    const Transform affine = Transform::FromMatrix4x4(Mathematics::Matrix4x4::Identity());
+    EXPECT_EQ(affine.Position, WorldPosition{});
 }
 
 TEST(TransformMathTests, FromTRS_GetRotationMatchesInput)
 {
     const float kHalfPi = 1.57079632679f;
     const Quaternion q = Quaternion::FromAxisAngle(Vector3(0.0f, 1.0f, 0.0f), kHalfPi);
-    const Transform t = Transform::FromTRS(Vector3(1.0f, 2.0f, 3.0f), q, Vector3(1.0f, 1.0f, 1.0f));
+    const Transform t = Transform::FromTRS(WorldPosition{1.0, 2.0, 3.0}, q, Vector3(1.0f, 1.0f, 1.0f));
     const Quaternion back = t.GetRotation();
     const Vector3 a = q.Rotate(Vector3(0.0f, 0.0f, 1.0f));
     const Vector3 b = back.Rotate(Vector3(0.0f, 0.0f, 1.0f));
@@ -146,7 +150,7 @@ TEST(TransformMathTests, FromTRS_GetRotationRoundTripsCompoundRotations)
     const Vector3 probes[] = {Vector3(0.0f, 0.0f, 1.0f), Vector3(1.0f, 0.0f, 0.0f)};
     for (const Quaternion& q : cases)
     {
-        const Transform t = Transform::FromTRS(Vector3(0.0f, 0.0f, 0.0f), q, Vector3(1.0f, 1.0f, 1.0f));
+        const Transform t = Transform::FromTRS(WorldPosition{}, q, Vector3(1.0f, 1.0f, 1.0f));
         const Quaternion back = t.GetRotation();
         for (const Vector3& v : probes)
         {
@@ -220,7 +224,7 @@ TEST(TransformMathTests, TransformTRSRoundTrip_LargeAndNegative_IdentityScale)
     for (const auto& s : kSamples)
     {
         Quaternion q = QuaternionFromEulerXYZDegrees(s.x, s.y, s.z);
-        Transform t = Transform::FromTRS(pos, q, scale);
+        Transform t = Transform::FromTRS(WorldPosition::FromVector3(pos), q, scale);
 
         Quaternion q2 = t.GetRotation();
         float rx = 0.0f, ry = 0.0f, rz = 0.0f;
@@ -236,12 +240,12 @@ TEST(TransformMathTests, TransformTRS_PreservesTranslation)
     Vector3  scale(2.0f, 3.0f, 4.0f);
     Quaternion q = QuaternionFromEulerXYZDegrees(15.0f, -25.0f, 35.0f);
 
-    Transform t = Transform::FromTRS(pos, q, scale);
+    Transform t = Transform::FromTRS(WorldPosition::FromVector3(pos), q, scale);
 
-    Vector3 outPos = t.GetPosition();
-    EXPECT_NEAR(outPos.x, pos.x, 1e-4f);
-    EXPECT_NEAR(outPos.y, pos.y, 1e-4f);
-    EXPECT_NEAR(outPos.z, pos.z, 1e-4f);
+    const WorldPosition outPos = t.GetPosition();
+    EXPECT_NEAR(outPos.X, pos.x, 1e-4f);
+    EXPECT_NEAR(outPos.Y, pos.y, 1e-4f);
+    EXPECT_NEAR(outPos.Z, pos.z, 1e-4f);
 }
 
 // Full pipeline: Euler -> quaternion -> Transform matrix -> quaternion -> Euler
@@ -255,7 +259,7 @@ TEST(TransformMathTests, TransformTRSRoundTrip_SmallAngles_IdentityScale)
     Vector3 scale(1.0f, 1.0f, 1.0f);
 
     Quaternion q = QuaternionFromEulerXYZDegrees(ex, ey, ez);
-    Transform t = Transform::FromTRS(pos, q, scale);
+    Transform t = Transform::FromTRS(WorldPosition::FromVector3(pos), q, scale);
 
     Quaternion q2 = t.GetRotation();
     EXPECT_NEAR(q2.GetGLM().x, q.GetGLM().x, 1e-4f);
@@ -278,7 +282,7 @@ TEST(TransformMathTests, TransformTRSRoundTrip_SmallAngles_NonUniformScale)
     Vector3 scale(2.0f, 3.0f, 4.0f);
 
     Quaternion q = QuaternionFromEulerXYZDegrees(ex, ey, ez);
-    Transform t = Transform::FromTRS(pos, q, scale);
+    Transform t = Transform::FromTRS(WorldPosition::FromVector3(pos), q, scale);
 
     Quaternion q2 = t.GetRotation();
     EXPECT_NEAR(q2.GetGLM().x, q.GetGLM().x, 1e-4f);
@@ -334,16 +338,16 @@ TEST(TransformMathTests, TransformTRSRoundTrip_SmallAngles_NonUniformScale)
 	    {
 	        SCOPED_TRACE(c.name);
 
-	        Transform t0 = Transform::FromTRS(c.position, c.rotation, c.scale);
+	        Transform t0 = Transform::FromTRS(WorldPosition::FromVector3(c.position), c.rotation, c.scale);
 
-	        Vector3 p1 = t0.GetPosition();
+	        const WorldPosition p1 = t0.GetPosition();
 	        Quaternion r1 = t0.GetRotation();
 	        Vector3 s1 = t0.GetScale();
 
 	        // Components should round-trip.
-	        EXPECT_NEAR(p1.x, c.position.x, kPositionEpsilon);
-	        EXPECT_NEAR(p1.y, c.position.y, kPositionEpsilon);
-	        EXPECT_NEAR(p1.z, c.position.z, kPositionEpsilon);
+	        EXPECT_NEAR(p1.X, c.position.x, kPositionEpsilon);
+	        EXPECT_NEAR(p1.Y, c.position.y, kPositionEpsilon);
+	        EXPECT_NEAR(p1.Z, c.position.z, kPositionEpsilon);
 
 	        EXPECT_NEAR(s1.x, c.scale.x, kScaleEpsilon);
 	        EXPECT_NEAR(s1.y, c.scale.y, kScaleEpsilon);
@@ -351,10 +355,7 @@ TEST(TransformMathTests, TransformTRSRoundTrip_SmallAngles_NonUniformScale)
 
 	        Transform t1 = Transform::FromTRS(p1, r1, s1);
 
-	        for (int i = 0; i < 16; ++i)
-	        {
-	            EXPECT_NEAR(t0.matrix[i], t1.matrix[i], kMatrixEpsilon);
-	        }
+	        ExpectPoseMatrixNear(t0, t1, kMatrixEpsilon);
 	    }
 	}
 
@@ -376,8 +377,8 @@ TEST(TransformMathTests, TransformTRSRoundTrip_SmallAngles_NonUniformScale)
 	    Quaternion childRot{};
 	    Vector3 childScale(1.0f, 1.0f, 1.0f);
 
-	    Transform parentLocal = Transform::FromTRS(parentPos, parentRot, parentScale);
-	    Transform childLocal  = Transform::FromTRS(childLocalPos, childRot, childScale);
+	    Transform parentLocal = Transform::FromTRS(WorldPosition::FromVector3(parentPos), parentRot, parentScale);
+	    Transform childLocal  = Transform::FromTRS(WorldPosition::FromVector3(childLocalPos), childRot, childScale);
 
 	    parent.Set(parentLocal);
 	    Parent parentComponent{};
@@ -397,18 +398,14 @@ TEST(TransformMathTests, TransformTRSRoundTrip_SmallAngles_NonUniformScale)
 	    ASSERT_NE(childWorld, nullptr);
 
 	    // Root world transform should match its local transform.
-	    for (int i = 0; i < 16; ++i)
-	    {
-	        EXPECT_NEAR(parentWorld->matrix[i], parentLocal.matrix[i], kMatrixEpsilon);
-	    }
+	    ExpectPoseMatrixNear(*parentWorld, parentLocal, kMatrixEpsilon);
 
 	    // Child world transform should match manual matrix composition.
-	    float32 expectedChildWorld[16] = {};
-	    MultiplyColumnMajor4x4Test(parentWorld->matrix, childLocal.matrix, expectedChildWorld);
-
+	    const Mathematics::Matrix4x4 expectedChildWorld = PoseMatrix(*parentWorld) * PoseMatrix(childLocal);
+	    const Mathematics::Matrix4x4 actualChildWorld = PoseMatrix(*childWorld);
 	    for (int i = 0; i < 16; ++i)
 	    {
-	        EXPECT_NEAR(childWorld->matrix[i], expectedChildWorld[i], kMatrixEpsilon);
+	        EXPECT_NEAR(actualChildWorld.Data()[i], expectedChildWorld.Data()[i], kMatrixEpsilon);
 	    }
 	}
 
@@ -430,8 +427,8 @@ TEST(TransformMathTests, TransformTRSRoundTrip_SmallAngles_NonUniformScale)
 		    Quaternion childRot = QuaternionFromEulerXYZDegrees(-10.0f, 45.0f, 5.0f);
 		    Vector3   childScale(0.75f, 1.25f, 1.5f);
 
-		    Transform parentLocal = Transform::FromTRS(parentPos, parentRot, parentScale);
-		    Transform childLocal  = Transform::FromTRS(childLocalPos, childRot, childScale);
+		    Transform parentLocal = Transform::FromTRS(WorldPosition::FromVector3(parentPos), parentRot, parentScale);
+		    Transform childLocal  = Transform::FromTRS(WorldPosition::FromVector3(childLocalPos), childRot, childScale);
 
 		    parent.Set(parentLocal);
 		    Parent parentComponent{};
@@ -451,18 +448,14 @@ TEST(TransformMathTests, TransformTRSRoundTrip_SmallAngles_NonUniformScale)
 		    ASSERT_NE(childWorld, nullptr);
 
 		    // Root world transform should still match its local transform.
-		    for (int i = 0; i < 16; ++i)
-		    {
-		        EXPECT_NEAR(parentWorld->matrix[i], parentLocal.matrix[i], kMatrixEpsilon);
-		    }
+		    ExpectPoseMatrixNear(*parentWorld, parentLocal, kMatrixEpsilon);
 
 		    // Child world transform should match manual matrix composition.
-		    float32 expectedChildWorld[16] = {};
-		    MultiplyColumnMajor4x4Test(parentWorld->matrix, childLocal.matrix, expectedChildWorld);
-
+		    const Mathematics::Matrix4x4 expectedChildWorld = PoseMatrix(*parentWorld) * PoseMatrix(childLocal);
+		    const Mathematics::Matrix4x4 actualChildWorld = PoseMatrix(*childWorld);
 		    for (int i = 0; i < 16; ++i)
 		    {
-		        EXPECT_NEAR(childWorld->matrix[i], expectedChildWorld[i], kMatrixEpsilon);
+		        EXPECT_NEAR(actualChildWorld.Data()[i], expectedChildWorld.Data()[i], kMatrixEpsilon);
 		    }
 		}
 
@@ -474,15 +467,15 @@ TEST(TransformMathTests, Hierarchy_CachedTopologyPropagatesCollapsedDirtySubtree
 {
     ECS::World world(nullptr);
     ECS::Entity root = world.Create(Transform::FromTRS(
-        {10.0f, 0.0f, 0.0f}, Quaternion{}, {1, 1, 1}));
+        {10.0, 0.0, 0.0}, Quaternion{}, {1, 1, 1}));
     ECS::Entity branchA = world.Create(Transform::FromTRS(
-        {0.0f, 2.0f, 0.0f}, Quaternion{}, {1, 1, 1}));
+        {0.0, 2.0, 0.0}, Quaternion{}, {1, 1, 1}));
     ECS::Entity leafA = world.Create(Transform::FromTRS(
-        {0.0f, 0.0f, 3.0f}, Quaternion{}, {1, 1, 1}));
+        {0.0, 0.0, 3.0}, Quaternion{}, {1, 1, 1}));
     ECS::Entity branchB = world.Create(Transform::FromTRS(
-        {0.0f, -2.0f, 0.0f}, Quaternion{}, {1, 1, 1}));
+        {0.0, -2.0, 0.0}, Quaternion{}, {1, 1, 1}));
     ECS::Entity leafB = world.Create(Transform::FromTRS(
-        {0.0f, 0.0f, -3.0f}, Quaternion{}, {1, 1, 1}));
+        {0.0, 0.0, -3.0}, Quaternion{}, {1, 1, 1}));
 
     Parent toRoot{}; toRoot.Entity = root.GetHandle();
     Parent toA{}; toA.Entity = branchA.GetHandle();
@@ -541,9 +534,9 @@ TEST(TransformMathTests, Hierarchy_CachedTopologyPropagatesCollapsedDirtySubtree
     const WorldTransform* reparented =
         world.GetComponent<WorldTransform>(leafA.GetHandle());
     ASSERT_NE(reparented, nullptr);
-    EXPECT_FLOAT_EQ(reparented->matrix[12], 13.0f);
-    EXPECT_FLOAT_EQ(reparented->matrix[13], -2.0f);
-    EXPECT_FLOAT_EQ(reparented->matrix[14], 4.0f);
+    EXPECT_DOUBLE_EQ(reparented->Position.X, 13.0);
+    EXPECT_DOUBLE_EQ(reparented->Position.Y, -2.0);
+    EXPECT_DOUBLE_EQ(reparented->Position.Z, 4.0);
 
     root.Set(HierarchyOrder{7});
     world.ProcessCommands();
@@ -580,6 +573,35 @@ TEST(TransformMathTests, Hierarchy_FirstResolveMarksEveryPoseResolved)
             << "an identity pose stayed unresolved, or a still frame bumped it again";
 }
 
+// A grandchild of a root at 300 km resolves to the exact sum of the three local
+// positions, within 0.1 mm. A 32-bit translation has a spacing of 31 mm there.
+TEST(TransformMathTests, Hierarchy_GrandchildAt300KmIsExactToATenthOfAMillimeter)
+{
+    const Vector3 rootPosition(300000.0f, 1200.0f, -299000.0f);
+    const Vector3 childPosition(0.1234567f, 2.5f, 0.0137f);
+    const Vector3 grandchildPosition(0.0217f, -0.75f, 0.4321f);
+    const Quaternion identity(1.0f, 0.0f, 0.0f, 0.0f);
+    const Vector3 unitScale(1.0f, 1.0f, 1.0f);
+
+    ECS::World world(nullptr);
+    ECS::Entity root = world.Create(Transform::FromTRS(WorldPosition::FromVector3(rootPosition), identity, unitScale));
+    ECS::Entity child = world.Create(Transform::FromTRS(WorldPosition::FromVector3(childPosition), identity, unitScale));
+    ECS::Entity grandchild =
+        world.Create(Transform::FromTRS(WorldPosition::FromVector3(grandchildPosition), identity, unitScale));
+    child.Set(Parent{root.GetHandle()});
+    grandchild.Set(Parent{child.GetHandle()});
+    world.ProcessCommands();
+
+    Engine::Renderer::TransformHierarchySystem hierarchy;
+    hierarchy.Update(world, 0.0f);
+
+    const auto position = world.GetComponent<WorldTransform>(grandchild.GetHandle())->GetPosition();
+    constexpr double kTolerance = 1.0e-4;
+    EXPECT_NEAR(position.X, double(rootPosition.x) + double(childPosition.x) + double(grandchildPosition.x), kTolerance);
+    EXPECT_NEAR(position.Y, double(rootPosition.y) + double(childPosition.y) + double(grandchildPosition.y), kTolerance);
+    EXPECT_NEAR(position.Z, double(rootPosition.z) + double(childPosition.z) + double(grandchildPosition.z), kTolerance);
+}
+
 // A required component stays while its requirer does: removing an entity's
 // WorldTransform while its Transform stays is refused, so the entity never
 // leaves the hierarchy's and extraction's queries for good.
@@ -602,13 +624,13 @@ TEST(TransformMathTests, Hierarchy_UnparentedRootsTakeTheFlatPassBesideAHierarch
 {
     constexpr int kRoots = 1000;
     ECS::World world(nullptr);
-    ECS::Entity parent = world.Create(Transform::FromTRS({0.0f, 0.0f, 0.0f}, Quaternion{}, {1, 1, 1}));
-    ECS::Entity child = world.Create(Transform::FromTRS({1.0f, 0.0f, 0.0f}, Quaternion{}, {1, 1, 1}));
+    ECS::Entity parent = world.Create(Transform::FromTRS({0.0, 0.0, 0.0}, Quaternion{}, {1, 1, 1}));
+    ECS::Entity child = world.Create(Transform::FromTRS({1.0, 0.0, 0.0}, Quaternion{}, {1, 1, 1}));
     child.Set(Parent{parent.GetHandle()});
     std::vector<ECS::Entity> roots;
     for (int i = 0; i < kRoots; ++i)
         roots.push_back(world.Create(Transform::FromTRS(
-            {static_cast<float>(i), 0.0f, 0.0f}, Quaternion{}, {1, 1, 1})));
+            {static_cast<double>(i), 0.0, 0.0}, Quaternion{}, {1, 1, 1})));
     world.ProcessCommands();
 
     Engine::Renderer::TransformHierarchySystem hierarchy;
@@ -625,7 +647,7 @@ TEST(TransformMathTests, Hierarchy_UnparentedRootsTakeTheFlatPassBesideAHierarch
         const auto* local = world.GetComponent<Transform>(root.GetHandle());
         const auto* worldTransform = world.GetComponent<WorldTransform>(root.GetHandle());
         ASSERT_NE(worldTransform, nullptr);
-        EXPECT_EQ(0, std::memcmp(worldTransform->matrix, local->matrix, sizeof(local->matrix)));
+        EXPECT_EQ(0, std::memcmp(worldTransform, local, kTransformPoseBytes));
     }
 }
 
@@ -641,8 +663,8 @@ TEST(TransformMathTests, Hierarchy_EveryUnitAHierarchyStillWalksNothingAndMovesW
     for (int i = 0; i < kUnits; ++i)
     {
         roots.push_back(world.Create(Transform::FromTRS(
-            {static_cast<float>(i), 0.0f, 0.0f}, Quaternion{}, {1, 1, 1})));
-        ECS::Entity child = world.Create(Transform::FromTRS({0.0f, 1.0f, 0.0f}, Quaternion{}, {1, 1, 1}));
+            {static_cast<double>(i), 0.0, 0.0}, Quaternion{}, {1, 1, 1})));
+        ECS::Entity child = world.Create(Transform::FromTRS({0.0, 1.0, 0.0}, Quaternion{}, {1, 1, 1}));
         child.Set(Parent{roots.back().GetHandle()});
         children.push_back(child);
     }
@@ -661,9 +683,9 @@ TEST(TransformMathTests, Hierarchy_EveryUnitAHierarchyStillWalksNothingAndMovesW
     {
         const auto* childWorld = world.GetComponent<WorldTransform>(children[i].GetHandle());
         ASSERT_NE(childWorld, nullptr);
-        EXPECT_FLOAT_EQ(childWorld->matrix[12], static_cast<float>(i));
-        EXPECT_FLOAT_EQ(childWorld->matrix[13], 1.0f);
-        EXPECT_FLOAT_EQ(childWorld->matrix[14], 2.0f);
+        EXPECT_DOUBLE_EQ(childWorld->Position.X, static_cast<double>(i));
+        EXPECT_DOUBLE_EQ(childWorld->Position.Y, 1.0);
+        EXPECT_DOUBLE_EQ(childWorld->Position.Z, 2.0);
     }
 }
 
@@ -676,11 +698,11 @@ TEST(TransformMathTests, Hierarchy_UnparentedSpawnsKeepTheTopologyAndResolveOnly
     constexpr int kFlat = 20000;
     constexpr int kSpawned = 10;
     ECS::World world(nullptr);
-    ECS::Entity parent = world.Create(Transform::FromTRS({0.0f, 0.0f, 0.0f}, Quaternion{}, {1, 1, 1}));
-    ECS::Entity child = world.Create(Transform::FromTRS({1.0f, 0.0f, 0.0f}, Quaternion{}, {1, 1, 1}));
+    ECS::Entity parent = world.Create(Transform::FromTRS({0.0, 0.0, 0.0}, Quaternion{}, {1, 1, 1}));
+    ECS::Entity child = world.Create(Transform::FromTRS({1.0, 0.0, 0.0}, Quaternion{}, {1, 1, 1}));
     child.Set(Parent{parent.GetHandle()});
     for (int i = 0; i < kFlat; ++i)
-        world.Create(Transform::FromTRS({static_cast<float>(i), 0.0f, 0.0f}, Quaternion{}, {1, 1, 1}));
+        world.Create(Transform::FromTRS({static_cast<double>(i), 0.0, 0.0}, Quaternion{}, {1, 1, 1}));
     world.ProcessCommands();
 
     Engine::Renderer::TransformHierarchySystem hierarchy;
@@ -691,7 +713,7 @@ TEST(TransformMathTests, Hierarchy_UnparentedSpawnsKeepTheTopologyAndResolveOnly
     std::vector<ECS::Entity> spawned;
     for (int i = 0; i < kSpawned; ++i)
         spawned.push_back(world.Create(Transform::FromTRS(
-            {-static_cast<float>(i + 1), 5.0f, 0.0f}, Quaternion{}, {1, 1, 1})));
+            {-static_cast<double>(i + 1), 5.0, 0.0}, Quaternion{}, {1, 1, 1})));
     world.ProcessCommands();
     world.GetComponentForWrite<Transform>(parent.GetHandle())->Translate(0.0f, 0.0f, 3.0f);
     hierarchy.Update(world, 0.0f);
@@ -706,15 +728,15 @@ TEST(TransformMathTests, Hierarchy_UnparentedSpawnsKeepTheTopologyAndResolveOnly
     }
     const WorldTransform* childWorld = world.GetComponent<WorldTransform>(child.GetHandle());
     ASSERT_NE(childWorld, nullptr);
-    EXPECT_FLOAT_EQ(childWorld->matrix[12], 1.0f);
-    EXPECT_FLOAT_EQ(childWorld->matrix[14], 3.0f);
-    EXPECT_FLOAT_EQ(world.GetComponent<WorldTransform>(parent.GetHandle())->matrix[14], 3.0f);
+    EXPECT_DOUBLE_EQ(childWorld->Position.X, 1.0);
+    EXPECT_DOUBLE_EQ(childWorld->Position.Z, 3.0);
+    EXPECT_DOUBLE_EQ(world.GetComponent<WorldTransform>(parent.GetHandle())->Position.Z, 3.0);
     for (const int i : {0, kSpawned - 1})
     {
         const WorldTransform* spawnedWorld = world.GetComponent<WorldTransform>(spawned[i].GetHandle());
         ASSERT_NE(spawnedWorld, nullptr);
-        EXPECT_FLOAT_EQ(spawnedWorld->matrix[12], -static_cast<float>(i + 1));
-        EXPECT_FLOAT_EQ(spawnedWorld->matrix[13], 5.0f);
+        EXPECT_DOUBLE_EQ(spawnedWorld->Position.X, -static_cast<double>(i + 1));
+        EXPECT_DOUBLE_EQ(spawnedWorld->Position.Y, 5.0);
     }
 }
 
@@ -727,9 +749,9 @@ TEST(TransformMathTests, Hierarchy_NodeMovedByAnUnrelatedStructuralChangeStillCa
     ECS::World world(nullptr);
     // The filler and the parent share an archetype chunk, the parent last:
     // destroying the filler swap-moves the parent into the filler's row.
-    ECS::Entity filler = world.Create(Transform::FromTRS({9.0f, 9.0f, 9.0f}, Quaternion{}, {1, 1, 1}));
-    ECS::Entity parent = world.Create(Transform::FromTRS({0.0f, 0.0f, 0.0f}, Quaternion{}, {1, 1, 1}));
-    ECS::Entity child = world.Create(Transform::FromTRS({1.0f, 0.0f, 0.0f}, Quaternion{}, {1, 1, 1}));
+    ECS::Entity filler = world.Create(Transform::FromTRS({9.0, 9.0, 9.0}, Quaternion{}, {1, 1, 1}));
+    ECS::Entity parent = world.Create(Transform::FromTRS({0.0, 0.0, 0.0}, Quaternion{}, {1, 1, 1}));
+    ECS::Entity child = world.Create(Transform::FromTRS({1.0, 0.0, 0.0}, Quaternion{}, {1, 1, 1}));
     child.Set(Parent{parent.GetHandle()});
     world.ProcessCommands();
     Engine::Renderer::TransformHierarchySystem hierarchy;
@@ -742,19 +764,19 @@ TEST(TransformMathTests, Hierarchy_NodeMovedByAnUnrelatedStructuralChangeStillCa
         << "the destroy did not move the parent; the case is not exercised";
     world.GetComponentForWrite<Transform>(parent.GetHandle())->Translate(0.0f, 2.0f, 0.0f);
     hierarchy.Update(world, 0.0f);
-    EXPECT_FLOAT_EQ(world.GetComponent<WorldTransform>(child.GetHandle())->matrix[13], 2.0f)
+    EXPECT_DOUBLE_EQ(world.GetComponent<WorldTransform>(child.GetHandle())->Position.Y, 2.0)
         << "the child did not follow a parent that a swap-remove moved";
 
     const Transform* parentBeforeGrowth = world.GetComponent<Transform>(parent.GetHandle());
     for (int i = 0; i < 5000; ++i)
-        world.Create(Transform::FromTRS({static_cast<float>(i), 0.0f, 0.0f}, Quaternion{}, {1, 1, 1}));
+        world.Create(Transform::FromTRS({static_cast<double>(i), 0.0, 0.0}, Quaternion{}, {1, 1, 1}));
     world.ProcessCommands();
     RecordProperty("parentMovedByGrowth", world.GetComponent<Transform>(parent.GetHandle()) != parentBeforeGrowth ? 1 : 0);
     world.GetComponentForWrite<Transform>(parent.GetHandle())->Translate(0.0f, 0.0f, 4.0f);
     hierarchy.Update(world, 0.0f);
     const WorldTransform* childWorld = world.GetComponent<WorldTransform>(child.GetHandle());
-    EXPECT_FLOAT_EQ(childWorld->matrix[13], 2.0f);
-    EXPECT_FLOAT_EQ(childWorld->matrix[14], 4.0f) << "the child did not follow after its archetype grew";
+    EXPECT_DOUBLE_EQ(childWorld->Position.Y, 2.0);
+    EXPECT_DOUBLE_EQ(childWorld->Position.Z, 4.0) << "the child did not follow after its archetype grew";
 
     // Removing the child's Parent moves it to an unparented archetype: it is
     // a root from then on, its world matrix its own local pose.
@@ -762,9 +784,9 @@ TEST(TransformMathTests, Hierarchy_NodeMovedByAnUnrelatedStructuralChangeStillCa
     world.GetComponentForWrite<Transform>(parent.GetHandle())->Translate(5.0f, 0.0f, 0.0f);
     hierarchy.Update(world, 0.0f);
     childWorld = world.GetComponent<WorldTransform>(child.GetHandle());
-    EXPECT_FLOAT_EQ(childWorld->matrix[12], 1.0f) << "the unparented child still followed its old parent";
-    EXPECT_FLOAT_EQ(childWorld->matrix[13], 0.0f);
-    EXPECT_FLOAT_EQ(childWorld->matrix[14], 0.0f);
+    EXPECT_DOUBLE_EQ(childWorld->Position.X, 1.0) << "the unparented child still followed its old parent";
+    EXPECT_DOUBLE_EQ(childWorld->Position.Y, 0.0);
+    EXPECT_DOUBLE_EQ(childWorld->Position.Z, 0.0);
 }
 
 // A Parent-holder spawned beside a cached hierarchy is resolved under its
@@ -774,23 +796,23 @@ TEST(TransformMathTests, Hierarchy_NodeMovedByAnUnrelatedStructuralChangeStillCa
 TEST(TransformMathTests, Hierarchy_ParentHolderSpawnedBesideACachedHierarchyResolves)
 {
     ECS::World world(nullptr);
-    ECS::Entity parent = world.Create(Transform::FromTRS({0.0f, 0.0f, 3.0f}, Quaternion{}, {1, 1, 1}));
-    ECS::Entity firstChild = world.Create(Transform::FromTRS({1.0f, 0.0f, 0.0f}, Quaternion{}, {1, 1, 1}));
+    ECS::Entity parent = world.Create(Transform::FromTRS({0.0, 0.0, 3.0}, Quaternion{}, {1, 1, 1}));
+    ECS::Entity firstChild = world.Create(Transform::FromTRS({1.0, 0.0, 0.0}, Quaternion{}, {1, 1, 1}));
     firstChild.Set(Parent{parent.GetHandle()});
     world.ProcessCommands();
     Engine::Renderer::TransformHierarchySystem hierarchy;
     hierarchy.Update(world, 0.0f);
     hierarchy.Update(world, 0.0f);
 
-    ECS::Entity secondChild = world.Create(Transform::FromTRS({0.0f, 1.0f, 0.0f}, Quaternion{}, {1, 1, 1}));
+    ECS::Entity secondChild = world.Create(Transform::FromTRS({0.0, 1.0, 0.0}, Quaternion{}, {1, 1, 1}));
     secondChild.Set(Parent{parent.GetHandle()});
     world.ProcessCommands();
     hierarchy.Update(world, 0.0f);
     const WorldTransform* childWorld = world.GetComponent<WorldTransform>(secondChild.GetHandle());
     ASSERT_NE(childWorld, nullptr);
-    EXPECT_FLOAT_EQ(childWorld->matrix[12], 0.0f);
-    EXPECT_FLOAT_EQ(childWorld->matrix[13], 1.0f);
-    EXPECT_FLOAT_EQ(childWorld->matrix[14], 3.0f) << "the new child was not resolved under its parent";
+    EXPECT_DOUBLE_EQ(childWorld->Position.X, 0.0);
+    EXPECT_DOUBLE_EQ(childWorld->Position.Y, 1.0);
+    EXPECT_DOUBLE_EQ(childWorld->Position.Z, 3.0) << "the new child was not resolved under its parent";
 }
 
 // The serial seam caches every entity and has no flat pass: a frame that only
@@ -798,18 +820,18 @@ TEST(TransformMathTests, Hierarchy_ParentHolderSpawnedBesideACachedHierarchyReso
 TEST(TransformMathTests, Hierarchy_SerialSeamResolvesASpawnOnAFrameWithoutDestroys)
 {
     ECS::World world(nullptr);
-    ECS::Entity parent = world.Create(Transform::FromTRS({0.0f, 0.0f, 0.0f}, Quaternion{}, {1, 1, 1}));
-    ECS::Entity child = world.Create(Transform::FromTRS({1.0f, 0.0f, 0.0f}, Quaternion{}, {1, 1, 1}));
+    ECS::Entity parent = world.Create(Transform::FromTRS({0.0, 0.0, 0.0}, Quaternion{}, {1, 1, 1}));
+    ECS::Entity child = world.Create(Transform::FromTRS({1.0, 0.0, 0.0}, Quaternion{}, {1, 1, 1}));
     child.Set(Parent{parent.GetHandle()});
     world.ProcessCommands();
     Engine::Renderer::TransformHierarchySystem serial(true);
     serial.Update(world, 0.0f);
     serial.Update(world, 0.0f);
 
-    ECS::Entity spawned = world.Create(Transform::FromTRS({7.0f, 0.0f, 0.0f}, Quaternion{}, {1, 1, 1}));
+    ECS::Entity spawned = world.Create(Transform::FromTRS({7.0, 0.0, 0.0}, Quaternion{}, {1, 1, 1}));
     world.ProcessCommands();
     serial.Update(world, 0.0f);
-    EXPECT_FLOAT_EQ(world.GetComponent<WorldTransform>(spawned.GetHandle())->matrix[12], 7.0f)
+    EXPECT_DOUBLE_EQ(world.GetComponent<WorldTransform>(spawned.GetHandle())->Position.X, 7.0)
         << "the serial seam left a spawned entity unresolved";
 }
 
@@ -888,9 +910,10 @@ void ReferenceWorld(const ECS::World& world, const std::vector<ECS::EntityHandle
                 at = static_cast<size_t>(parent);
                 continue;
             }
-            const float32* local = world.GetComponent<Transform>(handles[at])->matrix;
+            const Mathematics::Matrix4x4 localMatrix = PoseMatrix(*world.GetComponent<Transform>(handles[at]));
+            const float32* local = localMatrix.Data();
             if (parent >= 0)
-                MultiplyColumnMajor4x4Test(out[static_cast<size_t>(parent)].data(), local, out[at].data());
+                Mathematics::MultiplyColumnMajor4x4(out[static_cast<size_t>(parent)].data(), local, out[at].data());
             else
                 std::memcpy(out[at].data(), local, sizeof(float32) * 16);
             done[at] = 1u;
@@ -925,7 +948,7 @@ TEST(TransformMathTests, Hierarchy_SplitPathsMatchTheSerialPathOnRandomForests)
     {
         // The chain's first link has no Parent (a root the flat pass owns).
         spec.parentOf.push_back(link == 0 ? -1 : static_cast<int>(spec.parentOf.size()) - 1);
-        spec.locals.push_back(Transform::FromTRS({0.0f, 0.5f, 0.1f},
+        spec.locals.push_back(Transform::FromTRS({0.0, 0.5, 0.1},
                                                  Quaternion::FromAxisAngle(Vector3(0.0f, 1.0f, 0.0f), 0.05f),
                                                  {1.0f, 1.0f, 1.0f}));
     }
@@ -975,7 +998,7 @@ TEST(TransformMathTests, Hierarchy_SplitPathsMatchTheSerialPathOnRandomForests)
             const auto* b = serialWorld.GetComponent<WorldTransform>(serialHandles[i]);
             ASSERT_NE(a, nullptr);
             ASSERT_NE(b, nullptr);
-            ASSERT_EQ(0, std::memcmp(a->matrix, b->matrix, sizeof(a->matrix)))
+            ASSERT_EQ(0, std::memcmp(a, b, kTransformPoseBytes))
                 << "frame " << frame << " entity " << i << " differs from the serial path";
         }
     }
@@ -986,7 +1009,8 @@ TEST(TransformMathTests, Hierarchy_SplitPathsMatchTheSerialPathOnRandomForests)
     ReferenceWorld(splitWorld, splitHandles, settled, reference);
     for (int i = 0; i < entityCount; ++i)
     {
-        const float32* actual = splitWorld.GetComponent<WorldTransform>(splitHandles[i])->matrix;
+        const Mathematics::Matrix4x4 actualMatrix = PoseMatrix(*splitWorld.GetComponent<WorldTransform>(splitHandles[i]));
+        const float32* actual = actualMatrix.Data();
         for (int e = 0; e < 16; ++e)
             ASSERT_NEAR(actual[e], reference[i][e], 1e-3f * (1.0f + std::fabs(reference[i][e])))
                 << "entity " << i << " element " << e;
@@ -1047,14 +1071,12 @@ TEST(TransformMathTests, Hierarchy_SplitPathsMatchTheSerialPathWithSpawnsAndDest
         serial.Update(serialWorld, 0.0f);
 
         for (int i = 0; i < kForest; ++i)
-            ASSERT_EQ(0, std::memcmp(splitWorld.GetComponent<WorldTransform>(splitHandles[i])->matrix,
-                                     serialWorld.GetComponent<WorldTransform>(serialHandles[i])->matrix,
-                                     sizeof(float32) * 16))
+            ASSERT_EQ(0, std::memcmp(splitWorld.GetComponent<WorldTransform>(splitHandles[i]),
+                                     serialWorld.GetComponent<WorldTransform>(serialHandles[i]), kTransformPoseBytes))
                 << "frame " << frame << " forest entity " << i << " differs from the serial path";
         for (size_t i = 0; i < splitExtra.size(); ++i)
-            ASSERT_EQ(0, std::memcmp(splitWorld.GetComponent<WorldTransform>(splitExtra[i])->matrix,
-                                     serialWorld.GetComponent<WorldTransform>(serialExtra[i])->matrix,
-                                     sizeof(float32) * 16))
+            ASSERT_EQ(0, std::memcmp(splitWorld.GetComponent<WorldTransform>(splitExtra[i]),
+                                     serialWorld.GetComponent<WorldTransform>(serialExtra[i]), kTransformPoseBytes))
                 << "frame " << frame << " spawned entity " << i << " differs from the serial path";
     }
 }
@@ -1073,11 +1095,11 @@ TEST(TransformMathTests, DISABLED_Hierarchy_CachedTopologyPerformanceProbe)
 
     for (size_t index = 0; index < kRoots; ++index) {
         roots.push_back(world.Create(Transform::FromTRS(
-            {static_cast<float>(index), 0.0f, 0.0f}, Quaternion{}, {1, 1, 1})).GetHandle());
+            {static_cast<double>(index), 0.0, 0.0}, Quaternion{}, {1, 1, 1})).GetHandle());
     }
     for (size_t index = kRoots; index < kEntities; ++index) {
         ECS::Entity entity = world.Create(Transform::FromTRS(
-            {0.0f, static_cast<float>(index % 17), 0.0f}, Quaternion{}, {1, 1, 1}));
+            {0.0, static_cast<double>(index % 17), 0.0}, Quaternion{}, {1, 1, 1}));
         entity.Set(Parent{roots[index % kRoots]});
         leaves.push_back(entity.GetHandle());
     }
@@ -1129,7 +1151,7 @@ TEST(TransformMathTests, DISABLED_Hierarchy_CachedTopologyPerformanceProbe)
     // given, then relieved of, a component) pays the check and the rebuild.
     const size_t buildsBeforeSpawns = hierarchy.GetTopologyBuildCount();
     const double structuralCheckMs = median([&] {
-        world.Create(Transform::FromTRS({-1.0f, 0.0f, 0.0f}, Quaternion{}, {1, 1, 1}));
+        world.Create(Transform::FromTRS({-1.0, 0.0, 0.0}, Quaternion{}, {1, 1, 1}));
         world.ProcessCommands();
         hierarchy.Update(world, 0.0f);
     }, 11);
@@ -1150,6 +1172,38 @@ TEST(TransformMathTests, DISABLED_Hierarchy_CachedTopologyPerformanceProbe)
         kEntities, firstBuildMs, cleanMs, leafMs, branchMs, rebuildMs, structuralCheckMs, movedNodeMs);
 }
 
+namespace
+{
+    // The entities a Changed<WorldTransform> scan visits since `gate`. The
+    // scan binds WorldTransform as const, so it stamps nothing it measures.
+    std::vector<ECS::EntityHandle> EntitiesStampedSince(ECS::World& world, uint64 gate)
+    {
+        ECS::ChangeGate changeGate;
+        changeGate.LastRunVersion = gate;
+        std::vector<ECS::EntityHandle> visited;
+        auto q = world.Query<ECS::Read<WorldTransform>>();
+        q.Changed<WorldTransform>(changeGate);
+        q.Each([&visited](ECS::EntityHandle e, const WorldTransform&) { visited.push_back(e); });
+        return visited;
+    }
+
+    bool Contains(const std::vector<ECS::EntityHandle>& handles, ECS::EntityHandle wanted)
+    {
+        return std::find(handles.begin(), handles.end(), wanted) != handles.end();
+    }
+
+    // Runs one update and returns whether it reported `entity`'s WorldTransform
+    // as changed. The gate is sampled after the caller's edits, so only the
+    // update's own stamps count.
+    bool UpdateReports(ECS::World& world, Engine::Renderer::TransformHierarchySystem& hierarchy,
+                       ECS::EntityHandle entity)
+    {
+        const uint64 gate = world.GetGlobalSystemVersion();
+        hierarchy.Update(world, 0.0f);
+        return Contains(EntitiesStampedSince(world, gate), entity);
+    }
+}
+
 // Change-signaling contract for hierarchy-propagated moves. The hierarchy's
 // incremental path writes WorldTransform through pointers cached at topology
 // rebuild, so nothing in that write is a query visit — the per-(chunk, column)
@@ -1166,9 +1220,9 @@ TEST(TransformMathTests, HierarchyPropagationStampsWorldTransformForChangedGate)
     ECS::World world;
 
     ECS::Entity root  = world.Create(Transform::FromTRS(
-        {0.0f, 0.0f, 0.0f}, Quaternion{}, {1, 1, 1}));
+        {0.0, 0.0, 0.0}, Quaternion{}, {1, 1, 1}));
     ECS::Entity child = world.Create(Transform::FromTRS(
-        {1.0f, 0.0f, 0.0f}, Quaternion{}, {1, 1, 1}));
+        {1.0, 0.0, 0.0}, Quaternion{}, {1, 1, 1}));
     Parent toRoot{}; toRoot.Entity = root.GetHandle();
     child.Set(toRoot);
     world.ProcessCommands();
@@ -1179,31 +1233,13 @@ TEST(TransformMathTests, HierarchyPropagationStampsWorldTransformForChangedGate)
     ASSERT_EQ(hierarchy.GetTopologyBuildCount(), 1u);
     ASSERT_EQ(hierarchy.GetLastPropagatedNodeCount(), 0u);
 
-    // Entities a Changed<WorldTransform>-gated scan visits since `gate`. The
-    // callback binds WorldTransform as const, so the probe classifies the slot
-    // as a read and never stamps what it is measuring.
-    auto movedSince = [&world](uint64 gate) {
-        ECS::ChangeGate g;
-        g.LastRunVersion = gate;
-        std::vector<ECS::EntityHandle> visited;
-        auto q = world.Query<ECS::Read<WorldTransform>>();
-        q.Changed<WorldTransform>(g);
-        q.Each([&](ECS::EntityHandle e, const WorldTransform&) { visited.push_back(e); });
-        return visited;
-    };
-
-    auto contains = [](const std::vector<ECS::EntityHandle>& handles,
-                       ECS::EntityHandle wanted) {
-        return std::find(handles.begin(), handles.end(), wanted) != handles.end();
-    };
-
     // Positive control: the probe must be capable of seeing a stamped write.
     // A write grant on an untouched entity is the known event injected into
     // the measurement channel — without it a zero below would be unreadable.
     {
         const uint64 gate = world.GetGlobalSystemVersion();
         ASSERT_NE(world.GetComponentForWrite<WorldTransform>(root.GetHandle()), nullptr);
-        EXPECT_TRUE(contains(movedSince(gate), root.GetHandle()))
+        EXPECT_TRUE(Contains(EntitiesStampedSince(world, gate), root.GetHandle()))
             << "probe cannot see a write-granted WorldTransform; the gate below proves nothing";
     }
 
@@ -1214,7 +1250,7 @@ TEST(TransformMathTests, HierarchyPropagationStampsWorldTransformForChangedGate)
         const uint32 versionBefore =
             world.GetComponent<WorldTransform>(child.GetHandle())->Version;
 
-        Transform moved = Transform::FromTRS({7.0f, 0.0f, 0.0f}, Quaternion{}, {1, 1, 1});
+        Transform moved = Transform::FromTRS({7.0, 0.0, 0.0}, Quaternion{}, {1, 1, 1});
         world.AddComponentImmediate(child.GetHandle(), moved);
         hierarchy.Update(world, 0.0f);
 
@@ -1223,7 +1259,7 @@ TEST(TransformMathTests, HierarchyPropagationStampsWorldTransformForChangedGate)
         ASSERT_GT(world.GetComponent<WorldTransform>(child.GetHandle())->Version, versionBefore)
             << "propagation did not run; the stamp assertion below would be vacuous";
 
-        EXPECT_TRUE(contains(movedSince(gate), child.GetHandle()))
+        EXPECT_TRUE(Contains(EntitiesStampedSince(world, gate), child.GetHandle()))
             << "hierarchy recomposed the child's WorldTransform without stamping its column";
     }
 
@@ -1234,17 +1270,17 @@ TEST(TransformMathTests, HierarchyPropagationStampsWorldTransformForChangedGate)
         const uint32 versionBefore =
             world.GetComponent<WorldTransform>(root.GetHandle())->Version;
 
-        Transform moved = Transform::FromTRS({0.0f, 5.0f, 0.0f}, Quaternion{}, {1, 1, 1});
+        Transform moved = Transform::FromTRS({0.0, 5.0, 0.0}, Quaternion{}, {1, 1, 1});
         world.AddComponentImmediate(root.GetHandle(), moved);
         hierarchy.Update(world, 0.0f);
 
         ASSERT_EQ(hierarchy.GetTopologyBuildCount(), 1u);
         ASSERT_GT(world.GetComponent<WorldTransform>(root.GetHandle())->Version, versionBefore);
 
-        const std::vector<ECS::EntityHandle> moved2 = movedSince(gate);
-        EXPECT_TRUE(contains(moved2, root.GetHandle()))
+        const std::vector<ECS::EntityHandle> moved2 = EntitiesStampedSince(world, gate);
+        EXPECT_TRUE(Contains(moved2, root.GetHandle()))
             << "hierarchy rewrote the root's WorldTransform without stamping its column";
-        EXPECT_TRUE(contains(moved2, child.GetHandle()))
+        EXPECT_TRUE(Contains(moved2, child.GetHandle()))
             << "a root move must signal the subtree it recomputed";
     }
 }
@@ -1264,18 +1300,18 @@ TEST(TransformMathTests, Hierarchy_ChildrenFollowRootAfterDirectWorldWrite)
             auto child = world.Create(Transform{}, parent);
             Engine::Renderer::TransformHierarchySystem hierarchy(forceSerial);
             hierarchy.Update(world, 0.0f);
-            ASSERT_FLOAT_EQ(child.Get<WorldTransform>()->matrix[13], 0.0f);
+            ASSERT_DOUBLE_EQ(child.Get<WorldTransform>()->Position.Y, 0.0);
 
-            root.GetForWrite<Transform>()->matrix[13] = 8.0f;
+            root.GetForWrite<Transform>()->Position.Y = 8.0;
             if (publishWorld)
             {
                 auto* composed = root.GetForWrite<WorldTransform>();
-                composed->matrix[13] = 8.0f;
+                composed->Position.Y = 8.0;
                 BumpWorldTransform(world, root.GetHandle(), *composed);
             }
             hierarchy.Update(world, 0.0f);
-            EXPECT_FLOAT_EQ(root.Get<WorldTransform>()->matrix[13], 8.0f);
-            EXPECT_FLOAT_EQ(child.Get<WorldTransform>()->matrix[13], 8.0f);
+            EXPECT_DOUBLE_EQ(root.Get<WorldTransform>()->Position.Y, 8.0);
+            EXPECT_DOUBLE_EQ(child.Get<WorldTransform>()->Position.Y, 8.0);
         }
     }
 }
@@ -1285,24 +1321,140 @@ TEST(TransformMathTests, Hierarchy_GrandchildFollowsRootAfterDirectWorldWrite)
     ECS::World world;
     auto root = world.Create(Transform{});
     Transform childLocal{};
-    childLocal.matrix[13] = 1.0f;
+    childLocal.Position.Y = 1.0;
     Parent childParent{};
     childParent.Entity = root.GetHandle();
     auto child = world.Create(childLocal, childParent);
     Transform grandchildLocal{};
-    grandchildLocal.matrix[13] = 2.0f;
+    grandchildLocal.Position.Y = 2.0;
     Parent grandchildParent{};
     grandchildParent.Entity = child.GetHandle();
     auto grandchild = world.Create(grandchildLocal, grandchildParent);
     Engine::Renderer::TransformHierarchySystem hierarchy;
     hierarchy.Update(world, 0.0f);
-    ASSERT_FLOAT_EQ(grandchild.Get<WorldTransform>()->matrix[13], 3.0f);
+    ASSERT_DOUBLE_EQ(grandchild.Get<WorldTransform>()->Position.Y, 3.0);
 
-    root.GetForWrite<Transform>()->matrix[13] = 8.0f;
+    root.GetForWrite<Transform>()->Position.Y = 8.0;
     auto* composed = root.GetForWrite<WorldTransform>();
-    composed->matrix[13] = 8.0f;
+    composed->Position.Y = 8.0;
     BumpWorldTransform(world, root.GetHandle(), *composed);
     hierarchy.Update(world, 0.0f);
-    EXPECT_FLOAT_EQ(child.Get<WorldTransform>()->matrix[13], 9.0f);
-    EXPECT_FLOAT_EQ(grandchild.Get<WorldTransform>()->matrix[13], 11.0f);
+    EXPECT_DOUBLE_EQ(child.Get<WorldTransform>()->Position.Y, 9.0);
+    EXPECT_DOUBLE_EQ(grandchild.Get<WorldTransform>()->Position.Y, 11.0);
+}
+
+// A spawned Parent-holder rebuilds the topology, and the rebuild resets the flat pass's gate, so both passes
+// scan every chunk. Only a changed pose may read as changed to a Changed<WorldTransform> consumer. The gate is
+// sampled after the edits, so only the hierarchy's own stamps count.
+TEST(TransformMathTests, Hierarchy_SpawnFrameReportsOnlyChangedWorldTransforms)
+{
+    ECS::World world;
+    ECS::Entity still = world.Create(Transform::FromTRS({3.0, 0.0, 0.0}, Quaternion{}, {1, 1, 1}));
+    ECS::Entity root = world.Create(Transform{});
+    Parent toRoot{};
+    toRoot.Entity = root.GetHandle();
+    ECS::Entity child = world.Create(Transform::FromTRS({1.0, 0.0, 0.0}, Quaternion{}, {1, 1, 1}), toRoot);
+    Engine::Renderer::TransformHierarchySystem hierarchy;
+    hierarchy.Update(world, 0.0f);
+    hierarchy.Update(world, 0.0f);
+    ASSERT_EQ(hierarchy.GetTopologyBuildCount(), 1u);
+
+    // HierarchyOrder puts the new entity in a chunk of its own: stamps are per chunk.
+    ECS::Entity spawned =
+        world.Create(Transform::FromTRS({0.0, 2.0, 0.0}, Quaternion{}, {1, 1, 1}), toRoot, HierarchyOrder{});
+    const uint64 gate = world.GetGlobalSystemVersion();
+    hierarchy.Update(world, 0.0f);
+    ASSERT_EQ(hierarchy.GetTopologyBuildCount(), 2u) << "the spawn did not rebuild, so no gate was reset";
+
+    const std::vector<ECS::EntityHandle> stamped = EntitiesStampedSince(world, gate);
+    EXPECT_TRUE(Contains(stamped, spawned.GetHandle())) << "a new entity's first resolved pose was not reported";
+    EXPECT_FALSE(Contains(stamped, still.GetHandle())) << "the flat pass reported an unmoved root";
+    EXPECT_FALSE(Contains(stamped, root.GetHandle())) << "the flat pass reported an unmoved hierarchy root";
+    EXPECT_FALSE(Contains(stamped, child.GetHandle())) << "the rebuild reported an unmoved Parent-holder";
+}
+
+// The flat pass reports each real change of a root's pose: the first resolve, a move, a basis-only change,
+// and a return to a pose it held before. A move and back within one frame reports nothing.
+TEST(TransformMathTests, FlatPass_ReportsEachChangedRootPose)
+{
+    JobSystem::WorkStealingThreadPool pool(4);
+    ECS::World world(&pool);
+    const Transform first = Transform::FromTRS({1.0, 0.0, 0.0}, Quaternion{}, {1, 1, 1});
+    ECS::Entity mover = world.Create(first);
+    const ECS::EntityHandle handle = mover.GetHandle();
+    Engine::Renderer::TransformHierarchySystem hierarchy;
+
+    EXPECT_TRUE(UpdateReports(world, hierarchy, handle)) << "first resolve";
+    EXPECT_FALSE(UpdateReports(world, hierarchy, handle)) << "idle frame";
+    *mover.GetForWrite<Transform>() = Transform::FromTRS({5.0, 0.0, 0.0}, Quaternion{}, {1, 1, 1});
+    EXPECT_TRUE(UpdateReports(world, hierarchy, handle)) << "move";
+    *mover.GetForWrite<Transform>() = Transform::FromTRS({5.0, 0.0, 0.0}, Quaternion{}, {2, 2, 2});
+    EXPECT_TRUE(UpdateReports(world, hierarchy, handle)) << "basis-only change";
+    *mover.GetForWrite<Transform>() = first;
+    EXPECT_TRUE(UpdateReports(world, hierarchy, handle)) << "return to the first pose";
+    EXPECT_DOUBLE_EQ(mover.Get<WorldTransform>()->Position.X, 1.0);
+    mover.GetForWrite<Transform>()->Position.X = 9.0;
+    *mover.GetForWrite<Transform>() = first;
+    EXPECT_FALSE(UpdateReports(world, hierarchy, handle)) << "moved and back within one frame";
+}
+
+// A reparent rebuilds the topology; the child's new world pose is reported.
+TEST(TransformMathTests, Hierarchy_ReparentReportsTheMovedChild)
+{
+    ECS::World world;
+    ECS::Entity left = world.Create(Transform{});
+    ECS::Entity right = world.Create(Transform::FromTRS({10.0, 0.0, 0.0}, Quaternion{}, {1, 1, 1}));
+    Parent toLeft{};
+    toLeft.Entity = left.GetHandle();
+    ECS::Entity child = world.Create(Transform::FromTRS({1.0, 0.0, 0.0}, Quaternion{}, {1, 1, 1}), toLeft);
+    Engine::Renderer::TransformHierarchySystem hierarchy;
+    hierarchy.Update(world, 0.0f);
+    hierarchy.Update(world, 0.0f);
+
+    child.GetForWrite<Parent>()->Entity = right.GetHandle();
+    EXPECT_TRUE(UpdateReports(world, hierarchy, child.GetHandle()))
+        << "the reparented child's new world pose was not reported";
+    EXPECT_EQ(hierarchy.GetTopologyBuildCount(), 2u);
+    EXPECT_DOUBLE_EQ(child.Get<WorldTransform>()->Position.X, 11.0);
+}
+
+// A world switch resets every gate of the system. The first frame on each
+// world reports what changed there and nothing else.
+TEST(TransformMathTests, FlatPass_WorldSwitchReportsOnlyChangedPoses)
+{
+    ECS::World first;
+    ECS::World second;
+    ECS::Entity mover = first.Create(Transform{});
+    ECS::Entity spawned = second.Create(Transform::FromTRS({4.0, 0.0, 0.0}, Quaternion{}, {1, 1, 1}));
+    Engine::Renderer::TransformHierarchySystem hierarchy;
+    hierarchy.Update(first, 0.0f);
+    hierarchy.Update(first, 0.0f);
+
+    EXPECT_TRUE(UpdateReports(second, hierarchy, spawned.GetHandle()))
+        << "the first resolve on the new world was not reported";
+    EXPECT_FALSE(UpdateReports(first, hierarchy, mover.GetHandle())) << "the switch back reported an unmoved pose";
+
+    hierarchy.Update(second, 0.0f);
+    mover.GetForWrite<Transform>()->Position.X = 6.0;
+    EXPECT_TRUE(UpdateReports(first, hierarchy, mover.GetHandle()))
+        << "a pose edited while the other world was active was not reported";
+}
+
+// Roots in two chunks move in one pass. The stamp after the pass grants each
+// chunk that changed, not only one of them.
+TEST(TransformMathTests, FlatPass_ReportsChangedRootsInEachChunk)
+{
+    JobSystem::WorkStealingThreadPool pool(4);
+    ECS::World world(&pool);
+    ECS::Entity plain = world.Create(Transform{});
+    ECS::Entity ordered = world.Create(Transform{}, HierarchyOrder{});
+    Engine::Renderer::TransformHierarchySystem hierarchy;
+    hierarchy.Update(world, 0.0f);
+    plain.GetForWrite<Transform>()->Position.X = 1.0;
+    ordered.GetForWrite<Transform>()->Position.X = 2.0;
+    const uint64 gate = world.GetGlobalSystemVersion();
+    hierarchy.Update(world, 0.0f);
+    const std::vector<ECS::EntityHandle> stamped = EntitiesStampedSince(world, gate);
+    EXPECT_TRUE(Contains(stamped, plain.GetHandle())) << "the move in the first chunk was not reported";
+    EXPECT_TRUE(Contains(stamped, ordered.GetHandle())) << "the move in the second chunk was not reported";
 }

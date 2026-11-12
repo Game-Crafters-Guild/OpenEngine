@@ -2,13 +2,9 @@
 
 namespace GameEngine::Components
 {
-// Tag marking an entity as engine-created runtime state that must never be written to a
-// scene file. WriteSceneFile excludes any entity carrying this tag, the same way it
-// excludes prefab-instanced entities, so the entity exists only for the duration of a
-// session and is reconstructed at runtime on the next load. The first consumer is the HLOD
-// proxy entity, spawned from a baked .gehlod cluster; without this exclusion those proxies
-// would serialize into the user's scene and double-spawn (with dangling synthetic mesh
-// GUIDs) on reload.
+// Tag marking an entity as engine-created runtime state that no scene file holds. WriteSceneFile
+// excludes an entity with this tag. A world snapshot keeps it (the HLOD proxies). An entity that
+// its owner makes again after a snapshot restore also carries GeneratedEntity.
 //
 // The tag is intentionally kept out of the Add Component menu — a user adding it by hand
 // would silently drop the entity from every save — and is itself excluded from

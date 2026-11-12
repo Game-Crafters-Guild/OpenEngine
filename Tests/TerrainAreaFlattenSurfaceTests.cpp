@@ -94,8 +94,7 @@ public:
         auto& terrains = TerrainService::Get();
         m_Handle = terrains.CreateTerrain(config);
         TerrainData* data = terrains.GetTerrainData(m_Handle);
-        FillHeightfieldBaseRegion(data->Heightfield, Components::TerrainBaseSource::ProceduralNoise, nullptr, 0,
-                                  0, static_cast<int32>(kSampleDim) - 1, static_cast<int32>(kSampleDim) - 1);
+        data->Heightfield.FillRegionWithNoise(4.0f, 1.0f, 0, 0, static_cast<int32>(kSampleDim) - 1, static_cast<int32>(kSampleDim) - 1, 5, 42);
         data->MarkFullDirty();
         terrains.RebuildQuadtree(m_Handle);
         data->ResetSplatmapAndCommitRange();
@@ -107,7 +106,7 @@ public:
         component.HeightScale = kHeightScale;
         component.TerrainDataHandle = m_Handle.Index;
         component.TerrainDataGeneration = m_Handle.Generation;
-        component.BaseSource = Components::TerrainBaseSource::ProceduralNoise;
+        component.BaseSource = Components::TerrainBaseSource::Flat;
         m_World.AddComponentImmediate<Components::Terrain>(terrain, component);
         m_World.AddComponentImmediate<Components::WorldTransform>(terrain, Identity());
     }
@@ -194,8 +193,8 @@ public:
     {
         const ECS::EntityHandle entity = m_World.CreateEntity();
         Components::WorldTransform pose{};
-        pose.matrix[12] = 50.0f;
-        pose.matrix[14] = 50.0f;
+        pose.Position.X = 50.0;
+        pose.Position.Z = 50.0;
         m_World.AddComponentImmediate<Components::WorldTransform>(entity, pose);
         Components::TerrainModifierVolume volume{};
         volume.Shape = Components::TerrainVolumeShape::Circle;
@@ -472,6 +471,51 @@ TEST(TerrainAreaFlattenSurface, ARebuildFromTheSameInputsChangesNoTexel)
     ASSERT_EQ(first.size(), second.size());
     EXPECT_EQ(std::memcmp(first.data(), second.data(), first.size() * sizeof(float32)), 0)
         << "a rebuild from the same inputs changed the ground";
+}
+
+// The baked ground over the plaza and its fade, row by row.
+std::vector<float32> CopyPlazaHeights(const AreaFlattenScene& scene)
+{
+    std::vector<float32> heights;
+    for (uint32 row = ColumnAt(-kRimHalf - kFade); row <= ColumnAt(kRimHalf + kFade); ++row)
+        for (uint32 column = ColumnAt(-kRimHalf - kFade); column <= ColumnAt(kRimHalf + kFade); ++column)
+            heights.push_back(scene.HeightAt(column, row));
+    return heights;
+}
+
+// A road from the west opening that swings south, far past the plaza's bounds and its own reach,
+// and comes back in at the east opening. Each part near the plaza is its own run, so the plaza is
+// graded as by two roads; one run would bridge the gap across the plaza.
+TEST(TerrainAreaFlattenSurface, ARoadThatLeavesAndComesBackGradesThePlazaAsTwoRoads)
+{
+    constexpr float32 kWestY = -0.8f;
+    constexpr float32 kEastY = 0.85f;
+    const Mathematics::Vector3 westOpening{-kRimHalf, kWestY, kWestRoadZ};
+    const Mathematics::Vector3 westTurn{-35.0f, kWestY, kWestRoadZ};
+    const Mathematics::Vector3 eastTurn{35.0f, kEastY, kEastRoadZ};
+    const Mathematics::Vector3 eastOpening{kRimHalf, kEastY, kEastRoadZ};
+
+    std::vector<float32> oneRoad;
+    {
+        AreaFlattenScene scene;
+        scene.AddPlaza(kSlopedCorners);
+        scene.AddRoad({westOpening, westTurn, {-35.0f, kWestY, -40.0f}, {35.0f, kEastY, -40.0f}, eastTurn, eastOpening});
+        scene.Bake();
+        oneRoad = CopyPlazaHeights(scene);
+    }
+    std::vector<float32> twoRoads;
+    {
+        AreaFlattenScene scene;
+        scene.AddPlaza(kSlopedCorners);
+        scene.AddRoad({westOpening, westTurn});
+        scene.AddRoad({eastTurn, eastOpening});
+        scene.Bake();
+        twoRoads = CopyPlazaHeights(scene);
+    }
+
+    ASSERT_EQ(oneRoad.size(), twoRoads.size());
+    EXPECT_EQ(std::memcmp(oneRoad.data(), twoRoads.data(), oneRoad.size() * sizeof(float32)), 0)
+        << "the road that leaves and comes back grades the plaza unlike its two parts";
 }
 
 TEST(TerrainAreaFlattenSurface, OnlyAnEditToTheRimOrAnOpeningRebuildsTheSurface)

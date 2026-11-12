@@ -184,7 +184,7 @@ bool GenerateHdriExposurePreview(const std::filesystem::path& assetPath,
     if (std::filesystem::exists(cachePath, ec))
         return true;
 
-    Vector<uint8> fileBytes;
+    ByteBuffer fileBytes;
     const bool read = ReadFileBytesShared(assetPath, fileBytes);
     const Image::ImageFloat decoded =
         read ? Image::DecodeFloat(fileBytes, assetPath.string(), Image::DecodeChannels::Rgb) : Image::ImageFloat{};

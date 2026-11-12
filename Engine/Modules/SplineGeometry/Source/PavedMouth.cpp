@@ -4,6 +4,7 @@
 #include "PavedArmPath.h"
 #include "RingWalk.h"
 
+#include "Mathematics/Angle.h"
 #include "Mathematics/Geometry.h"
 #include "SplineGeometry/SplineCorner.h"
 
@@ -186,11 +187,7 @@ void AppendArc(const MouthArc& arc, const Vector2& onSide, AreaRing& out)
     const Vector2 from = arc.Touch.Point - arc.Center;
     const Vector2 to = onSide - arc.Center;
     const float32 start = std::atan2(from.y, from.x);
-    float32 sweep = std::atan2(to.y, to.x) - start;
-    if (sweep > std::numbers::pi_v<float32>)
-        sweep -= 2.0f * std::numbers::pi_v<float32>;
-    else if (sweep < -std::numbers::pi_v<float32>)
-        sweep += 2.0f * std::numbers::pi_v<float32>;
+    const float32 sweep = Mathematics::SignedAngleDifference(start, std::atan2(to.y, to.x));
     const float32 stepRadians = kRoundCornerStepDegrees * std::numbers::pi_v<float32> / 180.0f;
     const int steps = std::max({1, static_cast<int>(std::ceil(std::abs(sweep) / stepRadians)),
                                 static_cast<int>(std::ceil(std::abs(sweep) * arc.Radius / kMouthArcSpacingMeters))});

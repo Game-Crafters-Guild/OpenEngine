@@ -30,6 +30,7 @@
 #include "Mathematics/MatrixOps.h"
 #include "Rendering/Camera/CameraTypes.h"
 #include "Rendering/Common/Frustum.h"
+#include "TestCameraEye.h"
 
 #include <gtest/gtest.h>
 
@@ -115,7 +116,7 @@ Rendering::CameraData MakeCamera(const Pose& pose, const Lens& lens = {})
     cam.cameraPos.x = pose.Position.x;
     cam.cameraPos.y = pose.Position.y;
     cam.cameraPos.z = pose.Position.z;
-    return cam;
+    return ::GameEngine::Tests::TestCameraWithEye(cam);
 }
 
 // A visible receiver: the nearest ground or tower hit along a grid ray.

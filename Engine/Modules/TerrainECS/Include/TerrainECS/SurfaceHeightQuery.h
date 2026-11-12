@@ -1,7 +1,7 @@
 #pragma once
 
 #include "TerrainECS/PageLevelRule.h"
-#include "PageStreaming/CpuPageDirectory.h"
+#include "PageStreaming/CpuPage/CpuPageDirectory.h"
 #include "PageStreaming/Height/HeightPageLayer.h"
 #include "PageStreaming/PageStore/PageStoreFormat.h"
 #include "Mathematics/Rect.h"
@@ -19,6 +19,7 @@ class World;
 namespace GameEngine::Components
 {
 struct Terrain;
+struct TerrainPlanetRelief;
 struct WorldTransform;
 } // namespace GameEngine::Components
 
@@ -27,6 +28,7 @@ namespace GameEngine::TerrainECS
 
 struct TerrainData;
 struct TerrainHandle;
+struct TerrainHeightRangeMeters;
 
 /// What a caller does with an answer coarser than the finest data the terrain has at the point
 /// (design page-streaming D3). Every caller names its policy.
@@ -71,14 +73,25 @@ struct SurfaceHeightPageStamp
     uint64 Change = 0;
 };
 
+/// A planet's pages as SurfaceHeightQuery's spherical arm reads them (design page-streaming-planets 3.11).
+struct SurfaceHeightSphere
+{
+    Mathematics::Vector3 Center;   ///< the planet's center in world space
+    float64 ReferenceRadius = 0.0; ///< meters; the pages hold heights above it
+    uint32 FaceSamples = 0;        ///< level-0 samples along a face's side
+    /// What the planet's layers add to its pages, as its pages hold them (null: nothing).
+    const PageStreaming::HeightPageLayer* Modifiers = nullptr;
+    const PageStreaming::HeightPageLayer* Overlay = nullptr;
+};
+
 /// Samples per axis SurfaceHeightQuery::FillFinestPage writes: a level-0 page's owned samples and
 /// the first sample of the next page, so the pages' grids meet on a shared row and column.
 inline constexpr uint32 kFinestPageGridSamples = PageStreaming::kPageOwnedSamples + 1u;
 
-/// The CPU height of one planar terrain at a world point: the one reader type every CPU reader of
-/// terrain height takes (design page-streaming D3; the planar arm of page-streaming-planets 3.11).
+/// The CPU height of one terrain at a world point: the one reader type every CPU reader of terrain
+/// height takes (design page-streaming D3; page-streaming-planets 3.11).
 ///
-/// Three arms behind one SampleHeight:
+/// Four arms behind one SampleHeight:
 /// - a paged terrain reads its pages on the CPU (the residency's CpuPages directory): the bilinear
 ///   sample of the finest page over the point plus the terrain's modifier overlay there, on the
 ///   resolve's page lattice and apron (LocatePageTexel), never a read outside a page. The overlay is
@@ -88,9 +101,13 @@ inline constexpr uint32 kFinestPageGridSamples = PageStreaming::kPageOwnedSample
 ///   answers unsampled everywhere, under every policy: never a stale height. Its footprint and
 ///   lattice still answer, so a caller tells "wait" from "no ground".
 /// - a whole-map terrain (one heightfield) answers its bilinear sample, always Finest at level 0.
+/// - a planet (IsSpherical) reads its CPU pages by direction from its center: the page sampler of
+///   its page bodies (SamplePlanetPageTexel) plus its layers at the level-0 point, as its pages are drawn.
 ///
-/// Corner (0, 0) of the lattice sits on the footprint's minimum corner. A view of the terrain's
-/// data: valid until the next height-page Update, on the main thread.
+/// Corner (0, 0) of the lattice sits on the footprint's minimum corner. The footprint is the
+/// lattice's extent or less: a tiled terrain's lattice covers whole tiles, its footprint its authored
+/// size (ClipFootprint). A view of the terrain's data: valid until the next height-page Update, on
+/// the main thread.
 class SurfaceHeightQuery
 {
 public:
@@ -109,13 +126,21 @@ public:
     /// spread over `shape`'s footprint.
     SurfaceHeightQuery(const TerrainData& wholeMap, const TerrainHandle& handle, const PageRequestTerrain& shape,
                        float32 originY, float32 heightScale);
+    /// The query of a planet's CPU pages `pages`, whose pyramid is `levels`, placed by `sphere`.
+    SurfaceHeightQuery(const PageStreaming::CpuPageDirectory& pages,
+                       std::span<const PageStreaming::PageStoreLevel> levels, const SurfaceHeightSphere& sphere);
 
-    /// False when there is no planar terrain: no footprint.
+    /// False when there is no planar terrain: no footprint. A planet's query is not valid: IsSpherical.
     bool IsValid() const { return m_Shape.SamplesX >= 2u && m_Shape.SamplesZ >= 2u; }
+    /// True on a planet's query: SampleHeight answers by direction.
+    bool IsSpherical() const { return m_Sphere.FaceSamples >= 2u; }
+    /// The planet a spherical query reads.
+    const SurfaceHeightSphere& Sphere() const { return m_Sphere; }
 
     /// The height under `worldPoint` (its X and Z). False outside the footprint, while the terrain's
     /// pages have no source or have not had an Update, and, under RequireFinest, for a coarse answer;
-    /// `out` is written only when it returns true.
+    /// `out` is written only when it returns true. On a planet: the height in meters above the
+    /// reference radius on the line from the center through `worldPoint` (any point but the center).
     bool SampleHeight(const Mathematics::Vector3& worldPoint, SurfaceHeightPolicy policy, SurfaceHeightSample& out) const;
 
     /// Whether world (x, z) lies on the footprint. Outside it there is no ground and never will be;
@@ -124,7 +149,7 @@ public:
 
     /// True on a paged terrain whose pages have a source: its CPU pages answer (or will), not a
     /// heightfield. False on a whole-map terrain and while the pages have no source yet.
-    bool HasPageSource() const { return !m_Pages.Entries.empty() && !m_Levels.empty(); }
+    bool HasPageSource() const { return !m_Pages.Empty() && !m_Levels.empty(); }
 
     /// Writes the normalized level-0 samples of finest page (pageX, pageZ) to `out`
     /// (kFinestPageGridSamples squared, row-major, X fastest), each plus the modifier overlay there:
@@ -138,11 +163,20 @@ public:
     /// False off a paged terrain with a source, or outside the footprint.
     bool FinestPageAt(float32 worldX, float32 worldZ, uint32& outPageX, uint32& outPageZ) const;
 
+    /// Clips the footprint to `sizeX` x `sizeZ` world meters from its minimum corner (a tiled
+    /// terrain's authored size). A size past the lattice's extent keeps the lattice's extent.
+    void ClipFootprint(float32 sizeX, float32 sizeZ);
+
     /// The footprint's minimum corner and size, in world meters.
     float32 FootprintOriginX() const { return m_Shape.OriginX; }
     float32 FootprintOriginZ() const { return m_Shape.OriginZ; }
-    float32 FootprintSizeX() const;
-    float32 FootprintSizeZ() const;
+    float32 FootprintSizeX() const { return m_FootprintSizeX; }
+    float32 FootprintSizeZ() const { return m_FootprintSizeZ; }
+    /// The footprint as a world XZ rectangle: X is world x, Y is world z.
+    Mathematics::Rect Footprint() const
+    {
+        return Mathematics::Rect{m_Shape.OriginX, m_Shape.OriginZ, m_FootprintSizeX, m_FootprintSizeZ};
+    }
     /// The finest lattice's samples per axis.
     uint32 LatticeSamplesX() const { return m_Shape.SamplesX; }
     uint32 LatticeSamplesZ() const { return m_Shape.SamplesZ; }
@@ -183,8 +217,13 @@ public:
 
 private:
     bool SamplePaged(float32 u, float32 v, SurfaceHeightPolicy policy, SurfaceHeightSample& out) const;
+    bool SampleSphere(const Mathematics::Vector3& worldPoint, SurfaceHeightPolicy policy, SurfaceHeightSample& out) const;
+    // The lattice's extent in world meters: the span the uv of every page lookup is relative to.
+    float32 LatticeSizeX() const;
+    float32 LatticeSizeZ() const;
 
     PageStreaming::CpuPageDirectory m_Pages; // empty: no page source
+    SurfaceHeightSphere m_Sphere;            // FaceSamples 0: not a planet
     const PageStreaming::HeightPageLayer* m_Overlay = nullptr;
     const TerrainData* m_WholeMap = nullptr;
     uint64 m_WholeMapIdentity = 0;
@@ -192,6 +231,8 @@ private:
     PageRequestTerrain m_Shape;
     float32 m_OriginY = 0.0f;
     float32 m_HeightScale = 0.0f;
+    float32 m_FootprintSizeX = 0.0f;
+    float32 m_FootprintSizeZ = 0.0f;
     SurfaceHeightEdits m_Edits;
 };
 
@@ -202,19 +243,51 @@ struct SurfaceHeightTerrain
 {
     const Components::Terrain* Terrain = nullptr;
     const Components::WorldTransform* Transform = nullptr;
+    uint32 EntityId = 0; ///< the terrain entity's id: a planet's key in the height pages
+    /// A planet's base relief; null on a planar terrain and on a planet without one.
+    const Components::TerrainPlanetRelief* Relief = nullptr;
 };
 
 /// Finds the terrain under `point`: a planar terrain covers the points inside its footprint, a
-/// spherical terrain the points inside its outer radius. When several cover the point, the one
+/// spherical terrain every point but its center. When several cover the point, the one
 /// whose surface is nearest to it wins, so the answer does not depend on the order of the world's
 /// storage. A reader that takes more of that terrain than its heights (its tiles, its modifier
 /// stack) finds it here, so it reads the same terrain.
 SurfaceHeightTerrain FindSurfaceHeightTerrain(ECS::World& world, const Mathematics::Vector3& point);
 
+/// The radii in meters from a planet's center between which its ground lies.
+struct PlanetReliefShell
+{
+    float32 Inner = 0.0f;
+    float32 Outer = 0.0f;
+};
+
+/// The relief shell of a planet of `radius` with base relief `relief`: the radius -/+ the relief
+/// envelope (the base noise reaches 1.5 times its amplitude), widened by a quarter for the sculpt
+/// overlay and the modifier layers. Inner is never below zero.
+PlanetReliefShell PlanetReliefShellOf(float32 radius, const Components::TerrainPlanetRelief& relief);
+
+/// The height range of a planet's ground in meters about its radius: -/+ the relief envelope.
+/// The rows of a planet rule set band height inside it (MakeDefaultPlanetSurfaceRules).
+TerrainHeightRangeMeters PlanetHeightRangeMeters(const Components::TerrainPlanetRelief& relief);
+
+/// The height of a spherical terrain's atmosphere top above its PlanetRadius, in meters: the one value the sky
+/// and the Inspector read. ShareOfRadius gives AtmosphereShare x PlanetRadius; HeightMeters gives AtmosphereHeight,
+/// and a stored height above the radius reads as the radius. Auto gives the larger of Earth's ratio (100 km of air
+/// on a 6360 km radius) x PlanetRadius and the relief's top (PlanetHeightRangeMeters) over Everest's share of
+/// Earth's atmosphere, at most PlanetRadius. A PlanetRadius at or below 0 gives 0. `relief` may be null: no relief.
+float32 AtmosphereHeightMeters(const Components::Terrain& terrain, const Components::TerrainPlanetRelief* relief);
+
 /// The query of the terrain FindSurfaceHeightTerrain finds under `point` (TerrainService::SurfaceQuery).
-/// Invalid when that terrain is spherical, when no terrain covers the point, or when it has no height
-/// data yet.
+/// Spherical (IsSpherical) on a streamed planet; neither valid nor spherical when no terrain covers
+/// the point or it has no height data yet.
 SurfaceHeightQuery ResolveSurfaceHeightQuery(ECS::World& world, const Mathematics::Vector3& point);
+
+/// Fetches the level-0 height page under `point` of the planar paged terrain FindSurfaceHeightTerrain
+/// finds there, now, on the main thread (TerrainService::FetchFinestHeightPage). A caller that places
+/// something on a Coarse answer calls it, then resolves its query again: the answer there is then
+/// Finest. Returns whether that page is then on the CPU; false on a planet and off a paged terrain.
+bool FetchFinestSurfaceHeightPage(ECS::World& world, const Mathematics::Vector3& point);
 
 /// Keeps a CPU window of finest height pages around `center` at the next height-page Update, for
 /// every paged terrain (TerrainPages::RequestReaderWindow): a reader that needs the finest

@@ -12,6 +12,7 @@
 #include "JobSystem/TaskDependencyGraph.h"
 #include "JobSystem/WorkStealingThreadPool.h"
 #include "TestPlatform.h"
+#include "ScopedLogLevel.h"
 
 #include <gtest/gtest.h>
 
@@ -89,11 +90,10 @@ void BusyWaitUs(int us) {
 
 class TaskDependencyGraphTest : public ::testing::Test {
 protected:
-    void SetUp() override {
-        Logger::Log::SetLogLevel(Logger::LogLevel::Debug);
-    }
-
     TaskDependencyGraph graph;
+
+private:
+    ScopedLogLevel m_LogLevel{Logger::LogLevel::Debug};
 };
 
 TEST_F(TaskDependencyGraphTest, RegisterWithoutDependenciesIsImmediatelyReady) {
@@ -278,10 +278,8 @@ TEST(TaskGraphDeathTest, NeverSubmittedDependencyTripsTombstoneAssert) {
 // ========================================
 
 class TaskGraphPoolTest : public ::testing::Test {
-protected:
-    void SetUp() override {
-        Logger::Log::SetLogLevel(Logger::LogLevel::Warning);
-    }
+private:
+    ScopedLogLevel m_LogLevel{Logger::LogLevel::Warning};
 };
 
 /**
@@ -390,6 +388,8 @@ TEST_F(TaskGraphPoolTest, FanInDependencyHandlesAreTerminalWhenDependentRuns) {
  * this test times out.
  */
 TEST_F(TaskGraphPoolTest, SubmitDependentWhileDependencyCompletesStress) {
+    // Declared before the pool: a queued job can still use it when an ASSERT returns early.
+    std::atomic<bool> dependentRan{false};
     WorkStealingThreadPool pool(4);
 
     constexpr int kIterations = 5000;
@@ -397,7 +397,7 @@ TEST_F(TaskGraphPoolTest, SubmitDependentWhileDependencyCompletesStress) {
     std::uniform_int_distribution<int> jitterUs(0, 3);
 
     for (int i = 0; i < kIterations; ++i) {
-        std::atomic<bool> dependentRan{false};
+        dependentRan.store(false, std::memory_order_relaxed);
 
         // The dependency starts executing on a worker immediately; the jitter
         // straddles its completion so the dependent's Register races the
@@ -432,14 +432,16 @@ TEST_F(TaskGraphPoolTest, SubmitDependentWhileDependencyCompletesStress) {
  * a callback re-entered the graph and self-deadlocked.
  */
 TEST_F(TaskGraphPoolTest, SubmitFromCompletionCallbackDoesNotDeadlock) {
-    WorkStealingThreadPool pool(2);
-
+    // Declared before the pool: the held job, the completion callback and the inner task can still use them
+    // after an ASSERT returns.
     std::atomic<bool> gate{false};
     std::atomic<bool> innerRan{false};
     std::atomic<bool> innerSubmitted{false};
     TaskHandle innerHandle;
+    TaskHandle outerHandle;
+    WorkStealingThreadPool pool(2);
 
-    TaskHandle outerHandle = SubmitInGraph(pool, [&gate] {
+    outerHandle = SubmitInGraph(pool, [&gate] {
         while (!gate.load(std::memory_order_acquire)) {
             std::this_thread::yield();
         }
@@ -471,13 +473,14 @@ TEST_F(TaskGraphPoolTest, SubmitFromCompletionCallbackDoesNotDeadlock) {
  * erased) runs immediately.
  */
 TEST_F(TaskGraphPoolTest, DependentSubmittedAfterDependencyCompletedRunsImmediately) {
+    // Declared before the pool: a queued job can still use it when an ASSERT returns early.
+    std::atomic<bool> ran{false};
     WorkStealingThreadPool pool(2);
 
     TaskHandle depHandle = SubmitInGraph(pool, [] {});
     depHandle.Wait();
     EXPECT_EQ(pool.GetGraphTaskCountForTests(), 0u);
 
-    std::atomic<bool> ran{false};
     TaskHandle handle = SubmitInGraph(pool, [&ran] {
         ran.store(true, std::memory_order_release);
     }, {depHandle});
@@ -492,9 +495,12 @@ TEST_F(TaskGraphPoolTest, DependentSubmittedAfterDependencyCompletedRunsImmediat
  * dependency fails observes the failure and never runs.
  */
 TEST_F(TaskGraphPoolTest, DependentRegisteredBeforeDependencyFailureObservesFailure) {
+    // Declared before the pool: the held job can still read `gate` after the release, and the
+    // dependent can still use `ran` when an ASSERT returns early.
+    std::atomic<bool> gate{false};
+    std::atomic<bool> ran{false};
     WorkStealingThreadPool pool(2);
 
-    std::atomic<bool> gate{false};
     TaskHandle depHandle = SubmitInGraph(pool, [&gate] {
         while (!gate.load(std::memory_order_acquire)) {
             std::this_thread::yield();
@@ -502,7 +508,6 @@ TEST_F(TaskGraphPoolTest, DependentRegisteredBeforeDependencyFailureObservesFail
         throw std::runtime_error("dependency exploded");
     });
 
-    std::atomic<bool> ran{false};
     TaskHandle dependentHandle = SubmitInGraph(pool, [&ran] {
         ran.store(true, std::memory_order_release);
     }, {depHandle}); // parked
@@ -523,6 +528,8 @@ TEST_F(TaskGraphPoolTest, DependentRegisteredBeforeDependencyFailureObservesFail
  * erased) runs anyway; its handle observes its own result, not the failure.
  */
 TEST_F(TaskGraphPoolTest, DependentSubmittedAfterDependencyFailedRunsIndependently) {
+    // Declared before the pool: a queued job can still use it when an ASSERT returns early.
+    std::atomic<bool> ran{false};
     WorkStealingThreadPool pool(2);
 
     TaskHandle depHandle = SubmitInGraph(pool, [] {
@@ -539,7 +546,6 @@ TEST_F(TaskGraphPoolTest, DependentSubmittedAfterDependencyFailedRunsIndependent
                           std::chrono::seconds(10)))
         << "failed dependency's graph node never erased";
 
-    std::atomic<bool> ran{false};
     TaskHandle handle = SubmitInGraph(pool, [&ran] {
         ran.store(true, std::memory_order_release);
     }, {depHandle});
@@ -555,9 +561,10 @@ TEST_F(TaskGraphPoolTest, DependentSubmittedAfterDependencyFailedRunsIndependent
  * disturb the dependency's completion.
  */
 TEST_F(TaskGraphPoolTest, CancelParkedDependentPreventsExecution) {
+    // Declared before the pool: the held job can still read it after the release.
+    std::atomic<bool> gate{false};
     WorkStealingThreadPool pool(2);
 
-    std::atomic<bool> gate{false};
     TaskHandle depHandle = SubmitInGraph(pool, [&gate] {
         while (!gate.load(std::memory_order_acquire)) {
             std::this_thread::yield();

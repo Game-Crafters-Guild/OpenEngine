@@ -30,13 +30,15 @@ namespace GameEngine::ComponentScanner
 //   Rendering::RenderLayerMask       the C# type of the description's kind (BindingRules.h)
 //   AssetRef<C> and its aliases, GUID   AssetGuid, 16 bytes in the engine's text order
 //   Math::Curve                      Curve (644 bytes);  Mathematics::BoundingBox   BoundingBox
-//   an enum                          a property over a private field, whose setter refuses a value
+//   Mathematics::WorldPosition       WorldPosition (three doubles)
+//   Mathematics::Matrix3x3           Matrix3x3 (three float columns)
+//   an enum                         a property over a private field, whose setter refuses a value
 //                                    outside the enum with ArgumentOutOfRangeException
 //   char name[N]                     text: a string property over N private bytes, UTF-8 up to the
 //                                    first zero; the setter refuses more than N - 1 bytes
 //   T name[N]                        a field of the nested [InlineArray(N)] struct <Field>Array
 //   a reflected struct               its mirror
-// GUID, Math::Curve and Mathematics::BoundingBox take their kind only when the written name names
+// GUID, Math::Curve and the Mathematics types of this list take their kind only when the written name names
 // the engine type from the component's scope, as C++ looks it up. A field marked // @ge-hidden is
 // a private member; one marked // @ge-readonly is get-only.
 //
@@ -87,6 +89,8 @@ enum class MirrorKind : std::uint8_t
     AssetGuid,
     Curve,
     BoundingBox,
+    WorldPosition,
+    Matrix3x3,
     Text,
     Enum,
     Struct,

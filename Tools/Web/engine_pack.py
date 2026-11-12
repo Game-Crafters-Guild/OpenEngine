@@ -71,6 +71,8 @@ kPipelineSource = kRepoRoot / "Apps" / "WebLibrary" / kPipeline
 # whose cube faces draw with the full-screen vertex stage.
 kIblStageShaders = ("brdf_lut.comp", "fullscreen_noinput.vert", "sky_capture_cube.frag",
                     "sky_diffuse_convolve.comp", "sky_env_mip_downsample.comp", "sky_specular_prefilter.comp")
+# The built-in shader packages the pack cooks.
+kPackPackages = builtin_shader_cook.kPackages | builtin_shader_cook.kLibraryPackages
 kEngineShaders = kRepoRoot / "Engine" / "Modules" / "Rendering" / "Shaders"
 kShaderCook = kRepoRoot / "Tools" / "ShaderCook" / "shadercook.py"
 kFont = kRepoRoot / export_web_player.kFallbackFont
@@ -134,7 +136,7 @@ def build_engine_pack(out_path: Path, build_tree: Path, seed_project: Path = kSe
 
         failures = builtin_shader_cook.CookBuiltinPackages(
             shaderpkgDir, kEngineShaders, staging / export_web_player.kShaderAssetDir,
-            packages=builtin_shader_cook.kPackages | builtin_shader_cook.kLibraryPackages)
+            packages=kPackPackages)
         for packageName, error in failures:
             print(f"engine_pack: FAILED {packageName}: {error.splitlines()[0] if error else ''}", file=sys.stderr)
         failures += builtin_shader_cook.CookStageShaders(

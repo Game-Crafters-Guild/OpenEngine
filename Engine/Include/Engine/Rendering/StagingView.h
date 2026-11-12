@@ -23,7 +23,7 @@ struct TonemapParams;
 
 namespace GameEngine::Engine::Renderer
 {
-struct Camera;
+class Camera;
 class StagingViewPool;
 
 struct StagingViewTag

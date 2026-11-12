@@ -328,3 +328,28 @@ TEST(HierarchyQueries, DestroySubtreeImmediate_PreparesTheWholeTreeBeforeAnyOnRe
     EXPECT_FALSE(w.IsValid(grandchild));
     EXPECT_EQ(removedOrder, (std::vector<EntityHandle>{child, grandchild, root}));
 }
+
+// At 300 km a float step is 31 mm; the offset rounds to float only after the subtraction in double.
+TEST(HierarchyQueries, ReparentKeepingWorldPose_FarParentGivesTheOffsetInFloatPrecision) {
+    using GameEngine::Components::Transform;
+    using GameEngine::Components::WorldTransform;
+    using GameEngine::Mathematics::WorldPosition;
+    World w;
+    WorldTransform parentPose{};
+    parentPose.Position = WorldPosition{300000.1234567, 1200.0, -299000.0};
+    WorldTransform childPose{};
+    childPose.Position = WorldPosition{300000.1234567 + 1.3, 1200.0 - 0.7, -299000.0 + 2.2};
+    auto parentEntity = w.Create();
+    parentEntity.Set(parentPose);
+    auto childEntity = w.Create();
+    childEntity.Set(childPose);
+    w.ProcessCommands();
+
+    GameEngine::Components::ReparentKeepingWorldPose(w, childEntity.GetHandle(), parentEntity.GetHandle());
+
+    const Transform* local = w.GetComponent<Transform>(childEntity.GetHandle());
+    ASSERT_NE(local, nullptr);
+    EXPECT_NEAR(local->Position.X, 1.3, 1e-6);
+    EXPECT_NEAR(local->Position.Y, -0.7, 1e-6);
+    EXPECT_NEAR(local->Position.Z, 2.2, 1e-6);
+}

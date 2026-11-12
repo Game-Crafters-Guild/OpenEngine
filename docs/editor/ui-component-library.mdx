@@ -18,7 +18,7 @@ The editor UI is native C++ controls plus UXML structure and CSS-style theme ass
 ### Asset model
 
 - Global editor styling enters through `Apps/Editor/Assets/UI/theme.css`.
-- Reusable control CSS belongs in `Apps/Editor/Assets/UI/controls`.
+- Control CSS belongs beside its control: `Engine/Modules/UI/Assets/UI/controls` for the UI module's controls, `Apps/Editor/Assets/UI/controls` for the editor's.
 - Panel-specific CSS belongs in `Apps/Editor/Assets/UI/panels`.
 
 :::note
@@ -196,6 +196,22 @@ Text input, multiline text, float/int values, and vector groups. Controls: `Text
 ```
 
 Vector components shrink to 40 px minimum. Preserve focused fields during refresh.
+
+A `TextField` shows a hint while it holds no text: set the `placeholder` attribute, or call `SetPlaceholder` from C++. The hint hides as soon as the field holds text, and an empty hint shows nothing. The hint is never part of the value and never takes focus or the pointer. It draws in the quiet italic hint style from `UI/controls/FieldPlaceholder/FieldPlaceholder.css`.
+
+```xml title="A field with a hint"
+<TextField id="ApiKey" placeholder="Paste your API key" />
+```
+
+The hint is placed from the field's padding edge. When a host pads the field's text, it sets the same insets on the field in its own style sheet: `--ui_field_placeholder_left` and `--ui_field_placeholder_right` for the horizontal text inset, and `--ui_field_placeholder_lift`, a bottom padding that moves the hint up to the text's baseline. All three are 0 by default.
+
+```css title="A host that pads its field's text by 8 px"
+.todo-add-field {
+    padding: 4px 8px;
+    --ui_field_placeholder_left: 8px;
+    --ui_field_placeholder_right: 8px;
+}
+```
 
 ### Sliders
 

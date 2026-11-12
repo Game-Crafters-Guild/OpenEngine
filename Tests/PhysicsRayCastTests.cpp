@@ -53,8 +53,8 @@ protected:
     static RayCastQuery Forward()
     {
         RayCastQuery query;
-        query.ray.origin = {0, 0, 0};
-        query.ray.direction = {0, 0, 1};
+        query.origin = {0, 0, 0};
+        query.direction = {0, 0, 1};
         query.maxDistance = 100;
         return query;
     }
@@ -119,7 +119,7 @@ TEST_F(PhysicsRayCastTests, RayCastAllReturnsEveryBodyNearestFirst)
         EXPECT_EQ(hits[i].body, expected[i]) << i;
         EXPECT_EQ(hits[i].userData, i + 1) << i;
         EXPECT_NEAR(hits[i].distance, 2.5f + 3.0f * float(i), 1e-3f) << i;
-        EXPECT_NEAR(hits[i].hitPoint.z, hits[i].distance, 1e-3f) << i;
+        EXPECT_NEAR(hits[i].hitPoint.Z, hits[i].distance, 1e-3f) << i;
         EXPECT_NEAR(hits[i].hitNormal.z, -1.0f, 1e-3f) << i;
     }
 }
@@ -201,6 +201,38 @@ TEST_F(PhysicsRayCastTests, RayCastAllReportsAMeshBodyOnceAtItsNearestSurface)
     EXPECT_EQ(hits[0].body, body);
     EXPECT_NEAR(hits[0].distance, 4.0f, 1e-3f);
     EXPECT_EQ(hits[1].body, wall);
+}
+
+// 300 km from the origin a float holds a position to 31 mm. The queries start at the exact
+// position, and the hit point comes back exact.
+TEST_F(PhysicsRayCastTests, QueriesFarFromTheOriginUseTheExactPosition)
+{
+    constexpr double kFar = 300000.0;
+    BoxShapeDef box;
+    box.halfExtents = {.5f, .5f, .5f};
+    BodySettings settings;
+    settings.shape = world->CreateShape(box);
+    settings.position = {kFar, 0.0, 10.0};
+    settings.motionType = MotionType::Static;
+    settings.userData = 1;
+    const auto wall = world->CreateBody(settings);
+    ASSERT_TRUE(wall.IsValid());
+
+    RayCastQuery query = Forward();
+    query.origin = {kFar + 0.004, 0.0, 0.0};
+    RayCastResult hit;
+    ASSERT_TRUE(world->RayCast(query, hit));
+    EXPECT_EQ(hit.body, wall);
+    EXPECT_NEAR(hit.hitPoint.X, kFar + 0.004, 1e-6);
+    EXPECT_NEAR(hit.hitPoint.Z, 9.5, 1e-3);
+
+    // The query box reaches 4 mm into the wall's +X face. A float center moves it 15 mm out, clear of the wall.
+    std::vector<OverlapResult> overlaps;
+    BoxOverlapQuery overlap;
+    overlap.center = {kFar + 0.516, 0.0, 10.0};
+    overlap.halfExtents = {.02f, .02f, .02f};
+    ASSERT_TRUE(world->BoxOverlap(overlap, overlaps));
+    EXPECT_EQ(overlaps[0].body, wall);
 }
 } // namespace
 

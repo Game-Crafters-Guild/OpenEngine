@@ -325,6 +325,40 @@ TEST(ShaderVariantKeyTest, InterpolationFunctions_ReachOnlyMarchingDesktopKeys)
     SetInterpolationFunctionsAvailable(previousAvailable);
 }
 
+// The device's clip distances reach only the procedural-vertex programs (the terrain clips at its
+// authored edge), never a mesh program and never the compat arm.
+TEST(ShaderVariantKeyTest, ClipDistance_ReachesOnlyCustomVertexDesktopKeys)
+{
+    const bool previousAvailable = AreClipDistancesAvailable();
+    const bool previousCompat = IsCompatShaderProfile();
+    ShaderVariantKey terrain{};
+    terrain.materialKeywords = MaterialKeyword::ForwardPlus;
+    terrain.lightingModel = LightingModel::kStandardPBR;
+    ApplyCustomVertexShaderClamp(terrain);
+    ShaderVariantKey mesh{};
+    mesh.vertexFlags = VertexAttributeFlags::StandardMesh;
+    mesh.materialKeywords = MaterialKeyword::ForwardPlus;
+    mesh.lightingModel = LightingModel::kStandardPBR;
+    const auto clips = [](const ShaderVariantKey& key)
+    {
+        const std::vector<std::string> defs = GenerateDefines(key, "StandardPBR");
+        return std::find(defs.begin(), defs.end(), "GE_CLIP_DISTANCE") != defs.end();
+    };
+
+    SetCompatShaderProfile(false);
+    SetClipDistancesAvailable(true);
+    EXPECT_TRUE(clips(terrain));
+    EXPECT_FALSE(clips(mesh)) << "a mesh program keeps its defines on every device";
+    SetClipDistancesAvailable(false);
+    EXPECT_FALSE(clips(terrain));
+    SetClipDistancesAvailable(true);
+    SetCompatShaderProfile(true);
+    EXPECT_FALSE(clips(terrain));
+
+    SetCompatShaderProfile(previousCompat);
+    SetClipDistancesAvailable(previousAvailable);
+}
+
 // ---- Forward+ tests ----
 
 TEST(ShaderVariantKeyTest, ForwardPlus_GeneratesDefine)
@@ -393,6 +427,19 @@ TEST(ShaderVariantKeyTest, SurfaceInputsAtPixelCenter_GeneratesDefineAndReserves
     EXPECT_TRUE(has(GenerateDefines(key, "StandardPBR"), "GE_SURFACE_INPUTS_AT_PIXEL_CENTER"));
     // A user keyword cannot take the engine's name.
     EXPECT_EQ(ReservedEngineDefines().count("GE_SURFACE_INPUTS_AT_PIXEL_CENTER"), 1u);
+}
+
+TEST(ShaderVariantKeyTest, UV1Crossfade_GeneratesDefineAndReservesIt)
+{
+    ShaderVariantKey key{};
+    key.vertexFlags = VertexAttributeFlags::StandardMesh;
+    key.lightingModel = LightingModel::kStandardPBR;
+    const auto has = [](const std::vector<std::string>& defs) { return std::find(defs.begin(), defs.end(), "GE_UV1_CROSSFADE") != defs.end(); };
+
+    EXPECT_FALSE(has(GenerateDefines(key, "StandardPBR")));
+    key.materialKeywords = MaterialKeyword::UV1Crossfade;
+    EXPECT_TRUE(has(GenerateDefines(key, "StandardPBR")));
+    EXPECT_EQ(ReservedEngineDefines().count("GE_UV1_CROSSFADE"), 1u);
 }
 
 TEST(ShaderComposerTest, Compose_ForwardPlus_InjectsDefine)

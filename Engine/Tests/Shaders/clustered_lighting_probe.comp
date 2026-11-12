@@ -1,0 +1,58 @@
+#version 450
+// Test-only: GE_AccumulateClusteredLighting (clustered_lighting.glsl) for one sector-local sample per invocation,
+// every light in the one cluster; vPosRel and vPosWS are made as GE_ClipFromSectorLocal makes them.
+// results[2i] uses the relative inputs (ge_cameraPosRel, ge_viewRel, vPosRel), results[2i + 1] the absolute ones.
+layout(local_size_x = 1) in;
+
+// The adapter's LightUBO. The test binds zeros: no directional light.
+layout(set = 0, binding = 6) uniform LightUBO {
+    mat4 uLightVP;
+    vec4 uLightDirWorld;
+    vec4 uLightColorWorld;
+    vec4 uAmbient;
+    vec4 uTimeParams;
+    vec4 uSecondaryCount;
+    vec4 uSecondaryDirs[3];
+    vec4 uSecondaryColors[3];
+} Light;
+
+#include "Includes/clustered_lighting.glsl"
+
+struct ProbeSample
+{
+    vec4 sectorLocal; // xyz = the position in its instance sector, meters
+    ivec4 sector;     // xyz = the instance sector
+    vec4 normal;      // xyz = the surface normal
+};
+
+layout(set = 0, binding = 10, std430) readonly buffer ProbeSamples
+{
+    ProbeSample samples[];
+};
+
+layout(set = 0, binding = 11, std430) writeonly buffer ProbeResults
+{
+    vec4 results[];
+};
+
+void main()
+{
+    uint i = gl_GlobalInvocationID.x;
+    ProbeSample s = samples[i];
+    ivec3 originSector = ivec3(ge_renderOrigin.xyz);
+    vec3 posRel = vec3(s.sector.xyz - originSector) * ge_renderOrigin.w + s.sectorLocal.xyz;
+    vec3 posWS = posRel + vec3(originSector) * ge_renderOrigin.w;
+
+    SurfaceOutput so = DefaultSurfaceOutput();
+    so.baseColor = vec3(0.8);
+    so.roughness = 0.3;
+    so.normalWS = normalize(s.normal.xyz);
+
+    vec3 viewRel = normalize(ge_cameraPosRel.xyz - posRel);
+    float depthRel = (ge_viewRel * vec4(posRel, 1.0)).z;
+    results[2u * i] = vec4(GE_AccumulateClusteredLighting(so, viewRel, posWS, posRel, vec2(0.5), depthRel), 1.0);
+
+    vec3 viewAbs = normalize(ge_cameraPosWS.xyz - posWS);
+    float depthAbs = (ge_view * vec4(posWS, 1.0)).z;
+    results[2u * i + 1u] = vec4(GE_AccumulateClusteredLighting(so, viewAbs, posWS, posWS, vec2(0.5), depthAbs), 1.0);
+}

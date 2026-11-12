@@ -12,13 +12,13 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <vector>
 
+#include "CBTTerrain/CBTDemandTuning.h"
 #include "CBTTerrain/CBTInstance.h"
 #include "CBTTerrain/CBTKernelSet.h"
 #include "CBTTerrain/CBTLayout.h"
@@ -31,6 +31,7 @@
 using namespace GameEngine::CBTTerrain;
 using namespace GameEngine::CBTTerrain::Test;
 using namespace GameEngine::Rendering;
+using GameEngine::Mathematics::Vector3;
 
 namespace
 {
@@ -39,8 +40,6 @@ constexpr float kScreenW = 1600.0f;
 constexpr float kScreenH = 900.0f;
 constexpr float kSplitPx = 8.0f;
 constexpr float kMergePx = 4.0f;
-// The shipped near-field world facet target (CBTRenderFeature kNearFieldFacetTargetM).
-constexpr float kNearFieldFacetTargetM = 0.5f;
 // 16x the converged facet, so a coarsening near field has ~4 LEB levels to give back.
 constexpr float kRaisedNearFieldTargetM = 8.0f;
 constexpr float kOneLebLevel = 1.41421356f;
@@ -53,24 +52,18 @@ struct Proj
 
 // CPU mirror of CBT_ProjectPixels (cbt_layout.glsl): column-major clip = M * (x,y,z,1); InFront is
 // false when the point is at/behind the near plane (clip.w <= 1e-5).
-Proj ProjectPix(const float* m, const std::array<float, 3>& p)
+Proj ProjectPix(const float* m, const Vector3& p)
 {
     Proj r;
-    const float w = m[3] * p[0] + m[7] * p[1] + m[11] * p[2] + m[15];
+    const float w = m[3] * p.x + m[7] * p.y + m[11] * p.z + m[15];
     if (w <= 1e-5f)
         return r;
-    const float cx = m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12];
-    const float cy = m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13];
+    const float cx = m[0] * p.x + m[4] * p.y + m[8] * p.z + m[12];
+    const float cy = m[1] * p.x + m[5] * p.y + m[9] * p.z + m[13];
     r.Px = (cx / w * 0.5f + 0.5f) * kScreenW;
     r.Py = (cy / w * 0.5f + 0.5f) * kScreenH;
     r.InFront = true;
     return r;
-}
-
-float WorldLen(const std::array<float, 3>& u, const std::array<float, 3>& v)
-{
-    const float dx = u[0] - v[0], dy = u[1] - v[1], dz = u[2] - v[2];
-    return std::sqrt(dx * dx + dy * dy + dz * dz);
 }
 
 // Steady-state readings over a settled tail: what the frame ASKS for versus what it SERVES, plus
@@ -129,9 +122,9 @@ class CBTNearFieldMerge : public ::testing::Test
     }
 
     // Live facets that take a near-field branch (the shader's !v0In || !v2In split-edge test) AND
-    // whose world split edge sits below `mergeBelowM` — exactly the set the near-field merge rule
-    // claims it will drain.
-    uint64_t CountNearFieldBelow(CBTInstance& inst, const CBTFrameParams& p, float mergeBelowM)
+    // whose world split edge sits below `mergeBelowM`: the set the near-field merge rule drains.
+    // A planar facet wholly behind the eye takes the mirrored area metric instead, so it is not counted.
+    uint64_t CountNearFieldBelow(CBTInstance& inst, const CBTFrameParams& p, float mergeBelowM, bool planar)
     {
         const std::vector<uint64_t> heap = ReadHeap(inst);
         const std::vector<float> verts = VertexFloatsWithWorldCorners(inst.DebugReadWords(
@@ -142,11 +135,16 @@ class CBTNearFieldMerge : public ::testing::Test
             if (heap[s] == 0u)
                 continue;
             const uint32_t base = s * kVertexWordsPerSlot;
-            const std::array<float, 3> c0{verts[base + 0u], verts[base + 1u], verts[base + 2u]};
-            const std::array<float, 3> c2{verts[base + 8u], verts[base + 9u], verts[base + 10u]};
-            if (ProjectPix(p.ViewProjRel, c0).InFront && ProjectPix(p.ViewProjRel, c2).InFront)
+            const Vector3 c0(verts[base + 0u], verts[base + 1u], verts[base + 2u]);
+            const Vector3 c1(verts[base + 4u], verts[base + 5u], verts[base + 6u]);
+            const Vector3 c2(verts[base + 8u], verts[base + 9u], verts[base + 10u]);
+            const bool c0InFront = ProjectPix(p.ViewProjRel, c0).InFront;
+            const bool c2InFront = ProjectPix(p.ViewProjRel, c2).InFront;
+            if (c0InFront && c2InFront)
                 continue;
-            if (WorldLen(c0, c2) < mergeBelowM)
+            if (planar && !c0InFront && !c2InFront && !ProjectPix(p.ViewProjRel, c1).InFront)
+                continue;
+            if ((c0 - c2).Length() < mergeBelowM)
                 ++n;
         }
         return n;
@@ -275,8 +273,9 @@ TEST_F(CBTNearFieldMerge, PlanarNearFieldCoarsensWhenItsTargetRises)
         RunFrame(inst, c, p, frame);
     }
     const uint32_t liveFine = inst.ReadTessellationStats().LiveCount;
-    const uint64_t pinnedFine = CountNearFieldBelow(inst, p, kBelowMergeM);
-    ASSERT_GT(pinnedFine, 1000u) << "no near-field population — the branch under test is idle";
+    const uint64_t pinnedFine = CountNearFieldBelow(inst, p, kBelowMergeM, true);
+    // The planar near field is the band of facets across the eye plane: 768 at this pose.
+    ASSERT_GT(pinnedFine, 100u) << "no near-field population — the branch under test is idle";
     ASSERT_EQ(ValidationErrors(inst), 0u) << "the refined tree must start conforming";
 
     p.DemandTuning[0] = kRaisedNearFieldTargetM;
@@ -286,7 +285,7 @@ TEST_F(CBTNearFieldMerge, PlanarNearFieldCoarsensWhenItsTargetRises)
         RunFrame(inst, c, p, frame);
     }
     const uint32_t liveCoarse = inst.ReadTessellationStats().LiveCount;
-    const uint64_t pinnedCoarse = CountNearFieldBelow(inst, p, kBelowMergeM);
+    const uint64_t pinnedCoarse = CountNearFieldBelow(inst, p, kBelowMergeM, true);
 
     std::printf("[nf:planar] target %.2f -> %.2f m | live %u -> %u | below-merge %llu -> %llu\n",
                 static_cast<double>(kNearFieldFacetTargetM),
@@ -336,7 +335,7 @@ TEST_F(CBTNearFieldMerge, SphericalNearFieldCoarsensWhenItsTargetRises)
         RunFrame(inst, c, p, frame);
     }
     const uint32_t liveFine = inst.ReadTessellationStats().LiveCount;
-    const uint64_t pinnedFine = CountNearFieldBelow(inst, p, kBelowMergeM);
+    const uint64_t pinnedFine = CountNearFieldBelow(inst, p, kBelowMergeM, false);
     ASSERT_EQ(ValidationErrors(inst), 0u) << "the descended tree must start conforming";
     ASSERT_GT(pinnedFine, 100u) << "no near-field population at the walking pose";
 
@@ -347,7 +346,7 @@ TEST_F(CBTNearFieldMerge, SphericalNearFieldCoarsensWhenItsTargetRises)
         RunFrame(inst, c, p, frame);
     }
     const uint32_t liveCoarse = inst.ReadTessellationStats().LiveCount;
-    const uint64_t pinnedCoarse = CountNearFieldBelow(inst, p, kBelowMergeM);
+    const uint64_t pinnedCoarse = CountNearFieldBelow(inst, p, kBelowMergeM, false);
 
     std::printf("[nf:sphere] target %.2f -> %.2f m | live %u -> %u | below-merge %llu -> %llu\n",
                 static_cast<double>(kNearFieldFacetTargetM),
@@ -362,11 +361,10 @@ TEST_F(CBTNearFieldMerge, SphericalNearFieldCoarsensWhenItsTargetRises)
     inst.Shutdown();
 }
 
-// Standing split demand at the walking pose: a STARVED fixed point (the same candidates unserved
-// every frame — the class the split-bail fix cured) or CHURN (splits served every frame while
-// facets cross between the near-field branch and the area metric)? The demand counter alone cannot
-// tell those apart; served-in-the-tail and live-spread can.
-TEST_F(CBTNearFieldMerge, WalkingPoseSplitDemandIsServedNotStarved)
+// The walking pose settles: no split demand stands, served (churn: facets that cross between the
+// near-field bound and the area metric every frame) or unserved (a starved fixed point). The live count
+// does not move across the tail.
+TEST_F(CBTNearFieldMerge, WalkingPoseSettlesWithNoStandingSplitDemand)
 {
     const uint32_t cap = kSphereBaseDepth + kMaxDecodeSubdiv;
     CBTInstance inst;
@@ -403,14 +401,9 @@ TEST_F(CBTNearFieldMerge, WalkingPoseSplitDemandIsServedNotStarved)
 
     EXPECT_EQ(ValidationErrors(inst), 0u) << "the walking pose must stay conforming";
     EXPECT_EQ(t.OverflowDelta, 0) << "splits are rolled back for want of slots at this pose";
-    // Positive control: the near-field merge must generate demand at this pose,
-    // or the served-not-starved assertion below measures nothing.
-    ASSERT_GT(t.SplitDemand, 0)
-        << "the walking pose generated no split demand — the near-field merge "
-           "stopped firing here and this test can no longer discriminate";
-    EXPECT_GT(t.SplitServedMax, 0)
-        << "the walking pose holds " << t.SplitDemand
-        << " split candidates never served across a whole 40-frame tail against " << s.FreeCount
-        << " free slots — a starved fixed point, not churn";
+    EXPECT_EQ(t.SplitDemand, 0) << "the walking pose holds " << t.SplitDemand << " split candidates ("
+                                << t.SplitServedMax << " served at most per frame) against " << s.FreeCount
+                                << " free slots: the near-field bound does not terminate";
+    EXPECT_EQ(t.LiveMax - t.LiveMin, 0u) << "the live count moves across a still 40-frame tail";
     inst.Shutdown();
 }

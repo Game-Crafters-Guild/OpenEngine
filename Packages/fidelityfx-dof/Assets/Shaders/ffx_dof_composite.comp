@@ -15,7 +15,8 @@ layout(set = 0, binding = 5, std140) uniform ViewParamsBlock
 {
     mat4 ge_invProj;
     mat4 ge_view;
-    vec4 ge_nearFar;
+    vec4 ge_depthTerms;
+    vec4 ge_viewRanges;
     vec4 ge_cameraPosWS;
 } ViewParams;
 #include "Includes/reverse_z.glsl"
@@ -51,7 +52,7 @@ float PhysicalCocMeters(float rawDepth)
     // thin-lens limit rather than assigning a focus-independent maximum blur.
     if (IsBackgroundDepth(rawDepth))
         return -apertureDiameter * focal / max(focus - focal, 1e-6);
-    float d = LinearizeReverseZ(rawDepth, ViewParams.ge_nearFar.xy);
+    float d = LinearizeReverseZ(rawDepth, ViewParams.ge_depthTerms);
     return apertureDiameter * focal * (focus - d) /
            max(d * (focus - focal), 1e-6);
 }

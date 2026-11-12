@@ -111,7 +111,7 @@ protected:
         effect.HeightScale = height; effect.DensityScale = density;
         World.AddComponentImmediate<Components::TerrainGrassEffect>(entity, effect);
         Components::WorldTransform transform{};
-        transform.matrix[12] = x;
+        transform.Position.X = x;
         World.AddComponentImmediate<Components::WorldTransform>(entity, transform);
         return entity;
     }
@@ -264,7 +264,7 @@ TEST_F(TerrainGrassAsyncCompose, GrassWaitsForTheFirstFieldAndAnEditKeepsThePrev
     const auto pixels = Data->GrassField.Pixels;
     ASSERT_EQ(At(-30, 0), 51);
     HoldPool();
-    World.GetComponentForWrite<Components::WorldTransform>(region)->matrix[12] = 30;
+    World.GetComponentForWrite<Components::WorldTransform>(region)->Position.X = 30;
     Tick();
     EXPECT_EQ(Data->GrassField.Pixels, pixels) << "the previous field left before the new one was ready";
     EXPECT_TRUE(Data->GrassField.GatesPlacement());
@@ -348,7 +348,7 @@ TEST_F(TerrainGrassAsyncCompose, TheSettledFieldIsTheSerialComposeByteForByte)
     AddClosedSpline(path);
     const auto circle = Region(Components::TerrainVolumeShape::Circle, 0.0f, 0.2f, 30, 10);
     Tick();
-    World.GetComponentForWrite<Components::WorldTransform>(circle)->matrix[12] = -20;
+    World.GetComponentForWrite<Components::WorldTransform>(circle)->Position.X = -20;
     Tick();
     World.GetComponentForWrite<Components::TerrainGrassEffect>(area)->HeightScale = 0.25f;
     Tick();
@@ -391,7 +391,7 @@ TEST_F(TerrainGrassAsyncCompose, ASystemAndTerrainDestroyedWhileTheComposeRunsLe
     terrain.TerrainDataGeneration = handle.Generation;
     World.AddComponentImmediate<Components::Terrain>(entity, terrain);
     Components::WorldTransform transform{};
-    transform.matrix[12] = kX;
+    transform.Position.X = kX;
     World.AddComponentImmediate<Components::WorldTransform>(entity, transform);
     auto& splines = SplineECS::SplineService::Get();
     for (int route = 0; route < kRoutes; ++route)
@@ -472,7 +472,7 @@ TEST_F(TerrainGrassRegions, MovedRegionRestoresOldBoundsAndIdleRetainsVersion)
     EXPECT_EQ(At(-30, 0), 51);
     EXPECT_EQ(At(30, 0), 255);
     Data->GrassField.Dirty = false; // extraction consumed this version
-    World.GetComponentForWrite<Components::WorldTransform>(region)->matrix[12] = 30;
+    World.GetComponentForWrite<Components::WorldTransform>(region)->Position.X = 30;
     Tick();
     EXPECT_EQ(At(-30, 0), 255);
     EXPECT_EQ(At(30, 0), 51);
@@ -703,7 +703,7 @@ TEST_F(TerrainGrassRegions, TiledMoveUsesCurrentAuthoredOriginBeforeExtraction)
     Region(Components::TerrainVolumeShape::Circle, 0, 0);
     Tick();
     ASSERT_TRUE(tiled->GrassUnifiedField.IsActive());
-    World.GetComponentForWrite<Components::WorldTransform>(entity)->matrix[12] = 256;
+    World.GetComponentForWrite<Components::WorldTransform>(entity)->Position.X = 256;
     // Do not pre-update service.WorldOrigin: actual extraction runs after modifiers.
     Tick();
     EXPECT_FALSE(tiled->GrassUnifiedField.IsActive());
@@ -768,14 +768,14 @@ TEST_F(TerrainGrassRegions, SchemaRoundtripKeepsBoundedTargetsAndRefusesNonfinit
     authored.AddComponentImmediate<Components::TerrainModifierVolume>(source, {});
     const auto file = std::filesystem::temp_directory_path() / ("GrassRegionScene-" + std::to_string(
         std::chrono::steady_clock::now().time_since_epoch().count()) + ".scene");
-    ASSERT_TRUE(Scene::WriteSceneFile(authored, file)) << Scene::GetLastSceneIOError().message;
+    const auto writeResult = Scene::WriteSceneFile(authored, file);
+    ASSERT_TRUE(writeResult) << writeResult.Error->message;
     ECS::World loaded;
-    Scene::SceneDegradation degradation;
     Scene::SceneReadOptions options;
-    options.outDegradation = &degradation;
-    const bool success = Scene::ReadSceneInto(loaded, file, options);
+    const Scene::SceneInstantiateResult success = Scene::ReadSceneInto(loaded, file, options);
+    const Scene::SceneDegradation& degradation = success.Degradation;
     std::error_code ignored; std::filesystem::remove(file, ignored);
-    ASSERT_TRUE(success) << Scene::GetLastSceneIOError().message;
+    ASSERT_TRUE(success) << success.Error->message;
     EXPECT_FALSE(degradation.IsDegraded());
     uint32 found = 0;
     loaded.Query<ECS::Read<Components::TerrainGrassEffect>>()
@@ -810,14 +810,14 @@ TEST_F(TerrainGrassRegions, ColorEffectSchemaRoundtripClampsAndRefusesNonfinite)
     authored.AddComponentImmediate<Components::TerrainModifierVolume>(source, {});
     const auto file = std::filesystem::temp_directory_path() / ("ColorRegionScene-" + std::to_string(
         std::chrono::steady_clock::now().time_since_epoch().count()) + ".scene");
-    ASSERT_TRUE(Scene::WriteSceneFile(authored, file)) << Scene::GetLastSceneIOError().message;
+    const auto writeResult = Scene::WriteSceneFile(authored, file);
+    ASSERT_TRUE(writeResult) << writeResult.Error->message;
     ECS::World loaded;
-    Scene::SceneDegradation degradation;
     Scene::SceneReadOptions options;
-    options.outDegradation = &degradation;
-    const bool success = Scene::ReadSceneInto(loaded, file, options);
+    const Scene::SceneInstantiateResult success = Scene::ReadSceneInto(loaded, file, options);
+    const Scene::SceneDegradation& degradation = success.Degradation;
     std::error_code ignored; std::filesystem::remove(file, ignored);
-    ASSERT_TRUE(success) << Scene::GetLastSceneIOError().message;
+    ASSERT_TRUE(success) << success.Error->message;
     EXPECT_FALSE(degradation.IsDegraded());
     uint32 found = 0;
     loaded.Query<ECS::Read<Components::TerrainColorEffect>>()

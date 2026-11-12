@@ -162,6 +162,11 @@ Rendering::ShaderVariantKey DeriveBaseVariantKey(const MaterialDocument& doc)
     if (auto it = doc.properties.find("enableCoatNormal"); it != doc.properties.end())
         if (const bool* on = std::get_if<bool>(&it->second); on && *on)
             key.materialKeywords |= Rendering::MaterialKeyword::CoatNormal;
+    // Second-UV crossfade opt-in: mixes the maps sampled at uv1 by the vertex alpha (the paving's seam
+    // bands). Off by default.
+    if (auto it = doc.properties.find("enableUV1Crossfade"); it != doc.properties.end())
+        if (const bool* on = std::get_if<bool>(&it->second); on && *on)
+            key.materialKeywords |= Rendering::MaterialKeyword::UV1Crossfade;
     // Anisotropy opt-in: an explicit enableAnisotropy bool reshapes the base GGX lobe
     // along the tangent (uParams11.x drives the signed amount). Off by default.
     if (auto it = doc.properties.find("enableAnisotropy"); it != doc.properties.end())

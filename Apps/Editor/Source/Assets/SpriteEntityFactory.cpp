@@ -93,15 +93,13 @@ ECS::EntityHandle CreateSpriteEntityFromTexture(
         const Quaternion rot =
             Components::QuaternionFromEulerXYZDegrees(90.0f, 0.0f, 0.0f);
         xf = Components::Transform::FromTRS(
-            worldPos, rot, Mathematics::Vector3{scaleX, 1.0f, scaleZ});
+            Mathematics::WorldPosition::FromVector3(worldPos), rot, Mathematics::Vector3{scaleX, 1.0f, scaleZ});
     }
     else
     {
         xf.SetIdentity();
         xf.SetScale(scaleX, 1.0f, scaleZ);
-        xf.matrix[12] = worldPos.x;
-        xf.matrix[13] = worldPos.y;
-        xf.matrix[14] = worldPos.z;
+        xf.Position = Mathematics::WorldPosition::FromVector3(worldPos);
     }
     world.AddComponentImmediate(e, xf);
 

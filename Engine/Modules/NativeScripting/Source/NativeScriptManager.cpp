@@ -172,15 +172,13 @@ void NativeScriptManager::Shutdown()
     // AFTER this manager is destroyed, so a running build still holds `this`. Tick starts a
     // build only while none is in flight, so m_BuildTask is the only job of the channel.
     m_CancelBuild.store(true, std::memory_order_relaxed);
+    // Same lifetime rule for the toolchain warm job: Detect() uses m_Toolchain. JoinWarm cancels
+    // the probes, so it runs before the build wait: a build waits in WaitUntilReady until the
+    // detection completes.
+    m_Toolchain.JoinWarm();
     m_BuildTask.Wait();
     m_BuildTask = JobSystem::TaskHandle{};
     m_BuildChannel.reset();
-
-    // Same lifetime rule for the toolchain warm job: Detect() touches m_Toolchain, so a
-    // shutdown that lands before the one-time vswhere/vcvars probes finish must join it
-    // here or the job dereferences a destroyed toolchain (UAF that presents as a
-    // deadlocked pool join on the freed mutex).
-    m_Toolchain.JoinWarm();
 
     m_WatchSubscription.reset(); // RAII unsubscribe
     m_PendingChange.store(false, std::memory_order_relaxed);

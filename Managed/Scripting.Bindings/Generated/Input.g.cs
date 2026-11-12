@@ -20,7 +20,7 @@ namespace GameEngine.Scripting
     }
 
     /// <summary>
-    /// A stick or trigger axis of a gamepad. A stick reads -1 to 1, a trigger 0 to 1.
+    /// A stick or trigger axis of a gamepad, with one sign on every platform. A stick reads -1 to 1: +1 is pushed right on LeftX and RightX, and pushed up on LeftY and RightY. A trigger reads 0 to 1, and 1 is pulled fully. To invert an axis, bind it with a negative scale in BindGamepadAxis.
     /// </summary>
     public enum GamepadAxis : int
     {
@@ -52,6 +52,17 @@ namespace GameEngine.Scripting
         DpadRight = 12,
         DpadDown = 13,
         DpadLeft = 14,
+    }
+
+    /// <summary>
+    /// Whether the game can read gamepads. When it is RuntimeMissing, tell the player: "Install the GameInput runtime from Microsoft, then restart the game to use a gamepad."
+    /// </summary>
+    public enum GamepadRuntimeState : byte
+    {
+        Starting = 0,
+        Available = 1,
+        RuntimeMissing = 2,
+        Failed = 3,
     }
 
     /// <summary>
@@ -246,7 +257,7 @@ namespace GameEngine.Scripting
     /// </summary>
     public static unsafe partial class Input
     {
-        private static readonly BindingTable s_Table = BindingTable.Acquire("Input", 0x1283FE4E7111C269UL, 25);
+        private static readonly BindingTable s_Table = BindingTable.Acquire("Input", 0xA32113C2CD8DE176UL, 26);
         private static readonly delegate* unmanaged[Cdecl]<ulong, ulong, GamepadAxis, float, int> s_BindGamepadAxis = (delegate* unmanaged[Cdecl]<ulong, ulong, GamepadAxis, float, int>)s_Table[0];
         private static readonly delegate* unmanaged[Cdecl]<ulong, ulong, GamepadButton, int> s_BindGamepadButton = (delegate* unmanaged[Cdecl]<ulong, ulong, GamepadButton, int>)s_Table[1];
         private static readonly delegate* unmanaged[Cdecl]<ulong, ulong, Key, float, ModifierFlags, ModifierFlags, int> s_BindKey = (delegate* unmanaged[Cdecl]<ulong, ulong, Key, float, ModifierFlags, ModifierFlags, int>)s_Table[2];
@@ -254,27 +265,28 @@ namespace GameEngine.Scripting
         private static readonly delegate* unmanaged[Cdecl]<ulong, ulong, MouseButton, float, ModifierFlags, ModifierFlags, int> s_BindMouseButton = (delegate* unmanaged[Cdecl]<ulong, ulong, MouseButton, float, ModifierFlags, ModifierFlags, int>)s_Table[4];
         private static readonly delegate* unmanaged[Cdecl]<ulong, ulong, int> s_ClearBindings = (delegate* unmanaged[Cdecl]<ulong, ulong, int>)s_Table[5];
         private static readonly delegate* unmanaged[Cdecl]<ulong, ActionState*, int> s_GetActionState = (delegate* unmanaged[Cdecl]<ulong, ActionState*, int>)s_Table[6];
-        private static readonly delegate* unmanaged[Cdecl]<Vector2*, int> s_GetMouseDelta = (delegate* unmanaged[Cdecl]<Vector2*, int>)s_Table[7];
-        private static readonly delegate* unmanaged[Cdecl]<Vector2*, int> s_GetMousePosition = (delegate* unmanaged[Cdecl]<Vector2*, int>)s_Table[8];
-        private static readonly delegate* unmanaged[Cdecl]<PointerLockState*, int> s_GetPointerLockState = (delegate* unmanaged[Cdecl]<PointerLockState*, int>)s_Table[9];
-        private static readonly delegate* unmanaged[Cdecl]<Key, byte*, int> s_IsKeyDown = (delegate* unmanaged[Cdecl]<Key, byte*, int>)s_Table[10];
-        private static readonly delegate* unmanaged[Cdecl]<MouseButton, byte*, int> s_IsMouseButtonDown = (delegate* unmanaged[Cdecl]<MouseButton, byte*, int>)s_Table[11];
-        private static readonly delegate* unmanaged[Cdecl]<byte*, int> s_IsPointerInWindow = (delegate* unmanaged[Cdecl]<byte*, int>)s_Table[12];
-        private static readonly delegate* unmanaged[Cdecl]<byte*, int> s_IsWindowFocused = (delegate* unmanaged[Cdecl]<byte*, int>)s_Table[13];
-        private static readonly delegate* unmanaged[Cdecl]<int> s_LockPointer = (delegate* unmanaged[Cdecl]<int>)s_Table[14];
-        private static readonly delegate* unmanaged[Cdecl]<ulong, int> s_PopContext = (delegate* unmanaged[Cdecl]<ulong, int>)s_Table[15];
-        private static readonly delegate* unmanaged[Cdecl]<ulong, int> s_PushContext = (delegate* unmanaged[Cdecl]<ulong, int>)s_Table[16];
-        private static readonly delegate* unmanaged[Cdecl]<ulong, ulong, ActionKind, int> s_RegisterAction = (delegate* unmanaged[Cdecl]<ulong, ulong, ActionKind, int>)s_Table[17];
-        private static readonly delegate* unmanaged[Cdecl]<ulong, ulong, int> s_RemoveAction = (delegate* unmanaged[Cdecl]<ulong, ulong, int>)s_Table[18];
-        private static readonly delegate* unmanaged[Cdecl]<ulong, byte, int> s_SetContextEnabled = (delegate* unmanaged[Cdecl]<ulong, byte, int>)s_Table[19];
-        private static readonly delegate* unmanaged[Cdecl]<int> s_UnlockPointer = (delegate* unmanaged[Cdecl]<int>)s_Table[20];
-        private static readonly delegate* unmanaged[Cdecl]<Key, byte*, int> s_WasKeyPressed = (delegate* unmanaged[Cdecl]<Key, byte*, int>)s_Table[21];
-        private static readonly delegate* unmanaged[Cdecl]<Key, byte*, int> s_WasKeyReleased = (delegate* unmanaged[Cdecl]<Key, byte*, int>)s_Table[22];
-        private static readonly delegate* unmanaged[Cdecl]<MouseButton, byte*, int> s_WasMouseButtonPressed = (delegate* unmanaged[Cdecl]<MouseButton, byte*, int>)s_Table[23];
-        private static readonly delegate* unmanaged[Cdecl]<MouseButton, byte*, int> s_WasMouseButtonReleased = (delegate* unmanaged[Cdecl]<MouseButton, byte*, int>)s_Table[24];
+        private static readonly delegate* unmanaged[Cdecl]<GamepadRuntimeState*, int> s_GetGamepadRuntimeState = (delegate* unmanaged[Cdecl]<GamepadRuntimeState*, int>)s_Table[7];
+        private static readonly delegate* unmanaged[Cdecl]<Vector2*, int> s_GetMouseDelta = (delegate* unmanaged[Cdecl]<Vector2*, int>)s_Table[8];
+        private static readonly delegate* unmanaged[Cdecl]<Vector2*, int> s_GetMousePosition = (delegate* unmanaged[Cdecl]<Vector2*, int>)s_Table[9];
+        private static readonly delegate* unmanaged[Cdecl]<PointerLockState*, int> s_GetPointerLockState = (delegate* unmanaged[Cdecl]<PointerLockState*, int>)s_Table[10];
+        private static readonly delegate* unmanaged[Cdecl]<Key, byte*, int> s_IsKeyDown = (delegate* unmanaged[Cdecl]<Key, byte*, int>)s_Table[11];
+        private static readonly delegate* unmanaged[Cdecl]<MouseButton, byte*, int> s_IsMouseButtonDown = (delegate* unmanaged[Cdecl]<MouseButton, byte*, int>)s_Table[12];
+        private static readonly delegate* unmanaged[Cdecl]<byte*, int> s_IsPointerInWindow = (delegate* unmanaged[Cdecl]<byte*, int>)s_Table[13];
+        private static readonly delegate* unmanaged[Cdecl]<byte*, int> s_IsWindowFocused = (delegate* unmanaged[Cdecl]<byte*, int>)s_Table[14];
+        private static readonly delegate* unmanaged[Cdecl]<int> s_LockPointer = (delegate* unmanaged[Cdecl]<int>)s_Table[15];
+        private static readonly delegate* unmanaged[Cdecl]<ulong, int> s_PopContext = (delegate* unmanaged[Cdecl]<ulong, int>)s_Table[16];
+        private static readonly delegate* unmanaged[Cdecl]<ulong, int> s_PushContext = (delegate* unmanaged[Cdecl]<ulong, int>)s_Table[17];
+        private static readonly delegate* unmanaged[Cdecl]<ulong, ulong, ActionKind, int> s_RegisterAction = (delegate* unmanaged[Cdecl]<ulong, ulong, ActionKind, int>)s_Table[18];
+        private static readonly delegate* unmanaged[Cdecl]<ulong, ulong, int> s_RemoveAction = (delegate* unmanaged[Cdecl]<ulong, ulong, int>)s_Table[19];
+        private static readonly delegate* unmanaged[Cdecl]<ulong, byte, int> s_SetContextEnabled = (delegate* unmanaged[Cdecl]<ulong, byte, int>)s_Table[20];
+        private static readonly delegate* unmanaged[Cdecl]<int> s_UnlockPointer = (delegate* unmanaged[Cdecl]<int>)s_Table[21];
+        private static readonly delegate* unmanaged[Cdecl]<Key, byte*, int> s_WasKeyPressed = (delegate* unmanaged[Cdecl]<Key, byte*, int>)s_Table[22];
+        private static readonly delegate* unmanaged[Cdecl]<Key, byte*, int> s_WasKeyReleased = (delegate* unmanaged[Cdecl]<Key, byte*, int>)s_Table[23];
+        private static readonly delegate* unmanaged[Cdecl]<MouseButton, byte*, int> s_WasMouseButtonPressed = (delegate* unmanaged[Cdecl]<MouseButton, byte*, int>)s_Table[24];
+        private static readonly delegate* unmanaged[Cdecl]<MouseButton, byte*, int> s_WasMouseButtonReleased = (delegate* unmanaged[Cdecl]<MouseButton, byte*, int>)s_Table[25];
 
         /// <summary>
-        /// Binds a gamepad stick or trigger to an axis action: the action's value is the axis times the scale.
+        /// Binds a gamepad stick or trigger to an axis action: the action's value is the axis times the scale. A negative scale inverts the axis.
         /// </summary>
         /// <remarks>Call it on the main thread or from a system the engine runs. A call from a thread the engine does not run (Task.Run, a timer) throws EngineCallException.</remarks>
         public static void BindGamepadAxis(StringId context, StringId action, GamepadAxis axis, float scale = 1f)
@@ -349,6 +361,19 @@ namespace GameEngine.Scripting
             int code = s_GetActionState(action.Value, &result);
             if (code != 0 && code != BindingErrors.NotInitialized)
                 BindingErrors.Throw(code, "Input.GetActionState");
+            return result;
+        }
+
+        /// <summary>
+        /// Whether gamepads can be read on this PC. Read it before you ask the player for a gamepad: RuntimeMissing means the player must install Microsoft GameInput first.
+        /// </summary>
+        /// <remarks>Call it on the main thread or from a system the engine runs. A call from a thread the engine does not run (Task.Run, a timer) throws EngineCallException.</remarks>
+        public static GamepadRuntimeState GetGamepadRuntimeState()
+        {
+            GamepadRuntimeState result = default;
+            int code = s_GetGamepadRuntimeState(&result);
+            if (code != 0 && code != BindingErrors.NotInitialized)
+                BindingErrors.Throw(code, "Input.GetGamepadRuntimeState");
             return result;
         }
 

@@ -1,0 +1,10 @@
+<!-- ExportRequirementsSection (Apps/Editor/Source/Panels/BuildPanel/ExportRequirementsSection.h): the
+     Requirements heading, its Docs button and the rows. The ids are the contract with the .cpp, which
+     adds one notice to the rows for each tool that the enabled platforms' exports need. -->
+<UIElement class="export-requirements-layout">
+  <UIElement class="export-requirements-header">
+    <Label class="export-requirements-heading" text="Requirements" />
+    <Button id="ExportRequirementsDocs" class="export-requirements-docs small" text="Docs" />
+  </UIElement>
+  <UIElement id="ExportRequirementRows" class="export-requirements-rows" />
+</UIElement>

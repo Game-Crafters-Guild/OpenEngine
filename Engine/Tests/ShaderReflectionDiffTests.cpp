@@ -49,9 +49,8 @@
 //     mirror (Rendering::ViewParamsUBO), and the packaged prefixes — derives from
 //     one field list (view_params_fields.glsl), so locking a packaged prefix
 //     against the shared C++ mirror transitively locks the canonical block too.
-//     The packaged clustered_light_cull / forwardplus_lighting declare the 160 B
-//     core prefix (ge_invProj/ge_view/ge_nearFar/ge_cameraPosWS) at binding 5;
-//     heat_distortion declares the 240 B prefix (adds ge_screenSize/ge_viewProj).
+//     The packaged clustered_light_cull declares the full block at binding 5;
+//     heat_distortion declares the 256 B prefix (adds ge_screenSize/ge_viewProj).
 //     The ViewParams rows below diff those interior offsets (shape 2) against the
 //     shared mirror.
 //
@@ -88,8 +87,8 @@ namespace
 {
 
 // The packaged Forward+/post-FX shaders declare inline prefixes of the shared
-// per-view block (block `ViewParamsBlock`, instance `ViewParams`) — 160 B core
-// at binding 5 (clustered_light_cull / forwardplus_lighting), 240 B at binding 2
+// per-view block (block `ViewParamsBlock`, instance `ViewParams`) — the full
+// block at binding 5 (clustered_light_cull), 256 B at binding 2
 // (heat_distortion). Both derive from view_params_fields.glsl, so the rows below
 // diff the reflected interior offsets straight against the shared C++ mirror
 // Rendering::ViewParamsUBO (ViewParamsLayout.h, std140 offsets static_asserted).
@@ -160,17 +159,16 @@ const std::vector<MemberExpectation>& ExpectationTable()
         //    offsets are reflected, so these rows diff field-by-field against the
         //    shared Rendering::ViewParamsUBO mirror. Core prefix locked in both
         //    binding-5 consumers; heat_distortion extends coverage through the
-        //    240 B prefix (ge_screenSize/ge_viewProj).
+        //    256 B prefix (ge_screenSize/ge_viewProj).
         { "Shaders/clustered_light_cull.shaderpkg", "ViewParams", "ge_invProj",     offsetof(ViewParamsUBO, ge_invProj),     sizeof(decltype(ViewParamsUBO::ge_invProj)) },
         { "Shaders/clustered_light_cull.shaderpkg", "ViewParams", "ge_view",        offsetof(ViewParamsUBO, ge_view),        sizeof(decltype(ViewParamsUBO::ge_view)) },
-        { "Shaders/clustered_light_cull.shaderpkg", "ViewParams", "ge_nearFar",     offsetof(ViewParamsUBO, ge_nearFar),     sizeof(decltype(ViewParamsUBO::ge_nearFar)) },
+        { "Shaders/clustered_light_cull.shaderpkg", "ViewParams", "ge_depthTerms",  offsetof(ViewParamsUBO, ge_depthTerms),  sizeof(decltype(ViewParamsUBO::ge_depthTerms)) },
+        { "Shaders/clustered_light_cull.shaderpkg", "ViewParams", "ge_viewRanges",  offsetof(ViewParamsUBO, ge_viewRanges),  sizeof(decltype(ViewParamsUBO::ge_viewRanges)) },
         { "Shaders/clustered_light_cull.shaderpkg", "ViewParams", "ge_cameraPosWS", offsetof(ViewParamsUBO, ge_cameraPosWS), sizeof(decltype(ViewParamsUBO::ge_cameraPosWS)) },
-        { "Shaders/forwardplus_lighting.shaderpkg", "ViewParams", "ge_invProj",     offsetof(ViewParamsUBO, ge_invProj),     sizeof(decltype(ViewParamsUBO::ge_invProj)) },
-        { "Shaders/forwardplus_lighting.shaderpkg", "ViewParams", "ge_view",        offsetof(ViewParamsUBO, ge_view),        sizeof(decltype(ViewParamsUBO::ge_view)) },
-        { "Shaders/forwardplus_lighting.shaderpkg", "ViewParams", "ge_nearFar",     offsetof(ViewParamsUBO, ge_nearFar),     sizeof(decltype(ViewParamsUBO::ge_nearFar)) },
-        { "Shaders/forwardplus_lighting.shaderpkg", "ViewParams", "ge_cameraPosWS", offsetof(ViewParamsUBO, ge_cameraPosWS), sizeof(decltype(ViewParamsUBO::ge_cameraPosWS)) },
+        { "Shaders/clustered_light_cull.shaderpkg", "ViewParams", "ge_viewRel",     offsetof(ViewParamsUBO, ge_viewRel),     sizeof(decltype(ViewParamsUBO::ge_viewRel)) },
         { "Shaders/heat_distortion.shaderpkg",      "ViewParams", "ge_invProj",     offsetof(ViewParamsUBO, ge_invProj),     sizeof(decltype(ViewParamsUBO::ge_invProj)) },
-        { "Shaders/heat_distortion.shaderpkg",      "ViewParams", "ge_nearFar",     offsetof(ViewParamsUBO, ge_nearFar),     sizeof(decltype(ViewParamsUBO::ge_nearFar)) },
+        { "Shaders/heat_distortion.shaderpkg",      "ViewParams", "ge_depthTerms",  offsetof(ViewParamsUBO, ge_depthTerms),  sizeof(decltype(ViewParamsUBO::ge_depthTerms)) },
+        { "Shaders/heat_distortion.shaderpkg",      "ViewParams", "ge_viewRanges",  offsetof(ViewParamsUBO, ge_viewRanges),  sizeof(decltype(ViewParamsUBO::ge_viewRanges)) },
         { "Shaders/heat_distortion.shaderpkg",      "ViewParams", "ge_screenSize",  offsetof(ViewParamsUBO, ge_screenSize),  sizeof(decltype(ViewParamsUBO::ge_screenSize)) },
         { "Shaders/heat_distortion.shaderpkg",      "ViewParams", "ge_viewProj",    offsetof(ViewParamsUBO, ge_viewProj),    sizeof(decltype(ViewParamsUBO::ge_viewProj)) },
     };

@@ -40,19 +40,18 @@ bool SameVector(const Vector3& a, const Vector3& b)
 }
 
 // View depth (world units) of the far side of the sphere around `boundsRel`,
-// the scene's box relative to the render origin (ox, oy, oz). A sphere rather
+// the scene's box relative to the render origin `origin`. A sphere rather
 // than the box's corners so the reach does not change while the camera orbits
 // the scene, which keeps the fitted range, and with it the cascade splits, still.
 float SceneReachAlongView(const Rendering::CameraData& camera,
-                          const ShadowMapRenderFeature::SceneBoundsRel& boundsRel, float ox,
-                          float oy, float oz)
+                          const ShadowMapRenderFeature::SceneBoundsRel& boundsRel, const Vector3& origin)
 {
     // Row 2 of the column-major view matrix: the camera's forward axis in world space.
     const Vector3 forward = Vector3{camera.view[0][2], camera.view[1][2], camera.view[2][2]}.Normalize();
     const Vector3 center = (boundsRel.Min + boundsRel.Max) * 0.5f;
     const float radius = (boundsRel.Max - boundsRel.Min).Length() * 0.5f;
-    const Vector3 cameraRel{camera.cameraPos.x - ox, camera.cameraPos.y - oy,
-                            camera.cameraPos.z - oz};
+    const Vector3 cameraRel{camera.cameraPos.x - origin.x, camera.cameraPos.y - origin.y,
+                            camera.cameraPos.z - origin.z};
     return Vector3::Dot(center - cameraRel, forward) + radius;
 }
 
@@ -166,17 +165,13 @@ ShadowMapRenderFeature::ViewCascadeFitInputs ShadowMapRenderFeature::GatherFitIn
         Vector3 sceneMax{};
         if (scene->GetInstancesWorldBounds(sceneMin, sceneMax))
         {
-            const auto originSector =
-                ComputeRenderOriginSector(camera.cameraPos.x, camera.cameraPos.y, camera.cameraPos.z);
-            float ox = 0.0f;
-            float oy = 0.0f;
-            float oz = 0.0f;
-            SectorToWorld(originSector, ox, oy, oz);
-            inputs.SceneBounds.Min = Vector3{sceneMin.x - ox, sceneMin.y - oy, sceneMin.z - oz};
-            inputs.SceneBounds.Max = Vector3{sceneMax.x - ox, sceneMax.y - oy, sceneMax.z - oz};
+            const auto originSector = CameraRenderOriginSector(camera);
+            const Vector3 origin = SectorToWorld(originSector);
+            inputs.SceneBounds.Min = sceneMin - origin;
+            inputs.SceneBounds.Max = sceneMax - origin;
             inputs.HasSceneBounds = true;
             if (inputs.Settings.FitDistanceToScene)
-                inputs.SceneReach = SceneReachAlongView(camera, inputs.SceneBounds, ox, oy, oz);
+                inputs.SceneReach = SceneReachAlongView(camera, inputs.SceneBounds, origin);
         }
     }
     return inputs;
@@ -199,8 +194,8 @@ void ShadowMapRenderFeature::ResolveSdsmReadback(RenderServices& rs, Rendering::
     std::memcpy(&minNdc, &readback.MinWords[0], sizeof(float));
     std::memcpy(&maxNdc, &readback.MaxWords[0], sizeof(float));
     const SDSMBounds resolved = ResolveSDSMBounds(
-        minNdc, maxNdc, readback.Measured.NearPlane, readback.Measured.FarPlane,
-        readback.Measured.Orthographic, rs.Views().FindViewAntiAliasing(viewId) != nullptr);
+        minNdc, maxNdc, readback.Measured.DepthTerms, readback.Measured.NearPlane, readback.Measured.FarPlane,
+        rs.Views().FindViewAntiAliasing(viewId) != nullptr);
     if (resolved.valid)
         UpdateSDSMBounds(viewId, resolved.nearDepth, resolved.farDepth);
     UpdateShadowReceivers(viewId, measured);

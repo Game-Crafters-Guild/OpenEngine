@@ -1,0 +1,138 @@
+---
+title: Height functions
+description: Giving a planar terrain base heights that game code computes from a seed, with the registration, the two calls, the units, the band limit, determinism, and what an unregistered name does.
+---
+
+A planar terrain can take its base heights from a function in game code. The game registers the function under a name. The terrain names the function and a seed. The engine builds the function for that seed and asks it for heights when a tile or a page of the terrain fills. No heightmap is stored and nothing is cooked, so the same scene shows the world in the editor and in the Player, and a new seed makes a new world.
+
+## The short version
+
+:::steps
+
+1. Write a class that derives from `ITerrainHeightFunction` and has a constructor that takes a `TerrainHeightFunctionContext`.
+2. Register it with `GE_REGISTER_TERRAIN_HEIGHT_FUNCTION(Type, "Name")` in a source file of the game module.
+3. In the Terrain Inspector's Base section, set Base Source to Function, pick the name in Height Function, and type the seed in Seed. From code or a scene file, set the terrain's `BaseSource` to `Function`, its `HeightFunction` to the name, and its `BaseSeed` to the seed.
+
+:::
+
+The modifier stack (flatten, raise, splines, sculpt) applies on top of the function, as on every other base source.
+
+## Write and register a function
+
+```cpp title="An island world from a seed"
+#include <GameSDK/TerrainHeightFunction.h>
+
+#include <algorithm>
+
+using namespace GameEngine;
+
+class IslandHeights final : public TerrainECS::ITerrainHeightFunction
+{
+public:
+    explicit IslandHeights(const TerrainECS::TerrainHeightFunctionContext& context)
+        : m_CenterX(context.SizeX * 0.5f), m_CenterZ(context.SizeZ * 0.5f)
+    {
+        // Build the seed's state here: a random generator seeded from context.Seed, a coarse grid.
+    }
+
+    void HeightRow(float32 z, std::span<const float32> x, float32 minResolvedWavelength,
+                   std::span<float32> outMeters) const override
+    {
+        for (std::size_t i = 0; i < x.size(); ++i)
+        {
+            const float32 dx = x[i] - m_CenterX;
+            const float32 dz = z - m_CenterZ;
+            outMeters[i] = std::max(0.0f, 120.0f - 1.0e-4f * (dx * dx + dz * dz));
+        }
+    }
+
+    TerrainECS::TerrainHeightRange HeightRange(float32, float32, float32, float32, float32) const override
+    {
+        return {0.0f, 120.0f};
+    }
+
+private:
+    float32 m_CenterX = 0.0f;
+    float32 m_CenterZ = 0.0f;
+};
+
+GE_REGISTER_TERRAIN_HEIGHT_FUNCTION(IslandHeights, "Islands")
+```
+
+The name is 1 to 63 characters. A second registration of a name replaces the first: the newest module load wins.
+
+## The two calls
+
+```cpp title="TerrainECS/TerrainHeightFunction/ITerrainHeightFunction.h"
+virtual void HeightRow(float32 z, std::span<const float32> x, float32 minResolvedWavelength,
+                       std::span<float32> outMeters) const = 0;
+virtual TerrainHeightRange HeightRange(float32 minX, float32 minZ, float32 maxX, float32 maxZ,
+                                       float32 minResolvedWavelength) const = 0;
+```
+
+| Call | What it returns | When the engine calls it |
+|---|---|---|
+| `HeightRow` | The height at `(x[i], z)` in `outMeters[i]`, for one row of samples | Once for each row of a tile, a page, or the far-field coarse field |
+| `HeightRange` | The lowest and highest height over the rectangle, conservative | Once when the terrain is created, so the level selection is right before the first tile fills |
+
+Both calls run at the same time on many workers. They must be pure functions of their arguments and of the state the constructor built. They must not write to the instance.
+
+The engine builds one instance for each function, seed, and terrain footprint, on a worker. The constructor can run a long precompute, for example an erosion pass on a coarse grid. Until the first instance is ready, the terrain is not created and height queries answer that the ground is not sampled yet.
+
+## Units and coordinates
+
+- `x` and `z` are meters from the terrain's minimum corner, not world coordinates. A moved terrain carries its world with it.
+- The engine also asks for heights past the footprint, where the last tile column and row overhang it. The value there is the function's.
+- A height is in meters above the terrain's position. A height can be negative or higher than the terrain's **Height Scale**: the engine keeps it as it is.
+- A height must be a finite number. When a row holds NaN or an infinity, the page with that row stays empty, and the log shows one warning for each terrain that names the terrain, the function and the first such sample.
+- The terrain's **Height Scale** is the height band that the material height rules read. Set it to the highest height the function returns, so that a rule at 0.8 of the band starts at 0.8 of the highest ground.
+
+## The band limit
+
+`minResolvedWavelength` is in meters. Relief with a shorter wavelength than this value must be replaced by its mean. The value is 0 for the finest tiles and pages, so the function returns all of its detail there. A coarser page asks for `2 x spacing x 2^level`, as the procedural noise source drops its octaves. A function that ignores the value is still correct, but its coarse pages alias.
+
+## Determinism
+
+The function runs on every machine that loads the scene, so a seed must give the same heights everywhere. The engine compiles without fast math and without contraction of `a * b + c`, in the engine and in game modules built on the SDK. The sample positions are the same bits on every platform.
+
+The function must:
+
+- Use `+`, `-`, `*`, `/`, `sqrt`, `floor`, `ceil`, `abs`, `min`, `max`, and the engine's `Noise` module.
+- Not call `std::sin`, `std::cos`, `std::pow`, `std::exp`, `std::log`, or another transcendental function. Their results differ between platforms.
+- Not use approximate SIMD instructions (`rcp`, `rsqrt`).
+- Build its state from the seed only: a deterministic random generator seeded from `Seed`, no hash of a pointer, and no iteration order of an unordered container.
+- Return a value that depends only on its arguments and that state, never on the calling thread or the call order.
+
+## In the editor
+
+The Terrain Inspector's Base section shows these rows when Base Source is Function:
+
+| Row | What it does |
+|---|---|
+| Height Function | Lists the names that the loaded modules register, sorted by name. A pick is one undo step. |
+| Seed | The seed the function generates its world from, from 0 to 2,147,483,647. A typed number past that range is held to it. An edit is one undo step. A larger seed set from code shows as 2,147,483,647 until it is edited. The dice button at the end of the row sets a new random seed in that range, as one undo step. |
+
+While the function generates the world for a new name or seed, the Base header shows a gray "Generating" badge, and its tooltip names the function and the seed: "'Islands' for seed 42...". The rows under the header do not move. The old shape stays drawn until the new world is ready. For a few seconds after a seed change, the terrain can show without its surface colors. The colors return when the new surface is ready.
+
+## A new seed, a new module, or a new name
+
+A change to `BaseSeed`, `HeightFunction`, or the terrain's size makes the engine build a new instance. The old shape stays drawn and collidable until the new instance is ready. Then the terrain is created again from the new instance: its tiles fill again and its pages load again. This costs as much as a heightmap reload, so change the seed on a load screen, not every frame.
+
+When the game module is built again while the editor runs, the reloaded module registers the name again. The engine releases the old function before the old module unloads, and the terrain fills again from the new code.
+
+## An unregistered name
+
+When no loaded module registers the terrain's function name, the terrain is flat. The log shows a warning that names the terrain, the function and the fix:
+
+```text title="The warning"
+Terrain 'Island': no loaded module registers the height function 'Islands'. The terrain is flat. Build the game module that registers it, or set the terrain's Base Source.
+```
+
+In the editor, the Height Function row shows the name with "(not registered)" after it, and the Base section shows a notice: "No loaded module registers the height function 'Islands'. The terrain is flat until one does. Save the game module's source in the project's Assets folder so the editor builds it, or pick another function." The editor never replaces the name, and the section updates when a module that registers the name loads. If you do not pick a name, the section shows "No function is picked, so the base is flat. Pick one in Height Function above." While the base is flat, the Terrain Settings section does not show Height Range.
+
+When a module that registers the name loads later, the terrain fills from the function.
+
+## Limits
+
+- Planar terrains only. A planet takes its relief from its own generator.
+- The function is native C++ only. A function in C# is not available yet.

@@ -11,6 +11,7 @@
 #include <GLFW/glfw3.h>
 
 #if defined(__EMSCRIPTEN__)
+#include <emscripten/em_js.h>
 #include <emscripten/emscripten.h>
 #include <emscripten/html5.h>
 #endif
@@ -57,6 +58,35 @@ extern "C" {
 #include <X11/Xlib.h>
 #include <X11/Xatom.h>
 #include <X11/cursorfont.h>
+#endif
+
+#if defined(__EMSCRIPTEN__)
+// The JS side of the canvas window. Both run on the calling thread, which is
+// the main runtime thread: the Window API is main-thread only.
+// clang-format off
+EM_JS(void, GeWebSetCanvasCursor, (const char* css), {
+    var canvas = (typeof Module !== "undefined" && Module["canvas"])
+                     ? Module["canvas"]
+                     : document.getElementById("canvas");
+    if (canvas)
+        canvas.style.cursor = UTF8ToString(css);
+});
+
+// emscripten's GLFW sizes the drawing buffer by GLFW.getDevicePixelRatio(), on every
+// size change and on a devicePixelRatio change; the page's ratio replaces it.
+EM_JS(void, GeWebSetGlfwPixelRatio, (double ratio), {
+    GLFW.geRequestedPixelRatio = ratio;
+    if (!GLFW.geBrowserDevicePixelRatio)
+    {
+        GLFW.geBrowserDevicePixelRatio = GLFW.getDevicePixelRatio;
+        GLFW.getDevicePixelRatio = function() {
+            return GLFW.geRequestedPixelRatio > 0 ? GLFW.geRequestedPixelRatio
+                                                  : GLFW.geBrowserDevicePixelRatio();
+        };
+    }
+    GLFW.onDevicePixelRatioChange();
+});
+// clang-format on
 #endif
 
 namespace {
@@ -106,19 +136,6 @@ namespace {
         default:
             return "default";
         }
-    }
-
-    void ApplyWebCanvasCursor(const char* css)
-    {
-        MAIN_THREAD_EM_ASM(
-            {
-                var canvas = (typeof Module !== 'undefined' && Module['canvas'])
-                                 ? Module['canvas']
-                                 : document.getElementById('canvas');
-                if (canvas)
-                    canvas.style.cursor = UTF8ToString($0);
-            },
-            css);
     }
 
     // The page owns the window geometry on this target: its CSS sizes the
@@ -937,22 +954,7 @@ void Window::SetWebPixelRatio(double ratio)
 {
     if (!m_Handle)
         return;
-    // emscripten's GLFW sizes the drawing buffer by GLFW.getDevicePixelRatio(), on every
-    // size change and on a devicePixelRatio change; the page's ratio replaces it.
-    EM_ASM(
-        {
-            GLFW.geRequestedPixelRatio = $0;
-            if (!GLFW.geBrowserDevicePixelRatio)
-            {
-                GLFW.geBrowserDevicePixelRatio = GLFW.getDevicePixelRatio;
-                GLFW.getDevicePixelRatio = function() {
-                    return GLFW.geRequestedPixelRatio > 0 ? GLFW.geRequestedPixelRatio
-                                                          : GLFW.geBrowserDevicePixelRatio();
-                };
-            }
-            GLFW.onDevicePixelRatioChange();
-        },
-        ratio);
+    GeWebSetGlfwPixelRatio(ratio);
 }
 
 void Window::NotifyWebFullscreenChanged(bool isFullscreen)
@@ -1742,7 +1744,7 @@ void Window::SetCursor(CursorType type)
         return;
 
 #if defined(__EMSCRIPTEN__)
-    ApplyWebCanvasCursor(WebCanvasCssCursor(type));
+    GeWebSetCanvasCursor(WebCanvasCssCursor(type));
     return;
 #endif
 
@@ -1796,7 +1798,7 @@ void Window::ResetCursor()
         return;
 
 #if defined(__EMSCRIPTEN__)
-    ApplyWebCanvasCursor("default");
+    GeWebSetCanvasCursor("default");
     return;
 #endif
 

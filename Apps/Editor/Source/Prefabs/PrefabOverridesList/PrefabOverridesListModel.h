@@ -35,9 +35,9 @@ enum class PrefabOverrideRowKind
 struct PrefabOverrideRow
 {
     PrefabOverrideRowKind Kind = PrefabOverrideRowKind::ChangedField;
-    /// The Inspector's row label for a field ("Local Position", "Reflection Probe . Intensity"), the component's name
-    /// for a component, "Entity" for an added entity, the prefab's name of a removed child, the component and the
-    /// field of the line for a stale row.
+    /// The component and the Inspector's label for a field ("Transform: Local Position", "Reflection Probe:
+    /// Intensity"), "Name" for the name, the component's name for a component, "Entity" for an added entity, the
+    /// prefab's name of a removed child, the component and the field of the line for a stale row.
     std::string Label;
     /// The prefab's value of a changed field as the Inspector shows it (an asset's name, a rotation in degrees);
     /// empty for every other kind and for a value the list cannot show.
@@ -48,6 +48,8 @@ struct PrefabOverrideRow
     Scene::PrefabOverride Override;
     /// The index of the stale row's skip in the load report that the list was built from.
     std::size_t SkipIndex = 0;
+    /// True when the instance shows the same value as the prefab: the field keeps a record.
+    bool SameAsPrefab = false;
 };
 
 /// The overrides of one entity of the instance, or the stale rows of one address the prefab does not have.

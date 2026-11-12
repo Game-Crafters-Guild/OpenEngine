@@ -13,9 +13,10 @@ namespace GameEngine::Editor
 namespace
 {
 
-constexpr std::array<std::string_view, 8> kInputInjectionMethods = {
-    "send_key",     "input_text",   "send_text",           "click_element",
-    "move_pointer", "perform_drop", "simulate_mouse_drag", "simulate_double_click_drag",
+constexpr std::array<std::string_view, 9> kInputInjectionMethods = {
+    "send_key",     "input_text",  "send_text",           "click_element",
+    "move_pointer", "send_scroll", "perform_drop",        "simulate_mouse_drag",
+    "simulate_double_click_drag",
 };
 
 // The bridge whose Agent scope a request opens, or null for an input-injection method or

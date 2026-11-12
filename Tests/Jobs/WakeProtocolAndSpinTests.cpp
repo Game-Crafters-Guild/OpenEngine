@@ -7,6 +7,7 @@
 // interpreted.
 
 #include "JobSystem/ParallelAlgorithms.h"
+#include "JobSystem/TaskSlabPool.h"
 #include "JobSystem/WorkStealingThreadPool.h"
 
 #include <gtest/gtest.h>
@@ -18,10 +19,14 @@
 #include <cstdint>
 #include <cstdio>
 #include <functional>
+#include <iterator>
 #include <random>
+#include <span>
+#include <string>
 #include <thread>
 #include <vector>
 
+#include "HeldWorkers.h"
 #include "LatencyBudget.h"
 #include "TestPlatform.h"
 #if !GE_TEST_HAS_WIN_TIMERS
@@ -113,6 +118,41 @@ double MeasureForkUs(JobSystem::WorkStealingThreadPool& pool,
     return ElapsedUs(t0, SteadyClock::now());
 }
 
+// The flood and window tests raise the backstop to 60 s: a lost wake is then a
+// hang that a 2 s watchdog reports, not a slow pass.
+constexpr uint32_t kRaisedBackstopUs = 60'000'000;
+constexpr std::chrono::milliseconds kWatchdog{2000};
+
+// The pool's wake state, for a watchdog message.
+std::string WakeState(const JobSystem::WorkStealingThreadPool& pool)
+{
+    std::string state = "idle bits " + std::to_string(pool.GetIdleCountForTests()) + ", spinning " +
+                        std::to_string(pool.GetSpinningCountForTests()) + ", published " +
+                        std::to_string(pool.GetPublishedJobCount());
+#if GE_DEBUG_INSTRUMENTATION
+    const JobSystem::WorkStealingThreadPool::WakeCountsForTests counts = pool.GetWakeCountsForTests();
+    state += ", claims " + std::to_string(counts.Claims) + ", consumed " + std::to_string(counts.Consumed) +
+             ", merged " + std::to_string(counts.Merged) + ", stale " + std::to_string(counts.StaleConsumed) +
+             ", flags set " + std::to_string(counts.FlagsSet);
+#endif
+    return state;
+}
+
+// Polls the fork in flight (start time, 0 between forks). A fork older than
+// the watchdog is a stalled fork: the pool's wake state is kept for the failure.
+void WatchForks(const JobSystem::WorkStealingThreadPool& pool, const std::atomic<int64_t>& forkStartNs,
+                const std::atomic<bool>& stop, std::string& stuckState)
+{
+    constexpr int64_t kWatchdogNs = std::chrono::duration_cast<std::chrono::nanoseconds>(kWatchdog).count();
+    while (!stop.load() && stuckState.empty())
+    {
+        const int64_t startNs = forkStartNs.load();
+        if (startNs != 0 && SteadyNowNs() - startNs > kWatchdogNs)
+            stuckState = "a fork in flight for over " + std::to_string(kWatchdog.count()) + " ms; " + WakeState(pool);
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+}
+
 // Shared body for the lost-wakeup stress: 100k single-offload forks with
 // randomized 0-200µs inter-fork gaps. The gap range straddles the 100µs spin
 // expiry, so forks land in every phase of the spinner lifecycle — including
@@ -122,10 +162,8 @@ void RunLostWakeupStress(uint32_t spinWindowUs, uint32_t maxSpinners)
     JobSystem::WorkStealingThreadPool pool(4);
     pool.SetSpinConfigForTest(spinWindowUs, maxSpinners);
 
-    // Run the whole stress WITHOUT the ~1ms liveness rescue: a genuinely lost
-    // wakeup now costs ~500ms and cannot hide inside the scheduler's tail.
-    // (This is the "stress test proves the protocol" condition the spec sets
-    // for ever raising the production backstop.)
+    // The stress backstop takes the 1 ms rescue out of the fork times. The
+    // caller runs a unit that no helper claims, so a lost wake does not stall a fork.
     pool.SetSleepBackstopForTest(kStressBackstopUs);
     const LatencyBudget budget = ReadLatencyBudget();
 
@@ -154,10 +192,17 @@ void RunLostWakeupStress(uint32_t spinWindowUs, uint32_t maxSpinners)
     std::vector<Outlier> outliers; // every sample >900µs, for scheduler-noise triage
     int over100ms = 0;
     double worstUs = 0.0;
+    std::atomic<int64_t> forkStartNs{0};
+    std::atomic<bool> stopWatchdog{false};
+    std::string stuckState;
+    std::thread watchdog(WatchForks, std::cref(pool), std::cref(forkStartNs), std::cref(stopWatchdog),
+                         std::ref(stuckState));
     for (int i = 0; i < kIterations; ++i)
     {
         const auto t0 = SteadyClock::now();
+        forkStartNs.store(SteadyNowNs());
         JobSystem::ParallelFor(&pool, 2, [&](size_t task) { tasks[task](); });
+        forkStartNs.store(0);
         const double us = ElapsedUs(t0, SteadyClock::now());
         worstUs = std::max(worstUs, us);
         if (us > 900.0)
@@ -172,6 +217,9 @@ void RunLostWakeupStress(uint32_t spinWindowUs, uint32_t maxSpinners)
         }
         BusyWaitUs(gapUs(rng));
     }
+    stopWatchdog.store(true);
+    watchdog.join();
+    EXPECT_TRUE(stuckState.empty()) << "a stalled fork: " << stuckState;
 
     std::printf("[LostWakeupStress spin=%uus maxSpinners=%u] iters=%d worst=%.1fus "
                 "over900us=%zu over100ms=%d\n",
@@ -183,11 +231,10 @@ void RunLostWakeupStress(uint32_t spinWindowUs, uint32_t maxSpinners)
                     o.TotalUs, o.SubmitToRanUs, o.TotalUs - o.SubmitToRanUs);
     }
 
-    // With the rescue disabled, a lost wakeup holds the fork until a sleeper's
-    // backstop fires. Scheduler tails on a loaded machine pass 100 ms but stay
-    // under kLostWakeupLineUs, so only the latency line reads the machine load.
-    EXPECT_LT(worstUs, kLostWakeupLineUs)
-        << "a fork sample at the backstop with the rescue disabled is a lost wakeup";
+    // A fork at the backstop line is a stall of the fork path: a started helper or
+    // the caller's join. Scheduler tails on a loaded machine stay under
+    // kLostWakeupLineUs, so only the latency line reads the machine load.
+    EXPECT_LT(worstUs, kLostWakeupLineUs) << "a fork sample at the backstop line is a stalled fork";
     ExpectWithinBudget(worstUs, kStressLatencyLineUs, budget, "LostWakeupStress worst fork");
 }
 
@@ -199,13 +246,495 @@ TEST(WakeProtocolTest, LostWakeupStress)
     RunLostWakeupStress(100, 2);
 }
 
-// With the spin path disabled every fork exercises the mutex/condvar protocol
-// (§7 Hazard B) in isolation: producer publish + notify-under-mutex vs the
-// sleeper's increment-then-predicate-then-block sequence.
+// With the spin path disabled, every fork uses the park protocol alone: the
+// waker's claim and flag write under the slot lock against the worker's idle
+// bit, queued-count read and flag check under the same lock (§7 Hazard B).
 TEST(WakeProtocolTest, LostWakeupStressNoSpinners)
 {
     RunLostWakeupStress(0, 0);
 }
+
+namespace {
+
+using JobSystem::JobPriority;
+using JobSystem::WorkStealingThreadPool;
+
+constexpr uint32_t kShippingSpinWindowUs = 100;
+constexpr uint32_t kShippingMaxSpinners = 2;
+constexpr uint32_t kTimeoutRaceBackstopUs = 20;
+constexpr uint32_t kFloodRounds = 300;
+constexpr uint32_t kStallRounds = 100;
+constexpr size_t kRunSizes[] = {1, 7, 8, 9, 17, 64, 65};
+constexpr size_t kLargestRun = 65;
+constexpr int kMaxGapUs = 200;
+
+// At quiesce every claim wrote one flag: a wake consumed it, it merged into a
+// flag that was already set, or it is still set.
+void ExpectWakeCountsBalance(const WorkStealingThreadPool& pool)
+{
+#if GE_DEBUG_INSTRUMENTATION
+    const bool balanced = WaitUntil(
+        [&] {
+            const WorkStealingThreadPool::WakeCountsForTests counts = pool.GetWakeCountsForTests();
+            return counts.Claims == counts.Consumed + counts.Merged + counts.FlagsSet;
+        },
+        kWatchdog);
+    EXPECT_TRUE(balanced) << "the wake counts do not balance: " << WakeState(pool);
+#else
+    (void)pool;
+#endif
+}
+
+// A flood job is larger than a task slab, so its worker frees it to the heap.
+// A worker that frees a slab keeps a freelist block for the rest of the
+// process, and 70 such workers starve TaskSlabPoolTest and JobCounterTest.
+struct Tick
+{
+    std::atomic<uint64_t>* Ran = nullptr;
+    char Pad[JobSystem::kTaskSlabSize] = {};
+
+    void operator()() const { Ran->fetch_add(1, std::memory_order_relaxed); }
+};
+static_assert(sizeof(Tick) > JobSystem::kTaskSlabSize);
+
+struct FloodShape
+{
+    uint32_t Workers = 0;
+    uint32_t SpinWindowUs = 0;
+    uint32_t MaxSpinners = 0;
+    uint32_t Producers = 1;
+    uint32_t BackstopUs = kRaisedBackstopUs;
+};
+
+std::string Describe(const FloodShape& shape)
+{
+    return std::to_string(shape.Workers) + " workers, spin " + std::to_string(shape.SpinWindowUs) + " us x " +
+           std::to_string(shape.MaxSpinners) + ", " + std::to_string(shape.Producers) + " producers, backstop " +
+           std::to_string(shape.BackstopUs) + " us";
+}
+
+// The floods run on one pool per width, and each pool runs every shape in
+// turn: a pool per shape starts enough threads to fill the task slab
+// freelist's per-thread blocks. Only the run flood adds 70 workers (a second
+// mask word).
+constexpr uint32_t kFloodWidths[] = {2, 4, 16};
+constexpr uint32_t kSecondMaskWordWidth = 70;
+
+// The shapes one pool runs: the shipping spin and no spin, from one and from
+// four producers.
+std::vector<FloodShape> FloodShapes(uint32_t workers, uint32_t backstopUs)
+{
+    std::vector<FloodShape> shapes;
+    for (const bool spin : {true, false})
+        for (const uint32_t producers : {1u, 4u})
+            shapes.push_back({workers, spin ? kShippingSpinWindowUs : 0u, spin ? kShippingMaxSpinners : 0u, producers,
+                              backstopUs});
+    return shapes;
+}
+
+void ConfigureFlood(WorkStealingThreadPool& pool, const FloodShape& shape)
+{
+    pool.SetSpinConfigForTest(shape.SpinWindowUs, shape.MaxSpinners);
+    pool.SetSleepBackstopForTest(shape.BackstopUs);
+}
+
+uint64_t ClaimCount(const WorkStealingThreadPool& pool)
+{
+#if GE_DEBUG_INSTRUMENTATION
+    return pool.GetWakeCountsForTests().Claims;
+#else
+    (void)pool;
+    return 0;
+#endif
+}
+
+// A flood that claims no idle worker never parks one, so its pass says nothing.
+void ExpectClaimsSince(const WorkStealingThreadPool& pool, uint64_t claimsBefore)
+{
+#if GE_DEBUG_INSTRUMENTATION
+    EXPECT_GT(ClaimCount(pool), claimsBefore) << "the flood parked no worker: " << WakeState(pool);
+#else
+    (void)pool;
+    (void)claimsBefore;
+#endif
+}
+
+size_t RunSize(uint32_t roundIndex, uint32_t producer)
+{
+    return kRunSizes[(roundIndex + producer) % std::size(kRunSizes)];
+}
+
+// One producer's run of one round, after a 0-200 us gap. Every third run goes
+// to the Background lane.
+void PublishRun(WorkStealingThreadPool& pool, std::atomic<uint64_t>& ran, uint32_t roundIndex, uint32_t producer,
+                std::mt19937& rng)
+{
+    std::uniform_int_distribution<int> gapUs(0, kMaxGapUs);
+    BusyWaitUs(gapUs(rng));
+    const JobPriority lane = (roundIndex + producer) % 3 == 2 ? JobPriority::Background : JobPriority::Normal;
+    const size_t size = RunSize(roundIndex, producer);
+    if (size == 1)
+    {
+        pool.EnqueueWork(Tick{&ran}, lane);
+        return;
+    }
+    Tick run[kLargestRun];
+    for (size_t i = 0; i < size; ++i)
+        run[i] = Tick{&ran};
+    pool.EnqueueWorkBatch(run, size, lane);
+}
+
+// A helper producer publishes its run of each round when the round opens.
+void ProduceRounds(WorkStealingThreadPool& pool, std::atomic<uint64_t>& ran, const std::atomic<int64_t>& openRound,
+                   const std::atomic<bool>& stop, uint32_t producer)
+{
+    std::mt19937 rng(0xF100D + producer);
+    for (int64_t roundIndex = 0;; ++roundIndex)
+    {
+        while (openRound.load() < roundIndex && !stop.load())
+            std::this_thread::yield();
+        if (stop.load())
+            return;
+        PublishRun(pool, ran, static_cast<uint32_t>(roundIndex), producer, rng);
+    }
+}
+
+// External producers publish runs of 1 to 65 tasks. Each round must drain
+// inside the watchdog before the next round opens, so no later publish can
+// rescue a lost wake. `ran` outlives the pool, so a task a failed round left
+// queued counts into live memory.
+void RunExternalRunFlood(WorkStealingThreadPool& pool, std::atomic<uint64_t>& ran, const FloodShape& shape,
+                         uint32_t rounds)
+{
+    SCOPED_TRACE(Describe(shape));
+    ConfigureFlood(pool, shape);
+    const uint64_t claimsBefore = ClaimCount(pool);
+
+    std::atomic<int64_t> openRound{-1};
+    std::atomic<bool> stop{false};
+    std::vector<std::thread> producers;
+    for (uint32_t producer = 1; producer < shape.Producers; ++producer)
+        producers.emplace_back(ProduceRounds, std::ref(pool), std::ref(ran), std::cref(openRound), std::cref(stop),
+                               producer);
+
+    std::mt19937 rng(0xF100D);
+    uint64_t expected = ran.load();
+    std::string stuckState;
+    for (uint32_t roundIndex = 0; roundIndex < rounds && stuckState.empty(); ++roundIndex)
+    {
+        for (uint32_t producer = 0; producer < shape.Producers; ++producer)
+            expected += RunSize(roundIndex, producer);
+        openRound.store(roundIndex);
+        PublishRun(pool, ran, roundIndex, 0, rng);
+        if (!WaitUntil([&] { return ran.load() == expected; }, kWatchdog))
+            stuckState = "round " + std::to_string(roundIndex) + " ran " + std::to_string(ran.load()) + " of " +
+                         std::to_string(expected) + "; " + WakeState(pool);
+    }
+    stop.store(true);
+    for (std::thread& producer : producers)
+        producer.join();
+    EXPECT_TRUE(stuckState.empty()) << "a lost wake: " << stuckState;
+    ExpectWakeCountsBalance(pool);
+    ExpectClaimsSince(pool, claimsBefore);
+}
+
+// Runs the run flood with every shape on one pool per width.
+void RunRunFloods(std::span<const uint32_t> widths, uint32_t backstopUs, uint32_t rounds)
+{
+    for (const uint32_t workers : widths)
+    {
+        std::atomic<uint64_t> ran{0};
+        WorkStealingThreadPool pool(workers);
+        for (const FloodShape& shape : FloodShapes(workers, backstopUs))
+            RunExternalRunFlood(pool, ran, shape, rounds);
+    }
+}
+
+// A step shaped like a physics step: the external thread publishes a stage of
+// 17, the last job of a stage publishes one single, and the single publishes
+// the next stage. Worker publishes and the dequeue-side wake carry the step.
+constexpr uint32_t kStageWidth = 17;
+constexpr uint32_t kStagesPerStep = 4;
+
+struct StageChain
+{
+    WorkStealingThreadPool* Pool = nullptr;
+    std::atomic<uint64_t>* Ran = nullptr;
+    std::atomic<uint32_t> StagesLeft{0};
+    std::atomic<uint32_t> JobsLeft{0};
+};
+
+void PublishStage(StageChain* chain);
+
+// Each job counts itself last, so a drained count means no job reads the chain.
+struct StageSingle
+{
+    StageChain* Chain = nullptr;
+
+    void operator()() const
+    {
+        PublishStage(Chain);
+        Chain->Ran->fetch_add(1);
+    }
+};
+
+struct StageJob
+{
+    StageChain* Chain = nullptr;
+
+    void operator()() const
+    {
+        if (Chain->JobsLeft.fetch_sub(1) == 1 && Chain->StagesLeft.fetch_sub(1) > 1)
+            Chain->Pool->EnqueueWork(StageSingle{Chain});
+        Chain->Ran->fetch_add(1);
+    }
+};
+
+void PublishStage(StageChain* chain)
+{
+    chain->JobsLeft.store(kStageWidth);
+    StageJob stage[kStageWidth];
+    for (StageJob& job : stage)
+        job = StageJob{chain};
+    chain->Pool->EnqueueWorkBatch(stage, kStageWidth);
+}
+
+// The chain outlives the pool, so a job a failed step left queued reads live memory.
+void RunStageChainFlood(StageChain& chain, const FloodShape& shape, uint32_t steps)
+{
+    SCOPED_TRACE(Describe(shape));
+    WorkStealingThreadPool& pool = *chain.Pool;
+    std::atomic<uint64_t>& ran = *chain.Ran;
+    ConfigureFlood(pool, shape);
+    const uint64_t claimsBefore = ClaimCount(pool);
+
+    std::mt19937 rng(0xC4A1);
+    std::uniform_int_distribution<int> gapUs(0, kMaxGapUs);
+    uint64_t expected = ran.load();
+    std::string stuckState;
+    for (uint32_t step = 0; step < steps && stuckState.empty(); ++step)
+    {
+        expected += kStageWidth * kStagesPerStep + kStagesPerStep - 1;
+        chain.StagesLeft.store(kStagesPerStep);
+        PublishStage(&chain);
+        if (!WaitUntil([&] { return ran.load() == expected; }, kWatchdog))
+            stuckState = "step " + std::to_string(step) + " ran " + std::to_string(ran.load()) + " of " +
+                         std::to_string(expected) + "; " + WakeState(pool);
+        BusyWaitUs(gapUs(rng));
+    }
+    EXPECT_TRUE(stuckState.empty()) << "a lost wake: " << stuckState;
+    ExpectWakeCountsBalance(pool);
+    ExpectClaimsSince(pool, claimsBefore);
+}
+
+#if GE_DEBUG_INSTRUMENTATION
+using WakePoint = WorkStealingThreadPool::WakePoint;
+
+constexpr int kNoPoint = -1;
+constexpr int kStallUs = 200;
+constexpr std::chrono::milliseconds kHeldWakerStall{50};
+
+// The forced interleavings delay one wake point: a yield on even visits and a
+// 200 us busy stall on odd visits. The stall takes no lock, because at
+// BeforeBlock the worker holds its slot lock.
+std::atomic<int> g_StallPoint{kNoPoint};
+std::atomic<uint32_t> g_StallVisits{0};
+
+void StallAtOnePoint(WakePoint point, size_t)
+{
+    if (static_cast<int>(point) != g_StallPoint.load(std::memory_order_relaxed))
+        return;
+    if (g_StallVisits.fetch_add(1, std::memory_order_relaxed) % 2 == 0)
+        std::this_thread::yield();
+    else
+        BusyWaitUs(kStallUs);
+}
+
+// Holds one visit of one wake point. A worker point holds until the release.
+// BeforeBlock holds under the slot lock until a waker claims the worker, then
+// until the release or 50 ms, so a waker that writes the flag under the lock
+// waits for the hold. AfterClaim (on the waker) stalls 50 ms.
+std::atomic<int> g_HoldPoint{kNoPoint};
+std::atomic<bool> g_Held{false};
+std::atomic<bool> g_Release{false};
+std::atomic<const WorkStealingThreadPool*> g_HeldPool{nullptr};
+
+void HoldOneVisit(WakePoint point, size_t)
+{
+    int armed = static_cast<int>(point);
+    if (!g_HoldPoint.compare_exchange_strong(armed, kNoPoint))
+        return;
+    g_Held.store(true);
+    if (point == WakePoint::AfterClaim)
+    {
+        std::this_thread::sleep_for(kHeldWakerStall);
+        return;
+    }
+    if (point == WakePoint::BeforeBlock)
+    {
+        while (g_HeldPool.load()->GetIdleCountForTests() != 0 && !g_Release.load())
+            std::this_thread::yield();
+        const SteadyClock::time_point until = SteadyClock::now() + kHeldWakerStall;
+        while (!g_Release.load() && SteadyClock::now() < until)
+            std::this_thread::yield();
+        return;
+    }
+    while (!g_Release.load())
+        std::this_thread::yield();
+}
+
+// Opens every hold, so a failed case holds no worker of the next case.
+void OpenEveryHold()
+{
+    g_StallPoint.store(kNoPoint);
+    g_HoldPoint.store(kNoPoint);
+    g_Release.store(true);
+}
+
+// One worker, no spin, the raised backstop. The worker (at AfterClaim, the
+// waker) is held once at `point` while the test publishes one task, which
+// must run inside the watchdog.
+void RunHeldWindow(WakePoint point)
+{
+    std::atomic<uint64_t> ran{0};
+    WorkStealingThreadPool pool(1);
+    pool.SetSpinConfigForTest(0, 0);
+    pool.SetSleepBackstopForTest(kRaisedBackstopUs);
+    g_Held.store(false);
+    g_Release.store(false);
+    g_HeldPool.store(&pool);
+    ScopedWakeHook hook(&HoldOneVisit, &OpenEveryHold);
+    ASSERT_TRUE(WaitUntil([&] { return pool.GetIdleCountForTests() == 1; }, kWatchdog))
+        << "the worker never parked: " << WakeState(pool);
+
+    g_HoldPoint.store(static_cast<int>(point));
+    uint64_t expected = 1;
+    if (point != WakePoint::AfterClaim)
+    {
+        // One task cycles the parked worker, and its next park meets the hold.
+        pool.EnqueueWork(Tick{&ran});
+        ASSERT_TRUE(WaitUntil([&] { return g_Held.load(); }, kWatchdog))
+            << "the worker never reached the held point: " << WakeState(pool);
+        expected = 2;
+    }
+    pool.EnqueueWork(Tick{&ran});
+    g_Release.store(true);
+    EXPECT_TRUE(g_Held.load()) << "the hold never ran";
+    EXPECT_TRUE(WaitUntil([&] { return ran.load() == expected; }, kWatchdog))
+        << "a lost wake: ran " << ran.load() << " of " << expected << "; " << WakeState(pool);
+    ExpectWakeCountsBalance(pool);
+}
+#endif // GE_DEBUG_INSTRUMENTATION
+
+} // namespace
+
+TEST(WakeProtocolTest, RunFloodsLoseNoTaskOnAnyPoolWidth)
+{
+    constexpr uint32_t kRunFloodWidths[] = {2, 4, 16, kSecondMaskWordWidth};
+    RunRunFloods(kRunFloodWidths, kRaisedBackstopUs, kFloodRounds);
+}
+
+TEST(WakeProtocolTest, WorkerPublishedStageChainsLoseNoTask)
+{
+    for (const uint32_t workers : kFloodWidths)
+    {
+        std::atomic<uint64_t> ran{0};
+        StageChain chain;
+        WorkStealingThreadPool pool(workers);
+        chain.Pool = &pool;
+        chain.Ran = &ran;
+        for (const FloodShape& shape : FloodShapes(workers, kRaisedBackstopUs))
+            if (shape.Producers == 1)
+                RunStageChainFlood(chain, shape, kFloodRounds);
+    }
+}
+
+// A 20 us backstop races timeouts against claims (at least 1 ms on Windows,
+// where the wait has millisecond steps): a worker's idle-bit clear finds its
+// bit claimed, and the flag it leaves makes its next park return.
+TEST(WakeProtocolTest, TimeoutRaceAtTwentyMicrosecondsLosesNoTask)
+{
+    RunRunFloods(kFloodWidths, kTimeoutRaceBackstopUs, kFloodRounds);
+}
+
+// Shutdown notifies each parked worker: with the raised backstop, only that
+// notify ends the worker's wait inside the watchdog.
+TEST(WakeProtocolTest, ShutdownWakesAParkedWorker)
+{
+    WorkStealingThreadPool pool(1);
+    pool.SetSpinConfigForTest(0, 0);
+    pool.SetSleepBackstopForTest(kRaisedBackstopUs);
+    ASSERT_TRUE(WaitUntil([&] { return pool.GetIdleCountForTests() == 1; }, kWatchdog));
+    std::this_thread::sleep_for(std::chrono::milliseconds(50)); // the worker blocks in its raised-backstop wait
+    const SteadyClock::time_point start = SteadyClock::now();
+    pool.Shutdown();
+    EXPECT_LT(SteadyClock::now() - start, kWatchdog) << "Shutdown waited out the parked worker's backstop";
+}
+
+#if GE_DEBUG_INSTRUMENTATION
+// (0) Held after the failed find cycle, before its idle count and bit: the waker
+// finds no idle worker, so only the queued-count check before the block runs the task.
+TEST(WakeWindowTest, AWorkerHeldBeforeItsIdleBitRunsTheTaskPublishedMeanwhile)
+{
+    RunHeldWindow(WakePoint::BeforeIdleBit);
+}
+
+// (i) Held after the idle bit, before the queued-count check: the waker claims it.
+TEST(WakeWindowTest, AWorkerHeldAfterItsIdleBitIsClaimed)
+{
+    RunHeldWindow(WakePoint::AfterIdleBit);
+}
+
+// (ii) Held after the check, before the slot lock: it reads the flag under the lock.
+TEST(WakeWindowTest, AWorkerHeldBeforeItsSlotLockReadsTheFlag)
+{
+    RunHeldWindow(WakePoint::BeforeSlotLock);
+}
+
+// (B) Held under the slot lock between the flag read and the block: the
+// waker's flag write waits for the lock, so its notify reaches the blocked worker.
+TEST(WakeWindowTest, AWorkerHeldBeforeItBlocksGetsTheFlagAfterItBlocks)
+{
+    RunHeldWindow(WakePoint::BeforeBlock);
+}
+
+// (iii) The waker held after its claim, before the slot lock: the worker is
+// blocked when the notify lands.
+TEST(WakeWindowTest, AWakerHeldAfterItsClaimStillWakesTheWorker)
+{
+    RunHeldWindow(WakePoint::AfterClaim);
+}
+
+// Each wake point stalls in turn under the run floods. (iv), the stall after a
+// wait ends and before the idle-bit clear, also runs with the 20 us backstop,
+// so wakers claim workers whose waits expired.
+TEST(WakeWindowTest, StallsAtEveryWakePointLoseNoTask)
+{
+    ScopedWakeHook hook(&StallAtOnePoint, &OpenEveryHold);
+    for (const uint32_t workers : kFloodWidths)
+    {
+        std::atomic<uint64_t> ran{0};
+        WorkStealingThreadPool pool(workers);
+        for (const WakePoint point : {WakePoint::BeforeIdleBit, WakePoint::AfterIdleBit, WakePoint::BeforeSlotLock,
+                                      WakePoint::BeforeBlock, WakePoint::AfterClaim, WakePoint::BeforeIdleClear})
+        {
+            SCOPED_TRACE("stall at wake point " + std::to_string(static_cast<int>(point)));
+            g_StallPoint.store(static_cast<int>(point));
+            for (const FloodShape& shape : FloodShapes(workers, kRaisedBackstopUs))
+                RunExternalRunFlood(pool, ran, shape, kStallRounds);
+        }
+        g_StallPoint.store(static_cast<int>(WakePoint::BeforeIdleClear));
+        for (const FloodShape& shape : FloodShapes(workers, kTimeoutRaceBackstopUs))
+            RunExternalRunFlood(pool, ran, shape, kStallRounds);
+        g_StallPoint.store(kNoPoint);
+    }
+}
+#else
+TEST(WakeWindowTest, ForcedWindowsNeedDebugInstrumentation)
+{
+    GTEST_SKIP() << "the wake hooks are compiled only where GE_DEBUG_INSTRUMENTATION is 1";
+}
+#endif
 
 // Pins the F2-amended skip rule (composed with F3 wake propagation): a
 // producer may skip the kernel notify only when armed spinners >= its
@@ -283,6 +812,11 @@ TEST(WakeProtocolTest, MultiProducerSkipNotify)
 // producer skip that notify, and the second task waits for the blocker or a sleeper's backstop.
 TEST(WakeProtocolTest, BlockingCoverTaskDoesNotAbsorbSecondProducer)
 {
+    // Declared before the pool: a queued job can still use them when an ASSERT returns early.
+    std::atomic<bool> warmed{false};
+    std::atomic<bool> blockerStarted{false};
+    std::atomic<bool> blockerDone{false};
+    std::atomic<bool> secondDone{false};
     JobSystem::WorkStealingThreadPool pool(4);
     // One spinner, effectively-infinite window, no timeout rescue.
     pool.SetSpinConfigForTest(60000000, 1);
@@ -291,7 +825,6 @@ TEST(WakeProtocolTest, BlockingCoverTaskDoesNotAbsorbSecondProducer)
 
     // Warm one worker through an execution so it re-arms the (now long) spin
     // window; the remaining workers stay parked.
-    std::atomic<bool> warmed{false};
     pool.EnqueueWork([&warmed] { warmed.store(true); });
     auto deadline = SteadyClock::now() + std::chrono::seconds(2);
     while (!warmed.load() && SteadyClock::now() < deadline)
@@ -307,8 +840,6 @@ TEST(WakeProtocolTest, BlockingCoverTaskDoesNotAbsorbSecondProducer)
 
     // The blocker: our own publish skips the notify (spinning=1 >= queued=1),
     // so only the armed spinner can claim it.
-    std::atomic<bool> blockerStarted{false};
-    std::atomic<bool> blockerDone{false};
     pool.EnqueueWork([&blockerStarted, &blockerDone] {
         blockerStarted.store(true);
         std::this_thread::sleep_for(std::chrono::microseconds(kStressBackstopUs));
@@ -335,7 +866,6 @@ TEST(WakeProtocolTest, BlockingCoverTaskDoesNotAbsorbSecondProducer)
 
     // Second producer: must be notified immediately, not absorbed by the
     // spinner that is busy inside the blocker.
-    std::atomic<bool> secondDone{false};
     const auto t0 = SteadyClock::now();
     pool.EnqueueWork([&secondDone] { secondDone.store(true); });
     deadline = SteadyClock::now() + std::chrono::seconds(2);
@@ -639,8 +1169,8 @@ TEST(JobSystemBench, BENCHMARK_WarmStormFork)
 // fan-out-16 fork, so the offloaded 15 chunks take EnqueueWorkBatch's BULK
 // publication path (>= kBulkPublishThreshold) against a wide sleeper set —
 // the previously unbenched wide-pool bulk shape. This is a REPORT row: a
-// 16-wide join's round-trip is dominated by the bounded-wake propagation
-// chain (kMaxWakePerBatch caller wakes + F3 worker-side fan-out), so the
+// 16-wide join's round-trip is dominated by the wake propagation
+// chain (one caller wake + F3 worker-side fan-out), so the
 // 8-wide <20us gate does not transfer (measured ~43us median on the bench
 // box). The assertion is a strand-sanity bound only: no sample may reach the
 // backstop band.

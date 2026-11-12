@@ -3,12 +3,16 @@
 #include "Mathematics/Quaternion.h"
 #include "Mathematics/Vector3.h"
 
+#include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <format>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <type_traits>
 #include <utility>
+#include <vector>
 #include <nlohmann/json.hpp>
 
 // Reading authored JSON without throwing. A decode reports a file it cannot read by refusing it,
@@ -92,6 +96,40 @@ inline bool ParseJson(std::string_view text, nlohmann::json& outDocument, std::s
     return false;
 }
 
+/// The first key written twice in one object of `text`, or empty. JSON leaves a repeated key to the
+/// reader, which keeps the last; a format that refuses it loses no definition unseen.
+inline std::string FirstRepeatedKey(std::string_view text)
+{
+    std::vector<std::vector<std::string>> objects;
+    std::string repeated;
+    const auto callback = [&](int, nlohmann::json::parse_event_t event, nlohmann::json& parsed) {
+        if (event == nlohmann::json::parse_event_t::object_start)
+            objects.emplace_back();
+        else if (event == nlohmann::json::parse_event_t::object_end && !objects.empty())
+            objects.pop_back();
+        else if (event == nlohmann::json::parse_event_t::key && !objects.empty() && repeated.empty())
+        {
+            const std::string key = parsed.get<std::string>();
+            std::vector<std::string>& seen = objects.back();
+            if (std::find(seen.begin(), seen.end(), key) != seen.end())
+                repeated = key;
+            seen.push_back(key);
+        }
+        return true;
+    };
+    // Only the callback is wanted. GCC does not let a void cast drop a warn_unused_result value.
+    std::ignore = nlohmann::json::parse(text, callback, false);
+    return repeated;
+}
+
+/// Whether a reader refuses an absent field (Required) or gives the caller's fallback (Optional).
+/// Use Required for a field that has no correct default, such as a position in a save file.
+enum class FieldPresence : uint8_t
+{
+    Optional,
+    Required,
+};
+
 /**
  * @brief Reads the fields of JSON objects into C++ values without throwing.
  *
@@ -150,13 +188,14 @@ class JsonFieldReader
         }
     }
 
-    /// Field `key` of `object` as an array of at least three numbers (x, y, z); `fallback` when
-    /// `object` is not an object or the field is absent or is not such an array. An element that
-    /// is not a number is refused and leaves that component at the fallback's.
+    /// Field `key` of `object` as an array of at least three numbers (x, y, z). Gives `fallback` when
+    /// `object` is not an object or the field is absent (refused when `presence` is Required), and
+    /// refuses a field of another shape; a non-number element is refused and keeps the fallback value.
     Mathematics::Vector3 ReadVector3(const nlohmann::json& object, std::string_view key,
-                                     const Mathematics::Vector3& fallback)
+                                     const Mathematics::Vector3& fallback,
+                                     FieldPresence presence = FieldPresence::Optional)
     {
-        const nlohmann::json* array = ArrayField(object, key, 3);
+        const nlohmann::json* array = ArrayField(object, key, 3, "[x, y, z]", presence);
         if (array == nullptr)
             return fallback;
         float values[3] = {fallback.x, fallback.y, fallback.z};
@@ -165,13 +204,14 @@ class JsonFieldReader
         return Mathematics::Vector3(values[0], values[1], values[2]);
     }
 
-    /// Field `key` of `object` as an array of at least four numbers, written w, x, y, z;
-    /// `fallback` when `object` is not an object, the field is absent or is not such an array, or
-    /// the reader has refused anything.
+    /// Field `key` of `object` as an array of at least four numbers, written w, x, y, z. Gives
+    /// `fallback` when `object` is not an object, the field is absent (refused when `presence` is
+    /// Required), or the reader has refused anything. A field of another shape is refused.
     Mathematics::Quaternion ReadQuaternion(const nlohmann::json& object, std::string_view key,
-                                           const Mathematics::Quaternion& fallback)
+                                           const Mathematics::Quaternion& fallback,
+                                           FieldPresence presence = FieldPresence::Optional)
     {
-        const nlohmann::json* array = ArrayField(object, key, 4);
+        const nlohmann::json* array = ArrayField(object, key, 4, "[w, x, y, z]", presence);
         if (array == nullptr)
             return fallback;
         float values[4] = {0.0f, 0.0f, 0.0f, 0.0f};
@@ -186,17 +226,37 @@ class JsonFieldReader
     const std::string& Refusal() const { return m_Refusal; }
 
   private:
-    /// Field `key` of `object` when it is an array of at least `minimumSize` elements; null
-    /// otherwise, and when `object` is not an object.
-    static const nlohmann::json* ArrayField(const nlohmann::json& object, std::string_view key, size_t minimumSize)
+    /// Field `key` of `object` when it is an array of at least `minimumSize` elements; null when
+    /// `object` is not an object or the field is absent. A field of another shape, or an absent
+    /// Required one, is refused, with `expected` as the form to write, and gives null.
+    const nlohmann::json* ArrayField(const nlohmann::json& object, std::string_view key, size_t minimumSize,
+                                     std::string_view expected, FieldPresence presence)
     {
         if (!object.is_object())
             return nullptr;
         const auto field = object.find(key);
-        if (field == object.end() || !field->is_array() || field->size() < minimumSize)
+        if (field == object.end())
+        {
+            if (presence == FieldPresence::Required)
+                Refuse(std::format("{} is missing; write it as {}", QualifiedName(key), expected));
             return nullptr;
+        }
+        if (!field->is_array())
+        {
+            RefuseValue(*field, key, expected);
+            return nullptr;
+        }
+        if (field->size() < minimumSize)
+        {
+            Refuse(std::format("{} is an array of {} {}; write it as {}", QualifiedName(key), field->size(),
+                               field->size() == 1 ? "element" : "elements", expected));
+            return nullptr;
+        }
         return &*field;
     }
+
+    /// Field `name` after the context, quoted as a refusal quotes it.
+    std::string QualifiedName(std::string_view name) const { return FieldName(m_Context + std::string(name)); }
 
     /// How a refusal names the JSON value an author wrote: "a string", "an array", "true or false".
     static std::string_view DescribeJsonValue(const nlohmann::json& value)
@@ -241,8 +301,7 @@ class JsonFieldReader
 
     void RefuseValue(const nlohmann::json& value, std::string_view name, std::string_view expected)
     {
-        Refuse(std::format("{} is {}; write it as {}", FieldName(m_Context + std::string(name)),
-                           DescribeJsonValue(value), expected));
+        Refuse(std::format("{} is {}; write it as {}", QualifiedName(name), DescribeJsonValue(value), expected));
     }
 
     std::string m_Context;

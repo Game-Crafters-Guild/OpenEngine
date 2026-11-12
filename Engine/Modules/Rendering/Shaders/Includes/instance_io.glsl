@@ -46,20 +46,7 @@ struct InstanceData
 #endif
 };
 
-// Decode the packed 21-bit-per-axis render-origin sector from the two reserved
-// GPUInstance words. bitfieldExtract sign-extends the 21-bit two's-complement
-// axis. C++ pack/unpack mirror: Engine/Rendering/RenderOrigin.h (locked by
-// RenderOriginTests). Kept out of gpu_instance_fields.glsl because that file is
-// #included inside a struct body.
-ivec3 ge_UnpackInstanceSector(uint p0, uint p1)
-{
-    uint ux = p0 & 0x1FFFFFu;
-    uint uy = ((p0 >> 21) & 0x7FFu) | ((p1 & 0x3FFu) << 11);
-    uint uz = (p1 >> 10) & 0x1FFFFFu;
-    return ivec3(bitfieldExtract(int(ux), 0, 21),
-                 bitfieldExtract(int(uy), 0, 21),
-                 bitfieldExtract(int(uz), 0, 21));
-}
+#include "instance_sector.glsl"
 
 #ifdef GE_VERTEX_DEFORMATION
 // The deformation clock is part of the endpoint, not a global: a vertex modifier

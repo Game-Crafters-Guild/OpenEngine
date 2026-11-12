@@ -3,11 +3,18 @@
 #include "CBTTerrain/CBTDeepDecode.h"
 #include "CBTTerrain/CBTInstance.h"
 #include "CBTTerrain/CBTSphereRoots.h"
+#include "Mathematics/Matrix4x4.h"
+#include "Mathematics/Vector2.h"
+#include "Mathematics/Vector3.h"
+#include "Mathematics/Vector3Int.h"
+#include "Mathematics/Vector4.h"
+#include "Mathematics/WorldPosition.h"
 
 #include <algorithm>
 #include <array>
 #include <bit>
 #include <cmath>
+#include <limits>
 #include <type_traits>
 #include <unordered_set>
 
@@ -239,6 +246,36 @@ void UnpackRecords(const std::vector<uint32_t>& words, uint32_t wordsPerSlot, ui
         out[i] = std::bit_cast<T>(recordWords);
     }
 }
+// Corner k of the corner cache relative to the render origin sector `origin`, in meters: a world position,
+// or a sector and a sector-local offset when the slot carries the deep tag.
+Mathematics::Vector3 CornerFromOrigin(const CBTVertexData& v, uint32_t k, const Mathematics::Vector3Int& origin)
+{
+    const Mathematics::Vector3 local = k == 0u   ? Mathematics::Vector3(v.Corner0[0], v.Corner0[1], v.Corner0[2])
+                                       : k == 1u ? Mathematics::Vector3(v.Corner1[0], v.Corner1[1], v.Corner1[2])
+                                                 : Mathematics::Vector3(v.Corner2[0], v.Corner2[1], v.Corner2[2]);
+    const uint32_t sectorXY = k == 0u ? v.Sector0[0] : k == 1u ? v.Sector1[0] : v.Sector2[0];
+    const uint32_t sectorZ = k == 0u ? v.Sector0[1] : k == 1u ? v.Sector1[1] : v.Sector2[1];
+    const Mathematics::Vector3Int sector =
+        v.DeepTag[0] == 0u ? Mathematics::Vector3Int()
+                           : Mathematics::Vector3Int(UnpackSectorLo(sectorXY), UnpackSectorHi(sectorXY), UnpackSectorLo(sectorZ));
+    const float size = static_cast<float>(Mathematics::kWorldSectorSize);
+    const Mathematics::Vector3 sectorOffset(static_cast<float>(sector.x - origin.x) * size,
+                                            static_cast<float>(sector.y - origin.y) * size,
+                                            static_cast<float>(sector.z - origin.z) * size);
+    return local + sectorOffset;
+}
+
+// The point in viewport pixels; false at or behind the eye plane (clip w <= 1e-5, as CBT_ProjectPixels).
+bool ProjectToPixels(const Mathematics::Matrix4x4& viewProjectionRel, const Mathematics::Vector3& point, float widthPx,
+                     float heightPx, Mathematics::Vector2& outPixels)
+{
+    const Mathematics::Vector4 clip = viewProjectionRel.Transform(Mathematics::Vector4(point.x, point.y, point.z, 1.0f));
+    if (clip.w <= 1e-5f)
+        return false;
+    outPixels = Mathematics::Vector2((clip.x / clip.w * 0.5f + 0.5f) * widthPx, (clip.y / clip.w * 0.5f + 0.5f) * heightPx);
+    return true;
+}
+
 } // namespace
 
 CBTTreeSnapshot ReadTreeSnapshot(CBTInstance& instance, bool withCorners)
@@ -436,6 +473,36 @@ uint64_t TreeSignature(const CBTTreeSnapshot& s)
     }
     hash ^= ids.size();
     return hash;
+}
+
+CBTVisibleAreaBands CountVisibleLeavesByArea(const CBTTreeSnapshot& s, const Mathematics::Matrix4x4& viewProjectionRel,
+                                             const Mathematics::Vector3Int& renderOriginSector, uint32_t widthPx,
+                                             uint32_t heightPx)
+{
+    CBTVisibleAreaBands bands;
+    const float width = static_cast<float>(widthPx);
+    const float height = static_cast<float>(heightPx);
+    const uint32_t count = std::min<uint32_t>(s.VisibleCount, static_cast<uint32_t>(s.IndicesVisible.size()));
+    for (uint32_t i = 0; i < count; ++i)
+    {
+        const CBTVertexData& v = s.Vertices[s.IndicesVisible[i]];
+        Mathematics::Vector2 p0;
+        Mathematics::Vector2 p1;
+        Mathematics::Vector2 p2;
+        const bool projects =
+            ProjectToPixels(viewProjectionRel, CornerFromOrigin(v, 0u, renderOriginSector), width, height, p0) &&
+            ProjectToPixels(viewProjectionRel, CornerFromOrigin(v, 1u, renderOriginSector), width, height, p1) &&
+            ProjectToPixels(viewProjectionRel, CornerFromOrigin(v, 2u, renderOriginSector), width, height, p2);
+        const float areaPx = projects ? 0.5f * std::fabs((p1.x - p0.x) * (p2.y - p0.y) - (p1.y - p0.y) * (p2.x - p0.x))
+                                      : std::numeric_limits<float>::infinity();
+        if (areaPx < 1.0f)
+            ++bands.BelowOnePx;
+        else if (areaPx <= 16.0f)
+            ++bands.OneToSixteenPx;
+        else
+            ++bands.AboveSixteenPx;
+    }
+    return bands;
 }
 
 } // namespace GameEngine::CBTTerrain

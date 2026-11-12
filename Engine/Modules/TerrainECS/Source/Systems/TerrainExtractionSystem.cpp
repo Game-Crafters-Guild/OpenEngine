@@ -1,22 +1,26 @@
 #include "TerrainECS/Systems/TerrainExtractionSystem.h"
 #include "Mathematics/Interpolation.h"
+#include "Mathematics/WorldPosition.h"
+#include "TerrainECS/TerrainEntityProvisioning.h"
 #include "TerrainECS/TerrainHandleHygiene.h"
 #include "TerrainECS/TerrainService.h"
+#include "TerrainHeightFunction/TerrainHeightFunctionInstances.h"
 #include "TerrainFieldUploader.h"
 #include "TerrainSkyline.h"
 #include "TerrainECS/TerrainGrass/TerrainGrassAlpha.h"
 #include "TerrainECS/TerrainGrass/TerrainGrassAuthoredBits.h"
 #include "TerrainECS/TerrainRenderFeature.h"
 #include "TerrainECS/TerrainRenderPublication.h"
+#include "TerrainECS/TerrainRenderedViews.h"
 #include "TerrainECS/TileStreamingManager.h"
 #include "TerrainECS/AtlasResidencyController.h"
 #include "TerrainECS/AtlasTileNormal.h"
 #include "TerrainECS/TerrainSizingPlan.h"
 #include "TerrainECS/SurfaceHeightQuery.h"
 #include "TerrainECS/TerrainHeightPageDriver.h"
+#include "TerrainECS/TerrainModifierComponents.h"
 #include "TerrainECS/TerrainPageFeature.h"
 #include "TerrainECS/PageLevelRule.h"
-#include "CBTTerrain/CBTLayout.h" // kAtlasMaxTiles (F2 cap warn)
 #include "AssetCore/GUID.h"
 #include "Assets/TerrainMaterialLibraryAsset.h"
 #include "TerrainECS/TerrainMaterialAuthoring.h"
@@ -30,7 +34,6 @@
 #include "Engine/Rendering/RenderServices.h"
 #include "Engine/Rendering/SkyRenderFeature.h"
 #include "Engine/Rendering/SunGlareRenderFeature.h"
-#include "Engine/Rendering/RenderOrigin.h" // kSectorSize (world-anchoring UV phase)
 #include "Core/Engine.h"
 #include "ECS/ECS.h"
 #include "ECS/WorldTemplateImplementations.inl"
@@ -48,8 +51,6 @@
 #include <cstring>
 #include <limits>
 #include <numeric>
-
-using GameEngine::TerrainECS::ExtractCameraPosition;
 
 // Explicit cross-DLL instantiation for the Terrain component handlers.
 // See ECS/ECSTemplates.h for the rationale (GE_INSTANTIATE_ENGINE_COMPONENT).
@@ -115,7 +116,7 @@ void AppendTerrainMaterials(Terrain::TerrainGPUParams& params,
                             const Components::Terrain& terrain,
                             const std::vector<TerrainMaterialEntry>* library,
                             Engine::Renderer::RenderServices* renderServices,
-                            const int32 (&renderOriginSector)[4])
+                            const Mathematics::Vector3Int& renderOriginSector)
 {
     const TerrainTextureResolver resolveTexture = [renderServices](const GUID& guid) -> uint32
     { return ResolveTerrainTextureBindless(renderServices, guid); };
@@ -148,22 +149,17 @@ void AppendTerrainMaterials(Terrain::TerrainGPUParams& params,
                              : AuthorLegacyTerrainMaterialRecord(terrain, role, resolveTexture,
                                                                  access));
 
-        // World-anchoring UV phase, per world axis. The fragment tiles from the render-origin-
-        // relative position; adding fract(originWorld * effectiveTiling) shifts each projection's
-        // UV by a WHOLE number of texture repeats, which a REPEAT sampler cannot see, so the tap
-        // stays anchored to the world across a sector rebase. Computed in DOUBLE because fp32
-        // cannot hold sector * kSectorSize * tiling at planetary magnitude. A hex-tiled material is
-        // NOT anchored by it: the lattice ids re-hash under a whole-repeat shift. Zero while the
-        // render origin is inactive, which is what keeps near-origin scenes byte-identical.
+        // The UV phase per world axis, fract(originWorld * tiling), in double: it keeps the texture
+        // fixed to the world across a sector rebase. A hex-tiled material is not fixed by it.
+        // Zero while the render origin is inactive.
         const double effTiling = static_cast<double>(record.Tiling) / materialTiling;
         const auto wrapPhase = [&](int32 sector) -> float32 {
-            const double p = static_cast<double>(sector) *
-                             static_cast<double>(Engine::Renderer::kSectorSize) * effTiling;
+            const double p = static_cast<double>(sector) * Mathematics::kWorldSectorSize * effTiling;
             return static_cast<float32>(p - std::floor(p));
         };
-        record.UVPhaseX = wrapPhase(renderOriginSector[0]);
-        record.UVPhaseY = wrapPhase(renderOriginSector[1]);
-        record.UVPhaseZ = wrapPhase(renderOriginSector[2]);
+        record.UVPhaseX = wrapPhase(renderOriginSector.x);
+        record.UVPhaseY = wrapPhase(renderOriginSector.y);
+        record.UVPhaseZ = wrapPhase(renderOriginSector.z);
         // params carries the extent the terrain's textures cover (the tile grid's, for a tiled
         // terrain); a Planar material spans the authored size inside it.
         SetPlanarFootprintScale(record, params.WorldSizeX, params.WorldSizeZ, terrain.SizeX,
@@ -276,10 +272,11 @@ TerrainColorMapBinding PublishUnifiedColorMap(TerrainFieldUploader& uploader, Te
 TerrainColorMapBinding PublishAtlasColorMap(TerrainFieldUploader& uploader, TerrainRenderFeature& feature,
                                             Engine::Renderer::RenderServices& rs, TerrainHandle handle,
                                             TiledTerrainData& tiled, const AtlasGeometry& geometry,
-                                            std::span<const TileAtlasSlot> rows)
+                                            std::span<const TileAtlasSlot> rows,
+                                            JobSystem::WorkStealingThreadPool* pool)
 {
     TerrainColorMapBinding binding;
-    uploader.UpdateAtlas(feature, handle, tiled, geometry, rows);
+    uploader.UpdateAtlas(feature, handle, tiled, geometry, rows, pool);
     feature.RegisterFieldsBindless(handle, rs);
     if (!feature.FieldCanBeSampled(TerrainField::Color, handle, TerrainFieldMap::Atlas)
         || !feature.FieldCanBeSampled(TerrainField::Color, handle, TerrainFieldMap::Coarse))
@@ -483,7 +480,6 @@ void TerrainExtractionSystem::ForgetTiledTerrain(uint32 tiledIndex)
         m_StreamingManager->Forget(tiledIndex);
     m_AtlasByTiled.erase(tiledIndex);
     m_AtlasCoarseBuilt.erase(tiledIndex);
-    m_AtlasOverCapWarnedTiled.erase(tiledIndex);
     m_ReprovisionDebounce.erase(tiledIndex);
     m_TiledSlotGeneration.erase(tiledIndex);
 }
@@ -496,6 +492,22 @@ const CoarseTileStandIn& TerrainExtractionSystem::ResolveCoarseStandIn(const Ter
         return *tile.CoarseStandIn;
     BuildCoarseTileStandIn(tile.Heightfield, tileRes, tileWorldSize, heightScale, m_CoarseStandInScratch);
     return m_CoarseStandInScratch;
+}
+
+void TerrainExtractionSystem::ForgetDestroyedSizeRefusals(const ECS::World& world)
+{
+    // A world clear (a scene open) restarts entity versions, so a kept handle can name the new entity.
+    if (world.GetEntityHandleEpoch() != m_SizeRefusalHandleEpoch)
+    {
+        m_SizeRefusedEntities.Clear();
+        m_SizeRefusalHandleEpoch = world.GetEntityHandleEpoch();
+    }
+    std::vector<ECS::EntityHandle> destroyed;
+    for (const ECS::EntityHandle entity : m_SizeRefusedEntities)
+        if (!world.IsValid(entity))
+            destroyed.push_back(entity);
+    for (const ECS::EntityHandle entity : destroyed)
+        m_SizeRefusedEntities.Erase(entity);
 }
 
 void TerrainExtractionSystem::ForgetRetiredTiledTerrains(TerrainService& service)
@@ -608,6 +620,19 @@ void StampDrawOrder(Components::Terrain& terrain, uint64 extractionFrame)
         terrain.DrawOrderFrame = static_cast<uint32>(extractionFrame);
 }
 
+// The heights the terrain's samples span, so a box over the terrain covers ground lowered below the
+// transform or raised above the height scale. The nominal band while the terrain has no height data.
+void SetWorldHeightExtent(TerrainService& service, const Components::Terrain& terrain,
+                          const Components::WorldTransform& transform, TerrainInstanceInfo& info)
+{
+    const float32 originY = (transform.GetPosition() - Mathematics::WorldPosition{}).y;
+    info.WorldMinY = std::min(originY, originY + terrain.HeightScale);
+    info.WorldMaxY = std::max(originY, originY + terrain.HeightScale);
+    const SurfaceHeightQuery query = service.SurfaceQuery(terrain, transform);
+    if (query.IsValid())
+        query.HeightRange(info.WorldMinY, info.WorldMaxY);
+}
+
 } // namespace
 
 void TerrainExtractionSystem::PublishInDrawnTerrainOrder(const ECS::World& world, std::span<const uint64> drawOrder,
@@ -661,6 +686,12 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
     // system (scene close, entity delete, component remove) recycles the slot index
     // its per-terrain trackers key on.
     ForgetRetiredTiledTerrains(*terrainService);
+    ForgetDestroyedSizeRefusals(world);
+    // The height functions no terrain asked for since the last frame and no base holds.
+    terrainService->GetHeightFunctionInstances().ReleaseUnused();
+
+    // Last tick's bakes and tile arrivals set the height range the untouched default rows follow.
+    PlaceProvisionedSurfaceRules(world);
 
     PublishSunGlareSkyline(world);
 
@@ -700,65 +731,14 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
     // atlas mid-session (a resize past the unified ceiling).
     const uint64 atlasFrame = ++m_AtlasFrameCounter;
 
-    // Collect camera positions from all active views for tile streaming.
-    // Tiles within streaming radius of ANY camera are loaded.
-    // Also extract the maximum far clip across all views for LOD range clamping.
-    std::vector<Mathematics::Vector3> viewCameraPositions;
-    Mathematics::Vector3 viewDirection{0, 0, 1}; // Default forward
-    float32 maxViewFarClip = 1000.0f; // Conservative default
-    // The largest 1 / tan(vfov / 2) of the views: the height pages' level rule (PageLevelRule.h)
-    // serves the narrowest field of view, the one that asks for the finest level at a distance.
-    float32 pageFocalScale = 0.0f;
-    // Each view's position, forward and horizontal half field: the surface pages' wedges.
-    std::vector<PageRequestCamera> pageViews;
-    // Render-origin sector for the material table's world-anchoring UV phase. The table is shared
-    // by every view, so it takes the FIRST camera's sector — the same "first camera wins" rule the
-    // direction above uses. Two views far enough apart to sit in different sectors would anchor the
-    // table to one of them; near-origin scenes (sector 0) are unaffected either way.
-    int32 renderOriginSector[4] = {};
-    {
-        const auto& views = m_RenderServices->Views().GetViews();
-        for (const auto& view : views)
-        {
-            const auto* camData = m_RenderServices->Views().FindCameraData(view.cameraId);
-            if (camData)
-            {
-                viewCameraPositions.push_back(ExtractCameraPosition(*camData));
-                pageFocalScale = std::max(pageFocalScale, std::abs(camData->proj[1][1]));
-                // LH view: row 2 is forward; proj[0][0] is 1 / tan(horizontal half field).
-                const Mathematics::Vector3 forward{camData->view[0][2], camData->view[1][2], camData->view[2][2]};
-                pageViews.push_back(PageRequestCamera{viewCameraPositions.back(), forward,
-                                                      std::atan(1.0f / std::abs(camData->proj[0][0])), true});
-                // First camera XZ look for tile in-front priority. LH view row 2
-                // is forward (MakeLookAtLH); do not negate — that was the RH
-                // "looks along -Z in view space" fork and contradicted the
-                // {0,0,1} default above.
-                if (viewCameraPositions.size() == 1)
-                {
-                    viewDirection = TilePriorityViewDirectionXZ(camData->view);
-                    // ResolveCameraData, NOT the camData above: the sector is derived on read by
-                    // ComputeRebasedView and is zero in the registry's stored CameraData.
-                    const auto resolved = m_RenderServices->Views().ResolveCameraData(view.id);
-                    std::memcpy(renderOriginSector, resolved.renderOriginSector,
-                                sizeof(renderOriginSector));
-                }
-
-                // Extract far clip from perspective projection (LH, ZO):
-                // GLM perspectiveLH_ZO:
-                //   proj[2][2] = zFar / (zFar - zNear)
-                //   proj[3][2] = -(zNear * zFar) / (zFar - zNear)
-                // => zFar = -proj[3][2] / (proj[2][2] - 1)
-                const float32 p10 = camData->proj[2][2];
-                const float32 p14 = camData->proj[3][2];
-                if (std::abs(p10 - 1.0f) > 1e-6f)
-                {
-                    const float32 farClip = -p14 / (p10 - 1.0f);
-                    if (farClip > 0.0f)
-                        maxViewFarClip = std::max(maxViewFarClip, farClip);
-                }
-            }
-        }
-    }
+    // Tiles stream and pages are requested for the views the pipeline renders. The material table is
+    // shared by every view, so it takes the render-origin sector of the first such view.
+    const TerrainRenderedViews renderedViews = TerrainRenderedViews::Collect(m_RenderServices->Views());
+    const std::vector<Mathematics::Vector3>& viewCameraPositions = renderedViews.CameraPositions;
+    const std::vector<PageRequestCamera>& pageViews = renderedViews.PageCameras;
+    const Mathematics::Vector3 viewDirection = renderedViews.Direction;
+    const float32 maxViewFarClip = renderedViews.MaxFarClip;
+    const float32 pageFocalScale = renderedViews.PageFocalScale;
 
     // Assert that the modifier system is not concurrently accessing terrain data.
     terrainService->AssertNoModifierAccess();
@@ -773,6 +753,8 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
     // Every terrain's four channel-role materials, concatenated. Params entries name records in
     // here by absolute index, so the two are built and published as one unit.
     std::vector<Terrain::TerrainMaterialRecord> materialTable;
+    // The relief of every Flat planar terrain this tick (one walk over the Global volumes).
+    const std::optional<GeneratedNoiseRelief> generatedNoise = ResolveGeneratedNoiseRelief(world);
 
     world.Query<ECS::Write<Components::Terrain>, ECS::Read<Components::WorldTransform>>()
         .Each([&](ECS::EntityHandle entity,
@@ -786,10 +768,11 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                 const auto* name = world.GetComponent<Components::Name>(entity);
                 const auto* relief = world.GetComponent<Components::TerrainPlanetRelief>(entity);
                 RequestPlanetHeightPages(*terrainService, *device, entity.id,
+                                         worldXf.GetPosition() - Mathematics::WorldPosition{},
                                          PlanetRenderTerrain(*terrainService, terrain),
                                          name ? name->View() : std::string_view{}, terrain,
                                          relief ? *relief : Components::TerrainPlanetRelief{}, viewCameraPositions,
-                                         pageFocalScale);
+                                         pageViews, pageFocalScale);
             }
 
             // Grass placement is planar-only (TerrainGrassSupportsDomain): the compute roots blades
@@ -804,8 +787,9 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
 
             // Entity position is the center of the terrain.
             // Compute the corner origin for GPU params and patch selection.
-            const float32 centerX = worldXf.matrix[12];
-            const float32 centerZ = worldXf.matrix[14];
+            const Mathematics::Vector3 center = worldXf.GetPosition() - Mathematics::WorldPosition{};
+            const float32 centerX = center.x;
+            const float32 centerZ = center.z;
             const float32 worldX = centerX - terrain.SizeX * 0.5f;
             const float32 worldZ = centerZ - terrain.SizeZ * 0.5f;
 
@@ -814,10 +798,10 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                 terrain.SizeX, terrain.SizeZ, terrain.HeightScale,
                 terrain.SamplesPerMeter, Terrain::kDefaultGridSize, Terrain::kDefaultLODRangeScale);
 
-            // Auto-detect tiling: if the derived resolution exceeds the per-tile
-            // cap, the terrain is automatically split into tiles.
-            const bool needsTiling = Terrain::TerrainNeedsTiling(
-                terrain.SizeX, terrain.SizeZ, terrain.SamplesPerMeter);
+            // A planar terrain is always tiled, with one tile when it fits the per-tile cap. A
+            // planet tiles only past the cap.
+            const bool needsTiling = terrain.Domain == Components::TerrainDomain::Planar ||
+                                     Terrain::TerrainNeedsTiling(terrain.SizeX, terrain.SizeZ, terrain.SamplesPerMeter);
 
             // ---- Tiled terrain path ----
             if (needsTiling)
@@ -855,7 +839,8 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                     // the device. The debounce key is the live TiledTerrainHandle index, stable because
                     // we do not destroy while settling; it is cleared in ForgetTiledTerrain on teardown.
                     // StepTiledReprovision is the rule (tested in TerrainRegionBakeTests).
-                    const TiledTerrainEdit edit = terrainService->CompareTiledTerrainConfig(tiled->Config, terrain);
+                    const TiledTerrainEdit edit = terrainService->CompareTiledTerrainConfig(tiled->Config, terrain,
+                                                                                           generatedNoise);
                     const bool baseChanged = edit.BaseChanged;
                     if (StepTiledReprovision(m_ReprovisionDebounce, tiledHandle.Index, edit,
                                              terrain.SamplesPerMeter, terrain.SizeX, terrain.SizeZ,
@@ -895,6 +880,29 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                     }
                 }
 
+                // A scene file or a component write reaches here without ProvisionTerrainEntity, so
+                // the same size rule refuses an oversized planar terrain: logged once, nothing built.
+                if (!tiled && terrain.Domain == Components::TerrainDomain::Planar)
+                {
+                    const std::string sizeError =
+                        PlanarTerrainSizeError(terrain.SizeX, terrain.SizeZ, terrain.SamplesPerMeter);
+                    if (!sizeError.empty())
+                    {
+                        if (m_SizeRefusedEntities.Insert(entity))
+                        {
+                            const auto* refusedName = world.GetComponent<Components::Name>(entity);
+                            LOG_ERROR("Terrain '{}' is not created. {}",
+                                      refusedName ? refusedName->View() : std::string_view{}, sizeError);
+                        }
+                        return;
+                    }
+                    m_SizeRefusedEntities.Erase(entity);
+                }
+
+                // A Function terrain is provisioned once its height function is built.
+                if (!tiled && !terrainService->IsTiledTerrainBaseReady(terrain))
+                    return;
+
                 // Create tiled terrain if it doesn't exist.
                 if (!tiled)
                 {
@@ -904,8 +912,9 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
 
                     // The component's size, density and base (BuildTiledTerrainConfig, tested in
                     // TerrainRegionBakeTests).
-                    const auto newHandle =
-                        terrainService->CreateTiledTerrain(terrainService->BuildTiledTerrainConfig(terrain));
+                    const auto* entityName = world.GetComponent<Components::Name>(entity);
+                    const auto newHandle = terrainService->CreateTiledTerrain(terrainService->BuildTiledTerrainConfig(
+                        terrain, entityName ? entityName->View() : std::string_view{}, generatedNoise));
                     terrain.TiledTerrainHandle = newHandle.Index;
                     terrain.TiledTerrainGeneration = newHandle.Generation;
 
@@ -962,8 +971,7 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                 // streaming window instead — fixed VRAM regardless of world size — so it takes
                 // over from precisely that threshold upward, and there is no size an author can
                 // dial in that renders nothing.
-                const bool useAtlas = unifiedW > kMaxUnifiedTiledResolution ||
-                                      unifiedH > kMaxUnifiedTiledResolution;
+                const bool useAtlas = TiledRenderExtentUsesAtlas(extent);
 
                 // Streaming radius must cover at least the far clip plus one tile
                 // of margin so tiles are pre-loaded before they enter the visible
@@ -1001,19 +1009,6 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                 if (useAtlas)
                 {
                     GE_CPU_PROFILE_SCOPE("Terrain.AtlasResidency");
-                    // F2: the indirection table has one row per whole-terrain tile, capped at
-                    // kAtlasMaxTiles (CBTResources clamps the upload). Past the cap the tail tiles
-                    // never get a row, so they resolve through the coarse fallback forever — warn
-                    // once instead of silently degrading a slice of the world.
-                    if (static_cast<uint64>(tilesX) * static_cast<uint64>(tilesZ) >
-                            static_cast<uint64>(CBTTerrain::kAtlasMaxTiles) &&
-                        m_AtlasOverCapWarnedTiled.insert(tiledHandle.Index).second)
-                    {
-                        LOG_WARNING("TiledTerrain: {}x{} tiles ({}) exceeds the atlas indirection cap "
-                                    "{} — tail tiles resolve through the coarse fallback (never a hole)",
-                                    tilesX, tilesZ, static_cast<uint64>(tilesX) * tilesZ,
-                                    CBTTerrain::kAtlasMaxTiles);
-                    }
                     auto& ctrl = m_AtlasByTiled[tiledHandle.Index];
                     if (!ctrl)
                         ctrl = std::make_unique<AtlasResidencyController>();
@@ -1067,7 +1062,7 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                     GE_CPU_PROFILE_SCOPE("Terrain.HeightPages");
                     const auto* name = world.GetComponent<Components::Name>(entity);
                     RequestTiledTerrainPages(*terrainService, *device, *tiled, extent, globalGpuHandle,
-                                             name ? name->View() : std::string_view{}, worldXf.matrix[13],
+                                             name ? name->View() : std::string_view{}, (worldXf.GetPosition() - Mathematics::WorldPosition{}).y,
                                              terrain.HeightScale, terrain.TargetPixelError, streamCenters, pageViews,
                                              pageFocalScale);
                 }
@@ -1834,9 +1829,10 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                                     p.HeightScale = batch.HeightScale;
                                     p.TerrainOriginY = batch.TerrainOriginY;
                                     p.BaseFreq = batch.BaseFreq;
-                                    p.BaseAmp = batch.BaseAmp;
+                                    p.BaseGain = batch.BaseGain;
                                     p.BaseOctaves = batch.BaseOctaves;
                                     p.BaseSeed = batch.BaseSeed;
+                                    p.BaseAmplitude = batch.BaseAmplitude;
                                     p.Slot = ref.Slot;
                                     p.ModifierCount = modSizes.KernelModifierCount;
                                     p.TileRes = geo.TileRes;
@@ -1858,7 +1854,6 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                                             dispatches.front().Push.Slot);
                                     feature->QueueGpuHeightBake(globalGpuHandle, batch.Modifiers,
                                                                 std::move(dispatches), batch.Settle,
-                                                                batch.SplatMinH, batch.SplatMaxH,
                                                                 batch.SplatEligible,
                                                                 batch.SurfaceRules,
                                                                 batch.SurfaceRuleConditions);
@@ -1866,11 +1861,9 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                             }
                             batch.Pending = false;
 
-                            // Settle-readback adopt (slice-1c): apply completed GPU->CPU readbacks
-                            // into the CPU heightfield, then MarkRegionDirty + schedule the deferred
-                            // splat renormalize — the SAME settle machinery a CPU bake drives, so
-                            // physics / normal / splat catch up from the exact texels the GPU
-                            // rendered (closes the physics<->render epsilon to bit-level at settle).
+                            // Copy each completed GPU height readback into the CPU heightfield, so
+                            // physics and normals use the heights the GPU rendered. Record the
+                            // ReadbackSplatRegion: the modifier system splats it on its next update.
                             feature->DrainReadyHeightReadbacks(globalGpuHandle,
                                 [&](int32 tileX, int32 tileZ, const float32* samples, uint32 rectW,
                                     uint32 rectH, int32 rectMinX, int32 rectMinZ)
@@ -1913,8 +1906,9 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                                     tp.MarkRegionDirty(rectMinX, rectMinZ,
                                                        rectMinX + static_cast<int32>(rectW),
                                                        rectMinZ + static_cast<int32>(rectH));
-                                    tiled->SplatResplatPending = true;
-                                    tiled->SplatResplatIdleFrames = 0;
+                                    tp.ReadbackSplatRegion.Union(
+                                        {rectMinX, rectMinZ, rectMinX + static_cast<int32>(rectW),
+                                         rectMinZ + static_cast<int32>(rectH)});
                                     ++tiled->Revision;
                                     terrainService->MarkGpuReadbackSplatPending();
                                     static const bool kGpuBakeDebug =
@@ -1949,16 +1943,9 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                         if (coarseFirst || !integratedTiles.empty() || anySlotPatched ||
                             coarseContentEdited || splatCoarseEdited)
                         {
-                            // Whole-terrain base relief from the SAME deterministic world-space source
-                            // the tiles use (FillTiledBaseRegion over the terrain's base, as every
-                            // streamed tile is filled), so an out-of-window tile that never streamed
-                            // resolves to real low-frequency relief continuous with resident tiles —
-                            // not the flat 0.5 plane that made a large terrain dissolve into a sheet at
-                            // altitude. Streamed tiles still overlay their exact (modifier-inclusive)
-                            // height in BuildCoarseHeightField. The field spans the tile grid's extent,
-                            // the rect BuildCoarseHeightField maps its texels over (the grid can
-                            // overhang the authored size): FillAtlasCoarseBaseField, tested in
-                            // TerrainRegionBakeTests.
+                            // The out-of-window relief: the terrain's base over the tile grid's extent, a noise
+                            // or function base drops relief finer than two texels (FillAtlasCoarseBaseField).
+                            // Streamed tiles overlay their exact heights in BuildCoarseHeightField.
                             if (m_AtlasCoarseBaseHf.GetWidth() != cd || m_AtlasCoarseBaseHf.GetHeight() != cd)
                                 m_AtlasCoarseBaseHf.Resize(cd, cd, kAtlasCoarseFallbackNormalized);
                             FillAtlasCoarseBaseField(m_AtlasCoarseBaseHf, *tiled);
@@ -2056,11 +2043,13 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                 params.WorldOriginZ = worldZ;
                 params.WorldSizeX = extent.WorldSizeX;
                 params.WorldSizeZ = extent.WorldSizeZ;
+                params.LatticeOverhangX = std::max(extent.WorldSizeX - terrain.SizeX, 0.0f);
+                params.LatticeOverhangZ = std::max(extent.WorldSizeZ - terrain.SizeZ, 0.0f);
                 params.HeightScale = terrain.HeightScale;
                 params.InvHeightmapWidth = 1.0f / static_cast<float32>(unifiedW);
                 params.InvHeightmapHeight = 1.0f / static_cast<float32>(unifiedH);
                 params.TexelSize = 1.0f / static_cast<float32>(unifiedW - 1);
-                params.WorldOriginY = worldXf.matrix[13];
+                params.WorldOriginY = (worldXf.GetPosition() - Mathematics::WorldPosition{}).y;
                 params.SplatmapBindless = splatmapBindless;
                 params.NormalmapBindless = normalmapBindless;
                 params.HeightmapBindless = heightmapBindless;
@@ -2070,7 +2059,7 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                                        feature->MaterialLibraries().Get(
                                            terrain.MaterialLibraryGuid.ToGuid(),
                                            MakeTerrainTextureDeclarer(m_RenderServices)),
-                                       m_RenderServices, renderOriginSector);
+                                       m_RenderServices, renderedViews.RenderOriginSector);
                 params.GridDimHalf = static_cast<float32>(Terrain::kDefaultGridSize) * 0.5f;
                 params.Flags = (terrain.ReceiveShadows ? Terrain::kTerrainFlagReceiveShadows : 0u)
                     | (atlasBacked ? Terrain::kTerrainFlagAtlasBacked : 0u)
@@ -2090,7 +2079,8 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                 if (grass)
                 {
                     grassControlsActive = atlasBacked
-                        ? m_GrassFieldUploader->UpdateAtlas(*feature, globalGpuHandle, *tiled, atlasGeo, atlasRows)
+                        ? m_GrassFieldUploader->UpdateAtlas(*feature, globalGpuHandle, *tiled, atlasGeo, atlasRows,
+                                                            world.GetJobSystem())
                         : m_GrassFieldUploader->UpdateUnified(*feature, globalGpuHandle, tiled->GrassUnifiedField);
                     feature->RegisterFieldsBindless(globalGpuHandle, *m_RenderServices);
                     const bool required = atlasBacked
@@ -2123,7 +2113,7 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                 }
                 const TerrainColorMapBinding colorMap = atlasBacked
                     ? PublishAtlasColorMap(*m_ColorMapUploader, *feature, *m_RenderServices, globalGpuHandle, *tiled,
-                                           atlasGeo, atlasRows)
+                                           atlasGeo, atlasRows, world.GetJobSystem())
                     : PublishUnifiedColorMap(*m_ColorMapUploader, *feature, *m_RenderServices, globalGpuHandle,
                                              tiled->ColorUnifiedMap);
                 if (colorMap.Unified)
@@ -2163,11 +2153,15 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
 
                 TerrainInstanceInfo info{};
                 info.WorldOriginX = worldX;
-                info.WorldOriginY = worldXf.matrix[13];
+                info.WorldOriginY = (worldXf.GetPosition() - Mathematics::WorldPosition{}).y;
                 info.WorldOriginZ = worldZ;
                 info.SizeX = extent.WorldSizeX;
                 info.SizeZ = extent.WorldSizeZ;
+                info.AuthoredSizeX = terrain.SizeX;
+                info.AuthoredSizeZ = terrain.SizeZ;
                 info.HeightScale = terrain.HeightScale;
+                SetWorldHeightExtent(*terrainService, terrain, worldXf, info);
+                info.GrassFarThinning = grass ? Math::Clamp01(grass->FarThinning) : 1.0f;
                 info.LODRangeScale = Terrain::kDefaultLODRangeScale;
                 info.LODLevels = globalData->Config.LODLevels;
                 info.MaterialTiling = terrain.MaterialTiling;
@@ -2296,31 +2290,14 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                 // delete permanently terrainless.
                 ClearUnresolvedTerrainHandles(terrain);
 
-                const auto newHandle = terrainService->CreateTerrain(desired);
+                // The base fill gives rendering and physics heights before any modifier bake.
+                const auto newHandle = terrainService->CreateTerrainFromBase(desired, terrain);
                 terrain.TerrainDataHandle = newHandle.Index;
                 terrain.TerrainDataGeneration = newHandle.Generation;
 
                 data = terrainService->GetTerrainData(newHandle);
                 if (!data)
                     return;
-
-                // Stage-A base fill (design §3.1): noise / imported heightmap
-                // / flat, so the heightfield has data for both rendering and
-                // physics before any modifier bake. Modifier re-bakes reset
-                // through the same helper, keeping both paths per-sample
-                // identical.
-                std::shared_ptr<const Terrain::HeightfieldData> baseHeightmap;
-                if (terrain.BaseSource == Components::TerrainBaseSource::HeightmapAsset
-                    && !terrain.TerrainAssetGuid.IsNull())
-                {
-                    baseHeightmap = terrainService->ResolveHeightmapAsset(terrain.TerrainAssetGuid.ToGuid());
-                }
-                FillHeightfieldBaseRegion(data->Heightfield, terrain.BaseSource, baseHeightmap.get(),
-                                          0, 0,
-                                          static_cast<int32>(data->Heightfield.GetWidth()) - 1,
-                                          static_cast<int32>(data->Heightfield.GetHeight()) - 1);
-                data->MarkFullDirty();
-                terrainService->RebuildQuadtree(newHandle);
 
                 // Size the splatmap and commit the bake range. It stays unbaked (reads as
                 // channel 0) until the modifier system composites the surface rules over
@@ -2501,7 +2478,7 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
             params.InvHeightmapWidth = 1.0f / static_cast<float32>(data->Heightfield.GetWidth());
             params.InvHeightmapHeight = 1.0f / static_cast<float32>(data->Heightfield.GetHeight());
             params.TexelSize = 1.0f / static_cast<float32>(data->Heightfield.GetWidth() - 1);
-            params.WorldOriginY = worldXf.matrix[13];
+            params.WorldOriginY = (worldXf.GetPosition() - Mathematics::WorldPosition{}).y;
             params.SplatmapBindless = splatmapBindless;
             params.NormalmapBindless = normalmapBindless;
             params.HeightmapBindless = heightmapBindless;
@@ -2511,7 +2488,7 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                                    feature->MaterialLibraries().Get(
                                        terrain.MaterialLibraryGuid.ToGuid(),
                                        MakeTerrainTextureDeclarer(m_RenderServices)),
-                                   m_RenderServices, renderOriginSector);
+                                   m_RenderServices, renderedViews.RenderOriginSector);
             params.GridDimHalf = static_cast<float32>(data->Config.PatchGridSize) * 0.5f;
             params.Flags = (terrain.ReceiveShadows ? Terrain::kTerrainFlagReceiveShadows : 0u)
                 | (feature->GetHeightmapTexture(handle).IsValid()
@@ -2552,11 +2529,15 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
             // (the modifier system rewrites it on the main thread).
             TerrainInstanceInfo info{};
             info.WorldOriginX = worldX;
-            info.WorldOriginY = worldXf.matrix[13];
+            info.WorldOriginY = (worldXf.GetPosition() - Mathematics::WorldPosition{}).y;
             info.WorldOriginZ = worldZ;
             info.SizeX = terrain.SizeX;
             info.SizeZ = terrain.SizeZ;
+            info.AuthoredSizeX = terrain.SizeX;
+            info.AuthoredSizeZ = terrain.SizeZ;
             info.HeightScale = terrain.HeightScale;
+            SetWorldHeightExtent(*terrainService, terrain, worldXf, info);
+            info.GrassFarThinning = grass ? Math::Clamp01(grass->FarThinning) : 1.0f;
             info.LODRangeScale = Terrain::kDefaultLODRangeScale;
             info.LODLevels = data->Config.LODLevels;
             info.MaterialTiling = terrain.MaterialTiling;
@@ -2591,11 +2572,7 @@ void TerrainExtractionSystem::Update(ECS::World& world, float32 deltaTime)
     // Upload the params array (one entry per terrain) and the material table its LayerRole
     // indices address, in one call so both land on the same ring element. Called even when empty
     // so per-frame counts do not retain stale terrain/grass state.
-    feature->UploadTerrainParamsArray(paramsArray.empty() ? nullptr : paramsArray.data(),
-                                      static_cast<uint32>(paramsArray.size()),
-                                      materialTable.empty() ? nullptr : materialTable.data(),
-                                      static_cast<uint32>(materialTable.size()),
-                                      deviceFrameIndex);
+    feature->UploadTerrainParamsArray(paramsArray, activeInfos, materialTable, deviceFrameIndex);
     // Same published slot as the params, so a grass draw binds the volumes extracted with
     // the params it reads.
     const auto& windVolumes = m_GrassWindVolumes.Extract(world);

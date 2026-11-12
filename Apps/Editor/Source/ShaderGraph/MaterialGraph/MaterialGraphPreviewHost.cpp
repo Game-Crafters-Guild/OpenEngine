@@ -2,6 +2,7 @@
 
 #include "EditorContext.h"
 #include "Graph/NodeColorSettings.h"
+#include "Mathematics/Angle.h"
 #include "Types/StringId.h"
 #include "Graph/SgGraphModelBridge.h"
 #include "Engine/Rendering/ShaderGraphMaterial.h"
@@ -38,16 +39,6 @@ constexpr float kPreviewFallbackSizePx = 220.0f;
 constexpr float kPreviewCollapsedHeightPx = 48.0f;
 // Radians per frame, matching the released-drag spin the thumbnail orbit used.
 constexpr float kDefaultOrbitSpeed = 0.02f;
-constexpr float kTwoPi = 6.28318530718f;
-
-/** Keep the accumulated angle in one turn: it advances every frame for as long
-    as the editor is open, and an unwrapped float loses enough mantissa over a
-    long session for the step itself to start quantizing. */
-float WrapAngle(float radians)
-{
-    radians = std::fmod(radians, kTwoPi);
-    return radians < 0.f ? radians + kTwoPi : radians;
-}
 
 std::string ResourceNameWithoutEnginePrefix(const std::string& s)
 {
@@ -132,7 +123,7 @@ void MaterialGraphPreviewHost::EnsureUi()
         constexpr float kSensitivity = 0.0025f;
         const float scale = ModelThumbnailHandler::GetOrbitSpeedScale();
         m_OrbitVelocity = -dx * kSensitivity * scale;
-        m_OrbitYaw = WrapAngle(m_OrbitYaw + m_OrbitVelocity);
+        m_OrbitYaw = Mathematics::WrapAngle(m_OrbitYaw + m_OrbitVelocity);
         if (std::fabs(dx) > 1e-3f)
             m_LastDragOrbitSign = dx > 0.f ? -1.f : 1.f;
         e.Stop();
@@ -739,11 +730,11 @@ void MaterialGraphPreviewHost::Update(float dt)
     if (!m_Active || !m_Image || m_Image->GetOwnerManager() == nullptr)
         return;
 
-    /* Per frame, not per second: the drag sensitivity and the released spin
-       speed are both authored as radians per frame, and the thumbnail orbit
-       they replace integrated the same way. */
+    /* Per frame, not per second: the drag sensitivity and the spin speed are
+       in radians per frame. The yaw stays in one turn, so the float keeps the
+       precision of the step. */
     if (!m_IsDragging && !m_OrbitPaused)
-        m_OrbitYaw = WrapAngle(m_OrbitYaw + m_OrbitVelocity);
+        m_OrbitYaw = Mathematics::WrapAngle(m_OrbitYaw + m_OrbitVelocity);
 
     if (!m_IsMovingPreview && !m_IsResizingPreview)
     {

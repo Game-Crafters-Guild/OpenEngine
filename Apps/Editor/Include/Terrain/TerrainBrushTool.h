@@ -106,7 +106,7 @@ public:
     //                           still dropped in Paint mode (planet sculpt is raise|lower)
     //   End                   — whether an undo entry was recorded
     // Whether a stroke actually wrote is an effect-side question: the zone payload's
-    // written magnitude for planar, SphereSculptVersion() for the planet.
+    // written magnitude for planar, the planet layer's version for the planet.
     bool ApplyStrokePhase(TerrainStrokePhase phase, const Mathematics::Vector3& surfacePoint);
 
     // Resolve a world-space target onto the active terrain's surface with no camera:
@@ -134,19 +134,16 @@ private:
     bool RaycastSurface(const GizmoRay& ray, Mathematics::Vector3& outHit,
                         Mathematics::Vector3& outNormal);
 
-    // Sphere-stroke undo boundary, the sphere sibling of BeginStroke/FinalizeStroke.
-    // Begin arms the service's lazy per-page pre-image capture; End snapshots the
-    // touched pages' post-images and pushes ONE SphereSculptStrokeCommand. End returns
-    // whether an entry was pushed (false: nothing written, no undo service, or no
-    // stroke active).
+    // The planet stroke's undo boundary, as BeginStroke/FinalizeStroke for a planar one.
+    // Begin starts the planet layer's page capture; End copies the changed pages as they
+    // are now and pushes one PlanetSculptStrokeCommand. End returns whether an entry was
+    // pushed (false: nothing written, no undo service, or no stroke open).
     void BeginSphereStroke();
     bool EndSphereStroke();
 
-    // Planet editing v1 (plan §planet-editing). When the active terrain is a spherical CBT
-    // planet the brush edits the CBT sphere sculpt layer (an additive per-face height
-    // layer) instead of a planar zone: ray -> sphere hit -> the feature's ApplySphereSculptDab.
-    // Zone entities on the sphere are a documented v2 deferral. Returns the planet radius via
-    // outRadius when a spherical terrain is active.
+    // When the active terrain is a planet, the brush adds dabs to the planet's height page
+    // layer (TerrainService::ApplyPlanetSculptDab) instead of a planar zone. Returns the planet
+    // radius via outRadius when a spherical terrain is active.
     bool IsSphericalPlanet(float& outRadius) const;
     // Ray vs the planet sphere (centred at the world origin, radius R). Nearest positive hit.
     bool RaycastPlanet(const GizmoRay& ray, float radius, Mathematics::Vector3& outHit,
@@ -154,6 +151,9 @@ private:
     // Drive one planet sculpt dab at surface direction `hitDir` (unit) with footprint from
     // the current brush radius / planetRadius. Raise/Lower only (paint on the planet is v2).
     void ApplySphereDab(const Mathematics::Vector3& hitDir, float planetRadius);
+    // The active planet's terrain entity id, the level-0 samples a face side of its height pages and
+    // their level-0 texel in meters; false when no terrain is active or its pages cannot stream.
+    bool ResolvePlanetLayer(uint32& outPlanet, uint32& outFaceSamples, float32& outTexel) const;
 
     // Resolve the zone to paint into: a selected matching zone, else the
     // stroke's auto-created zone. Auto-creates + grows as needed. Returns false
@@ -188,7 +188,8 @@ private:
 
     // Stroke state.
     bool m_IsStroking = false;
-    bool m_SphereStroking = false; // a sphere-stroke capture is armed (undo boundary open)
+    bool m_SphereStroking = false; // a planet stroke's capture is open (undo boundary open)
+    uint32 m_SphereStrokePlanet = 0; // the terrain entity id of the planet the open stroke captures
     ECS::EntityHandle m_ActiveZone{};
     GUID m_ActivePayload{};
     bool m_CreatedZoneThisStroke = false;

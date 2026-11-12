@@ -65,14 +65,14 @@ bool IgnoresScriptVelocity(const ECS::World& world, ECS::EntityHandle entity)
 
 // The query of a ray from origin along direction, or false for a zero direction or a maxDistance that is not
 // above 0.
-bool MakeRayQuery(Mathematics::Vector3 origin, Mathematics::Vector3 direction, float maxDistance, std::uint32_t layerMask,
-                  bool ignoreTriggers, Physics::RayCastQuery& outQuery)
+bool MakeRayQuery(Mathematics::WorldPosition origin, Mathematics::Vector3 direction, float maxDistance,
+                  std::uint32_t layerMask, bool ignoreTriggers, Physics::RayCastQuery& outQuery)
 {
     const float length = std::sqrt(direction.x * direction.x + direction.y * direction.y + direction.z * direction.z);
     if (!(length > 0.0f) || !(maxDistance > 0.0f))
         return false;
-    outQuery.ray.origin = origin;
-    outQuery.ray.direction = direction / length;
+    outQuery.origin = origin;
+    outQuery.direction = direction / length;
     outQuery.maxDistance = maxDistance;
     outQuery.filter.layerMask = layerMask;
     outQuery.filter.ignoreSensors = ignoreTriggers;
@@ -152,8 +152,8 @@ PhysicsEntityEventCallbacks::EndedCallback EndedRelay(ScriptCallback<Payload> ca
 
 } // namespace
 
-bool RayCast(Physics::PhysicsWorld& physics, Mathematics::Vector3 origin, Mathematics::Vector3 direction, RayHit& hit,
-             float maxDistance, std::uint32_t layerMask, bool ignoreTriggers)
+bool RayCast(Physics::PhysicsWorld& physics, Mathematics::WorldPosition origin, Mathematics::Vector3 direction,
+             RayHit& hit, float maxDistance, std::uint32_t layerMask, bool ignoreTriggers)
 {
     Physics::RayCastQuery query;
     if (!MakeRayQuery(origin, direction, maxDistance, layerMask, ignoreTriggers, query))
@@ -165,8 +165,8 @@ bool RayCast(Physics::PhysicsWorld& physics, Mathematics::Vector3 origin, Mathem
     return true;
 }
 
-std::int32_t RayCastAll(Physics::PhysicsWorld& physics, Mathematics::Vector3 origin, Mathematics::Vector3 direction,
-                        std::span<RayHit> hits, float maxDistance, std::uint32_t layerMask, bool ignoreTriggers)
+std::int32_t RayCastAll(Physics::PhysicsWorld& physics, Mathematics::WorldPosition origin,
+                        Mathematics::Vector3 direction, std::span<RayHit> hits, float maxDistance, std::uint32_t layerMask, bool ignoreTriggers)
 {
     Physics::RayCastQuery query;
     if (!MakeRayQuery(origin, direction, maxDistance, layerMask, ignoreTriggers, query))
@@ -179,9 +179,9 @@ std::int32_t RayCastAll(Physics::PhysicsWorld& physics, Mathematics::Vector3 ori
     return ResultCount(results.size());
 }
 
-std::int32_t BoxOverlap(Physics::PhysicsWorld& physics, Mathematics::Vector3 center, Mathematics::Vector3 halfExtents,
-                        Mathematics::Quaternion rotation, std::span<ECS::EntityHandle> bodies, std::uint32_t layerMask,
-                        bool ignoreTriggers)
+std::int32_t BoxOverlap(Physics::PhysicsWorld& physics, Mathematics::WorldPosition center,
+                        Mathematics::Vector3 halfExtents, Mathematics::Quaternion rotation,
+                        std::span<ECS::EntityHandle> bodies, std::uint32_t layerMask, bool ignoreTriggers)
 {
     Physics::BoxOverlapQuery query;
     query.center = center;
@@ -229,7 +229,7 @@ void AddImpulse(ECS::World& world, ECS::EntityHandle entity, Mathematics::Vector
 }
 
 void AddImpulseAtPosition(ECS::World& world, ECS::EntityHandle entity, Mathematics::Vector3 impulse,
-                          Mathematics::Vector3 position)
+                          Mathematics::WorldPosition position)
 {
     if (const BodyRef body = FindBody(world, entity); body.World != nullptr)
         body.World->AddImpulseAtPosition(body.Body, impulse, position);

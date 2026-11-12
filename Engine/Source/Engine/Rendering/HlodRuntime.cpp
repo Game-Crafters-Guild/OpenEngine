@@ -206,8 +206,8 @@ uint32 HlodRuntime::ReconcileScene(GameEngine::ECS::World& world,
 
                 GameEngine::ECS::Entity proxy = world.Create();
                 proxy.Set(Components::Transform::FromTRS(
-                    Mathematics::Vector3{cluster.SphereCenter[0], cluster.SphereCenter[1],
-                                         cluster.SphereCenter[2]},
+                    Mathematics::WorldPosition{cluster.SphereCenter[0], cluster.SphereCenter[1],
+                                               cluster.SphereCenter[2]},
                     Mathematics::Quaternion{}, Mathematics::Vector3{1.0f, 1.0f, 1.0f}));
 
                 Components::MeshRenderer mr{};

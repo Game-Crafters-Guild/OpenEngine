@@ -6,7 +6,7 @@ import { ipc } from "./ipc-singleton.js";
 import { ToolError } from "./registry.js";
 import { allTools, toolByName } from "./tools/index.js";
 import { parseToolArgs } from "./cli/args.js";
-import { overviewHelp, toolHelp } from "./cli/help.js";
+import { batchHelp, overviewHelp, toolHelp } from "./cli/help.js";
 import { kExitOk, kExitUsage, renderError, renderOutput, type RenderOptions } from "./cli/output.js";
 import { runBatch, runRaw } from "./cli/raw.js";
 
@@ -79,6 +79,14 @@ async function main(): Promise<number> {
     return kExitOk;
   }
   if (command === "raw") return runRaw(rest.slice(1), opts);
+  if (command === "batch" && opts.help) {
+    console.log(batchHelp());
+    return kExitOk;
+  }
+  if (command === "batch" && opts.dryRun) {
+    console.error("ge batch has no --dry-run: it sends each stdin line when it reads it. Remove the flag, or run 'ge <tool> --dry-run' for one call.");
+    return kExitUsage;
+  }
   if (command === "batch") return runBatch(opts);
 
   if (command.startsWith("-")) {

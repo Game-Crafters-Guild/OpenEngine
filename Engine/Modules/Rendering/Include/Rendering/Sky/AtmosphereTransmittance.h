@@ -7,10 +7,9 @@
 namespace GameEngine {
 namespace Rendering {
 
-/// The atmosphere the sky LUTs bake, as the ground-level evaluators below take it. Its scattering
-/// parameters are fixed (SkyRenderNode's FillAtmosphereFromSettings overrides only the ground,
-/// horizon and below-horizon fields), so the extinction a ground-level surface sees can be
-/// evaluated from the same model the GPU integrates.
+/// The atmosphere the sky LUTs bake on the flat scene's planet, as the ground-level evaluators below
+/// take it. Its scattering parameters are fixed (SkyRenderNode's FillAtmosphereFromSettings also
+/// sets the planet's sphere and the ground, horizon and below-horizon fields).
 const AtmosphereParametersGPU& ScatteringAtmosphere();
 
 /// Colour of the primary celestial source as it reaches the GROUND: `colorAboveAtmosphere`

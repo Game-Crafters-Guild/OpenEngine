@@ -1,5 +1,7 @@
 #include "Assets/TextureCook.h"
 
+#include "AssetCore/SharedFileRead.h"
+
 #include "Assets/TextureCookWorkers.h"
 #include "Assets/Textures/BC7TransparentEndpointRepair.h"
 #include "Image/Decode.h"
@@ -7,6 +9,10 @@
 #include "Logger/Logger.h"
 #include "Mathematics/Interpolation.h"
 #include "Mathematics/Vector3.h"
+#include "Memory/Arena.h"
+#include "Memory/ScratchScope.h"
+#include "Types/Fnv1a.h"
+#include "Types/FunctionRef.h"
 
 #include <algorithm>
 #include <array>
@@ -14,6 +20,7 @@
 #include <bit>
 #include <charconv>
 #include <climits>
+#include <cstdint>
 #include <cerrno>
 #include <cmath>
 #include <cstdlib>
@@ -175,14 +182,38 @@ bool NeedsTextureCook(const TextureCookInputs& inputs, TextureCookOutput output)
     return output != TextureCookOutput::Uncompressed || inputs.Settings.MipsEnabled || inputs.Swizzle[0] != 0;
 }
 
+const char* TextureCookOutputName(TextureCookOutput output)
+{
+    // No default: -Wswitch fails the build when an output has no name.
+    switch (output)
+    {
+    case TextureCookOutput::Uncompressed: return "Uncompressed";
+    case TextureCookOutput::BC1:          return "BC1";
+    case TextureCookOutput::BC4:          return "BC4";
+    case TextureCookOutput::BC5:          return "BC5";
+    case TextureCookOutput::BC6H:         return "BC6H";
+    case TextureCookOutput::BC7:          return "BC7";
+    }
+    return "Unknown";
+}
+
+namespace
+{
+    // The start of every artifact name of `guid` and `output` (TextureCookArtifactName).
+    std::string TextureCookArtifactPrefix(const GUID& guid, TextureCookOutput output)
+    {
+        return guid.ToString() + "-" + TextureCookOutputName(output) + "-";
+    }
+}
+
 std::string TextureCookArtifactName(const GUID& guid, uint64 sourceHash,
                                     const TextureCookInputs& inputs, TextureCookOutput output)
 {
-    char hashes[35];
-    std::snprintf(hashes, sizeof(hashes), "-%016llx-%016llx",
+    char hashes[34];
+    std::snprintf(hashes, sizeof(hashes), "%016llx-%016llx",
                   static_cast<unsigned long long>(sourceHash),
                   static_cast<unsigned long long>(ComputeTextureCookConfigHash(inputs, output)));
-    return guid.ToString() + hashes + ".ktx2";
+    return TextureCookArtifactPrefix(guid, output) + hashes + ".ktx2";
 }
 
 std::filesystem::path TextureCookVarianceCompanionPath(const std::filesystem::path& parentArtifact)
@@ -190,6 +221,22 @@ std::filesystem::path TextureCookVarianceCompanionPath(const std::filesystem::pa
     std::filesystem::path companion = parentArtifact;
     companion.replace_extension(".nvar.ktx2");
     return companion;
+}
+
+void RemoveSupersededTextureCookArtifacts(const std::filesystem::path& kept, const GUID& guid,
+                                          TextureCookOutput output)
+{
+    const std::string prefix = TextureCookArtifactPrefix(guid, output);
+    const std::filesystem::path keptCompanion = TextureCookVarianceCompanionPath(kept);
+    std::error_code listError;
+    for (std::filesystem::directory_iterator it(kept.parent_path(), listError), end; !listError && it != end;
+         it.increment(listError))
+    {
+        const std::filesystem::path& file = it->path();
+        std::error_code removeError;
+        if (file != kept && file != keptCompanion && file.filename().string().starts_with(prefix))
+            std::filesystem::remove(file, removeError);
+    }
 }
 
 namespace
@@ -503,6 +550,28 @@ bool DecodeBlockPayloadRGBA32F(TextureFormat format, uint32 width, uint32 height
 #endif
 }
 
+namespace
+{
+    // One mip level in storage that its owner keeps: tightly packed RGBA8, or RGBA32F as bytes.
+    struct MipLevelView
+    {
+        std::span<uint8> Bytes;
+        uint32 Width = 0;
+        uint32 Height = 0;
+    };
+
+    MipLevelView ViewOf(TextureCookMipLevel& level)
+    {
+        return {level.Bytes, level.Width, level.Height};
+    }
+
+    // The extent of mip `level` of a base extent, as successive halving to at least 1 gives it.
+    uint32 MipExtent(uint32 baseExtent, uint32 level)
+    {
+        return level < 32u ? std::max(baseExtent >> level, 1u) : 1u;
+    }
+}
+
 #if defined(GE_TEXTURE_COOK_ENCODER)
 namespace
 {
@@ -521,6 +590,22 @@ namespace
         default:                      return DXGI_FORMAT_UNKNOWN;
         }
     }
+
+    // A level's BCn blocks: ceil(w/4) in each row, and ceil(h/4) rows, at least 1.
+    struct LevelBlocks
+    {
+        uint32 PerRow = 0;
+        uint32 Rows = 0;
+        size_t RowBytes = 0;
+        size_t Bytes() const { return RowBytes * Rows; }
+    };
+
+    LevelBlocks BlocksOf(DXGI_FORMAT format, uint32 width, uint32 height)
+    {
+        const uint32 perRow = (width + kBlockDim - 1) / kBlockDim;
+        const size_t blockBytes = DirectX::BitsPerPixel(format) * kBlockDim * kBlockDim / 8;
+        return {perRow, std::max(1u, (height + kBlockDim - 1) / kBlockDim), perRow * blockBytes};
+    }
 }
 #endif
 
@@ -536,7 +621,9 @@ namespace
     // encodes each one.
     struct LevelBands
     {
-        const TextureCookMipLevel* Level = nullptr;
+        std::span<const uint8> Pixels; // the level, tightly packed
+        uint32 Width = 0;
+        uint32 Height = 0;
         bool IsFloat = false;
         TextureCookOutput Output = TextureCookOutput::BC7;
         DXGI_FORMAT SourceFormat = DXGI_FORMAT_UNKNOWN;
@@ -572,20 +659,20 @@ namespace
     }
 
     // One texel of the level as RGBA8 in memory order (R first), as bc7e reads it.
-    uint32 LevelTexelRGBA8(const TextureCookMipLevel& level, bool isFloat, uint32 x, uint32 y)
+    uint32 LevelTexelRGBA8(const LevelBands& bands, uint32 x, uint32 y)
     {
-        const size_t texel = static_cast<size_t>(y) * level.Width + x;
+        const size_t texel = static_cast<size_t>(y) * bands.Width + x;
         uint8 rgba[4];
-        if (isFloat)
+        if (bands.IsFloat)
         {
             float channels[4];
-            std::memcpy(channels, level.Bytes.data() + texel * sizeof(channels), sizeof(channels));
+            std::memcpy(channels, bands.Pixels.data() + texel * sizeof(channels), sizeof(channels));
             for (int c = 0; c < 4; ++c)
                 rgba[c] = SaturateToUnorm8(channels[c]);
         }
         else
         {
-            std::memcpy(rgba, level.Bytes.data() + texel * 4, 4);
+            std::memcpy(rgba, bands.Pixels.data() + texel * 4, 4);
         }
         uint32 packed = 0;
         std::memcpy(&packed, rgba, sizeof(packed));
@@ -595,12 +682,14 @@ namespace
     // Encodes the band's block rows with bc7e: each row's blocks are gathered to
     // 16 contiguous texels, edge-replicated past the level's right and bottom
     // edges (only extents that are not a multiple of 4 reach them, the 2x2 and
-    // 1x1 tails among them), and compressed in one call per row.
+    // 1x1 tails among them), and compressed in one call per row. The gathered row lives in
+    // the encoding thread's scratch, so a steady encode takes nothing from the heap.
     void EncodeBC7Band(const LevelBands& bands, uint32 y, uint32 height, uint8* payload)
     {
-        const TextureCookMipLevel& level = *bands.Level;
         const uint32 blocksPerRow = static_cast<uint32>(bands.BlockRowBytes / kBC7BlockBytes);
-        std::vector<uint32> gathered(static_cast<size_t>(blocksPerRow) * kBlockTexels);
+        Memory::ScratchScope scratch;
+        const std::span<uint32> gathered =
+            scratch.AllocateArrayForOverwrite<uint32>(static_cast<size_t>(blocksPerRow) * kBlockTexels);
         const ispc::bc7e_compress_block_params& params = BC7EncodeParams();
         for (uint32 rowY = 0; rowY < height; rowY += kBlockDim)
         {
@@ -608,12 +697,12 @@ namespace
             {
                 for (uint32 ty = 0; ty < kBlockDim; ++ty)
                 {
-                    const uint32 sy = std::min(y + rowY + ty, level.Height - 1);
+                    const uint32 sy = std::min(y + rowY + ty, bands.Height - 1);
                     for (uint32 tx = 0; tx < kBlockDim; ++tx)
                     {
-                        const uint32 sx = std::min(block * kBlockDim + tx, level.Width - 1);
+                        const uint32 sx = std::min(block * kBlockDim + tx, bands.Width - 1);
                         gathered[static_cast<size_t>(block) * kBlockTexels + ty * kBlockDim + tx] =
-                            LevelTexelRGBA8(level, bands.IsFloat, sx, sy);
+                            LevelTexelRGBA8(bands, sx, sy);
                     }
                 }
             }
@@ -641,16 +730,15 @@ namespace
 
     bool EncodeLevelBand(LevelBands& bands, uint32 band)
     {
-        const TextureCookMipLevel& level = *bands.Level;
         const uint32 y = band * bands.BandHeight;
 
         DirectX::Image src{};
-        src.width = level.Width;
-        src.height = std::min(bands.BandHeight, level.Height - y);
+        src.width = bands.Width;
+        src.height = std::min(bands.BandHeight, bands.Height - y);
         src.format = bands.SourceFormat;
         src.rowPitch = bands.RowPitch;
         src.slicePitch = bands.RowPitch * src.height;
-        src.pixels = const_cast<uint8*>(level.Bytes.data()) + static_cast<size_t>(y) * bands.RowPitch;
+        src.pixels = const_cast<uint8*>(bands.Pixels.data()) + static_cast<size_t>(y) * bands.RowPitch;
 
         uint8* payload = bands.Payload + static_cast<size_t>(y / kBlockDim) * bands.BlockRowBytes;
         if (bands.Output != TextureCookOutput::BC7)
@@ -664,12 +752,95 @@ namespace
         if (!bands.IsFloat)
         {
             const size_t bandBytes = bands.BlockRowBytes * ((height + kBlockDim - 1) / kBlockDim);
-            RepairBC7TransparentEndpoints(src.pixels, level.Width, height, std::span<uint8>(payload, bandBytes));
+            RepairBC7TransparentEndpoints(src.pixels, bands.Width, height, std::span<uint8>(payload, bandBytes));
         }
         return true;
     }
 }
 #endif
+
+namespace
+{
+    // Block-compresses one tightly packed level into `payload`, which holds exactly its
+    // ceil(w/4) x ceil(h/4) blocks: CompressTextureCookLevel's encode, into storage the caller
+    // owns. A failure leaves `payload` partly written.
+    bool CompressLevelInto(std::span<const uint8> pixels, uint32 width, uint32 height, bool isFloat,
+                           TextureCookOutput output, uint32 bandBlocks, std::span<uint8> payload,
+                           std::string& outError, const std::function<bool()>& cancelRequested,
+                           TextureCookWorkers* workers)
+    {
+#if defined(GE_TEXTURE_COOK_ENCODER)
+        const DXGI_FORMAT dstFormat = DxgiTargetFor(output);
+        if (dstFormat == DXGI_FORMAT_UNKNOWN)
+        {
+            outError = "not a block-compressed output";
+            return false;
+        }
+
+        LevelBands bands;
+        bands.Pixels = pixels;
+        bands.Width = width;
+        bands.Height = height;
+        bands.IsFloat = isFloat;
+        bands.Output = output;
+        bands.SourceFormat = isFloat ? DXGI_FORMAT_R32G32B32A32_FLOAT : DXGI_FORMAT_R8G8B8A8_UNORM;
+        bands.TargetFormat = dstFormat;
+        bands.RowPitch = static_cast<size_t>(width) * 4 * (isFloat ? sizeof(float) : 1);
+
+        // No TEX_COMPRESS_PARALLEL: it starts an OpenMP thread team for each calling thread, so
+        // concurrent cooks starve the machine. One texture spreads across the JobSystem's workers
+        // through `workers` instead, in a budget that every cook shares.
+        const LevelBlocks blocks = BlocksOf(dstFormat, width, height);
+        const uint32 targetBlocks = bandBlocks != 0 ? bandBlocks : kTextureCookBandBlocks;
+        // Clamp to the level's own block rows: a large bandBlocks over a narrow level otherwise
+        // wraps bandHeight to 0, and the encoder refuses a zero-height band. A band at or above
+        // the level is one whole-level call.
+        const uint32 bandBlockRows = std::clamp(targetBlocks / std::max(1u, blocks.PerRow), 1u, blocks.Rows);
+        bands.BandHeight = bandBlockRows * kBlockDim;
+        bands.BandCount = (blocks.Rows + bandBlockRows - 1) / bandBlockRows;
+        bands.BlockRowBytes = blocks.RowBytes;
+        if (payload.size() != blocks.Bytes())
+        {
+            outError = "the payload does not hold the level's blocks";
+            return false;
+        }
+        bands.Payload = payload.data();
+
+        const auto encodeBand = [&bands](uint32 band) { return EncodeLevelBand(bands, band); };
+        bool encoded = true;
+        if (workers)
+        {
+            encoded = workers->RunBands(bands.BandCount, encodeBand, cancelRequested);
+        }
+        else
+        {
+            for (uint32 band = 0; band < bands.BandCount && encoded; ++band)
+                encoded = !(cancelRequested && cancelRequested()) && encodeBand(band);
+        }
+        if (encoded)
+            return true;
+
+        const long failure = bands.FirstFailure.load();
+        if (failure != 0)
+            outError = "BC encode failed (hr=" + std::to_string(failure) + ")";
+        else
+            outError = kTextureCookCancelledError;
+        return false;
+#else
+        (void)pixels;
+        (void)width;
+        (void)height;
+        (void)isFloat;
+        (void)output;
+        (void)bandBlocks;
+        (void)payload;
+        (void)cancelRequested;
+        (void)workers;
+        outError = "BC encoder not compiled in";
+        return false;
+#endif
+    }
+}
 
 bool CompressTextureCookLevel(const TextureCookMipLevel& level, bool isFloat,
                               TextureCookOutput output, uint32 bandBlocks,
@@ -685,70 +856,14 @@ bool CompressTextureCookLevel(const TextureCookMipLevel& level, bool isFloat,
         outError = "not a block-compressed output";
         return false;
     }
-
-    LevelBands bands;
-    bands.Level = &level;
-    bands.IsFloat = isFloat;
-    bands.Output = output;
-    bands.SourceFormat = isFloat ? DXGI_FORMAT_R32G32B32A32_FLOAT : DXGI_FORMAT_R8G8B8A8_UNORM;
-    bands.TargetFormat = dstFormat;
-    bands.RowPitch = static_cast<size_t>(level.Width) * 4 * (isFloat ? sizeof(float) : 1);
-
-    // No TEX_COMPRESS_PARALLEL: it forks an OpenMP thread team PER CALLING
-    // THREAD, so concurrent cooks each fork their own (observed live: 1,074
-    // threads, 7.2 GB WS, machine-wide starvation while the frame's ECS wave
-    // waited behind the cooks). One texture spreads across the JobSystem's
-    // workers through `workers` instead, within a budget shared by every cook.
-    const uint32 blocksPerRow = (level.Width + kBlockDim - 1) / kBlockDim;
-    const uint32 targetBlocks = bandBlocks != 0 ? bandBlocks : kTextureCookBandBlocks;
-    // Clamp to the level's own block rows: a huge bandBlocks over a narrow level
-    // (few blocks per row) otherwise scales the row count past 2^30, and the
-    // multiply to pixels below wraps bandHeight to 0. The first band is then a
-    // zero-height image, which the encoder rejects (E_INVALIDARG) — failing a
-    // cook that should have succeeded. The clamp is also exactly the documented
-    // contract: a band at or above the level issues one whole-level call.
-    const uint32 blockRowsInLevel = std::max(1u, (level.Height + kBlockDim - 1) / kBlockDim);
-    const uint32 bandBlockRows =
-        std::clamp(targetBlocks / std::max(1u, blocksPerRow), 1u, blockRowsInLevel);
-    bands.BandHeight = bandBlockRows * kBlockDim;
-    bands.BandCount = (blockRowsInLevel + bandBlockRows - 1) / bandBlockRows;
-    const size_t blockBytes = DirectX::BitsPerPixel(dstFormat) * kBlockDim * kBlockDim / 8;
-    bands.BlockRowBytes = static_cast<size_t>(blocksPerRow) * blockBytes;
-    outBytes.resize(bands.BlockRowBytes * blockRowsInLevel);
-    bands.Payload = outBytes.data();
-
-    const auto encodeBand = [&bands](uint32 band) { return EncodeLevelBand(bands, band); };
-    bool encoded = true;
-    if (workers)
-    {
-        encoded = workers->RunBands(bands.BandCount, encodeBand, cancelRequested);
-    }
-    else
-    {
-        for (uint32 band = 0; band < bands.BandCount && encoded; ++band)
-            encoded = !(cancelRequested && cancelRequested()) && encodeBand(band);
-    }
-    if (encoded)
+    outBytes.resize(BlocksOf(dstFormat, level.Width, level.Height).Bytes());
+#endif
+    if (CompressLevelInto(level.Bytes, level.Width, level.Height, isFloat, output, bandBlocks, outBytes, outError,
+                          cancelRequested, workers))
         return true;
-
     // A partial payload must never reach the container: drop every band.
     outBytes.clear();
-    const long failure = bands.FirstFailure.load();
-    if (failure != 0)
-        outError = "BC encode failed (hr=" + std::to_string(failure) + ")";
-    else
-        outError = kTextureCookCancelledError;
     return false;
-#else
-    (void)level;
-    (void)isFloat;
-    (void)output;
-    (void)bandBlocks;
-    (void)cancelRequested;
-    (void)workers;
-    outError = "BC encoder not compiled in";
-    return false;
-#endif
 }
 
 TextureCookOutput ResolveTextureCookOutput(const TextureCookSettings& settings,
@@ -802,7 +917,26 @@ TextureCookOutput ResolveTextureCookOutput(const TextureCookSettings& settings,
 
 uint64 ComputeTextureCookSourceHash(const uint8* bytes, size_t size)
 {
-    return FnvAppend(kFnvOffset, bytes, size);
+    return Hashing::Fnv1a64(bytes, size);
+}
+
+std::optional<uint64> ComputeTextureCookSourceFileHash(const std::filesystem::path& source)
+{
+    constexpr size_t kChunkBytes = 64 * 1024;
+    SharedFileReader reader;
+    if (!reader.Open(source))
+        return std::nullopt;
+    std::array<uint8, kChunkBytes> chunk;
+    uint64 hash = Hashing::kFnv1a64OffsetBasis;
+    for (;;)
+    {
+        const int64 read = reader.Read(chunk.data(), chunk.size());
+        if (read < 0)
+            return std::nullopt;
+        if (read == 0)
+            return hash;
+        hash = Hashing::Fnv1a64(chunk.data(), static_cast<size_t>(read), hash);
+    }
 }
 
 bool HasNormalVarianceCompanion(const TextureCookInputs& inputs, TextureCookOutput output)
@@ -890,7 +1024,7 @@ namespace
         return length > kMinNormalLength ? n / length : Vector3(0.0f, 0.0f, 1.0f);
     }
 
-    AlphaHistogram AlphaCounts(const TextureCookMipLevel& mip)
+    AlphaHistogram AlphaCounts(const MipLevelView& mip)
     {
         AlphaHistogram counts{};
         for (size_t i = 3; i < mip.Bytes.size(); i += 4)
@@ -903,7 +1037,7 @@ namespace
         return static_cast<uint8>(std::clamp(std::floor(alpha * scale + 0.5), 0.0, 255.0));
     }
 
-    void PreserveMipAlphaCoverage(std::vector<TextureCookMipLevel>& chain, float cutoff)
+    void PreserveMipAlphaCoverage(std::span<MipLevelView> chain, float cutoff)
     {
         // The material discards alpha < cutoff: cutoff 0 already admits every
         // texel, including transparent zero. UNORM8 conversion also defines 1.
@@ -969,7 +1103,7 @@ namespace
 
     // Re-unit-length XYZ after filtering (same recipe as Tools/TextureCompiler):
     // filtered normals shorten, which flattens relief at distance.
-    void RenormalizeNormalsRGBA8(TextureCookMipLevel& mip)
+    void RenormalizeNormalsRGBA8(const MipLevelView& mip)
     {
         const auto toByte = [](float v) {
             return static_cast<uint8>(std::clamp((v * 0.5f + 0.5f) * 255.0f + 0.5f, 0.0f, 255.0f));
@@ -986,58 +1120,112 @@ namespace
     }
 }
 
+namespace
+{
+    // The mip chain's input contract: valid coverage settings and, when coverage is on, one
+    // tightly packed RGBA8 base (`levelsHeld` == 1) and a natural mip count.
+    bool ValidateMipChainInputs(const MipLevelView& base, size_t levelsHeld, uint32 mipCount, bool isFloat,
+                                const TextureCookSettings& settings, std::string& error)
+    {
+        if (!ValidateTextureAlphaCoverageSettings(settings, isFloat, error))
+            return false;
+        if (!settings.PreserveAlphaCoverage)
+            return true;
+        const uint64 pixels = levelsHeld == 0 ? 0 : static_cast<uint64>(base.Width) * base.Height;
+        if (levelsHeld != 1 || !pixels || pixels > std::numeric_limits<uint32>::max() || base.Width > INT_MAX ||
+            base.Height > INT_MAX || pixels * 4 != base.Bytes.size() || mipCount == 0 ||
+            mipCount > ComputeTextureCookMipCount(base.Width, base.Height, TextureCookSettings{}))
+        {
+            error = "alpha coverage requires one valid tightly packed RGBA8 base and a natural mip count";
+            return false;
+        }
+        return true;
+    }
+
+    // One step of the mip recipe: `source` resampled into `destination`, which holds the next
+    // extent, and a normal map's XYZ made unit length again. False when the resample fails.
+    bool ResampleMipLevel(const MipLevelView& source, const MipLevelView& destination, bool isFloat, bool srgb,
+                          TextureCookUsage usage)
+    {
+        if (isFloat)
+        {
+            return Image::ResampleRgba32F(
+                std::span(reinterpret_cast<const float*>(source.Bytes.data()), source.Bytes.size() / sizeof(float)),
+                source.Width, source.Height,
+                std::span(reinterpret_cast<float*>(destination.Bytes.data()),
+                          destination.Bytes.size() / sizeof(float)),
+                destination.Width, destination.Height);
+        }
+        if (!Image::ResampleRgba8(source.Bytes, source.Width, source.Height, destination.Bytes, destination.Width,
+                                  destination.Height,
+                                  srgb ? Image::ResampleColorSpace::Srgb : Image::ResampleColorSpace::Linear))
+            return false;
+        if (usage == TextureCookUsage::Normal)
+            RenormalizeNormalsRGBA8(destination);
+        return true;
+    }
+
+    // Fills levels 1 and up of `chain` from level 0, each into the storage its view names, then
+    // corrects their alpha coverage when the settings ask. False when a resample fails.
+    bool BuildMipLevels(std::span<MipLevelView> chain, bool isFloat, bool srgb, const TextureCookSettings& settings)
+    {
+        for (size_t level = 1; level < chain.size(); ++level)
+            if (!ResampleMipLevel(chain[level - 1], chain[level], isFloat, srgb, settings.Usage))
+                return false;
+        if (settings.PreserveAlphaCoverage)
+            PreserveMipAlphaCoverage(chain, settings.AlphaCoverageCutoff);
+        return true;
+    }
+
+    // The most levels a chain of 32-bit extents has.
+    constexpr uint32 kMaxMipLevels = 32;
+
+    using MipChainStorage = std::array<MipLevelView, kMaxMipLevels>;
+
+    // Sets the first `count` views of `storage` to `viewOfLevel(level)` and returns them, so a
+    // chain of views takes no allocation. `count` is at most kMaxMipLevels.
+    std::span<MipLevelView> FillMipChainViews(MipChainStorage& storage, size_t count,
+                                              FunctionRef<MipLevelView(uint32)> viewOfLevel)
+    {
+        const std::span<MipLevelView> chain = std::span(storage).first(count);
+        for (uint32 level = 0; level < chain.size(); ++level)
+            chain[level] = viewOfLevel(level);
+        return chain;
+    }
+}
+
 bool BuildTextureCookMipChain(std::vector<TextureCookMipLevel>& chain, uint32 mipCount, bool isFloat,
                               bool srgb, const TextureCookSettings& settings, std::string* error)
 {
     if (error) error->clear();
     std::string validationError;
-    if (!ValidateTextureAlphaCoverageSettings(settings, isFloat, validationError))
+    const MipLevelView base = chain.empty() ? MipLevelView{} : ViewOf(chain[0]);
+    if (!ValidateMipChainInputs(base, chain.size(), mipCount, isFloat, settings, validationError))
     {
         if (error) *error = validationError;
         return false;
     }
-    if (settings.PreserveAlphaCoverage)
-    {
-        const uint64 pixels = chain.empty() ? 0 : static_cast<uint64>(chain[0].Width) * chain[0].Height;
-        if (chain.size() != 1 || !pixels || pixels > std::numeric_limits<uint32>::max() ||
-            chain[0].Width > INT_MAX || chain[0].Height > INT_MAX ||
-            pixels * 4 != chain[0].Bytes.size() || mipCount == 0 ||
-            mipCount > ComputeTextureCookMipCount(chain[0].Width, chain[0].Height, TextureCookSettings{}))
-        {
-            if (error) *error = "alpha coverage requires one valid tightly packed RGBA8 base and a natural mip count";
-            return false;
-        }
-    }
     while (chain.size() < mipCount)
     {
-        const TextureCookMipLevel& src = chain.back();
-        TextureCookMipLevel dst;
-        dst.Width = std::max(src.Width / 2u, 1u);
-        dst.Height = std::max(src.Height / 2u, 1u);
-        dst.Bytes.resize(static_cast<size_t>(dst.Width) * dst.Height * 4 * (isFloat ? sizeof(float) : 1));
-
-        bool ok = false;
-        if (isFloat)
+        TextureCookMipLevel next;
+        next.Width = std::max(chain.back().Width / 2u, 1u);
+        next.Height = std::max(chain.back().Height / 2u, 1u);
+        next.Bytes.resize(static_cast<size_t>(next.Width) * next.Height * 4 * (isFloat ? sizeof(float) : 1));
+        chain.push_back(std::move(next));
+        if (!ResampleMipLevel(ViewOf(chain[chain.size() - 2]), ViewOf(chain.back()), isFloat, srgb, settings.Usage))
         {
-            ok = Image::ResampleRgba32F(
-                std::span(reinterpret_cast<const float*>(src.Bytes.data()), src.Bytes.size() / sizeof(float)),
-                src.Width, src.Height,
-                std::span(reinterpret_cast<float*>(dst.Bytes.data()), dst.Bytes.size() / sizeof(float)),
-                dst.Width, dst.Height);
-        }
-        else
-        {
-            ok = Image::ResampleRgba8(src.Bytes, src.Width, src.Height, dst.Bytes, dst.Width, dst.Height,
-                                      srgb ? Image::ResampleColorSpace::Srgb : Image::ResampleColorSpace::Linear);
-        }
-        if (!ok)
+            chain.pop_back();
             return false;
-        if (settings.Usage == TextureCookUsage::Normal && !isFloat)
-            RenormalizeNormalsRGBA8(dst);
-        chain.push_back(std::move(dst));
+        }
     }
     if (settings.PreserveAlphaCoverage)
-        PreserveMipAlphaCoverage(chain, settings.AlphaCoverageCutoff);
+    {
+        // Validation holds the chain to its natural count, at most kMaxMipLevels.
+        MipChainStorage storage;
+        PreserveMipAlphaCoverage(
+            FillMipChainViews(storage, chain.size(), [&chain](uint32 level) { return ViewOf(chain[level]); }),
+            settings.AlphaCoverageCutoff);
+    }
     return true;
 }
 
@@ -1045,7 +1233,7 @@ bool BuildTextureCookMipChain(std::vector<TextureCookMipLevel>& chain, uint32 mi
 
 namespace
 {
-    void ApplySwizzleRGBA8(std::vector<uint8>& pixels, const char swizzle[4])
+    void ApplySwizzleRGBA8(std::span<uint8> pixels, const char swizzle[4])
     {
         const size_t count = pixels.size() / 4;
         for (size_t i = 0; i < count; ++i)
@@ -1084,8 +1272,8 @@ namespace
     // writes each mean and its sigma texel. An odd last row or column folds into the last texel,
     // so every source texel counts once. The means stay unnormalized.
     template <typename FetchNormal>
-    void HalveNormalRows(uint32 width, uint32 height, TextureCookMipLevel& sigmaLevel, uint32 rowBegin,
-                         uint32 rowEnd, const FetchNormal& fetch, std::vector<Vector3>& means)
+    void HalveNormalRows(uint32 width, uint32 height, const MipLevelView& sigmaLevel, uint32 rowBegin,
+                         uint32 rowEnd, const FetchNormal& fetch, std::span<Vector3> means)
     {
         const uint32 halfWidth = sigmaLevel.Width;
         const uint32 halfHeight = sigmaLevel.Height;
@@ -1113,19 +1301,14 @@ namespace
         }
     }
 
-    // One companion level from a width x height level of normals: the sigma level and its means.
-    // The rows run as bands on the cook's workers, or on the calling thread without them; each
-    // band writes its own rows, so the bytes do not depend on the split. False on a cancel.
+    // One companion level from a level of normals: the sigma level at half extent, and its means.
+    // Bands run on the cook's workers or on this thread; each writes its own rows, so the bytes do not
+    // depend on the split. False on a cancel.
     template <typename FetchNormal>
     bool BuildVarianceLevel(uint32 width, uint32 height, const FetchNormal& fetch, TextureCookWorkers* workers,
-                            const std::function<bool()>& cancelRequested, TextureCookMipLevel& outLevel,
-                            std::vector<Vector3>& outMeans)
+                            const std::function<bool()>& cancelRequested, const MipLevelView& outLevel,
+                            std::span<Vector3> outMeans)
     {
-        outLevel.Width = std::max(width / 2u, 1u);
-        outLevel.Height = std::max(height / 2u, 1u);
-        const size_t texels = static_cast<size_t>(outLevel.Width) * outLevel.Height;
-        outLevel.Bytes.resize(texels * 4);
-        outMeans.resize(texels);
         const uint32 bandCount = (outLevel.Height + kVarianceBandRows - 1u) / kVarianceBandRows;
         const auto runBand = [&](uint32 band)
         {
@@ -1141,30 +1324,34 @@ namespace
         return true;
     }
 
-    // The companion's levels: level j is sigma of normal mip j + 1, at that mip's extent. The
-    // means box-filter the base's unit normals, so each level sees its whole footprint. False on
-    // a cancel.
-    bool BuildNormalVarianceCompanionLevels(const TextureCookMipLevel& base, uint32 normalMipCount,
-                                            TextureCookWorkers* workers,
-                                            const std::function<bool()>& cancelRequested,
-                                            std::vector<TextureCookMipLevel>& outLevels)
+    // The companion's level count for a normal map of `normalMipCount` mips: level j is sigma of
+    // normal mip j + 1, at that mip's extent.
+    uint32 CompanionLevelCount(uint32 normalMipCount)
     {
-        const uint32 levelCount = std::max(normalMipCount, 2u) - 1u;
-        outLevels.assign(levelCount, {});
+        return std::max(normalMipCount, 2u) - 1u;
+    }
+
+    // Fills the companion's levels, each sized to its extent. The means box-filter the base's unit
+    // normals, so each level sees its whole footprint; `means` and `previousMeans` each hold the
+    // texels of level 0. False on a cancel.
+    bool BuildNormalVarianceCompanionLevels(const MipLevelView& base, std::span<const MipLevelView> levels,
+                                            std::span<Vector3> means, std::span<Vector3> previousMeans,
+                                            TextureCookWorkers* workers,
+                                            const std::function<bool()>& cancelRequested)
+    {
         const uint8* baseBytes = base.Bytes.data();
-        std::vector<Vector3> means;
-        std::vector<Vector3> previousMeans;
         if (!BuildVarianceLevel(base.Width, base.Height,
                                 [baseBytes](size_t index) { return DecodeUnitNormal(baseBytes + index * 4); },
-                                workers, cancelRequested, outLevels[0], means))
+                                workers, cancelRequested, levels[0], means))
             return false;
-        for (uint32 level = 1; level < levelCount; ++level)
+        for (size_t level = 1; level < levels.size(); ++level)
         {
-            previousMeans.swap(means);
-            const TextureCookMipLevel& previous = outLevels[level - 1];
+            std::swap(previousMeans, means);
+            const MipLevelView& previous = levels[level - 1];
+            const std::span<const Vector3> previousLevelMeans = previousMeans;
             if (!BuildVarianceLevel(previous.Width, previous.Height,
-                                    [&previousMeans](size_t index) { return previousMeans[index]; }, workers,
-                                    cancelRequested, outLevels[level], means))
+                                    [previousLevelMeans](size_t index) { return previousLevelMeans[index]; },
+                                    workers, cancelRequested, levels[level], means))
                 return false;
         }
         return true;
@@ -1186,91 +1373,255 @@ namespace
         }
     }
 
-    // Encodes every level to `output` and serializes the chain as KTX2. This check catches a
-    // cancel between levels; CompressTextureCookLevel checks again between block-row bands
-    // within a level, which bounds the wait on a large base level. A failure writes no bytes.
-    bool EncodeTextureCookChainKtx2(std::vector<TextureCookMipLevel>& chain, bool isFloat, bool srgb,
-                                    TextureCookOutput output, std::vector<uint8>& outKtx2Bytes,
-                                    std::string& outError, const std::function<bool()>& cancelRequested,
-                                    TextureCookWorkers* workers)
+    // A ktxStream over bytes written in order; with no bytes it only counts. A write whose source
+    // is already at the write position is skipped: a level payload encoded in place stays there.
+    struct ByteRangeStream
     {
-        std::vector<std::vector<uint8>> levelPayloads(chain.size());
-        for (size_t i = 0; i < chain.size(); ++i)
+        uint8* Data = nullptr;
+        size_t Size = 0;
+        size_t Position = 0;
+    };
+
+    ByteRangeStream& RangeOf(ktxStream* stream)
+    {
+        return *static_cast<ByteRangeStream*>(stream->data.custom_ptr.address);
+    }
+
+    KTX_error_code WriteToByteRange(ktxStream* stream, const void* source, const ktx_size_t size,
+                                    const ktx_size_t count)
+    {
+        ByteRangeStream& range = RangeOf(stream);
+        const size_t bytes = static_cast<size_t>(size * count);
+        if (range.Data)
+        {
+            if (bytes > range.Size - range.Position)
+                return KTX_FILE_OVERFLOW;
+            uint8* destination = range.Data + range.Position;
+            const auto sourceAddress = reinterpret_cast<std::uintptr_t>(source);
+            const auto rangeAddress = reinterpret_cast<std::uintptr_t>(range.Data);
+            if (source != destination)
+            {
+                // A source inside the range that is not in place: libktx laid the file out
+                // differently from the level storage it was given.
+                if (sourceAddress >= rangeAddress && sourceAddress < rangeAddress + range.Size)
+                    return KTX_INVALID_OPERATION;
+                std::memcpy(destination, source, bytes);
+            }
+        }
+        range.Position += bytes;
+        return KTX_SUCCESS;
+    }
+
+    // Writes `texture`'s file into `range`, or counts its bytes when the range has none.
+    KTX_error_code WriteKtx2(ktxTexture2* texture, ByteRangeStream& range)
+    {
+        ktxStream stream{};
+        stream.read = [](ktxStream*, void*, const ktx_size_t) { return KTX_INVALID_OPERATION; };
+        stream.skip = [](ktxStream*, const ktx_size_t) { return KTX_INVALID_OPERATION; };
+        stream.write = WriteToByteRange;
+        stream.getpos = [](ktxStream* s, ktx_off_t* const offset) {
+            *offset = static_cast<ktx_off_t>(RangeOf(s).Position);
+            return KTX_SUCCESS;
+        };
+        stream.setpos = [](ktxStream*, const ktx_off_t) { return KTX_INVALID_OPERATION; };
+        stream.getsize = [](ktxStream* s, ktx_size_t* const size) {
+            *size = RangeOf(s).Position;
+            return KTX_SUCCESS;
+        };
+        stream.destruct = [](ktxStream*) {};
+        stream.type = eStreamTypeCustom;
+        stream.data.custom_ptr.address = &range;
+        return ktxTexture2_WriteToStream(texture, &stream);
+    }
+
+    // Room for the header, the level index of kMaxMipLevels levels and the metadata, so the
+    // file's bytes are sized once. A larger header costs one reallocation before any payload.
+    constexpr size_t kKtx2HeaderReserveBytes = 2048;
+
+    // A KTX2 file that libktx lays out and the cook writes in place: Begin sizes the bytes once
+    // for the whole file, each level payload is written once at its file offset (Level), and
+    // Finish writes the header, the level index and the metadata in front of the payloads.
+    class Ktx2InPlaceWriter
+    {
+      public:
+        explicit Ktx2InPlaceWriter(std::vector<uint8>& bytes) : m_Bytes(bytes) {}
+        ~Ktx2InPlaceWriter()
+        {
+            if (!m_Texture)
+                return;
+            m_Texture->pData = nullptr; // the bytes are the caller's
+            ktxTexture_Destroy(ktxTexture(m_Texture));
+        }
+        Ktx2InPlaceWriter(const Ktx2InPlaceWriter&) = delete;
+        Ktx2InPlaceWriter& operator=(const Ktx2InPlaceWriter&) = delete;
+
+        // The vkFormat carries the block layout and the transfer function; the loader reads the
+        // color space from the container's format descriptor.
+        bool Begin(TextureCookOutput output, bool srgb, bool isFloat, uint32 width, uint32 height,
+                   uint32 levelCount, std::string& outError)
+        {
+            ktxTextureCreateInfo createInfo{};
+            createInfo.vkFormat = VkFormatFor(output, srgb, isFloat);
+            createInfo.baseWidth = width;
+            createInfo.baseHeight = height;
+            createInfo.baseDepth = 1;
+            createInfo.numDimensions = 2;
+            createInfo.numLevels = levelCount;
+            createInfo.numLayers = 1;
+            createInfo.numFaces = 1;
+            createInfo.isArray = KTX_FALSE;
+            createInfo.generateMipmaps = KTX_FALSE;
+            KTX_error_code err = ktxTexture2_Create(&createInfo, KTX_TEXTURE_CREATE_NO_STORAGE, &m_Texture);
+            if (err != KTX_SUCCESS)
+            {
+                m_Texture = nullptr;
+                outError = std::string("ktxTexture2_Create failed: ") + ktxErrorString(err);
+                return false;
+            }
+
+            // The writer key names the cook. libktx appends its own version to it, so a libktx
+            // update changes the cooked bytes.
+            const char* writer = "GameEngine.TextureCook v1";
+            ktxHashList_AddKVPair(&m_Texture->kvDataHead, KTX_WRITER_KEY,
+                                  static_cast<ktx_uint32_t>(std::strlen(writer) + 1), writer);
+
+            // The levels sit smallest first, so the base level ends the payloads.
+            ktx_size_t baseOffset = 0;
+            ktxTexture_GetImageOffset(ktxTexture(m_Texture), 0, 0, 0, &baseOffset);
+            const size_t payloadBytes = baseOffset + ktxTexture_GetImageSize(ktxTexture(m_Texture), 0);
+
+            // Count the header first, with the payload range standing in for levels not written yet.
+            m_Bytes.clear();
+            m_Bytes.reserve(payloadBytes + kKtx2HeaderReserveBytes);
+            m_Bytes.resize(payloadBytes);
+            m_Texture->pData = m_Bytes.data();
+            m_Texture->dataSize = payloadBytes;
+            ByteRangeStream counter;
+            err = WriteKtx2(m_Texture, counter);
+            if (err != KTX_SUCCESS || counter.Position < payloadBytes)
+            {
+                outError = std::string("ktx header layout failed: ") + ktxErrorString(err);
+                return false;
+            }
+            m_Bytes.resize(counter.Position);
+            m_Texture->pData = m_Bytes.data() + (counter.Position - payloadBytes);
+            return true;
+        }
+
+        // Level `level`'s payload, at its place in the file.
+        std::span<uint8> Level(uint32 level) const
+        {
+            ktx_size_t offset = 0;
+            ktxTexture_GetImageOffset(ktxTexture(m_Texture), level, 0, 0, &offset);
+            return {m_Texture->pData + offset, ktxTexture_GetImageSize(ktxTexture(m_Texture), level)};
+        }
+
+        bool Finish(std::string& outError)
+        {
+            ByteRangeStream file{m_Bytes.data(), m_Bytes.size()};
+            const KTX_error_code err = WriteKtx2(m_Texture, file);
+            if (err != KTX_SUCCESS || file.Position != m_Bytes.size())
+            {
+                outError = std::string("ktx write failed: ") + ktxErrorString(err);
+                return false;
+            }
+            return true;
+        }
+
+      private:
+        std::vector<uint8>& m_Bytes;
+        ktxTexture2* m_Texture = nullptr;
+    };
+
+    // Encodes each level of `chain` into its place in `file`; an uncompressed chain is there
+    // already. This check catches a cancel between levels; the band encode checks again
+    // between block-row bands within a level, which bounds the wait on a large base level.
+    bool EncodeLevels(std::span<const MipLevelView> chain, bool isFloat, TextureCookOutput output,
+                      const Ktx2InPlaceWriter& file, std::string& outError,
+                      const std::function<bool()>& cancelRequested, TextureCookWorkers* workers)
+    {
+        for (uint32 level = 0; level < chain.size(); ++level)
         {
             if (cancelRequested && cancelRequested())
             {
-                outKtx2Bytes.clear();
                 outError = kTextureCookCancelledError;
                 return false;
             }
-
-            if (output == TextureCookOutput::Uncompressed)
-            {
-                levelPayloads[i] = std::move(chain[i].Bytes);
-            }
-            else if (!CompressTextureCookLevel(chain[i], isFloat, output, /*bandBlocks=*/0,
-                                              levelPayloads[i], outError, cancelRequested, workers))
-            {
-                outKtx2Bytes.clear();
+            if (output != TextureCookOutput::Uncompressed &&
+                !CompressLevelInto(chain[level].Bytes, chain[level].Width, chain[level].Height, isFloat, output,
+                                   /*bandBlocks=*/0, file.Level(level), outError, cancelRequested, workers))
                 return false;
-            }
         }
-
-        // Serialize KTX2. The vkFormat carries block layout + transfer function;
-        // the loader treats the container DFD as authoritative for color space.
-        ktxTextureCreateInfo createInfo{};
-        createInfo.vkFormat = VkFormatFor(output, srgb, isFloat);
-        createInfo.baseWidth = chain[0].Width;
-        createInfo.baseHeight = chain[0].Height;
-        createInfo.baseDepth = 1;
-        createInfo.numDimensions = 2;
-        createInfo.numLevels = static_cast<ktx_uint32_t>(chain.size());
-        createInfo.numLayers = 1;
-        createInfo.numFaces = 1;
-        createInfo.isArray = KTX_FALSE;
-        createInfo.generateMipmaps = KTX_FALSE;
-
-        ktxTexture2* texture = nullptr;
-        KTX_error_code err = ktxTexture2_Create(&createInfo, KTX_TEXTURE_CREATE_ALLOC_STORAGE, &texture);
-        if (err != KTX_SUCCESS)
-        {
-            outError = std::string("ktxTexture2_Create failed: ") + ktxErrorString(err);
-            return false;
-        }
-
-        for (size_t level = 0; level < levelPayloads.size(); ++level)
-        {
-            err = ktxTexture_SetImageFromMemory(ktxTexture(texture), static_cast<ktx_uint32_t>(level), 0, 0,
-                                                levelPayloads[level].data(), levelPayloads[level].size());
-            if (err != KTX_SUCCESS)
-            {
-                outError = std::string("ktx SetImageFromMemory failed: ") + ktxErrorString(err);
-                ktxTexture_Destroy(ktxTexture(texture));
-                return false;
-            }
-        }
-
-        // Pin the writer metadata so cook output stays byte-stable across libktx
-        // version bumps (the library would otherwise stamp its own version string).
-        const char* writer = "GameEngine.TextureCook v1";
-        ktxHashList_AddKVPair(&texture->kvDataHead, KTX_WRITER_KEY,
-                              static_cast<ktx_uint32_t>(std::strlen(writer) + 1), writer);
-
-        ktx_uint8_t* mem = nullptr;
-        ktx_size_t memSize = 0;
-        err = ktxTexture_WriteToMemory(ktxTexture(texture), &mem, &memSize);
-        ktxTexture_Destroy(ktxTexture(texture));
-        if (err != KTX_SUCCESS || !mem || memSize == 0)
-        {
-            outError = std::string("ktx WriteToMemory failed: ") + ktxErrorString(err);
-            if (mem)
-                free(mem);
-            return false;
-        }
-
-        outKtx2Bytes.assign(mem, mem + memSize);
-        free(mem);
         return true;
+    }
+
+    // Arena allocations start on this boundary, so a level read as floats or Vector3s is aligned.
+    constexpr size_t kCookLevelAlignment = 16;
+
+    size_t AlignedCookBytes(size_t bytes)
+    {
+        return (bytes + kCookLevelAlignment - 1) / kCookLevelAlignment * kCookLevelAlignment;
+    }
+
+    size_t MipLevelBytes(uint32 baseWidth, uint32 baseHeight, uint32 level, size_t bytesPerTexel)
+    {
+        return static_cast<size_t>(MipExtent(baseWidth, level)) * MipExtent(baseHeight, level) * bytesPerTexel;
+    }
+
+    // What the cook's arena hands out: the chain's levels above the base when they are encoded,
+    // and the companion's levels and means. Sized up front, so the arena takes one block.
+    size_t CookArenaBytes(const MipLevelView& base, uint32 mipCount, size_t bytesPerTexel, bool chainInArena,
+                          uint32 companionLevels)
+    {
+        size_t bytes = 0;
+        for (uint32 level = 1; chainInArena && level < mipCount; ++level)
+            bytes += AlignedCookBytes(MipLevelBytes(base.Width, base.Height, level, bytesPerTexel));
+        for (uint32 level = 1; level <= companionLevels; ++level)
+            bytes += AlignedCookBytes(MipLevelBytes(base.Width, base.Height, level, 4));
+        if (companionLevels > 0)
+            bytes += 2 * AlignedCookBytes(MipLevelBytes(base.Width, base.Height, 1, sizeof(Vector3)));
+        return bytes;
+    }
+
+    // Mip `level` of `base` in storage from the cook's arena.
+    MipLevelView ArenaMipLevel(Memory::Arena& arena, const MipLevelView& base, uint32 level, size_t bytesPerTexel)
+    {
+        const size_t bytes = MipLevelBytes(base.Width, base.Height, level, bytesPerTexel);
+        return {std::span(static_cast<uint8*>(arena.Allocate(bytes, kCookLevelAlignment)), bytes),
+                MipExtent(base.Width, level), MipExtent(base.Height, level)};
+    }
+
+    // Builds the BC4 normal-variance companion of `base` and writes its file into `outKtx2Bytes`.
+    bool CookNormalVarianceCompanion(const MipLevelView& base, uint32 normalMipCount, Memory::Arena& arena,
+                                     std::vector<uint8>& outKtx2Bytes, std::string& outError,
+                                     const std::function<bool()>& cancelRequested, TextureCookWorkers* workers)
+    {
+        MipChainStorage storage;
+        const std::span<MipLevelView> levels =
+            FillMipChainViews(storage, CompanionLevelCount(normalMipCount),
+                              [&arena, &base](uint32 level) { return ArenaMipLevel(arena, base, level + 1, 4); });
+        const size_t meanCount = static_cast<size_t>(levels[0].Width) * levels[0].Height;
+        const std::span<Vector3> means = arena.AllocateArrayForOverwrite<Vector3>(meanCount);
+        const std::span<Vector3> previousMeans = arena.AllocateArrayForOverwrite<Vector3>(meanCount);
+        if (!BuildNormalVarianceCompanionLevels(base, levels, means, previousMeans, workers, cancelRequested))
+        {
+            outError = kTextureCookCancelledError;
+            return false;
+        }
+        Ktx2InPlaceWriter file(outKtx2Bytes);
+        return file.Begin(TextureCookOutput::BC4, false, false, levels[0].Width, levels[0].Height,
+                          static_cast<uint32>(levels.size()), outError) &&
+               EncodeLevels(levels, false, TextureCookOutput::BC4, file, outError, cancelRequested, workers) &&
+               file.Finish(outError);
+    }
+
+    // A failed cook leaves no bytes in either output. Returns false for the caller to return.
+    bool DropCookOutputs(std::vector<uint8>& outKtx2Bytes, std::vector<uint8>* outVarianceCompanionKtx2)
+    {
+        outKtx2Bytes.clear();
+        if (outVarianceCompanionKtx2)
+            outVarianceCompanionKtx2->clear();
+        return false;
     }
 } // namespace
 
@@ -1318,32 +1669,32 @@ bool CookTexture(const uint8* srcBytes, size_t srcSize, std::string_view sourceN
 
     // Decode the source to tightly-packed RGBA (8-bit or float). A source that does
     // not decode fails the cook; the decode's warning names it and says why.
+    // The base level is the decoder's own pixels, viewed in place.
     const std::span<const uint8> source(srcBytes, srcSize);
-    TextureCookMipLevel base;
+    Image::ImageFloat decodedFloat;
+    Image::Image8 decoded8;
+    MipLevelView base;
     if (isFloat)
     {
-        const Image::ImageFloat decoded = Image::DecodeFloat(source, sourceName, Image::DecodeChannels::Rgba);
-        if (!decoded.Valid)
+        decodedFloat = Image::DecodeFloat(source, sourceName, Image::DecodeChannels::Rgba);
+        if (!decodedFloat.Valid)
         {
             outError = "decode failed";
             return false;
         }
-        const auto* bytes = reinterpret_cast<const uint8*>(decoded.Pixels.data());
-        base.Bytes.assign(bytes, bytes + decoded.Pixels.size() * sizeof(float));
-        base.Width = decoded.Width;
-        base.Height = decoded.Height;
+        base = {std::span(reinterpret_cast<uint8*>(decodedFloat.Pixels.data()),
+                          decodedFloat.Pixels.size() * sizeof(float)),
+                decodedFloat.Width, decodedFloat.Height};
     }
     else
     {
-        Image::Image8 decoded = Image::Decode8(source, sourceName, Image::DecodeChannels::Rgba);
-        if (!decoded.Valid)
+        decoded8 = Image::Decode8(source, sourceName, Image::DecodeChannels::Rgba);
+        if (!decoded8.Valid)
         {
             outError = "decode failed";
             return false;
         }
-        base.Bytes = std::move(decoded.Pixels);
-        base.Width = decoded.Width;
-        base.Height = decoded.Height;
+        base = {decoded8.Pixels, decoded8.Width, decoded8.Height};
     }
 
     // Bake the upload swizzle so block-compressed payloads honor it too (the
@@ -1352,38 +1703,48 @@ bool CookTexture(const uint8* srcBytes, size_t srcSize, std::string_view sourceN
         ApplySwizzleRGBA8(base.Bytes, inputs.Swizzle);
 
     const uint32 mipCount = ComputeTextureCookMipCount(base.Width, base.Height, inputs.Settings);
-    std::vector<TextureCookMipLevel> chain;
-    chain.reserve(mipCount);
-    chain.push_back(std::move(base));
-    if (!BuildTextureCookMipChain(chain, mipCount, isFloat, srgb, inputs.Settings, &outError))
-    {
-        if (outError.empty()) outError = "mip downsample failed";
+    if (!ValidateMipChainInputs(base, 1, mipCount, isFloat, inputs.Settings, outError))
         return false;
+    const bool cookCompanion = outVarianceCompanionKtx2 && !isFloat && HasNormalVarianceCompanion(inputs, output);
+    if (outVarianceCompanionKtx2)
+        outVarianceCompanionKtx2->clear();
+
+    // An uncompressed chain is built where the file holds it. An encoded chain's levels above
+    // the base, and the companion, live in one arena for the cook.
+    const size_t bytesPerTexel = isFloat ? 4 * sizeof(float) : 4;
+    const bool encoded = output != TextureCookOutput::Uncompressed;
+    Memory::Arena arena("Assets.TextureCook", CookArenaBytes(base, mipCount, bytesPerTexel, encoded,
+                                                             cookCompanion ? CompanionLevelCount(mipCount) : 0));
+    Ktx2InPlaceWriter file(outKtx2Bytes);
+    if (!file.Begin(output, srgb, isFloat, base.Width, base.Height, mipCount, outError))
+        return DropCookOutputs(outKtx2Bytes, outVarianceCompanionKtx2);
+    MipChainStorage storage;
+    const std::span<MipLevelView> chain = FillMipChainViews(
+        storage, mipCount, [&file, &arena, &base, encoded, bytesPerTexel](uint32 level) {
+            if (!encoded)
+                return MipLevelView{file.Level(level), MipExtent(base.Width, level), MipExtent(base.Height, level)};
+            return level == 0 ? base : ArenaMipLevel(arena, base, level, bytesPerTexel);
+        });
+    if (!encoded)
+    {
+        if (chain[0].Bytes.size() != base.Bytes.size())
+        {
+            outError = "the file's base level does not hold the decoded image";
+            return DropCookOutputs(outKtx2Bytes, outVarianceCompanionKtx2);
+        }
+        std::memcpy(chain[0].Bytes.data(), base.Bytes.data(), base.Bytes.size());
+    }
+    if (!BuildMipLevels(chain, isFloat, srgb, inputs.Settings))
+    {
+        outError = "mip downsample failed";
+        return DropCookOutputs(outKtx2Bytes, outVarianceCompanionKtx2);
     }
 
-    if (outVarianceCompanionKtx2)
-    {
-        outVarianceCompanionKtx2->clear();
-        if (!isFloat && HasNormalVarianceCompanion(inputs, output))
-        {
-            std::vector<TextureCookMipLevel> companion;
-            if (!BuildNormalVarianceCompanionLevels(chain[0], mipCount, workers, cancelRequested, companion))
-            {
-                outVarianceCompanionKtx2->clear();
-                outError = kTextureCookCancelledError;
-                return false;
-            }
-            if (!EncodeTextureCookChainKtx2(companion, false, false, TextureCookOutput::BC4,
-                                            *outVarianceCompanionKtx2, outError, cancelRequested, workers))
-                return false;
-        }
-    }
-    if (!EncodeTextureCookChainKtx2(chain, isFloat, srgb, output, outKtx2Bytes, outError, cancelRequested, workers))
-    {
-        if (outVarianceCompanionKtx2)
-            outVarianceCompanionKtx2->clear();
-        return false;
-    }
+    if (cookCompanion && !CookNormalVarianceCompanion(chain[0], mipCount, arena, *outVarianceCompanionKtx2,
+                                                      outError, cancelRequested, workers))
+        return DropCookOutputs(outKtx2Bytes, outVarianceCompanionKtx2);
+    if (!EncodeLevels(chain, isFloat, output, file, outError, cancelRequested, workers) || !file.Finish(outError))
+        return DropCookOutputs(outKtx2Bytes, outVarianceCompanionKtx2);
     return true;
 }
 

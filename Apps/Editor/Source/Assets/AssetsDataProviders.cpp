@@ -1671,8 +1671,6 @@ void AssetsGridDataProvider::LoadRemoteItems(const std::vector<std::pair<std::fi
     {
         const std::filesystem::path& p = pair.first;
         const std::string& label = pair.second;
-        const std::string pathStr = p.generic_string();
-        const bool isVirtualPath = pathStr.rfind("polyhaven://", 0) == 0;
 
         Item item{};
         uint64_t h = StableHashPath(p) & 0x7FFFFFFFFFFFFFFFull;
@@ -1690,25 +1688,8 @@ void AssetsGridDataProvider::LoadRemoteItems(const std::vector<std::pair<std::fi
         item.label = label.empty() ? p.filename().string() : label;
         item.isDir = false;
         item.path = p;
+        // The file of a remote item is its thumbnail, so the item has no size and no dimensions.
         item.type = typeKey;
-
-        if (!isVirtualPath)
-        {
-            std::error_code ecSize;
-            const auto sz = std::filesystem::file_size(p, ecSize);
-            if (!ecSize)
-            {
-                item.sizeBytes = sz;
-                item.hasSizeBytes = true;
-            }
-            int imgW = 0, imgH = 0;
-            if (GetImageDimensions(p, imgW, imgH))
-            {
-                item.imgWidth = imgW;
-                item.imgHeight = imgH;
-                item.hasImageDimensions = true;
-            }
-        }
         IndexItemForSearch(item, m_TagSortKeyResolver);
         m_AllItems.emplace_back(std::move(item));
     }
@@ -1740,8 +1721,6 @@ void AssetsGridDataProvider::AppendRemoteItems(
     {
         const std::filesystem::path& p = pair.first;
         const std::string& label = pair.second;
-        const std::string pathStr = p.generic_string();
-        const bool isVirtualPath = pathStr.rfind("polyhaven://", 0) == 0;
 
         Item item{};
         uint64_t h = StableHashPath(p) & 0x7FFFFFFFFFFFFFFFull;
@@ -1759,25 +1738,8 @@ void AssetsGridDataProvider::AppendRemoteItems(
         item.label = label.empty() ? p.filename().string() : label;
         item.isDir = false;
         item.path = p;
+        // The file of a remote item is its thumbnail, so the item has no size and no dimensions.
         item.type = typeKey;
-
-        if (!isVirtualPath)
-        {
-            std::error_code ecSize;
-            const auto sz = std::filesystem::file_size(p, ecSize);
-            if (!ecSize)
-            {
-                item.sizeBytes = sz;
-                item.hasSizeBytes = true;
-            }
-            int imgW = 0, imgH = 0;
-            if (GetImageDimensions(p, imgW, imgH))
-            {
-                item.imgWidth = imgW;
-                item.imgHeight = imgH;
-                item.hasImageDimensions = true;
-            }
-        }
         IndexItemForSearch(item, m_TagSortKeyResolver);
         m_AllItems.emplace_back(std::move(item));
     }

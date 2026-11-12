@@ -2,6 +2,7 @@
 
 #include "Mathematics/Geometry.h"
 #include "Mathematics/Interpolation.h"
+#include "Mathematics/Transcendental.h"
 #include "Mathematics/Vector2.h"
 #include "TerrainECS/TerrainModifierSystem.h"
 #include "Types/Fnv1a.h"
@@ -328,7 +329,7 @@ void AreaReferenceSurface::Build(const AreaSurfaceInputs& inputs)
     // Successive over-relaxation in a fixed order, with the factor that is optimal for the square
     // that holds the raster.
     const uint32 longest = std::max(m_Width, m_Height);
-    const float64 relaxation = 2.0 / (1.0 + std::sin(std::numbers::pi / static_cast<float64>(longest)));
+    const float64 relaxation = 2.0 / (1.0 + Math::Sin(std::numbers::pi / static_cast<float64>(longest)));
     const uint32 sweepCap = kSweepsPerAxisSample * longest;
     for (uint32 sweep = 0; sweep < sweepCap; ++sweep)
     {

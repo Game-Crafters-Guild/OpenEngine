@@ -7,12 +7,9 @@
 #include "Components/Terrain/TerrainModifierVolume.h"
 #include "Components/Terrain/TerrainPlanetRelief.h"
 #include "Components/Transform.h"
-#include "PhysicsECS/Components/HeightFieldColliderShape.h"
-#include "PhysicsECS/Components/PhysicsBody.h"
-#include "PhysicsECS/Components/PhysicsCollider.h"
 #include "Terrain/TerrainTypes.h"
 #include "TerrainECS/TerrainDefaultSurfaceRules.h"
-#include "TerrainECS/TerrainFactory.h"
+#include "TerrainECS/TerrainModifierComponents.h"
 #include "TerrainECS/TerrainService.h"
 #include "TerrainECS/TerrainSizingPlan.h"
 
@@ -21,7 +18,10 @@
 
 #include <algorithm>
 #include <cstring>
-#include <format>
+#include <limits>
+#include <optional>
+#include <string_view>
+#include <vector>
 
 namespace GameEngine::TerrainECS
 {
@@ -44,21 +44,17 @@ bool SceneHasGlobalSurfaceRules(ECS::World& world)
     return found;
 }
 
-// The default surface rules, as an ORDINARY entity. Nothing marks it, nothing re-creates it once
-// deleted, and it is indistinguishable in the scene file from one authored by hand. It appears
-// when a terrain is created and never on load, so deleting it is permanent for that scene.
-ECS::EntityHandle SpawnDefaultSurfaceRulesVolume(ECS::World& world)
+// An ordinary entity named `label` with an identity Transform and a Shape::Global volume.
+ECS::EntityHandle SpawnGlobalVolume(ECS::World& world, std::string_view label)
 {
     const ECS::EntityHandle entity = world.CreateEntity();
     if (!entity.IsValid())
         return entity;
 
-    // Bounded copy with an explicit terminator: Name is a fixed char buffer, so the length has to
-    // be clamped to it rather than trusted from the label.
-    static constexpr char kLabel[] = "Terrain Surface Rules";
+    // Bounded copy with an explicit terminator: Name is a fixed char buffer.
     Components::Name name{};
-    const std::size_t copied = std::min(sizeof(name.value) - 1u, sizeof(kLabel) - 1u);
-    std::memcpy(name.value, kLabel, copied);
+    const std::size_t copied = std::min(sizeof(name.value) - 1u, label.size());
+    std::memcpy(name.value, label.data(), copied);
     name.value[copied] = '\0';
     world.AddComponentImmediate(entity, name);
     world.AddComponentImmediate(entity, Components::Transform{});
@@ -66,8 +62,25 @@ ECS::EntityHandle SpawnDefaultSurfaceRulesVolume(ECS::World& world)
     Components::TerrainModifierVolume volume{};
     volume.Shape = Components::TerrainVolumeShape::Global;
     world.AddComponentImmediate(entity, volume);
+    return entity;
+}
 
-    world.AddComponentImmediate(entity, MakeDefaultTerrainSurfaceRules());
+// The default surface rules, as an ORDINARY entity. Nothing marks it, nothing re-creates it once
+// deleted, and it is indistinguishable in the scene file from one authored by hand. It appears
+// when a terrain is created and never on load, so deleting it is permanent for that scene.
+ECS::EntityHandle SpawnDefaultSurfaceRulesVolume(ECS::World& world, const Components::Terrain& config)
+{
+    // Read before the spawn: the query walks the scene's volumes.
+    const std::optional<GeneratedNoiseRelief> generatedNoise = ResolveGeneratedNoiseRelief(world);
+    const ECS::EntityHandle entity = SpawnGlobalVolume(world, "Terrain Surface Rules");
+    if (!entity.IsValid())
+        return entity;
+
+    // Without the service the terrain has no data yet: its range is the nominal band.
+    TerrainHeightRangeMeters range{0.0f, config.HeightScale};
+    if (auto* terrainService = TerrainService::TryGet())
+        range = terrainService->GetHeightRangeMeters(config, generatedNoise);
+    world.AddComponentImmediate(entity, MakeDefaultTerrainSurfaceRules(range.Min, range.Max));
     return entity;
 }
 
@@ -81,20 +94,10 @@ TerrainProvisioningResult ProvisionTerrainEntity(ECS::World& world, ECS::EntityH
     const bool spherical = config.Domain == Components::TerrainDomain::Spherical;
     if (!spherical)
     {
-        const float32 maxExtent = MaxTerrainExtentMetres(config.SamplesPerMeter);
-        if (!(config.SizeX > 0.0f && config.SizeX <= maxExtent && config.SizeZ > 0.0f && config.SizeZ <= maxExtent))
-        {
-            result.Error = std::format("A terrain at {:g} samples per meter is up to {:.0f} m on each side; this one "
-                                       "is {:.0f} x {:.0f} m. Make it smaller or lower its samples per meter.",
-                                       config.SamplesPerMeter, maxExtent, config.SizeX, config.SizeZ);
+        result.Error = PlanarTerrainSizeError(config.SizeX, config.SizeZ, config.SamplesPerMeter);
+        if (!result.Error.empty())
             return result;
-        }
     }
-    // A terrain wider than the per-tile cap auto-tiles: extraction owns its provisioning (unified
-    // maps + per-page colliders), so eager single-heightfield creation here would just be
-    // destroyed at the tiling flip and its collider stranded.
-    const bool willTile = Terrain::TerrainNeedsTiling(config.SizeX, config.SizeZ, config.SamplesPerMeter);
-
     if (!world.GetComponent<Components::Terrain>(entity))
         world.AddComponentImmediate(entity, config);
     else
@@ -110,15 +113,15 @@ TerrainProvisioningResult ProvisionTerrainEntity(ECS::World& world, ECS::EntityH
     else if (world.GetComponent<Components::TerrainPlanetRelief>(entity))
         world.RemoveComponentImmediate<Components::TerrainPlanetRelief>(entity);
 
-    // Single-tile terrains get eager noise data so they render immediately; tiled terrains are
-    // provisioned by the extraction system on the next tick.
-    if (!willTile)
+    // A planar terrain is tiled: the extraction system provisions its tiles, pages and page colliders
+    // on the next tick. A planet below the per-tile cap gets its data now, so it renders at once.
+    if (spherical && !Terrain::TerrainNeedsTiling(config.SizeX, config.SizeZ, config.SamplesPerMeter))
     {
         if (auto* terrainService = TerrainService::TryGet())
         {
             const auto terrainConfig = Terrain::TerrainConfig::FromSamplesPerMeter(
                 config.SizeX, config.SizeZ, config.HeightScale, config.SamplesPerMeter);
-            const auto terrainHandle = CreateDefaultTerrainWithNoise(*terrainService, terrainConfig);
+            const TerrainHandle terrainHandle = terrainService->CreateTerrainFromBase(terrainConfig, config);
             if (auto* comp = world.GetComponentForWrite<Components::Terrain>(entity))
             {
                 comp->TerrainDataHandle = terrainHandle.Index;
@@ -127,40 +130,67 @@ TerrainProvisioningResult ProvisionTerrainEntity(ECS::World& world, ECS::EntityH
         }
     }
 
-    // Heightfield collision is planar, single-tile only. A planet's collider is a queued slice; a
-    // tiled terrain uses per-page colliders.
-    if (!spherical && !willTile)
-    {
-        const auto* terrain = world.GetComponent<Components::Terrain>(entity);
-
-        Components::PhysicsBody body{};
-        body.motionType = Physics::MotionType::Static;
-        body.mass = 0.0f;
-        body.gravityScale = 0.0f;
-        world.AddComponentImmediate(entity, body);
-
-        Components::PhysicsCollider collider{};
-        collider.layer = Physics::Layers::Static;
-        world.AddComponentImmediate(entity, collider);
-
-        Components::HeightFieldColliderShape shape{};
-        if (terrain)
-        {
-            shape.dataHandle = terrain->TerrainDataHandle;
-            shape.dataGeneration = terrain->TerrainDataGeneration;
-            shape.sizeX = terrain->SizeX;
-            shape.sizeZ = terrain->SizeZ;
-            shape.heightScale = terrain->HeightScale;
-        }
-        world.AddComponentImmediate(entity, shape);
-    }
-
     // Rules evaluate on the planar bake only, so a planet gets none: an invisible modifier that
     // cannot fire would be worse than no modifier.
     if (!spherical && !SceneHasGlobalSurfaceRules(world))
-        result.SurfaceRulesVolume = SpawnDefaultSurfaceRulesVolume(world);
+        result.SurfaceRulesVolume = SpawnDefaultSurfaceRulesVolume(world, config);
 
     return result;
+}
+
+uint32 PlaceProvisionedSurfaceRules(ECS::World& world)
+{
+    auto* terrainService = TerrainService::TryGet();
+    if (!terrainService)
+        return 0;
+
+    // Once every rule set is the author's, the tick reads no terrain range and builds no rules.
+    bool anyMarked = false;
+    world.Query<ECS::Read<Components::TerrainSurfaceRulesEffect>>().Each(
+        [&](const Components::TerrainSurfaceRulesEffect& effect) { anyMarked = anyMarked || effect.ProvisionedDefaults; });
+    if (!anyMarked)
+        return 0;
+
+    bool anyPlanar = false;
+    const std::optional<GeneratedNoiseRelief> generatedNoise = ResolveGeneratedNoiseRelief(world);
+    TerrainHeightRangeMeters joined{std::numeric_limits<float32>::max(), std::numeric_limits<float32>::lowest()};
+    world.Query<ECS::Read<Components::Terrain>>().Each([&](const Components::Terrain& terrain) {
+        if (terrain.Domain != Components::TerrainDomain::Planar)
+            return;
+        const TerrainHeightRangeMeters range = terrainService->GetHeightRangeMeters(terrain, generatedNoise);
+        joined.Min = std::min(joined.Min, range.Min);
+        joined.Max = std::max(joined.Max, range.Max);
+        anyPlanar = true;
+    });
+    if (!anyPlanar)
+        return 0;
+
+    const Components::TerrainSurfaceRulesEffect placed = MakeDefaultTerrainSurfaceRules(joined.Min, joined.Max);
+    std::vector<ECS::EntityHandle> stale;
+    world.Query<ECS::Read<Components::TerrainSurfaceRulesEffect>>().Each(
+        [&](ECS::EntityHandle entity, const Components::TerrainSurfaceRulesEffect& effect) {
+            if (effect.ProvisionedDefaults && std::memcmp(effect.Rules, placed.Rules, sizeof(placed.Rules)) != 0)
+                stale.push_back(entity);
+        });
+    for (const ECS::EntityHandle entity : stale)
+    {
+        auto* effect = world.GetComponentForWrite<Components::TerrainSurfaceRulesEffect>(entity);
+        effect->RuleCount = placed.RuleCount;
+        std::memcpy(effect->Rules, placed.Rules, sizeof(placed.Rules));
+    }
+    return static_cast<uint32>(stale.size());
+}
+
+ECS::EntityHandle SpawnGeneratedNoiseVolume(ECS::World& world)
+{
+    const ECS::EntityHandle entity = SpawnGlobalVolume(world, "Terrain Noise");
+    if (!entity.IsValid())
+        return entity;
+    Components::TerrainNoiseEffect noise{};
+    noise.Mode = Components::TerrainNoiseMode::Generated;
+    noise.Preset = Components::TerrainNoisePreset::Rolling;
+    world.AddComponentImmediate(entity, noise);
+    return entity;
 }
 
 } // namespace GameEngine::TerrainECS

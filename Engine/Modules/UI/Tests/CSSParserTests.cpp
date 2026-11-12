@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 #include "UI/Parsers/CSSParser.h"
 #include "Logger/CallbackSink.h"
@@ -15,6 +16,7 @@
 #include "UI/Controls/Toggle.h"
 #include "UI/Registration/ElementRegistration.h"
 #include "UI/Selectors/SelectorTypes.h"
+#include "Types/Fnv1a.h"
 #include "Types/StringId.h"
 #include "../Source/UIAttributeAccess.h"
 
@@ -65,6 +67,21 @@ TEST(UIElementIdTests, RepeatedEmptyIdPreservesRuleCache)
     element.SetId("");
     EXPECT_TRUE(element.m_RuleCacheValid);
     EXPECT_EQ(element.GetIdHash(), StringId{0});
+}
+
+namespace
+{
+struct AttributeHashAccess : UIElement
+{
+    using UIElement::AttributeKeyHash;
+};
+} // namespace
+
+TEST(UIElementAttributeTests, AttributeKeyHashIsFnv1a64OfTheLowerCaseName)
+{
+    const AttributeHashAccess::AttributeKeyHash hash;
+    EXPECT_EQ(hash(std::string_view("Data-Role")), hash(std::string_view("data-role")));
+    EXPECT_EQ(hash(std::string_view("Data-Role")), static_cast<size_t>(Hashing::Fnv1a64(std::string_view("data-role"))));
 }
 
 namespace
@@ -157,6 +174,34 @@ TEST(CSSParserTests, EqualSpecificityLaterSheetWins) {
     EXPECT_TRUE(style.Layout.Width.IsPx());
     EXPECT_NEAR(style.Layout.Width.Value, 100.f, 0.01f)
         << "equal specificity across sheets: the later-attached sheet must win";
+}
+
+// A control's own sheet attaches on the control, so it comes after the host's sheet. It still
+// loses a specificity tie to the host. Specificity decides first, so its :hover rule still wins.
+TEST(CSSParserTests, ControlSheetLosesEqualSpecificityTiesToHostSheet) {
+    Stylesheet host{};
+    ASSERT_TRUE(CSSParser::ParseStylesFromString(
+        ".menu-entry { width: 50px; }\n* { height: 20px; }\n", host));
+
+    Stylesheet control{};
+    ASSERT_TRUE(CSSParser::ParseStylesFromString(
+        ".button { width: 100px; height: 10px; }\n.button:hover { width: 120px; }\n", control));
+    control.Origin = StyleOrigin::Control;
+
+    UIElement el;
+    el.AddClass("button");
+    el.AddClass("menu-entry");
+    const std::vector<const Stylesheet*> sheets{&host, &control};
+
+    ElementState rest{};
+    auto style = CSSParser::ComputeStyleFor(el, sheets, rest);
+    EXPECT_NEAR(style.Layout.Width.Value, 50.f, 0.01f) << "the host rule must win an equal-specificity tie";
+    EXPECT_NEAR(style.Layout.Height.Value, 10.f, 0.01f) << "a host rule of lower specificity must lose";
+
+    ElementState hovered{};
+    hovered.Hover = true;
+    style = CSSParser::ComputeStyleFor(el, sheets, hovered);
+    EXPECT_NEAR(style.Layout.Width.Value, 120.f, 0.01f) << "the control's more specific :hover rule must win";
 }
 
 // C-10: specificity is a lexicographic (A, B, C) triple. The old flattened

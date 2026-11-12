@@ -80,15 +80,11 @@ protected:
         entity.Set(state);
 
         Components::Transform xf{};
-        xf.matrix[12] = startX;
-        xf.matrix[13] = 0.0f;
-        xf.matrix[14] = startZ;
+        xf.Position = Mathematics::WorldPosition{startX, 0.0, startZ};
         entity.Set(xf);
 
         Components::WorldTransform wt{};
-        wt.matrix[12] = startX;
-        wt.matrix[13] = 0.0f;
-        wt.matrix[14] = startZ;
+        wt.Position = xf.Position;
         entity.Set(wt);
 
         m_World->ProcessCommands();
@@ -116,8 +112,9 @@ protected:
     {
         auto* wt = entity.Get<Components::WorldTransform>();
         ASSERT_NE(wt, nullptr);
-        x = wt->matrix[12];
-        z = wt->matrix[14];
+        const Mathematics::Vector3 position = wt->GetPosition() - Mathematics::WorldPosition{};
+        x = position.x;
+        z = position.z;
     }
 
     Components::NavigationAgent GetAgent(ECS::Entity& entity)

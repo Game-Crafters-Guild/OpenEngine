@@ -13,8 +13,7 @@ namespace {
 
 // Cluster-relative world matrix: subtract the cluster origin from the (column-
 // major) translation column. Left-multiplication by a pure translation shifts
-// only cols 12..14, preserving rotation/scale — the ComposeEffectiveWorldTransform
-// identity. Keeps baked vertices small-magnitude around the proxy origin,
+// only cols 12..14, preserving rotation/scale. Keeps baked vertices small-magnitude around the proxy origin,
 // preserving float precision + composing with camera-relative rendering.
 void ClusterRelative(const float world[16], const float origin[3], float out[16]) {
     for (int i = 0; i < 16; ++i)

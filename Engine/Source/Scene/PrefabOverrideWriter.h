@@ -1,8 +1,8 @@
 #pragma once
 
-// Writes a prefab instance as the scene saver saves it: its [prefab] section and the lines that
-// differ from its prefab, found against the prefab placed once per save. Private to the scene IO
-// sources.
+// Writes a prefab instance as the scene saver saves it: its [prefab] section and its override lines
+// (the lines that differ from its prefab, found against the prefab placed once per save, and the
+// recorded fields). Private to the scene IO sources.
 
 #include "Scene/PrefabAuthoring.h"
 #include "Scene/PrefabPlacement.h"
@@ -37,12 +37,11 @@ struct PrefabTemplates
 
     explicit PrefabTemplates(const SceneWriteOptions& saveOptions)
     {
-        loadOptions.clearWorldFirst = false;
-        loadOptions.assetResolver = saveOptions.assetResolver;
-        loadOptions.assetRootOverride = saveOptions.assetRootOverride;
+        loadOptions.Read.AssetResolver = saveOptions.assetResolver;
+        loadOptions.Read.AssetRootOverride = saveOptions.assetRootOverride;
     }
 
-    SceneReadOptions loadOptions;
+    SceneLoadOptions loadOptions;
     std::unique_ptr<ECS::World> world;
     std::unique_ptr<PrefabPlacement> placement;
     FlatMap<std::string, std::unique_ptr<Template>> byPath;
@@ -68,13 +67,14 @@ void AssignSceneLevelIdIfNeeded(ECS::World& world, ECS::EntityHandle h,
                                 std::unordered_map<ECS::EntityId, std::string>& tagByEntity,
                                 std::unordered_set<std::string>& usedTags);
 
-// Sorts the scene's entities into prefab instances and the rest.
+// Sorts the scene's entities into prefab instances and the rest. False, with `error` set, when an
+// instance cannot be saved.
 bool CollectPrefabInstances(ECS::World& world, const std::vector<ECS::EntityHandle>& entities,
                             const SceneWriteOptions& options, const SceneWriteContext& saveCtx,
                             const std::filesystem::path& sceneFilePath,
                             std::unordered_map<ECS::EntityId, std::string>& tagByEntity,
                             std::unordered_set<ECS::EntityId>& excluded, PrefabTemplates& templates,
-                            std::vector<SavedPrefabInstance>& instances);
+                            std::vector<SavedPrefabInstance>& instances, SceneIOError& error);
 
 // One component of an entity as the scene saver writes it: its file token and its lines.
 struct ComponentText

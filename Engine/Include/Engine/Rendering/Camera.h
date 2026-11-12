@@ -3,6 +3,7 @@
 #include "Components/Rendering/Camera.h"
 #include "ECS/Entity.h"
 #include "Mathematics/Matrix4x4.h"
+#include "Mathematics/WorldPosition.h"
 #include "Rendering/Camera/CameraTypes.h"
 
 #include <optional>
@@ -22,13 +23,25 @@ namespace GameEngine::Engine::Renderer {
 
 /// Full camera state with computed matrices, suitable for rendering.
 /// Distinct from Components::Camera (ECS component holding just fovY/nearZ/farZ parameters).
-struct Camera
+/// The double eye is the one source of the camera's position: SetPose writes the transform's
+/// translation from it, so the two cannot disagree.
+class Camera
 {
-    Mathematics::Matrix4x4 worldTransform;
+public:
     Components::Camera params; // projection, clipping, culling, and post-process params
     ECS::EntityHandle entity;
 
-    /// Compute view matrix (inverse of worldTransform).
+    /// Set the pose: the rotation and scale of `basis` at the exact `eye` in world meters.
+    /// The translation of `basis` is ignored.
+    void SetPose(const Mathematics::Matrix4x4& basis, const Mathematics::WorldPosition& eye);
+
+    /// The exact eye in world meters.
+    const Mathematics::WorldPosition& Eye() const { return m_Eye; }
+
+    /// The pose as a matrix. Its translation is the eye rounded to fp32.
+    const Mathematics::Matrix4x4& WorldTransform() const { return m_WorldTransform; }
+
+    /// Compute the view matrix: the inverse of WorldTransform().
     Mathematics::Matrix4x4 ComputeViewMatrix() const;
 
     /// Compute projection matrix for a given viewport aspect ratio.
@@ -41,9 +54,18 @@ struct Camera
     Mathematics::Matrix4x4 ComputeViewProjectionMatrix(float aspectRatio,
                                                        std::optional<float> orthoHeightOverride = std::nullopt) const;
 
-    /// Fill a CameraData struct ready for RenderServices::SetCameraData().
+    /// Fill a CameraData struct ready for ViewRegistry::SetCameraData().
     Rendering::CameraData ToCameraData(float aspectRatio,
                                        std::optional<float> orthoHeightOverride = std::nullopt) const;
+
+    /// The near distance and culling range for ViewRegistry::SetCameraData().
+    /// A NearZ at or below zero, or a FarZ at or below NearZ, logs one error per entity and
+    /// gives the component's default NearZ and FarZ.
+    Rendering::CameraRanges ToCameraRanges() const;
+
+private:
+    Mathematics::Matrix4x4 m_WorldTransform;
+    Mathematics::WorldPosition m_Eye;
 };
 
 /// Find the active camera in the ECS world.
@@ -57,8 +79,15 @@ std::optional<Camera> FindActiveCamera(ECS::World& world);
 class ViewRegistry;
 
 /// Declares a game view for this frame once its world's active camera is resolved: the view draws the
-/// camera's Visible Layers and is armed for the frame. With no camera nothing is armed, so an on-demand
-/// view sleeps: its effective layers are None, and no extraction, culling or pass reads it.
+/// camera's Visible Layers, or no world while the camera's WorldDrawingPaused is set, and is armed for
+/// the frame. With no camera nothing is armed, so an on-demand view sleeps: its effective layers are
+/// None, and no extraction, culling or pass reads it. The view's world pause then follows the camera
+/// from the next extraction on (ApplyActiveCameraWorldPause).
 void DeclareGameCameraView(ViewRegistry& views, Rendering::ViewId view, const Camera* activeCamera);
+
+/// Copies the WorldDrawingPaused of the world's active camera into the game views of the world that
+/// DeclareGameCameraView declared. Extraction calls it before it reads the views, so the frame that
+/// resumes the camera extracts the world for the view that it draws.
+void ApplyActiveCameraWorldPause(ViewRegistry& views, ECS::World& world);
 
 } // namespace GameEngine::Engine::Renderer

@@ -137,14 +137,14 @@ std::vector<ExtractedWindVolume>& ExtractVolumes(ECS::World& world)
                   ExtractedWindVolume extracted{};
                   extracted.Volume = volume;
                   extracted.EntityId = entity.id;
-                  extracted.Center[0] = xf.matrix[12];
-                  extracted.Center[1] = xf.matrix[13];
-                  extracted.Center[2] = xf.matrix[14];
+                  const Mathematics::Vector3 center = xf.GetPosition() - Mathematics::WorldPosition{};
+                  extracted.Center[0] = center.x;
+                  extracted.Center[1] = center.y;
+                  extracted.Center[2] = center.z;
 
-                  const float* m = xf.matrix;
-                  const float ax[3] = {m[0], m[1], m[2]};
-                  const float ay[3] = {m[4], m[5], m[6]};
-                  const float az[3] = {m[8], m[9], m[10]};
+                  const Mathematics::Vector3 ax(xf.Basis[0]);
+                  const Mathematics::Vector3 ay(xf.Basis[1]);
+                  const Mathematics::Vector3 az(xf.Basis[2]);
                   const float sx = std::sqrt(ax[0] * ax[0] + ax[1] * ax[1] + ax[2] * ax[2]);
                   const float sy = std::sqrt(ay[0] * ay[0] + ay[1] * ay[1] + ay[2] * ay[2]);
                   const float sz = std::sqrt(az[0] * az[0] + az[1] * az[1] + az[2] * az[2]);

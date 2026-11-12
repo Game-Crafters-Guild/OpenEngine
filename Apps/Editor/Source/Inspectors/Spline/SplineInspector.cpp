@@ -439,7 +439,7 @@ bool CaptureResampleSource(const Spline::SplineData& data,
                                     : nullptr;
     if (xf)
     {
-        const Mathematics::Matrix4x4 localToWorld = Mathematics::Matrix4x4::FromColumnMajor(xf->matrix);
+        const Mathematics::Matrix4x4 localToWorld = xf->ToMatrix4x4(xf->GetPosition() - Mathematics::WorldPosition{});
         for (const auto& frame : state.SourceFrames)
             state.MeasurePositions.push_back(localToWorld.TransformPoint(frame.Position));
     }
@@ -535,8 +535,8 @@ void RegisterSplineInspectors()
                         if (const auto* xf =
                                 ctx.World->GetComponent<Components::WorldTransform>(ctx.Entity))
                         {
-                            const Mathematics::Matrix4x4 localToWorld =
-                                Mathematics::Matrix4x4::FromColumnMajor(xf->matrix);
+                            // The length reads only the axis scales: the translation is not used.
+                            const Mathematics::Matrix4x4 localToWorld = xf->ToMatrix4x4(Mathematics::Vector3{});
                             worldLength =
                                 Editor::WorldCenterlineLength(data->TotalArcLength, localToWorld);
                         }

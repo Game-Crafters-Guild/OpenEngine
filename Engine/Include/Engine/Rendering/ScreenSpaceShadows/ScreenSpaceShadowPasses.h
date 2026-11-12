@@ -35,6 +35,9 @@ class ScreenSpaceShadowPasses
     // After an in-place device rebuild: the sampler died with the old device.
     // Forgets it without destroying it; the next pass recreates it.
     void OnDeviceRebuilt() { m_Sampler = {}; }
+    // Asks the device (IDevice::RequestComputePipeline) for the four pipelines that DeclareMaskPass
+    // uses. A paused view calls it, so the mask of its first live frame builds no pipeline.
+    void RequestPipelines();
     Rendering::RenderGraph::RGTexture DeclareMaskPass(
         Rendering::RenderGraph::RGFrame& frame, uint32_t viewId,
         Rendering::RenderGraph::RGTexture depth, const Rendering::CameraData& camera,
@@ -53,10 +56,12 @@ class ScreenSpaceShadowPasses
     std::unique_ptr<Rendering::ShaderMeta> m_MatchMeta;
     Rendering::DescriptorSetLayoutDesc m_MatchLayout{};
     bool LoadShader();
-    bool LoadPassPipeline(const char* path, Rendering::ComputePipelineId& pipeline,
-                          std::unique_ptr<Rendering::ShaderMeta>& meta,
-                          Rendering::DescriptorSetLayoutDesc& layout,
-                          std::span<const NamedBinding> bindings);
+    // Interns the four pass pipelines once. Builds no backend pipeline.
+    bool InternPipelines();
+    bool InternPassPipeline(const char* path, Rendering::ComputePipelineId& pipeline,
+                            std::unique_ptr<Rendering::ShaderMeta>& meta,
+                            Rendering::DescriptorSetLayoutDesc& layout,
+                            std::span<const NamedBinding> bindings);
     Rendering::IDevice* m_Device = nullptr;
     Rendering::ComputePipelineId m_Pipeline{};
     Rendering::ComputePipelineId m_PreparePipeline{};

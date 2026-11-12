@@ -49,6 +49,7 @@ GPUScene::CullingShaderLoaderFunc g_CullingShaderLoader = nullptr;
 //   set = 0, binding 1: GPUCullingData buffer (SSBO)
 //   set = 0, binding 2: frustumResults / visibility buffer (SSBO)
 //   set = 0, binding 3: per-material deformation margins (SSBO)
+// The shader declares bindings 0, 1 and 3 `readonly`, so the layout marks them read-only too.
 DescriptorSetLayoutDesc MakeCullingDescriptorSetLayout()
 {
     DescriptorSetLayoutDesc layout;
@@ -60,6 +61,7 @@ DescriptorSetLayoutDesc MakeCullingDescriptorSetLayout()
     instanceBinding.count = 1;
     instanceBinding.shaderStages = kShaderStageCompute;
     instanceBinding.debugName = "InstanceDataBuffer";
+    instanceBinding.flags = kDescriptorBindingReadOnlyStorage;
     layout.bindings.push_back(instanceBinding);
 
     DescriptorBinding cullingDataBinding;
@@ -68,6 +70,7 @@ DescriptorSetLayoutDesc MakeCullingDescriptorSetLayout()
     cullingDataBinding.count = 1;
     cullingDataBinding.shaderStages = kShaderStageCompute;
     cullingDataBinding.debugName = "CullingDataBuffer";
+    cullingDataBinding.flags = kDescriptorBindingReadOnlyStorage;
     layout.bindings.push_back(cullingDataBinding);
 
     DescriptorBinding visibilityBinding;
@@ -84,6 +87,7 @@ DescriptorSetLayoutDesc MakeCullingDescriptorSetLayout()
     marginBinding.count = 1;
     marginBinding.shaderStages = kShaderStageCompute;
     marginBinding.debugName = "DeformationMarginBuffer";
+    marginBinding.flags = kDescriptorBindingReadOnlyStorage;
     layout.bindings.push_back(marginBinding);
 
     return layout;
@@ -146,10 +150,7 @@ void GPUScene::SetCullingShaderLoader(CullingShaderLoaderFunc loader)
 GPUScene::GPUScene(IDevice* device)
     : m_Device(device),
       m_DebugName("GPUScene"),
-      m_InstanceBuffer(INVALID_BUFFER_HANDLE),
-      m_ScatterHotBuffer(INVALID_BUFFER_HANDLE),
       m_MeshBuffer(INVALID_BUFFER_HANDLE),
-      m_VisibilityBuffer(INVALID_BUFFER_HANDLE),
       m_IndirectArgsBuffer(INVALID_BUFFER_HANDLE),
       m_MaxInstances(0),
       m_MaxMeshes(0),
@@ -183,7 +184,10 @@ bool GPUScene::Initialize(uint32_t maxInstances, uint32_t maxMeshes)
 
     // Each slot's first instance upload must be a full one.
     for (uint32_t s = 0; s < kMaxFramesInFlight; ++s)
+    {
         m_InstanceDirtyAllSlots[s] = true;
+        m_Frames[s].instanceCapacity = std::min(kInitialInstanceCapacity, maxInstances);
+    }
 
     // Reserve CPU-side storage
     m_Instances.reserve(maxInstances);
@@ -209,25 +213,10 @@ void GPUScene::Shutdown()
     if (m_Device)
     {
         // Destroy buffers
-        if (m_InstanceBuffer.IsValid())
-        {
-            m_Device->DestroyBuffer(m_InstanceBuffer);
-            m_InstanceBuffer = INVALID_BUFFER_HANDLE;
-        }
-        if (m_ScatterHotBuffer.IsValid())
-        {
-            m_Device->DestroyBuffer(m_ScatterHotBuffer);
-            m_ScatterHotBuffer = INVALID_BUFFER_HANDLE;
-        }
         if (m_MeshBuffer.IsValid())
         {
             m_Device->DestroyBuffer(m_MeshBuffer);
             m_MeshBuffer = INVALID_BUFFER_HANDLE;
-        }
-        if (m_VisibilityBuffer.IsValid())
-        {
-            m_Device->DestroyBuffer(m_VisibilityBuffer);
-            m_VisibilityBuffer = INVALID_BUFFER_HANDLE;
         }
         if (m_IndirectArgsBuffer.IsValid())
         {
@@ -238,14 +227,12 @@ void GPUScene::Shutdown()
         for (uint32_t i = 0; i < kMaxFramesInFlight; ++i)
         {
             auto& fr = m_Frames[i];
-            if (fr.instanceBuffer.IsValid() && fr.instanceBuffer != m_InstanceBuffer)
+            if (fr.instanceBuffer.IsValid())
                 m_Device->DestroyBuffer(fr.instanceBuffer);
-            if (fr.scatterHotBuffer.IsValid() && fr.scatterHotBuffer != m_ScatterHotBuffer)
+            if (fr.scatterHotBuffer.IsValid())
                 m_Device->DestroyBuffer(fr.scatterHotBuffer);
             if (fr.meshBuffer.IsValid() && fr.meshBuffer != m_MeshBuffer)
                 m_Device->DestroyBuffer(fr.meshBuffer);
-            if (fr.visibilityBuffer.IsValid() && fr.visibilityBuffer != m_VisibilityBuffer)
-                m_Device->DestroyBuffer(fr.visibilityBuffer);
             if (fr.indirectArgsBuffer.IsValid() && fr.indirectArgsBuffer != m_IndirectArgsBuffer)
                 m_Device->DestroyBuffer(fr.indirectArgsBuffer);
             fr = {};
@@ -914,7 +901,7 @@ void GPUScene::ScheduleCullingPassImpl(RenderGraph::RGFrame& frame, const GPUSce
 
     const size_t kMinInstanceBufferSize = 1024;
     const size_t instBytes =
-        std::max(kMinInstanceBufferSize, static_cast<size_t>(m_MaxInstances) * sizeof(GPUInstance));
+        std::max(kMinInstanceBufferSize, static_cast<size_t>(GetInstanceCapacity()) * sizeof(GPUInstance));
 
     // Graphics queue deliberately (slice-2 decision D1): the old graph recorded
     // these inline on the graphics CL; AddComputePass would smuggle in real
@@ -966,39 +953,6 @@ void GPUScene::CreateBuffers()
     // gone, so the elision epoch must advance even with no CPU dirty bits.
     ++m_ContentEpoch;
 
-    // Create instance buffer
-    {
-        BufferDesc d{};
-        // Allocate based on the configured maximum instance capacity so that
-        // stress tests and large worlds cannot overflow the buffer when
-        // UpdateGPUBuffers uploads all instances.
-        const size_t kMinInstanceBufferSize = 1024;
-        const size_t maxInstanceBytes = static_cast<size_t>(m_MaxInstances) * sizeof(GPUInstance);
-        d.size = std::max(kMinInstanceBufferSize, maxInstanceBytes);
-        d.usage = static_cast<uint32_t>(BufferUsage::Vertex | BufferUsage::Storage | BufferUsage::TransferDst);
-        d.memoryUsage = BufferMemoryUsage::Upload;
-        d.flags = BufferCreateFlags::None;
-        d.debugName = "GPUScene_InstanceBuffer";
-        m_InstanceBuffer = m_Device->CreateBuffer(d);
-    }
-
-    // Coalesced scatter-hot mirror (32 B/instance). Storage + TransferDst only:
-    // read by the scatter compute via a descriptor binding (no vertex fetch, no
-    // buffer-reference/BDA), uploaded host-side like the instance buffer.
-    if (m_ScatterHotEnabled)
-    {
-        BufferDesc d{};
-        const size_t kMinScatterHotBufferSize = 256;
-        const size_t maxScatterHotBytes =
-            static_cast<size_t>(m_MaxInstances) * sizeof(GPUInstanceScatterHot);
-        d.size = std::max(kMinScatterHotBufferSize, maxScatterHotBytes);
-        d.usage = static_cast<uint32_t>(BufferUsage::Storage | BufferUsage::TransferDst);
-        d.memoryUsage = BufferMemoryUsage::Upload;
-        d.flags = BufferCreateFlags::None;
-        d.debugName = "GPUScene_ScatterHotBuffer";
-        m_ScatterHotBuffer = m_Device->CreateBuffer(d);
-    }
-
     // Mesh metadata table: one GPUMesh row per declared mesh slot. What keeps
     // an upload inside the allocation is this size TOGETHER WITH the row clamp
     // in UpdateGPUBuffers; the size alone bounds nothing.
@@ -1018,20 +972,6 @@ void GPUScene::CreateBuffers()
         m_MeshBuffer = m_Device->CreateBuffer(d);
     }
 
-    // Visibility buffer (storage + transfer)
-    {
-        BufferDesc d{};
-        // One visibility uint per potential instance.
-        const size_t kMinVisibilityBufferSize = 4096;
-        const size_t maxVisibilityBytes = static_cast<size_t>(m_MaxInstances) * sizeof(uint32_t);
-        d.size = std::max(kMinVisibilityBufferSize, maxVisibilityBytes);
-        d.usage = static_cast<uint32_t>(BufferUsage::Storage | BufferUsage::TransferDst | BufferUsage::TransferSrc);
-        d.memoryUsage = BufferMemoryUsage::DeviceLocal;
-        d.flags = BufferCreateFlags::None;
-        d.debugName = "GPUScene_VisibilityBuffer";
-        m_VisibilityBuffer = m_Device->CreateBuffer(d);
-    }
-
     // Indirect args buffer (legacy single-buffer for demo paths)
     {
         BufferDesc d{};
@@ -1045,43 +985,7 @@ void GPUScene::CreateBuffers()
 
     for (uint32_t i = 0; i < m_FramesInFlight; ++i)
     {
-        {
-            BufferDesc d{};
-            const size_t kMinInstanceBufferSize = 1024;
-            const size_t maxInstanceBytes = static_cast<size_t>(m_MaxInstances) * sizeof(GPUInstance);
-            d.size = std::max(kMinInstanceBufferSize, maxInstanceBytes);
-            // ShaderDeviceAddress: instanced vertex shaders consume this via
-            // GL_EXT_buffer_reference (instance_io.glsl GE_INSTANCED path),
-            // dropping the SSBO binding from set 0 so the instanced-depth
-            // descriptor set becomes app-lifetime-cacheable. Requested only
-            // when the device has BDA; without it consumers already take the
-            // SSBO-binding path (they bail on a zero address).
-            d.usage = static_cast<uint32_t>(BufferUsage::Vertex | BufferUsage::Storage |
-                                             BufferUsage::TransferDst);
-            if (m_Device->GetCapabilities().supportsBufferDeviceAddress)
-                d.usage |= static_cast<uint32_t>(BufferUsage::ShaderDeviceAddress);
-            d.memoryUsage = BufferMemoryUsage::Upload;
-            // FrameSlotted: one element of a ring exactly as deep as the device paces,
-            // so the write is safe only behind BeginFrame — where UpdateGPUBuffers runs
-            // (FlushGPUBuffers is called from the render graph build, not from the
-            // update-phase AdvanceFrameSlot that picks the slot).
-            d.flags = BufferCreateFlags::FrameSlotted;
-            d.debugName = "GPUScene_InstanceBuffer_PerFrame";
-            m_Frames[i].instanceBuffer = m_Device->CreateBuffer(d);
-        }
-        if (m_ScatterHotEnabled)
-        {
-            BufferDesc d{};
-            const size_t kMinScatterHotBufferSize = 256;
-            const size_t maxScatterHotBytes =
-                static_cast<size_t>(m_MaxInstances) * sizeof(GPUInstanceScatterHot);
-            d.size = std::max(kMinScatterHotBufferSize, maxScatterHotBytes);
-            d.usage = static_cast<uint32_t>(BufferUsage::Storage | BufferUsage::TransferDst);
-            d.memoryUsage = BufferMemoryUsage::Upload;
-            d.flags = BufferCreateFlags::FrameSlotted;
-            d.debugName = "GPUScene_ScatterHotBuffer_PerFrame";
-            m_Frames[i].scatterHotBuffer = m_Device->CreateBuffer(d);
-        }
+        CreateInstanceBuffers(i);
         {
             BufferDesc d{};
             const size_t kMinMeshBufferSize = 1024;
@@ -1092,17 +996,6 @@ void GPUScene::CreateBuffers()
             d.flags = BufferCreateFlags::FrameSlotted;
             d.debugName = "GPUScene_MeshBuffer_PerFrame";
             m_Frames[i].meshBuffer = m_Device->CreateBuffer(d);
-        }
-        {
-            const size_t kMinVisibilityBufferSize = 4096;
-            const size_t maxVisibilityBytes = static_cast<size_t>(m_MaxInstances) * sizeof(uint32_t);
-            BufferDesc d{};
-            d.size = std::max(kMinVisibilityBufferSize, maxVisibilityBytes);
-            d.usage = static_cast<uint32_t>(BufferUsage::Storage | BufferUsage::TransferDst | BufferUsage::TransferSrc);
-            d.memoryUsage = BufferMemoryUsage::DeviceLocal;
-            d.flags = BufferCreateFlags::None;
-            d.debugName = "GPUScene_VisibilityBuffer_PerFrame";
-            m_Frames[i].visibilityBuffer = m_Device->CreateBuffer(d);
         }
         {
             BufferDesc d{};
@@ -1116,6 +1009,57 @@ void GPUScene::CreateBuffers()
     }
 
     std::cout << "✅ GPU buffers created successfully" << std::endl;
+}
+
+void GPUScene::CreateInstanceBuffers(uint32_t slot)
+{
+    GPUSceneFrameResources& frame = m_Frames[slot];
+    {
+        BufferDesc d{};
+        const size_t kMinInstanceBufferSize = 1024;
+        d.size = std::max(kMinInstanceBufferSize, static_cast<size_t>(frame.instanceCapacity) * sizeof(GPUInstance));
+        // ShaderDeviceAddress: instanced vertex shaders read this through GL_EXT_buffer_reference
+        // (instance_io.glsl GE_INSTANCED path). Without BDA, consumers bind it as an SSBO.
+        d.usage = static_cast<uint32_t>(BufferUsage::Vertex | BufferUsage::Storage | BufferUsage::TransferDst);
+        if (m_Device->GetCapabilities().supportsBufferDeviceAddress)
+            d.usage |= static_cast<uint32_t>(BufferUsage::ShaderDeviceAddress);
+        d.memoryUsage = BufferMemoryUsage::Upload;
+        // FrameSlotted: one element of a ring as deep as the device paces, so the CPU writes it
+        // only behind BeginFrame, where UpdateGPUBuffers runs.
+        d.flags = BufferCreateFlags::FrameSlotted;
+        d.debugName = "GPUScene_InstanceBuffer_PerFrame";
+        frame.instanceBuffer = m_Device->CreateBuffer(d);
+    }
+    // Coalesced scatter-hot mirror (40 B/instance), read by the scatter compute through a
+    // descriptor binding and uploaded on the same runs as the instance buffer.
+    if (m_ScatterHotEnabled)
+    {
+        BufferDesc d{};
+        const size_t kMinScatterHotBufferSize = 256;
+        d.size = std::max(kMinScatterHotBufferSize,
+                          static_cast<size_t>(frame.instanceCapacity) * sizeof(GPUInstanceScatterHot));
+        d.usage = static_cast<uint32_t>(BufferUsage::Storage | BufferUsage::TransferDst);
+        d.memoryUsage = BufferMemoryUsage::Upload;
+        d.flags = BufferCreateFlags::FrameSlotted;
+        d.debugName = "GPUScene_ScatterHotBuffer_PerFrame";
+        frame.scatterHotBuffer = m_Device->CreateBuffer(d);
+    }
+}
+
+void GPUScene::GrowInstanceBuffers(uint32_t rowCount)
+{
+    GPUSceneFrameResources& frame = m_Frames[m_FrameSlot];
+    const uint32_t previousCapacity = frame.instanceCapacity;
+    // The device defers the destroy until the GPU has finished every frame that read the old buffers.
+    m_Device->DestroyBuffer(frame.instanceBuffer);
+    if (frame.scatterHotBuffer.IsValid())
+        m_Device->DestroyBuffer(frame.scatterHotBuffer);
+    frame.instanceCapacity = std::min(std::bit_ceil(rowCount), m_MaxInstances);
+    CreateInstanceBuffers(m_FrameSlot);
+    m_InstanceDirtyAllSlots[m_FrameSlot] = true;
+    ++m_ContentEpoch;
+    Logger::Log::Info("GPUScene: frame slot {} instance capacity {} -> {} for {} rows", m_FrameSlot,
+                      previousCapacity, frame.instanceCapacity, rowCount);
 }
 
 void GPUScene::UpdateGPUBuffers()
@@ -1176,7 +1120,7 @@ void GPUScene::UpdateGPUBuffers()
             // Mirror the SAME run into the compact scatter-hot buffer. It never
             // needs the DX12 matrix transpose (no matrices), so it uploads
             // straight from m_ScatterHot. Uploading on identical runs keeps the
-            // mirror's per-frame bytes at exactly 32/240 of the instance bytes.
+            // mirror's per-frame bytes at exactly 40/240 of the instance bytes.
             if (m_ScatterHotEnabled)
             {
                 const size_t hotOffset =
@@ -1199,6 +1143,8 @@ void GPUScene::UpdateGPUBuffers()
                 "reach the GPU. Raise maxInstances in GPUScene::Initialize.",
                 m_Instances.size(), m_MaxInstances, m_MaxInstances, m_Instances.size() - 1);
         }
+        if (instanceTotal > m_Frames[m_FrameSlot].instanceCapacity)
+            GrowInstanceBuffers(instanceTotal);
         if (m_InstanceDirtyAllSlots[m_FrameSlot])
         {
             uploadRange(0u, instanceTotal);
@@ -1438,12 +1384,15 @@ bool GPUScene::GetInstancesWorldBounds(Vector3& outMin, Vector3& outMax) const
                 const float r = inst.boundingRadius;
                 if (r <= 0.0f)
                     continue;
-                mn.x = std::min(mn.x, inst.boundingCenter.x - r);
-                mn.y = std::min(mn.y, inst.boundingCenter.y - r);
-                mn.z = std::min(mn.z, inst.boundingCenter.z - r);
-                mx.x = std::max(mx.x, inst.boundingCenter.x + r);
-                mx.y = std::max(mx.y, inst.boundingCenter.y + r);
-                mx.z = std::max(mx.z, inst.boundingCenter.z + r);
+                // The bounds are in world space: the center is composed against sector (0,0,0).
+                const Vector3 center = SectorLocalPointRelativeTo(inst.boundingCenter, inst.sectorPacked[0],
+                                                                  inst.sectorPacked[1], {0, 0, 0});
+                mn.x = std::min(mn.x, center.x - r);
+                mn.y = std::min(mn.y, center.y - r);
+                mn.z = std::min(mn.z, center.z - r);
+                mx.x = std::max(mx.x, center.x + r);
+                mx.y = std::max(mx.y, center.y + r);
+                mx.z = std::max(mx.z, center.z + r);
             }
             m_InstancesAABBMin = mn;
             m_InstancesAABBMax = mx;

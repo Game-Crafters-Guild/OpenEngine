@@ -273,19 +273,22 @@ add_executable(AgentProviderTests
     ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Editor/AssistantMode.cpp
     ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Editor/AssistantTools.cpp
     ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Editor/AgentSessionState.cpp
-    ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Editor/AiAssistantLoginStatusRow.cpp
     ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Editor/AiAssistantSettings.cpp
+    ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Editor/Setup/AiAssistantSetupPage.cpp
+    ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Editor/Setup/AiAssistantApiKeyRow.cpp
     ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Editor/ModelDisplayName.cpp
     ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Editor/Providers/SseParser.cpp
     ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Editor/Providers/ClaudeApiStream.cpp
     ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Editor/Providers/ClaudeApiProvider.cpp
+    ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Editor/Providers/ApiKeyStore.cpp
     ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Editor/Providers/CliSessionProvider.cpp
     ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Editor/Providers/ClaudeSessionProvider.cpp
     ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Editor/Providers/CodexSessionProvider.cpp
     ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Editor/Providers/ReplyTextBlocks.cpp
     ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Editor/Providers/CliSessionFiles.cpp)
 target_include_directories(AgentProviderTests PRIVATE
-    ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Editor)
+    ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Editor
+    ${CMAKE_SOURCE_DIR}/Engine/Tests)
 target_link_libraries(AgentProviderTests PRIVATE
     Engine EditorSDK PlatformTestSupport nlohmann_json::nlohmann_json GTest::gtest_main)
 target_compile_features(AgentProviderTests PRIVATE cxx_std_20)
@@ -334,6 +337,7 @@ add_executable(AiAssistantPanelTests
     ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Editor/AssistantTools.cpp
     ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Editor/AgentConversationController.cpp
     ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Editor/AgentSessionSearchProvider.cpp
+    ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Editor/AgentConnectionDropdown.cpp
     ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Editor/AgentModelPopover.cpp
     ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Editor/ModeControlFit.cpp
     ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Editor/AgentConversationRowModel.cpp
@@ -350,12 +354,14 @@ add_executable(AiAssistantPanelTests
     ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Editor/DictationText.cpp
     ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Editor/TurnMailbox.cpp
     ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Editor/AgentSessionState.cpp
-    ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Editor/AiAssistantLoginStatusRow.cpp
     ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Editor/AiAssistantSettings.cpp
+    ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Editor/Setup/AiAssistantSetupPage.cpp
+    ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Editor/Setup/AiAssistantApiKeyRow.cpp
     ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Editor/ModelDisplayName.cpp
     ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Editor/Providers/SseParser.cpp
     ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Editor/Providers/ClaudeApiStream.cpp
     ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Editor/Providers/ClaudeApiProvider.cpp
+    ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Editor/Providers/ApiKeyStore.cpp
     ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Editor/Providers/CliSessionProvider.cpp
     ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Editor/Providers/ClaudeSessionProvider.cpp
     ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Editor/Providers/CodexSessionProvider.cpp
@@ -366,10 +372,24 @@ target_include_directories(AiAssistantPanelTests PRIVATE
     # UIRgTestHarness.h: a headless device for a real UIManager.
     ${CMAKE_SOURCE_DIR}/Engine/Modules/UI/Tests)
 target_link_libraries(AiAssistantPanelTests PRIVATE
-    Engine EditorSDK SharedHeadlessDeviceTestSupport nlohmann_json::nlohmann_json GTest::gtest_main)
+    Engine EditorSDK PlatformTestSupport SharedHeadlessDeviceTestSupport nlohmann_json::nlohmann_json GTest::gtest_main)
 target_compile_features(AiAssistantPanelTests PRIVATE cxx_std_20)
 ge_set_output_tests(AiAssistantPanelTests)
 ge_stage_runtime_dependencies(AiAssistantPanelTests)
+# The setup page's tiles, step rows and fix notices build from these layouts, read from the
+# install-assets root.
+ge_stage_test_asset(AiAssistantPanelTests
+    "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/UI/controls/InspectorNotice/InspectorNotice.uxml"
+    "Assets/UI/controls/InspectorNotice/InspectorNotice.uxml")
+ge_stage_test_asset(AiAssistantPanelTests
+    "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/UI/controls/PictureChoiceField/PictureChoiceField.uxml"
+    "Assets/UI/controls/PictureChoiceField/PictureChoiceField.uxml")
+ge_stage_test_asset(AiAssistantPanelTests
+    "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/UI/controls/SetupStepList/SetupStepList.uxml"
+    "Assets/UI/controls/SetupStepList/SetupStepList.uxml")
+ge_stage_test_asset(AiAssistantPanelTests
+    "${CMAKE_SOURCE_DIR}/Apps/Editor/Assets/UI/controls/SetupStepList/SetupStepRow.uxml"
+    "Assets/UI/controls/SetupStepList/SetupStepRow.uxml")
 add_dependencies(AiAssistantPanelTests FakeAgentCli)
 add_custom_command(TARGET AiAssistantPanelTests POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:AiAssistantPanelTests>/AiAssistantPanelFixtures
@@ -379,6 +399,16 @@ add_custom_command(TARGET AiAssistantPanelTests POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory
         $<TARGET_FILE_DIR:AiAssistantPanelTests>/AiAssistantPanelFixtures/ai-assistant/Editor/UI/panels
         $<TARGET_FILE_DIR:AiAssistantPanelTests>/AiAssistantPanelFixtures/ai-assistant/Editor/UI/controls
+        $<TARGET_FILE_DIR:AiAssistantPanelTests>/AiAssistantPanelFixtures/ai-assistant/Editor/UI/controls/AiAssistantSetup
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Assets/.assetmanifest
+        $<TARGET_FILE_DIR:AiAssistantPanelTests>/AiAssistantPanelFixtures/ai-assistant/.assetmanifest
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Assets/Editor/UI/controls/AiAssistantSetup/AiAssistantSetupPage.uxml
+        ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Assets/Editor/UI/controls/AiAssistantSetup/AiAssistantSetupPage.css
+        ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Assets/Editor/UI/controls/AiAssistantSetup/AiAssistantApiKeyRow.uxml
+        ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Assets/Editor/UI/controls/AiAssistantSetup/AiAssistantApiKeyRow.css
+        $<TARGET_FILE_DIR:AiAssistantPanelTests>/AiAssistantPanelFixtures/ai-assistant/Editor/UI/controls/AiAssistantSetup
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${CMAKE_SOURCE_DIR}/Packages/ai-assistant/Assets/Editor/UI/panels/PromptPanel.css
         $<TARGET_FILE_DIR:AiAssistantPanelTests>/AiAssistantPanelFixtures/ai-assistant/Editor/UI/panels/PromptPanel.css

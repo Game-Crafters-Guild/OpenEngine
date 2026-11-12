@@ -22,6 +22,8 @@
 namespace GameEngine::Memory
 {
 
+class ScratchScope;
+
 namespace Detail
 {
 class ScratchThread;
@@ -138,6 +140,8 @@ class Arena
     /// block. Each of a thread's two `FrameMemory` arenas owns one the same way.
     friend class Detail::ScratchThread;
     friend class Detail::FrameArena;
+    /// `ScratchScope::GrowArray` extends its latest take through `TryExtendLatest`.
+    friend class ScratchScope;
 
     /// Registers as `kind` with the OS id of the constructing thread, which owns the arena.
     Arena(Detail::ThreadArenaTag, std::string_view statsName, StatsKind kind);
@@ -200,6 +204,9 @@ class Arena
 
     /// The fast path's bump into the current block; null when the request does not fit.
     void* TryBump(std::size_t bytes, std::size_t alignment);
+    /// Adds `bytes` to the end of `[begin, end)` when that range is the latest take in the current
+    /// block, starts at or after `floor`, and the block has room; false, changing nothing, otherwise.
+    bool TryExtendLatest(const void* begin, const void* end, std::size_t bytes, Marker floor);
     /// Marks `[begin, begin + bytes)` as rewound: filled with 0xDD where instrumentation is on,
     /// and poisoned under AddressSanitizer, so a read through a pointer that outlived its Rewind
     /// or Reset shows. The range holds alignment padding that was never handed out and is still
@@ -283,6 +290,20 @@ inline void* Arena::TryBump(std::size_t bytes, std::size_t alignment)
     std::memset(memory, 0xCD, bytes);
 #endif
     return memory;
+}
+
+inline bool Arena::TryExtendLatest(const void* begin, const void* end, std::size_t bytes, Marker floor)
+{
+    if (m_Blocks.empty() || reinterpret_cast<std::uintptr_t>(end) != m_Cursor)
+        return false;
+    // A floor in an earlier block puts the whole current block above it.
+    const std::uintptr_t lowest = reinterpret_cast<std::uintptr_t>(m_Blocks[m_Current].Data) +
+                                  (floor.Block == m_Current ? floor.Offset : 0);
+    if (reinterpret_cast<std::uintptr_t>(begin) < lowest)
+        return false;
+    const UseScope use(*this);
+    // At the cursor an alignment of one adds no padding: the bump fills and unpoisons the added bytes only.
+    return TryBump(bytes, 1) != nullptr;
 }
 
 inline Arena::Marker Arena::GetMarker() const

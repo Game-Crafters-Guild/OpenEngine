@@ -1,13 +1,14 @@
 // The editor's preview hour on the sky system: the frame renders the preview in place of the
 // component's hour, in the same frame, per world, with the component and its animated clock left
-// alone; and the setting half of the day read from the sun state the sky publishes (IsDuskHalf) for
-// a driven sun, a sun set by hand and a polar day.
+// alone; a paused world clock holds the animated clock; and the setting half of the day read from
+// the sun state the sky publishes (IsDuskHalf) for a driven sun, a sun set by hand and a polar day.
 
 #include <gtest/gtest.h>
 
 #include <cmath>
 
 #include "Assets/DayCycleProfile.h"
+#include "ECS/Systems.h"
 #include "Rendering/Camera/CameraTypes.h"
 #include "Rendering/Sky/SkySunState.h"
 #include "SkySunAnchorHarness.h"
@@ -82,6 +83,23 @@ TEST(SkyPreviewHour, APreviewHoldsTheAnimatedClock)
     rig.Rig.System.ClearPreviewHour(rig.WorldId());
     rig.Run(5.0f);
     EXPECT_GT(rig.Rig.Sky().TimeOfDayHours, 10.0f);
+}
+
+// The scheduler hands the sky a delta of 0 while the world clock is paused, so the animated clock
+// holds.
+TEST(SkyPreviewHour, APausedWorldClockHoldsTheAnimatedClock)
+{
+    PreviewRig rig(10.0f, true);
+    ECS::SystemManager systems;
+    systems.AddSystem<Engine::Renderer::SkyEnvironmentSystem>(&rig.Rig.Services);
+    systems.Update(rig.Rig.World, 0.1f);
+    const float held = rig.Rig.Sky().TimeOfDayHours;
+    ASSERT_GT(held, 10.0f);
+
+    rig.Rig.World.GetSimulationClock().SetTimeScale(0.0);
+    for (int frame = 0; frame < 5; ++frame)
+        systems.Update(rig.Rig.World, 0.1f);
+    EXPECT_EQ(rig.Rig.Sky().TimeOfDayHours, held) << "a paused clock holds the time of day";
 }
 
 TEST(SkyPreviewHour, APreviewBelongsToOneWorld)

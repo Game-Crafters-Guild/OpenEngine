@@ -254,7 +254,9 @@ float GE_StarSparkleFalloff(float d)
 {
     float n = clamp(d, 0.0, 1.0);
     float t = n <= kStarSparkleFlatSize ? 0.0 : (n - kStarSparkleFlatSize) / (1.0 - kStarSparkleFlatSize);
-    return pow(1.0 - t, kStarSparkleFalloff);
+    // Fast math (Metal) can make t more than 1 at n = 1, and pow of a negative base is NaN. So t >= 1
+    // gives 0 and pow gets a positive base only.
+    return t >= 1.0 ? 0.0 : pow(1.0 - t, kStarSparkleFalloff);
 }
 
 // The sparkle's profile at q (pixels over the reach S): the round core under the four points.

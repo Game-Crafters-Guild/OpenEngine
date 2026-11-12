@@ -53,4 +53,18 @@ static_assert(__STDCPP_DEFAULT_NEW_ALIGNMENT__ >= alignof(moodycamel::details::m
 template <typename T>
 using ConcurrentQueue = moodycamel::ConcurrentQueue<T, QueueAllocationTraits>;
 
+/// Traits for a freelist that keeps at most `Capacity` entries and takes them by tokenless
+/// `try_enqueue`. Each releasing thread fills its own sub-queue, and `try_enqueue` never grows
+/// that sub-queue's block index. This index covers the whole capacity, so one thread can fill it.
+template <std::size_t Capacity>
+struct FreelistQueueTraits : QueueAllocationTraits
+{
+    static constexpr std::size_t IMPLICIT_INITIAL_INDEX_SIZE = Capacity / QueueAllocationTraits::BLOCK_SIZE;
+};
+
+/// A freelist queue. Construct it with `Capacity`: `try_enqueue` takes no new blocks, so the
+/// capacity is the most entries it keeps.
+template <typename T, std::size_t Capacity>
+using FreelistQueue = moodycamel::ConcurrentQueue<T, FreelistQueueTraits<Capacity>>;
+
 } // namespace JobSystem

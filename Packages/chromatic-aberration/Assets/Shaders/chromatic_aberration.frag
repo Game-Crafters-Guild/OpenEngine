@@ -65,7 +65,7 @@ float AxialDepthWeight()
     if (IsBackgroundDepth(rawDepth))
         return 0.0;
 
-    float linearDepth = LinearizeReverseZ(rawDepth, ViewParams.ge_nearFar.xy);
+    float linearDepth = LinearizeReverseZ(rawDepth, ViewParams.ge_depthTerms);
     float focusDistance = max(pc.dofFocusDistance, 0.01);
     float relativeDefocus = abs(linearDepth - focusDistance) /
                             max(max(linearDepth, focusDistance), 0.01);

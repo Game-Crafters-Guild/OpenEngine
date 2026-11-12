@@ -39,9 +39,10 @@ ZoneStrokeState MakeZone(World& world, TerrainService& svc, ECS::EntityHandle e,
                          const GUID& guid, float32 extent, float32 posX, const TerrainZonePayload& payload)
 {
     Components::Transform xf{};
-    xf.matrix[12] = posX;
+    xf.Position.X = posX;
     Components::WorldTransform wxf{};
-    std::memcpy(wxf.matrix, xf.matrix, sizeof(wxf.matrix));
+    wxf.Position = xf.Position;
+    wxf.Basis = xf.Basis;
     Components::Name nm{};
     std::strncpy(nm.value, "SculptZone", sizeof(nm.value) - 1);
     Components::TerrainSculptZone z{};
@@ -161,7 +162,7 @@ TEST_F(TerrainZoneStrokeCommandTests, ExistingStrokeRevertsComponentTransformPay
     cmd.Undo();
     ASSERT_NE(m_World.GetComponent<Components::TerrainSculptZone>(e), nullptr);
     EXPECT_FLOAT_EQ(m_World.GetComponent<Components::TerrainSculptZone>(e)->ExtentX, 16.0f);
-    EXPECT_FLOAT_EQ(m_World.GetComponent<Components::Transform>(e)->matrix[12], -10.0f);
+    EXPECT_DOUBLE_EQ(m_World.GetComponent<Components::Transform>(e)->Position.X, -10.0);
     ASSERT_NE(svc.GetZonePayload(guid), nullptr);
     EXPECT_EQ(svc.GetZonePayload(guid)->Width, 17u);
     EXPECT_FLOAT_EQ(svc.GetZonePayload(guid)->Offsets[0], 1.0f);
@@ -169,7 +170,7 @@ TEST_F(TerrainZoneStrokeCommandTests, ExistingStrokeRevertsComponentTransformPay
 
     cmd.Redo();
     EXPECT_FLOAT_EQ(m_World.GetComponent<Components::TerrainSculptZone>(e)->ExtentX, 32.0f);
-    EXPECT_FLOAT_EQ(m_World.GetComponent<Components::Transform>(e)->matrix[12], 5.0f);
+    EXPECT_DOUBLE_EQ(m_World.GetComponent<Components::Transform>(e)->Position.X, 5.0);
     EXPECT_EQ(svc.GetZonePayload(guid)->Width, 33u);
     EXPECT_FLOAT_EQ(svc.GetZonePayload(guid)->Offsets[0], 4.0f);
 

@@ -35,7 +35,7 @@ protected:
         BodySettings settings;
         settings.shape = world->CreateShape(definition);
         if (!settings.shape.IsValid()) throw std::runtime_error("actual shape creation failed");
-        settings.position = position;
+        settings.position = WorldPosition::FromVector3(position);
         settings.rotation = rotation;
         settings.motionType = MotionType::Static;
         settings.layer = layer;
@@ -71,7 +71,7 @@ protected:
     BoxOverlapQuery Query(Vector3 center = {}, Vector3 half = {.3f, .3f, .3f})
     {
         BoxOverlapQuery q;
-        q.center = center;
+        q.center = WorldPosition::FromVector3(center);
         q.halfExtents = half;
         return q;
     }
@@ -86,13 +86,13 @@ protected:
     void GroundAt(Vector3 point, BodyHandle expected, float height)
     {
         RayCastQuery ray;
-        ray.ray.origin = {point.x, 30, point.z};
-        ray.ray.direction = {0, -1, 0};
+        ray.origin = {point.x, 30, point.z};
+        ray.direction = {0, -1, 0};
         ray.maxDistance = 40;
         RayCastResult result;
         ASSERT_TRUE(world->RayCast(ray, result));
         EXPECT_EQ(result.body, expected);
-        EXPECT_NEAR(result.hitPoint.y, height, .01f);
+        EXPECT_NEAR(result.hitPoint.Y, height, .01f);
     }
 };
 
@@ -295,8 +295,8 @@ TEST_F(PhysicsBoxOverlapTests, InvalidQueryClearsPriorResults)
         auto query = Query();
         switch (i)
         {
-        case 0: query.center.x = nan; break;
-        case 1: query.center.z = inf; break;
+        case 0: query.center.X = nan; break;
+        case 1: query.center.Z = inf; break;
         case 2: query.halfExtents.y = 0; break;
         case 3: query.halfExtents.x = -1; break;
         case 4: query.halfExtents.z = inf; break;

@@ -160,9 +160,10 @@ TEST(FileSystem, TreeRemovalHoldsNoComputeWorker)
     std::filesystem::create_directories(tree / "Assets");
     { std::ofstream file(tree / "Assets" / "scene.scene"); }
 
+    // Declared before the pool: the parked worker can still read it after the release.
+    std::atomic<bool> release{false};
     ::JobSystem::WorkStealingThreadPool pool(1);
     std::atomic<bool> workerParked{false};
-    std::atomic<bool> release{false};
     pool.EnqueueWork([&]
     {
         workerParked.store(true);
@@ -205,13 +206,14 @@ TEST(FileSystem, TreeRemovalQueuedAtDestructionStillRuns)
         std::ofstream file(tree / "Assets" / "scene.scene");
     }
 
-    ::JobSystem::WorkStealingThreadPool pool(1, 1);
-    auto holder = std::make_unique<::JobSystem::JobChannel>(
-        pool, ::JobSystem::JobChannelDesc{.Name = "Test blocking thread holder", .MaxRunning = 1});
+    // Declared before the pool: the held job can still be inside changed.wait() after the release.
     std::mutex mutex;
     std::condition_variable changed;
     bool holding = false;
     bool release = false;
+    ::JobSystem::WorkStealingThreadPool pool(1, 1);
+    auto holder = std::make_unique<::JobSystem::JobChannel>(
+        pool, ::JobSystem::JobChannelDesc{.Name = "Test blocking thread holder", .MaxRunning = 1});
     ::JobSystem::TaskHandle held = holder->Submit([&]
     {
         std::unique_lock<std::mutex> lock(mutex);
@@ -439,4 +441,12 @@ TEST(FileSystem, KeepsTheTemporaryFileOfAnotherRunningWriter)
     EXPECT_EQ(GameEngine::FileSystem::RemoveOrphanedTemporaryFiles(dir, ".gepage"), 0u);
     EXPECT_TRUE(std::filesystem::exists(file)) << "a running writer's temporary file was removed";
     std::filesystem::remove_all(dir);
+}
+
+TEST(FileSystem, RecognizesTheNameOfATemporarySibling)
+{
+    const auto temp = GameEngine::FileSystem::MakeTemporarySiblingPath("slot/save.bin");
+    EXPECT_TRUE(GameEngine::FileSystem::IsTemporarySiblingName(temp.filename().string()));
+    EXPECT_FALSE(GameEngine::FileSystem::IsTemporarySiblingName("save.bin"));
+    EXPECT_FALSE(GameEngine::FileSystem::IsTemporarySiblingName("notes.tmp"));
 }

@@ -58,7 +58,9 @@ float GE_NightTintStarContrast(float storedY, float starY, float depth)
 // pixel's scene luminance in cd/m2, before the exposure. contrast: GE_NightTintStarContrast.
 float GE_NightTintAmount(float strength, float adaptationNits, float sceneNits, float contrast)
 {
-    if (strength <= 0.0)
+    // The tint is off at and above the photopic edge. With fast math (Metal), log(adaptationNits) at the
+    // edge can differ from the folded log of the edge, and the smoothstep then leaves 2^-46 of the tint.
+    if (strength <= 0.0 || adaptationNits >= kNightTintPhotopicNits)
         return 0.0;
     float t = smoothstep(log(kNightTintScotopicNits), log(kNightTintPhotopicNits), log(max(adaptationNits, 1e-12)));
     float amount = clamp(strength, 0.0, 1.0) * (1.0 - t) *

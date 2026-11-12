@@ -21,6 +21,7 @@ set(EDITOR_SOURCES
     Source/Editor/Settings/DirectionalShadowSettingsPage.cpp
     Source/Editor/Settings/ExperimentalRenderingSettingsPage.cpp
     Source/Editor/Settings/InterfaceSettingsPage.cpp
+    Source/Editor/Settings/StartupSettingsPage.cpp
     Source/Editor/Settings/AssetPreviewSettings.cpp
     Source/Editor/Settings/ToggleAppearanceSettings.cpp
     Source/Editor/Settings/AudioEnabledSettings.cpp
@@ -54,6 +55,7 @@ set(EDITOR_SOURCES
 	Source/Startup/EditorPathPolicy.cpp
 	Source/Startup/EditorSessionDescriptor.cpp
 	Source/Startup/EditorStartup.cpp
+	Source/Startup/StartupWindowShowGate.cpp
 	Source/Automation/EditorSmokeHooks.cpp
 	Source/Automation/UiReplayRunner.cpp
 	Source/Telemetry/RGCsvSidecar.cpp
@@ -96,6 +98,7 @@ set(EDITOR_SOURCES
     Source/Panels/BookmarksPanel.cpp
     Source/Panels/UndoHistoryPanel.cpp
     Source/Panels/BuildPanel.cpp
+    Source/Panels/BuildPanel/ExportRequirementsSection.cpp
     Source/Panels/BuiltInPanelTypes.cpp
     Source/Panels/MovieRecorderPanel.cpp
     Source/Panels/HierarchyPanel.cpp
@@ -116,6 +119,10 @@ set(EDITOR_SOURCES
     Source/Panels/Script/ScriptErrorsPanel.cpp
     Source/Panels/ShaderErrors/ShaderErrorRows.cpp
     Source/Panels/ShaderErrors/ShaderErrorsPanel.cpp
+    Source/Panels/Scribe/ScribeDocument.cpp
+    Source/Panels/Scribe/ScribeEditCommand.cpp
+    Source/Panels/Scribe/ScribePanel.cpp
+    Source/Panels/Scribe/ScribeWorkspace.cpp
     Source/Panels/MonitorsPanel.cpp
     Source/Panels/RenderGraphPanel.cpp
     Source/Panels/CpuProfilerPanel.cpp
@@ -194,8 +201,9 @@ set(EDITOR_SOURCES
     Source/Scene/SceneLoadProgressOverlay.cpp
     Source/Scene/SceneEditorController.cpp
     Source/Scene/SceneThumbnailCapture.cpp
-    Source/GameViewController.cpp
-    Source/GameViewMovieCapture.cpp
+    Source/GameView/GameViewController.cpp
+    Source/GameView/GameViewMovieCapture.cpp
+    Source/GameView/GameViewRenderCoordinator.cpp
     Source/MovieRecorderController.cpp
     Source/MovieRecorderToolbarMenu.cpp
     Source/SceneView/SceneViewController.cpp
@@ -257,9 +265,8 @@ set(EDITOR_SOURCES
 	Source/UI/Controls/EditorTopToolbar.cpp
 	Source/UI/Controls/EditorTitleBar.cpp
 	Source/UI/Controls/EditorBuildStatus.cpp
-	Source/UI/Controls/InspectorNotice.cpp
 	Source/UI/Controls/ListItemActions.cpp
-	Source/UI/Controls/PictureChoiceField.cpp
+	Source/UI/Controls/SeedField.cpp
 	Source/UI/Controls/TransientNotice.cpp
 	Source/UI/Controls/SkyDayKeyGradientBar.cpp
 	Source/UI/Controls/CurveField.cpp
@@ -275,12 +282,14 @@ set(EDITOR_SOURCES
 	Source/UI/Layout/DockConfigElements.cpp
 	Source/UI/Layout/EditorDockConfigParser.cpp
 	Source/Inspectors/TransformInspector.cpp
+	Source/Inspectors/BuiltInComponentTraits.cpp
 	Source/Inspectors/BuiltInInspectorRegistration.cpp
 	Source/Inspectors/ComponentIconClass.cpp
 	Source/Inspectors/ComponentPresets.cpp
 	Source/Inspectors/DefaultComponentInspector.cpp
 	Source/Inspectors/GeneratedEntityNotice.cpp
 	Source/Inspectors/InspectorEntityActivity.cpp
+	Source/Inspectors/InspectorOverrideRows.cpp
 	Source/Inspectors/InspectorSectionHosts.cpp
 	Source/Inspectors/PreservedFieldNotice.cpp
 	Source/Inspectors/InspectorComponent/InspectorComponentSection.cpp
@@ -288,7 +297,6 @@ set(EDITOR_SOURCES
 	Source/Inspectors/ShadowCastingRow.cpp
 	Source/Inspectors/RenderLayers/RenderLayerField.cpp
 	Source/Inspectors/Navigation/NavigationAgentInspector.cpp
-	Source/Inspectors/Navigation/NavigationSourceComponentTraits.cpp
 	Source/Inspectors/Navigation/NavigationSurfaceInspector.cpp
 	Source/Inspectors/SplineRecipe/SplineRecipeInspector.cpp
 	Source/Inspectors/SplineRecipe/Paving/SplinePavingInspector.cpp
@@ -376,6 +384,9 @@ set(EDITOR_SOURCES
 	Source/Inspectors/VolumetricCloudsInspector.cpp
 	Source/Inspectors/PostProcessEffects/VolumetricFogEffectInspector.cpp
 	Source/Inspectors/AudioInspector.cpp
+	Source/Inspectors/ShipRules/SetShipRuleCommand.cpp
+	Source/Inspectors/ShipRules/ShipRuleRow.cpp
+	Source/Inspectors/ShipRules/ShipRuleSelection.cpp
 	Source/Inspectors/AudioEmitterInspector.cpp
 	Source/Inspectors/SkeletonProfileInspector.cpp
 	Source/Inspectors/HumanoidRigInspector.cpp
@@ -385,9 +396,12 @@ set(EDITOR_SOURCES
 	Source/Terrain/TerrainHeightmapInspector.cpp
 	Source/Terrain/RawHeightmapSettingsCommit.cpp
 	Source/Terrain/TerrainInspector.cpp
+	Source/Terrain/Planet/PlanetEditsNotice.cpp
+	Source/Terrain/Planet/PlanetAtmosphereRows.cpp
 	Source/Terrain/TerrainDrawnNotice.cpp
 	Source/Terrain/TerrainSizingNotice.cpp
 	Source/Terrain/TerrainPageCookOverlay.cpp
+	Source/Terrain/TerrainModifier/GeneratedNoiseNoticeHost.cpp
 	Source/Terrain/TerrainModifier/TerrainModifierInspectors.cpp
 	Source/Terrain/TerrainVolumeNotices.cpp
 	Source/Terrain/TerrainGrass/TerrainGrassPresetRow.cpp
@@ -396,15 +410,15 @@ set(EDITOR_SOURCES
 	Source/Terrain/TerrainMaterialLibraryMint.cpp
 	Source/Terrain/TerrainMaterialLibraryInspector.cpp
 	Source/Navigation/NavigationBakedDataSave.cpp
-	Source/Terrain/TerrainBakeCacheSave.cpp
 	Source/Terrain/TerrainGrass/TerrainGrassVocabulary.cpp
 	Source/Terrain/TerrainRoleMaterials.cpp
 	Source/Terrain/TerrainRule/TerrainRuleConditionVocabulary.cpp
 	Source/Terrain/TerrainRule/TerrainRuleWeightProfileStrip.cpp
 	Source/Terrain/TerrainRule/TerrainRuleRows.cpp
 	Source/Terrain/TerrainRule/TerrainRuleNotices.cpp
+	Source/Terrain/TerrainRule/TerrainRulePresetPicker.cpp
 	Source/Terrain/TerrainInteractiveModifierEdit.cpp
-	Source/Terrain/SphereSculptSaver.cpp
+	Source/Terrain/Planet/PlanetHeightLayerSaver.cpp
 	Source/Terrain/TerrainZonePayloadSaver.cpp
 	Source/Sky/SkyEnvironment/SkyEnvironmentComponentTraits.cpp
 	Source/Sky/SkyEnvironment/SkyEnvironmentCreation.cpp
@@ -428,7 +442,7 @@ set(EDITOR_SOURCES
 	Source/ScriptEditor/SourceLocation.cpp
 	Source/ScriptEditor/SourceLocationOpener.cpp
 	Source/Editor/Assets/ShaderGlslOpen.cpp
-	Source/Editor/Assets/AssetOpenRouting.cpp
+	Source/Editor/Assets/BuiltInAssetOpeners.cpp
 
 	Modules/EditorToolbar/EditorToolbar.cpp
 	Modules/EditorToolbar/EditorMenuBarBuilder.cpp
@@ -525,6 +539,10 @@ set(EDITOR_SOURCES
 	Source/SceneView/SplineTool/SplineJunctionMarkers.cpp
 	Source/SceneView/SplineTool/SplineDrapePolylines.cpp
 	Source/SceneView/SceneViewDropPlacement.cpp
+	Source/SceneView/SceneViewport/SceneViewHoverPill.cpp
+	Source/SceneView/SceneViewport/SceneViewport.cpp
+	Source/SceneView/SceneViewport/SceneViewportEdits.cpp
+	Source/SceneView/SceneViewport/SceneViewportRegistry.cpp
 	Source/SceneView/SceneViewNoticeOverlay.cpp
 	Source/SceneView/SceneViewExposureHintOverlay.cpp
 	Source/SceneView/SceneViewFraming.cpp
@@ -609,6 +627,7 @@ set(EDITOR_SOURCES
 	Source/Prefabs/PrefabEditorRegistration.cpp
 	Source/Prefabs/PrefabHierarchyRows.cpp
 	Source/Prefabs/PrefabInstanceDescriptions.cpp
+	Source/Prefabs/PrefabOverrideRecordsCommand.cpp
 	Source/Prefabs/PrefabRemovedComponents.cpp
 	Source/Prefabs/PrefabService.cpp
 	Source/Prefabs/PrefabThumbnailHandler.cpp
@@ -630,8 +649,10 @@ set(EDITOR_SOURCES
 	Source/DebugServer/LogQueryReport.cpp
 	Source/DebugServer/BuildStatusReport.cpp
 	Source/DebugServer/Components/ComponentValueReader.cpp
-	Source/DebugServer/Components/RenderLayerMaskValue.cpp
+	Source/DebugServer/Components/FieldValueReaders.cpp
 	Source/DebugServer/Components/SchemaComponentApply.cpp
+	Source/DebugServer/AI/AiDebugHandlers.cpp
+	Source/DebugServer/AI/AiTraceReport.cpp
 	Source/DebugServer/DebugHandlers.cpp
 	Source/DebugServer/DebugServerReply.cpp
 	Source/DebugServer/ElementPointerTarget.cpp
@@ -645,12 +666,14 @@ set(EDITOR_SOURCES
 	Source/DebugServer/SystemWaveTraceReport.cpp
 	Source/DebugServer/FramePhase/FramePhaseDebugHandlers.cpp
 	Source/DebugServer/FramePhase/FramePhaseReport.cpp
+	Source/DebugServer/GpuProfiler/GpuProfilerReport.cpp
 	Source/DebugServer/MarkupDebugHandlers.cpp
 	Source/DebugServer/SkyDebugHandlers.cpp
 	Source/DebugServer/ThumbnailDebugHandlers.cpp
 	Source/DebugServer/Parallax/ParallaxDebugHandlers.cpp
 	Source/DebugServer/Parallax/ParallaxStepsViewRequest.cpp
 	Source/DebugServer/InjectedInput.cpp
+	Source/DebugServer/KeyTapSequence.cpp
 	Source/DebugServer/OpenAssetPath.cpp
 	Source/DebugServer/Physics/PhysicsDebugHandlers.cpp
 	Source/DebugServer/Physics/PhysicsRaycastRequest.cpp
@@ -660,6 +683,7 @@ set(EDITOR_SOURCES
 	Source/DebugServer/SceneDegradedReport.cpp
 	Source/DebugServer/RenderGraphResourceFilter.cpp
 	Source/DebugServer/ScreenshotCaptureWait.cpp
+	Source/DebugServer/ScrollSequence.cpp
 	Source/DebugServer/Terrain/PlanetPageOverlayHandler.cpp
 	Source/DebugServer/Terrain/TerrainDebugHandlers.cpp
 	Source/DebugServer/Terrain/TerrainStrokeTarget.cpp
@@ -685,6 +709,7 @@ set(EDITOR_HEADERS
 	Source/DebugServer/BuildStatusReport.h
 	Source/DebugServer/Components/ComponentValueReader.h
 	Source/DebugServer/Components/SchemaComponentApply.h
+	Source/DebugServer/AI/AiDebugHandlers.h
 	Source/DebugServer/DebugHandlers.h
 	Source/DebugServer/DebugServerReply.h
 	Source/DebugServer/ElementPointerTarget.h
@@ -697,10 +722,12 @@ set(EDITOR_HEADERS
 	Source/DebugServer/SystemWaveTraceReport.h
 	Source/DebugServer/FramePhase/FramePhaseDebugHandlers.h
 	Source/DebugServer/FramePhase/FramePhaseReport.h
+	Source/DebugServer/GpuProfiler/GpuProfilerReport.h
 	Source/DebugServer/SkyDebugHandlers.h
 	Source/DebugServer/Parallax/ParallaxDebugHandlers.h
 	Source/DebugServer/Parallax/ParallaxStepsViewRequest.h
 	Source/DebugServer/InjectedInput.h
+	Source/DebugServer/KeyTapSequence.h
 	Source/DebugServer/OpenAssetPath.h
 	Source/DebugServer/Physics/PhysicsDebugHandlers.h
 	Source/DebugServer/Physics/PhysicsRaycastRequest.h
@@ -708,6 +735,7 @@ set(EDITOR_HEADERS
 	Source/DebugServer/PointerCoordsRequest.h
 	Source/DebugServer/SceneDegradedReport.h
 	Source/DebugServer/RenderGraphResourceFilter.h
+	Source/DebugServer/ScrollSequence.h
 	Source/DebugServer/Terrain/TerrainDebugHandlers.h
 	Source/DebugServer/Terrain/TerrainStrokeTarget.h
 	Source/DebugServer/UITreeDump.h
@@ -722,6 +750,7 @@ set(EDITOR_HEADERS
 	Source/Startup/EditorPathPolicy.h
 	Source/Startup/EditorSessionDescriptor.h
 	Source/Startup/EditorStartup.h
+	Source/Startup/StartupWindowShowGate.h
 	Source/Telemetry/RGCsvSidecar.h
 	Source/Automation/EditorSmokeHooks.h
 	Source/Automation/UiReplayRunner.h
@@ -730,6 +759,7 @@ set(EDITOR_HEADERS
 	Include/Editor/Registries/EditorPluginRegistry.h
 	Include/Editor/Registries/EditorService.h
 	Include/Editor/Registries/EditorServiceRegistry.h
+	Include/Editor/Registries/AssetOpenerRegistry.h
 	Include/Editor/Registries/BuiltInStatusBarItems.h
 	Include/Editor/Registries/StatusBarItemRegistry.h
 	Include/Editor/Settings/EditorHiDpiPlatformSettings.h
@@ -741,6 +771,9 @@ set(EDITOR_HEADERS
     Include/UndoRedo/GenericEditUndo.h
     Include/UndoRedo/RenameAssetCommand.h
     Include/UndoRedo/SetAssetMetaValueCommand.h
+    Include/Inspectors/ShipRules/SetShipRuleCommand.h
+    Include/Inspectors/ShipRules/ShipRuleRow.h
+    Include/Inspectors/ShipRules/ShipRuleSelection.h
     Include/UndoRedo/DeleteAssetPathsCommand.h
     Include/PlayMode/PlayModeManager.h
     Source/PlayMode/PlayModeGameViewFocus.h
@@ -756,7 +789,6 @@ set(EDITOR_HEADERS
     Include/Inspectors/TransformInspector.h
 	Include/Inspectors/MeshRendererInspector.h
 	Include/Inspectors/Navigation/NavigationAgentInspector.h
-	Include/Inspectors/Navigation/NavigationSourceComponentTraits.h
 	Include/Inspectors/Navigation/NavigationSurfaceInspector.h
 	Include/Inspectors/SkinnedMeshRendererInspector.h
 	Include/Inspectors/ValueCurveInspector.h
@@ -853,7 +885,7 @@ set(EDITOR_HEADERS
 	Include/ScriptEditor/SourceLocation.h
 	Include/ScriptEditor/SourceLocationOpener.h
 	Include/Editor/Assets/ShaderGlslOpen.h
-	Include/Editor/Assets/AssetOpenRouting.h
+	Include/Editor/Assets/BuiltInAssetOpeners.h
 	Include/Editor/Assets/EditorAssetActions.h
 	Include/Editor/CaptureOutputDirectory.h
     Include/Panels/AssetsPanel.h
@@ -945,12 +977,21 @@ set(EDITOR_HEADERS
     Include/Scene/SceneDocumentManager.h
     Include/Scene/SceneEditorController.h
     Include/Scene/SceneThumbnailCapture.h
-    Include/GameViewController.h
-    Include/GameViewMovieCapture.h
+    Include/GameView/GameViewController.h
+    Include/GameView/GameViewMovieCapture.h
+    Include/GameView/GameViewRenderCoordinator.h
     Include/MovieRecorderToolbarMenu.h
 	Include/SceneView/SceneViewController.h
 	Include/SceneView/GizmoSettingsWiring.h
 	Include/SceneView/SceneViewGridRenderer.h
+	Include/SceneView/SceneViewport/SceneViewCameraGesture.h
+	Include/SceneView/SceneViewport/SceneViewHoverPill.h
+	Include/SceneView/SceneViewport/SceneViewport.h
+	Include/SceneView/SceneViewport/SceneViewportBinding.h
+	Include/SceneView/SceneViewport/SceneViewportEdits.h
+	Include/SceneView/SceneViewport/SceneViewportHost.h
+	Include/SceneView/SceneViewport/SceneViewportMeasureSettings.h
+	Include/SceneView/SceneViewport/SceneViewportRegistry.h
 	Include/SceneView/SceneViewDropPlacement.h
 	Include/SceneView/SceneViewNoticeOverlay.h
 	Include/SceneView/SceneViewExposureHintOverlay.h
@@ -1004,10 +1045,10 @@ set(EDITOR_HEADERS
 # registry instance across plugin DLLs, headless module hosting, a curated
 # export ABI — presupposes dynamic linking the target does not have.
 set(EDITOR_SDK_SOURCES
+	Source/Editor/Registries/AssetOpenerRegistry.cpp
 	Source/Editor/Registries/BuildExporterRegistry.cpp
 	Source/Editor/Registries/DebugRequestGateRegistry.cpp
 	Source/Editor/Registries/EditorPluginRegistry.cpp
-	Source/Editor/Entities/DDGIVolumeComponentTraits.cpp
 	Source/Editor/Entities/EditorComponentTraits.cpp
 	Source/Editor/Registries/EditorPanelRegistry.cpp
 	Source/Editor/Registries/EditorMenuRegistry.cpp
@@ -1052,6 +1093,12 @@ set(EDITOR_SDK_SOURCES
 	Source/UI/AssetField.cpp
 	Source/UI/ActivateOnRelease.cpp
 	Source/UI/Controls/CollapsibleInfoCard.cpp
+	# The inspector notice, in the SDK so a package's settings row shows a finding and its fix.
+	Source/UI/Controls/InspectorNotice.cpp
+	# The picture choice tiles and the setup step list, in the SDK so a package's settings page
+	# offers choices as tiles and lists its setup steps.
+	Source/UI/Controls/PictureChoiceField.cpp
+	Source/UI/Controls/SetupStepList.cpp
 	# The item size slider and the Resize Items gesture binding it reads, in the SDK so a
 	# package panel sizes its items with the same control and gesture as the built-in views.
 	Source/UI/Controls/ItemSizeSlider.cpp
@@ -1085,20 +1132,17 @@ if(MSVC)
 	target_compile_options(EditorMiniz PRIVATE /w)
 endif()
 
-# Editor/BuildCommit.h: the short commit id the title bar and the info dialog show beside the
-# engine version (Source/Editor/Application/EditorVersion.cpp). The target runs on every
-# build and rewrites the header only when the id changed.
-find_package(Git QUIET)
-set(GE_EDITOR_BUILD_COMMIT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
-add_custom_target(EditorBuildCommit
-	COMMAND ${CMAKE_COMMAND}
-		"-DGIT=${GIT_EXECUTABLE}"
-		"-DSOURCE_DIR=${CMAKE_SOURCE_DIR}"
-		"-DOUTPUT=${GE_EDITOR_BUILD_COMMIT_DIR}/Editor/BuildCommit.h"
-		-P "${CMAKE_SOURCE_DIR}/cmake/WriteBuildCommit.cmake"
-	BYPRODUCTS "${GE_EDITOR_BUILD_COMMIT_DIR}/Editor/BuildCommit.h"
-	COMMENT "Recording the editor's build commit"
-	VERBATIM)
+# The vcpkg ports' license texts are part of the notices of both editors.
+if(DEFINED VCPKG_INSTALLED_DIR)
+	set(_GE_VCPKG_INSTALLED_DIR "${VCPKG_INSTALLED_DIR}")
+elseif(DEFINED _VCPKG_INSTALLED_DIR)
+	set(_GE_VCPKG_INSTALLED_DIR "${_VCPKG_INSTALLED_DIR}")
+else()
+	message(FATAL_ERROR "Third-party notice staging requires VCPKG_INSTALLED_DIR")
+endif()
+if(NOT DEFINED VCPKG_TARGET_TRIPLET)
+	message(FATAL_ERROR "Third-party notice staging requires VCPKG_TARGET_TRIPLET")
+endif()
 
 # ---------------------------------------------------------------------------
 # Web Editor (wasm): the editor as one static binary on a single canvas.
@@ -1144,8 +1188,9 @@ if(EMSCRIPTEN)
 		${EDITOR_SDK_SOURCES}
 		$<TARGET_OBJECTS:VCSIntegration>
 	)
-	add_dependencies(WebEditor EditorBuildCommit)
-	target_include_directories(WebEditor PRIVATE "${GE_EDITOR_BUILD_COMMIT_DIR}")
+	# EditorVersion.cpp reads the build commit.
+	add_dependencies(WebEditor BuildCommit)
+	target_include_directories(WebEditor PRIVATE "${GE_BUILD_COMMIT_INCLUDE_DIR}")
 	# Tree Generator (eztree) ships as two MODULE DLLs on desktop. Wasm cannot
 	# dlopen them, and this file return()s before ge_add_engine_package_module.
 	# Compile the same TUs into WebEditor so the static-init registrars run
@@ -1373,6 +1418,35 @@ if(EMSCRIPTEN)
 	add_custom_target(WebEditorMaterialVariants DEPENDS ${_ge_webeditor_material_stamp})
 	add_dependencies(WebEditor WebEditorMaterialVariants)
 	set_property(TARGET WebEditor APPEND PROPERTY LINK_DEPENDS ${_ge_webeditor_material_stamp})
+
+	# Every third-party shader port the cooked variants compose has its notice in the list the
+	# web editor ships. Each --source-root maps a source alias of the cook above to its folder.
+	set(_ge_webeditor_notice_stamp ${CMAKE_BINARY_DIR}/WebEditorNoticeCheck.stamp)
+	add_custom_command(OUTPUT ${_ge_webeditor_notice_stamp}
+		COMMAND ${GE_PYTHON3} ${CMAKE_SOURCE_DIR}/Tools/Web/test_engine_pack.py
+			--program-index ${GE_WEB_EDITOR_MATERIAL_CACHE}/program-index.bin
+			--source-root project=${CMAKE_SOURCE_DIR}/Tools/Web/smoke-project
+			--source-root ddgi-sponza-project=${CMAKE_SOURCE_DIR}/Tools/Web/ddgi-sponza-project/Assets
+			--source-root eztree=${CMAKE_SOURCE_DIR}/Packages/eztree/Assets
+		COMMAND ${CMAKE_COMMAND} -E touch ${_ge_webeditor_notice_stamp}
+		DEPENDS
+			${_ge_webeditor_material_stamp}
+			${CMAKE_SOURCE_DIR}/Tools/Web/test_engine_pack.py
+			${CMAKE_SOURCE_DIR}/Tools/Web/test_build_web_package.py
+			${CMAKE_SOURCE_DIR}/Tools/Web/build_web_package.py
+		COMMENT "Checking the notices of the shader ports the web editor's variants compose"
+		VERBATIM)
+	add_custom_target(WebEditorNoticeCheck DEPENDS ${_ge_webeditor_notice_stamp})
+	add_dependencies(WebEditor WebEditorNoticeCheck)
+	# The notices of the third-party code and content in WebEditor.wasm and WebEditor.data.
+	set_property(TARGET WebEditor APPEND PROPERTY LINK_DEPENDS
+		${CMAKE_SOURCE_DIR}/Tools/Web/build_web_package.py)
+	add_custom_command(TARGET WebEditor POST_BUILD
+		COMMAND ${GE_PYTHON3} ${CMAKE_SOURCE_DIR}/Tools/Web/build_web_package.py
+			--editor-notices $<TARGET_FILE_DIR:WebEditor>
+			--vcpkg-share ${_GE_VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/share
+		COMMENT "Writing the third-party notices of the web editor"
+		VERBATIM)
 
 	# Web pack uses 512 albedo. The 1024 originals and the extra PBR maps stay
 	# in the repo for desktop; they are too large to ship three times under
@@ -1660,10 +1734,8 @@ target_include_directories(EditorSDK PUBLIC
 	${CMAKE_SOURCE_DIR}/Engine/Modules/VCSIntegration/Include
 )
 target_link_libraries(EditorSDK PUBLIC Engine Types Mathematics Events)
-set_target_properties(EditorSDK PROPERTIES
-	WINDOWS_EXPORT_ALL_SYMBOLS ON
-	FOLDER "Apps/Editor"
-)
+ge_windows_export_all_symbols(EditorSDK)
+set_target_properties(EditorSDK PROPERTIES FOLDER "Apps/Editor")
 if(MSVC)
 	target_compile_options(EditorSDK PRIVATE /wd4100)
 endif()
@@ -1735,8 +1807,9 @@ if(APPLE)
 else()
 	add_executable(Editor ${EDITOR_SOURCES} ${EDITOR_HEADERS} ${EDITOR_RESOURCES})
 endif()
-add_dependencies(Editor EditorBuildCommit)
-target_include_directories(Editor PRIVATE "${GE_EDITOR_BUILD_COMMIT_DIR}")
+# EditorVersion.cpp reads the build commit.
+add_dependencies(Editor BuildCommit)
+target_include_directories(Editor PRIVATE "${GE_BUILD_COMMIT_INCLUDE_DIR}")
 ge_add_production_allocation_hook(Editor)
 
 # Keep the Linux native executable behind a launcher so packaged builds use
@@ -2235,17 +2308,6 @@ else()
 	set(_GE_EDITOR_STAGE_STAMP_DIR "${CMAKE_BINARY_DIR}/bin/$<CONFIG>/Apps/Editor/Assets")
 endif()
 
-if(DEFINED VCPKG_INSTALLED_DIR)
-	set(_GE_VCPKG_INSTALLED_DIR "${VCPKG_INSTALLED_DIR}")
-elseif(DEFINED _VCPKG_INSTALLED_DIR)
-	set(_GE_VCPKG_INSTALLED_DIR "${_VCPKG_INSTALLED_DIR}")
-else()
-	message(FATAL_ERROR "Third-party notice staging requires VCPKG_INSTALLED_DIR")
-endif()
-if(NOT DEFINED VCPKG_TARGET_TRIPLET)
-	message(FATAL_ERROR "Third-party notice staging requires VCPKG_TARGET_TRIPLET")
-endif()
-
 # StageEditorAssets: stage source assets into the build output.
 # Can be run independently without recompiling Editor:
 #   cmake --build --preset <preset> --target StageEditorAssets
@@ -2263,6 +2325,7 @@ file(GLOB_RECURSE _GE_STAGE_INPUTS CONFIGURE_DEPENDS
 	"${_GE_VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/share/*"
 	"${CMAKE_SOURCE_DIR}/Managed/licenses/*"
 	"${CMAKE_CURRENT_SOURCE_DIR}/Assets/*"
+	"${CMAKE_SOURCE_DIR}/Engine/Modules/UI/Assets/UI/*"
 	"${CMAKE_CURRENT_SOURCE_DIR}/ProjectTemplates/*"
 	"${CMAKE_SOURCE_DIR}/Engine/Assets/SkeletonProfiles/*"
 	"${CMAKE_SOURCE_DIR}/Engine/Assets/DayCycles/*"
@@ -2318,10 +2381,19 @@ list(APPEND _GE_STAGE_INPUTS
 	"${CMAKE_SOURCE_DIR}/Engine/Source/ThirdParty/ufbx/UFBX_VERSION.txt"
 	"${CMAKE_SOURCE_DIR}/Engine/Source/ThirdParty/fbtBlend/LICENSE"
 	"${CMAKE_SOURCE_DIR}/Engine/Source/ThirdParty/fbtBlend/UPDATE-NOTES.md"
+	"${CMAKE_SOURCE_DIR}/ThirdParty/RunevisionErosionFilter/UPSTREAM.md"
+	"${CMAKE_SOURCE_DIR}/Engine/Modules/TerrainECS/Include/TerrainECS/Erosion/ErosionFilter.h"
+	"${CMAKE_SOURCE_DIR}/Engine/Modules/TerrainECS/Source/Erosion/ErosionFilter.cpp"
 	"${CMAKE_SOURCE_DIR}/ThirdParty/PunikontaVhs/LICENSE.md"
 	"${CMAKE_SOURCE_DIR}/ThirdParty/PunikontaVhs/UPSTREAM.md"
 	"${CMAKE_SOURCE_DIR}/ThirdParty/BendScreenSpaceShadows/LICENSE.txt"
 	"${CMAKE_SOURCE_DIR}/ThirdParty/BendScreenSpaceShadows/UPSTREAM.md"
+	"${CMAKE_SOURCE_DIR}/ThirdParty/fdlibm/LICENSE.txt"
+	"${CMAKE_SOURCE_DIR}/ThirdParty/fdlibm/UPSTREAM.md"
+	"${CMAKE_SOURCE_DIR}/Packages/film-simulation/LICENSE.txt"
+	"${CMAKE_SOURCE_DIR}/ThirdParty/Slug/LICENSE-MIT"
+	"${CMAKE_SOURCE_DIR}/ThirdParty/Slug/NOTICE"
+	"${CMAKE_SOURCE_DIR}/ThirdParty/Slug/UPSTREAM.md"
 )
 
 # EZ-Tree preset JSONs come from the vcpkg build input and must ship with the
@@ -2336,6 +2408,10 @@ set(_GE_EDITOR_MIRROR_COMMANDS "")
 # Editor-owned assets: icons, fonts, themes, UI, default graphs and scenes.
 _ge_editor_mirror_commands(_GE_EDITOR_MIRROR_COMMANDS
 	"${CMAKE_CURRENT_SOURCE_DIR}/Assets" "${_GE_EDITOR_ASSETS_DEST}")
+# The UI module's control styles and layouts. They join the editor's UI tree at the same
+# relative paths; the export collector ships them from UI/ControlAssetPaths.h.
+_ge_editor_mirror_commands(_GE_EDITOR_MIRROR_COMMANDS
+	"${CMAKE_SOURCE_DIR}/Engine/Modules/UI/Assets/UI" "${_GE_EDITOR_ASSETS_DEST}/UI")
 # Project templates (manifest + payload folders), a sibling of Assets so
 # template content never enters the editor asset mount.
 _ge_editor_mirror_commands(_GE_EDITOR_MIRROR_COMMANDS
@@ -2384,7 +2460,7 @@ _ge_editor_mirror_commands(_GE_EDITOR_MIRROR_COMMANDS
 # CBT terrain sources. The vertex modifier, the surface and the GPU bake kernel
 # (terrain_height_bake.comp, TerrainRenderFeature::EnsureGpuBakePipeline) are
 # composed at runtime via shaderc and #include their siblings — cbt_layout,
-# cbt_domain, cbt_atlas, cbt_sculpt, cbt_analytic, terrain_surface_rules — so the
+# cbt_domain, cbt_atlas, terrain_surface_rules — so the
 # whole directory ships as one tree. The compiled compute kernel is a build
 # product and is staged beside them by StageEditorShaders.
 _ge_editor_mirror_commands(_GE_EDITOR_MIRROR_COMMANDS

@@ -6,7 +6,7 @@
 //   * The UNIT copy. Two of the five condition kinds exist only so a migrated
 //     normalized domain is what a scene may already carry, and they measure something the other two do
 //     not — picking the wrong one is silent and only shows up as a wrong-looking
-//     terrain. Height in metres in particular is measured from the TERRAIN'S
+//     terrain. Height in meters in particular is measured from the TERRAIN'S
 //     BASE; calling it world Y would be wrong in exactly the way an author
 //     discovers after moving a terrain and watching the band stay put.
 //   * The per-row IGNORED state. The Shape::Global review's finding was that a
@@ -22,14 +22,19 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cctype>
 #include <memory>
 #include <string>
 
+#include "Components/Terrain/Terrain.h"
 #include "Components/Terrain/TerrainSurfaceRules.h"
 #include "Terrain/TerrainRule/TerrainRuleNotices.h"
 #include "Terrain/TerrainInteractiveModifierEdit.h"
 #include "Terrain/TerrainRule/TerrainRuleConditionVocabulary.h"
+#include "Terrain/TerrainRule/TerrainRulePresetPicker.h"
+#include "TerrainECS/TerrainService.h"
+#include "TerrainECS/TerrainSurface/TerrainSurfaceRulePresets.h"
 #include "UI/Controls/InspectorNotice.h"
 #include "UI/Controls/Label.h"
 #include "UI/UIElement.h"
@@ -44,12 +49,13 @@ namespace Vocab = GameEngine::Editor::TerrainRuleVocabulary;
 
 using Kind = Components::TerrainRuleConditionKind;
 using Curve = Components::TerrainRuleFalloffCurve;
+using Components::TerrainDomain;
 
 namespace
 {
 
-constexpr Kind kAllKinds[] = {Kind::SlopeDegrees, Kind::SlopeNormalized, Kind::HeightMetres,
-                              Kind::HeightNormalized, Kind::Noise};
+constexpr Kind kAllKinds[] = {Kind::SlopeDegrees, Kind::SlopeNormalized, Kind::HeightMeters,
+                              Kind::Noise, Kind::LatitudeDegrees};
 
 std::string Lower(std::string text)
 {
@@ -146,18 +152,18 @@ Components::TerrainSurfaceRule MakeOwningRule(float strength = 1.0f, bool replac
 
 // ---- Unit copy -------------------------------------------------------------
 
-// The recorded engine finding, pinned as copy: HeightMetres is measured from the
+// The recorded engine finding, pinned as copy: HeightMeters is measured from the
 // terrain's base, and the terrain entity's own Y translation is not part of it.
 //
 // The assertion is on the CLAIM, not on the substring "world y". The copy is
 // allowed to contain that phrase — and does — because DISCLAIMING it is the
 // strongest way to carry the finding, which is what the shipped component
-// header's own comment does ("METRES ABOVE THE TERRAIN'S BASE - not world-space
+// header's own comment does ("Meters above the terrain's base, not world-space
 // Y"). What must never appear is an affirmative reading.
-TEST(TerrainRuleVocabulary, HeightMetresIsAboveTheTerrainBaseAndDisclaimsWorldY)
+TEST(TerrainRuleVocabulary, HeightMetersIsAboveTheTerrainBaseAndDisclaimsWorldY)
 {
-    const std::string help = Lower(std::string(Vocab::ConditionKindHelp(Kind::HeightMetres)));
-    EXPECT_TRUE(Has(help, "metres above the terrain's base")) << help;
+    const std::string help = Lower(std::string(Vocab::ConditionKindHelp(Kind::HeightMeters, TerrainDomain::Planar)));
+    EXPECT_TRUE(Has(help, "meters above the terrain's base")) << help;
     EXPECT_TRUE(Has(help, "not world y")) << help;
     for (const char* affirmative : {"is world y", "world y height", "world-space y height"})
         EXPECT_FALSE(Has(help, affirmative)) << affirmative << " in: " << help;
@@ -170,11 +176,14 @@ TEST(TerrainRuleVocabulary, NoConditionKindClaimsToMeasureWorldY)
 {
     for (const Kind kind : kAllKinds)
     {
-        const std::string help = Lower(std::string(Vocab::ConditionKindHelp(kind)));
-        for (const char* affirmative : {"is world y", "world y height", "world-space y height",
-                                        "above world y", "in world y"})
-            EXPECT_FALSE(Has(help, affirmative))
-                << static_cast<int>(kind) << " claims " << affirmative << ": " << help;
+        for (const TerrainDomain domain : {TerrainDomain::Planar, TerrainDomain::Spherical})
+        {
+            const std::string help = Lower(std::string(Vocab::ConditionKindHelp(kind, domain)));
+            for (const char* affirmative : {"is world y", "world y height", "world-space y height",
+                                            "above world y", "in world y"})
+                EXPECT_FALSE(Has(help, affirmative))
+                    << static_cast<int>(kind) << " claims " << affirmative << ": " << help;
+        }
     }
 }
 
@@ -183,28 +192,100 @@ TEST(TerrainRuleVocabulary, EveryKindHasALabelAndAnExplanation)
     for (const Kind kind : kAllKinds)
     {
         EXPECT_FALSE(Vocab::ConditionKindLabel(kind).empty()) << static_cast<int>(kind);
-        EXPECT_FALSE(Vocab::ConditionKindHelp(kind).empty()) << static_cast<int>(kind);
+        EXPECT_FALSE(Vocab::ConditionKindHelp(kind, TerrainDomain::Planar).empty()) << static_cast<int>(kind);
+        EXPECT_FALSE(Vocab::ConditionKindHelp(kind, TerrainDomain::Spherical).empty()) << static_cast<int>(kind);
     }
 }
 
-// The pairs differ only by unit, and picking the wrong one is silent. Their
+// The Replace Rules list holds the presets of the terrain's domain and no prompt entry, and a
+// preset replaces the rows while the block's other fields stay.
+TEST(TerrainRulePresetPicker, ListsTheDomainsPresetsAndReplacesOnlyTheRows)
+{
+    using GameEngine::Components::TerrainDomain;
+    const auto planet = GameEngine::TerrainRulePresetOptions(TerrainDomain::Spherical);
+    ASSERT_EQ(planet.size(), 4u);
+    EXPECT_EQ(planet[0].label, "Temperate");
+    EXPECT_EQ(planet[1].label, "Desert");
+    EXPECT_EQ(planet[2].label, "Ice Moon");
+    EXPECT_EQ(planet[3].label, "Barren");
+    EXPECT_EQ(GameEngine::TerrainRulePresetOptions(TerrainDomain::Planar).size(), 1u);
+
+    GameEngine::Components::TerrainSurfaceRulesEffect effect{};
+    effect.RespectClaims = true;
+    effect.ProvisionedDefaults = true;
+    effect.RuleCount = 7;
+    const auto& iceMoon = GameEngine::TerrainECS::TerrainSurfaceRulePresets()[3];
+    GameEngine::ApplyTerrainRulePreset(effect, iceMoon, {-6000.0f, 6000.0f});
+    EXPECT_TRUE(effect.RespectClaims);
+    EXPECT_FALSE(effect.ProvisionedDefaults) << "the replaced rows are the author's";
+    EXPECT_EQ(effect.RuleCount, 2u);
+    EXPECT_EQ(effect.Rules[1].Conditions[0].Kind, Kind::SlopeDegrees);
+}
+
+// Latitude reads 0 on a flat terrain, so only a planet's Measures list offers it.
+TEST(TerrainRuleVocabulary, OnlyAPlanetListsLatitude)
+{
+    const auto flat = Vocab::ConditionKinds(TerrainDomain::Planar);
+    const auto planet = Vocab::ConditionKinds(TerrainDomain::Spherical);
+    EXPECT_EQ(std::count(flat.begin(), flat.end(), Kind::LatitudeDegrees), 0);
+    EXPECT_EQ(std::count(planet.begin(), planet.end(), Kind::LatitudeDegrees), 1);
+    EXPECT_EQ(planet.size(), flat.size() + 1);
+}
+
+// Each terrain type reads its own sentence: a planet card never starts with the flat one.
+TEST(TerrainRuleVocabulary, TheHelpCardIsTheTerrainTypesOwnSentence)
+{
+    for (const Kind kind : kAllKinds)
+    {
+        const std::string flat = Lower(std::string(Vocab::ConditionKindHelp(kind, TerrainDomain::Planar)));
+        const std::string planet = Lower(std::string(Vocab::ConditionKindHelp(kind, TerrainDomain::Spherical)));
+        EXPECT_FALSE(Has(flat, "on a planet")) << flat;
+        EXPECT_FALSE(Has(planet, "on a planet")) << planet;
+        EXPECT_FALSE(Has(planet, "height scale")) << planet;
+        EXPECT_FALSE(Has(planet, "cos")) << planet;
+    }
+    EXPECT_TRUE(Has(Lower(std::string(Vocab::ConditionKindHelp(Kind::HeightMeters, TerrainDomain::Spherical))),
+                    "meters above the planet's radius"));
+    EXPECT_EQ(Vocab::ConditionKindHelp(Kind::LatitudeDegrees, TerrainDomain::Spherical),
+              "Degrees from the equator: 0 at the equator, 90 at either pole.");
+}
+
+// Two snow rows read apart: the one whose Latitude band reaches a pole is headed Polar.
+TEST(TerrainRuleVocabulary, ARuleWithALatitudeBandToThePoleIsHeadedPolar)
+{
+    Components::TerrainSurfaceRule polar{};
+    polar.ConditionCount = 1;
+    polar.Conditions[0].Kind = Kind::LatitudeDegrees;
+    polar.Conditions[0].Min = 70.0f;
+    polar.Conditions[0].Max = 90.0f;
+    EXPECT_EQ(Vocab::RuleHeadingQualifier(polar), "Polar ");
+
+    polar.Conditions[0].Max = 40.0f;
+    EXPECT_EQ(Vocab::RuleHeadingQualifier(polar), "");
+    polar.Conditions[0].Min = 0.0f;
+    polar.Conditions[0].Max = 90.0f;
+    EXPECT_EQ(Vocab::RuleHeadingQualifier(polar), "") << "a band from the equator to the pole is not polar";
+    Components::TerrainSurfaceRule height{};
+    height.ConditionCount = 1;
+    height.Conditions[0].Kind = Kind::HeightMeters;
+    height.Conditions[0].Max = 90.0f;
+    EXPECT_EQ(Vocab::RuleHeadingQualifier(height), "");
+}
+
+// The slope pair differs only by unit, and picking the wrong one is silent. The
 // labels must therefore be distinct AND must each name a unit — a dropdown
-// showing "Slope" twice is the whole failure.
+// showing "Slope" twice is the whole failure. Height has one unit, in meters.
 TEST(TerrainRuleVocabulary, UnitPairsAreDistinguishableInAPicker)
 {
     const std::string slopeDeg = Lower(std::string(Vocab::ConditionKindLabel(Kind::SlopeDegrees)));
     const std::string slopeRaw =
         Lower(std::string(Vocab::ConditionKindLabel(Kind::SlopeNormalized)));
-    const std::string heightM = Lower(std::string(Vocab::ConditionKindLabel(Kind::HeightMetres)));
-    const std::string heightN =
-        Lower(std::string(Vocab::ConditionKindLabel(Kind::HeightNormalized)));
+    const std::string height = Lower(std::string(Vocab::ConditionKindLabel(Kind::HeightMeters)));
 
     EXPECT_NE(slopeDeg, slopeRaw);
-    EXPECT_NE(heightM, heightN);
     EXPECT_TRUE(Has(slopeDeg, "degrees")) << slopeDeg;
-    EXPECT_TRUE(Has(heightM, "metres")) << heightM;
     EXPECT_TRUE(Has(slopeRaw, "0-1")) << slopeRaw;
-    EXPECT_TRUE(Has(heightN, "0-1")) << heightN;
+    EXPECT_EQ(height, "height (meters)");
 }
 
 // The migration-exact kinds have to say why they are on the menu at all, or an
@@ -212,34 +293,28 @@ TEST(TerrainRuleVocabulary, UnitPairsAreDistinguishableInAPicker)
 // squashed domain instead of an angle.
 TEST(TerrainRuleVocabulary, RawSlopeHelpSaysItIsNotAnAngle)
 {
-    const std::string help = Lower(std::string(Vocab::ConditionKindHelp(Kind::SlopeNormalized)));
+    const std::string help = Lower(std::string(Vocab::ConditionKindHelp(Kind::SlopeNormalized, TerrainDomain::Planar)));
     EXPECT_TRUE(Has(help, "not an angle")) << help;
     EXPECT_TRUE(Has(help, "degrees")) << help; // names where to go instead
-}
-
-TEST(TerrainRuleVocabulary, NormalizedHeightHelpSaysTheBandChasesTheHeightfield)
-{
-    const std::string help = Lower(std::string(Vocab::ConditionKindHelp(Kind::HeightNormalized)));
-    EXPECT_TRUE(Has(help, "chases")) << help;
 }
 
 // ---- Domains ---------------------------------------------------------------
 
 TEST(TerrainRuleVocabulary, AuthoringDomainsMatchTheKindsUnit)
 {
-    constexpr float kHeightScale = 512.0f;
+    constexpr Vocab::ConditionDomain kHeightRange{-20.0f, 512.0f};
 
-    const auto degrees = Vocab::ConditionAuthoringDomain(Kind::SlopeDegrees, kHeightScale);
+    const auto degrees = Vocab::ConditionAuthoringDomain(Kind::SlopeDegrees, kHeightRange);
     EXPECT_FLOAT_EQ(degrees.Min, 0.0f);
     EXPECT_FLOAT_EQ(degrees.Max, 90.0f);
 
-    const auto metres = Vocab::ConditionAuthoringDomain(Kind::HeightMetres, kHeightScale);
-    EXPECT_FLOAT_EQ(metres.Min, 0.0f);
-    EXPECT_FLOAT_EQ(metres.Max, kHeightScale);
+    const auto meters = Vocab::ConditionAuthoringDomain(Kind::HeightMeters, kHeightRange);
+    EXPECT_FLOAT_EQ(meters.Min, kHeightRange.Min);
+    EXPECT_FLOAT_EQ(meters.Max, kHeightRange.Max);
 
-    for (const Kind kind : {Kind::SlopeNormalized, Kind::HeightNormalized, Kind::Noise})
+    for (const Kind kind : {Kind::SlopeNormalized, Kind::Noise})
     {
-        const auto unit = Vocab::ConditionAuthoringDomain(kind, kHeightScale);
+        const auto unit = Vocab::ConditionAuthoringDomain(kind, kHeightRange);
         EXPECT_FLOAT_EQ(unit.Min, 0.0f) << static_cast<int>(kind);
         EXPECT_FLOAT_EQ(unit.Max, 1.0f) << static_cast<int>(kind);
     }
@@ -247,13 +322,24 @@ TEST(TerrainRuleVocabulary, AuthoringDomainsMatchTheKindsUnit)
 
 // A rules effect can be authored before any terrain exists, and a zero-width
 // domain is a slider whose handles cannot move — a dead control, not an empty one.
-TEST(TerrainRuleVocabulary, MetresDomainStaysUsableWithNoTerrainToReadAHeightFrom)
+TEST(TerrainRuleVocabulary, MetersDomainStaysUsableWithNoTerrainToReadAHeightFrom)
 {
-    for (const float heightScale : {0.0f, -1.0f})
+    for (const Vocab::ConditionDomain range : {Vocab::ConditionDomain{0.0f, 0.0f}, Vocab::ConditionDomain{5.0f, -1.0f}})
     {
-        const auto domain = Vocab::ConditionAuthoringDomain(Kind::HeightMetres, heightScale);
-        EXPECT_GT(domain.Max, domain.Min) << "height scale " << heightScale;
+        const auto domain = Vocab::ConditionAuthoringDomain(Kind::HeightMeters, range);
+        EXPECT_GT(domain.Max, domain.Min) << "range " << range.Min << " to " << range.Max;
     }
+}
+
+// #6332: a heightmap in meters at Height Scale 1 reports its relief (-45 m to 300 m) as its
+// range, so the meters slider spans it and a 175 m band is inside the domain.
+TEST(TerrainRuleVocabulary, MetersDomainSpansTheTerrainRangeNotItsHeightScale)
+{
+    const auto domain = Vocab::ConditionAuthoringDomain(Kind::HeightMeters, {-45.0f, 300.0f});
+    EXPECT_FLOAT_EQ(domain.Min, -45.0f);
+    EXPECT_FLOAT_EQ(domain.Max, 300.0f);
+    EXPECT_GT(175.0f, domain.Min);
+    EXPECT_LT(175.0f, domain.Max);
 }
 
 // ---- Band summary ----------------------------------------------------------
@@ -266,6 +352,16 @@ TEST(TerrainRuleVocabulary, OrdinaryBandSummaryNamesBothEdgesAndTheFeather)
     EXPECT_TRUE(Has(summary, "90")) << summary;
     EXPECT_TRUE(Has(summary, "8")) << summary;
     EXPECT_TRUE(Has(summary, "feather")) << summary;
+}
+
+// Nothing lies past the pole, so a Latitude band that reaches it feathers below its low edge only.
+TEST(TerrainRuleVocabulary, ALatitudeBandToThePoleFeathersBelowItOnly)
+{
+    const auto condition = MakeCondition(Kind::LatitudeDegrees, 70.0f, 90.0f, 8.0f);
+    const std::string summary = Lower(Vocab::ConditionBandSummary(condition, MakeOwningRule()));
+    EXPECT_TRUE(Has(summary, "to the pole")) << summary;
+    EXPECT_TRUE(Has(summary, "over an 8")) << summary;
+    EXPECT_FALSE(Has(summary, "past each edge")) << summary;
 }
 
 // The feather's reach is stated as a WIDTH. Stating it as the two absolute
@@ -284,7 +380,7 @@ TEST(TerrainRuleVocabulary, FeatherReachIsAWidthNotAnOutOfDomainValue)
 // leaving it to a dropdown several rows away.
 TEST(TerrainRuleVocabulary, BandSummaryNamesTheFeatherShape)
 {
-    auto linear = MakeCondition(Kind::HeightNormalized, 0.2f, 0.8f, 0.1f);
+    auto linear = MakeCondition(Kind::HeightMeters, 20.0f, 80.0f, 10.0f);
     EXPECT_TRUE(Has(Lower(Vocab::ConditionBandSummary(linear, MakeOwningRule())), "linear"));
 
     auto smooth = linear;
@@ -294,7 +390,7 @@ TEST(TerrainRuleVocabulary, BandSummaryNamesTheFeatherShape)
 
 TEST(TerrainRuleVocabulary, HardEdgedBandSaysSoRatherThanNamingAZeroFeather)
 {
-    const auto condition = MakeCondition(Kind::HeightMetres, 100.0f, 400.0f, 0.0f);
+    const auto condition = MakeCondition(Kind::HeightMeters, 100.0f, 400.0f, 0.0f);
     const std::string summary = Lower(Vocab::ConditionBandSummary(condition, MakeOwningRule()));
     EXPECT_TRUE(Has(summary, "hard edge")) << summary;
 }
@@ -345,7 +441,7 @@ TEST(TerrainRuleState, AnEmptyBandWithNoFeatherKillsTheRowAndIsNumberedFromOne)
 {
     auto rule = MakeLiveRule();
     rule.ConditionCount = 2;
-    rule.Conditions[1] = MakeCondition(Kind::HeightMetres, 400.0f, 100.0f, 0.0f);
+    rule.Conditions[1] = MakeCondition(Kind::HeightMeters, 400.0f, 100.0f, 0.0f);
 
     const std::string reason = Lower(Vocab::RuleInertReason(rule));
     ASSERT_FALSE(reason.empty());
@@ -361,7 +457,7 @@ TEST(TerrainRuleState, AnEmptyBandWithNoFeatherKillsTheRowAndIsNumberedFromOne)
 TEST(TerrainRuleState, AnEmptyBandWithAFeatherIsStillLive)
 {
     auto rule = MakeLiveRule();
-    rule.Conditions[0] = MakeCondition(Kind::HeightMetres, 400.0f, 100.0f, 25.0f);
+    rule.Conditions[0] = MakeCondition(Kind::HeightMeters, 400.0f, 100.0f, 25.0f);
     EXPECT_TRUE(Vocab::RuleInertReason(rule).empty());
 }
 
@@ -371,7 +467,7 @@ TEST(TerrainRuleState, ConditionsPastTheCountAreNotInspected)
 {
     auto rule = MakeLiveRule();
     rule.ConditionCount = 1;
-    rule.Conditions[1] = MakeCondition(Kind::HeightMetres, 400.0f, 100.0f, 0.0f);
+    rule.Conditions[1] = MakeCondition(Kind::HeightMeters, 400.0f, 100.0f, 0.0f);
     EXPECT_TRUE(Vocab::RuleInertReason(rule).empty());
 
     // ...and it IS reported the moment the count reaches it, so the test above
@@ -391,6 +487,19 @@ TEST(TerrainRuleNotice, AnEffectWithNoRulesSaysSoAndNamesTheButton)
     ASSERT_FALSE(text.empty());
     EXPECT_EQ(WarningCountIn(host), 1u);
     EXPECT_TRUE(Has(text, "add rule")) << text;
+    EXPECT_TRUE(Has(text, "replace rules list")) << text;
+}
+
+TEST(TerrainRuleNotice, APlanetBlockSaysItsRulesDoNotPaintAndNamesTheEffectsThatDo)
+{
+    UIElement planet;
+    GameEngine::Editor::AddSurfaceRulesPlanetNotice(&planet, TerrainDomain::Spherical);
+    EXPECT_TRUE(Has(AllTextIn(planet), "surface rules do not paint a planet.")) << AllTextIn(planet);
+    EXPECT_TRUE(Has(AllTextIn(planet), "noise, flatten, stamp or sculpt zones")) << AllTextIn(planet);
+
+    UIElement flat;
+    GameEngine::Editor::AddSurfaceRulesPlanetNotice(&flat, TerrainDomain::Planar);
+    EXPECT_TRUE(AllTextIn(flat).empty());
 }
 
 TEST(TerrainRuleNotice, AnEffectWithRulesIsQuiet)
@@ -557,11 +666,11 @@ TEST(TerrainInteractiveEditArm, AnArmThatNeverArmedReleasesNothing)
 // adding one is a no-op until the author narrows it.
 TEST(TerrainRuleVocabulary, AFreshConditionSpansItsKindsWholeDomain)
 {
-    constexpr float kHeightScale = 512.0f;
+    constexpr Vocab::ConditionDomain kHeightRange{0.0f, 512.0f};
     for (const Kind kind : kAllKinds)
     {
-        const auto condition = Vocab::MakeDefaultCondition(kind, kHeightScale);
-        const auto domain = Vocab::ConditionAuthoringDomain(kind, kHeightScale);
+        const auto condition = Vocab::MakeDefaultCondition(kind, kHeightRange);
+        const auto domain = Vocab::ConditionAuthoringDomain(kind, kHeightRange);
         EXPECT_EQ(condition.Kind, kind);
         EXPECT_FLOAT_EQ(condition.Min, domain.Min) << static_cast<int>(kind);
         EXPECT_FLOAT_EQ(condition.Max, domain.Max) << static_cast<int>(kind);
@@ -573,7 +682,7 @@ TEST(TerrainRuleVocabulary, AFreshConditionSpansItsKindsWholeDomain)
 // wide. Named separately from the sweep so a failure says which case broke.
 TEST(TerrainRuleVocabulary, AFreshDegreesConditionIsNotAOneDegreeSliver)
 {
-    const auto condition = Vocab::MakeDefaultCondition(Kind::SlopeDegrees, 256.0f);
+    const auto condition = Vocab::MakeDefaultCondition(Kind::SlopeDegrees, {0.0f, 256.0f});
     EXPECT_FLOAT_EQ(condition.Max, 90.0f);
     EXPECT_GT(condition.Max - condition.Min, 1.0f)
         << "a fresh slope condition is a sliver, so adding one silently kills the rule";
@@ -585,7 +694,7 @@ TEST(TerrainRuleState, AddingAFreshConditionDoesNotMakeARuleIgnored)
 {
     auto rule = MakeLiveRule();
     rule.ConditionCount = 2;
-    rule.Conditions[1] = Vocab::MakeDefaultCondition(Kind::HeightMetres, 300.0f);
+    rule.Conditions[1] = Vocab::MakeDefaultCondition(Kind::HeightMeters, {0.0f, 300.0f});
     EXPECT_TRUE(Vocab::RuleInertReason(rule).empty());
 }
 
@@ -597,14 +706,14 @@ TEST(TerrainRuleState, AddingAFreshConditionDoesNotMakeARuleIgnored)
 TEST(TerrainRuleVocabulary, SmallMetricValuesKeepADecimalRatherThanRoundingBothWays)
 {
     EXPECT_EQ(Vocab::FormatConditionValue(Kind::SlopeDegrees, 4.8f), "4.8\xC2\xB0");
-    EXPECT_EQ(Vocab::FormatConditionValue(Kind::HeightMetres, 3.2f), "3.2 m");
+    EXPECT_EQ(Vocab::FormatConditionValue(Kind::HeightMeters, 3.2f), "3.2 m");
 }
 
 // Large values stay whole: a decimal on every slope in a rule set is noise.
 TEST(TerrainRuleVocabulary, LargeMetricValuesStayWholeNumbers)
 {
     EXPECT_EQ(Vocab::FormatConditionValue(Kind::SlopeDegrees, 35.0f), "35\xC2\xB0");
-    EXPECT_EQ(Vocab::FormatConditionValue(Kind::HeightMetres, 400.0f), "400 m");
+    EXPECT_EQ(Vocab::FormatConditionValue(Kind::HeightMeters, 400.0f), "400 m");
 }
 
 // A non-zero value must never print as zero, whatever its kind's precision — a
@@ -614,13 +723,13 @@ TEST(TerrainRuleVocabulary, ASmallNonZeroValueNeverRendersAsZero)
 {
     for (const float value : {0.4f, 0.04f, 0.004f})
     {
-        const std::string text = Vocab::FormatConditionValue(Kind::HeightMetres, value);
+        const std::string text = Vocab::FormatConditionValue(Kind::HeightMeters, value);
         EXPECT_NE(text.find_first_of("123456789"), std::string::npos)
             << value << " rendered as " << text;
     }
     // Genuine zero renders "0 m": it takes the one-decimal form like the 0.4
     // beside it, and the trailing zero then comes off with every other one.
-    EXPECT_EQ(Vocab::FormatConditionValue(Kind::HeightMetres, 0.0f), "0 m");
+    EXPECT_EQ(Vocab::FormatConditionValue(Kind::HeightMeters, 0.0f), "0 m");
 }
 
 // ---- Band range text (finding 11) -----------------------------------------
@@ -637,6 +746,39 @@ TEST(TerrainRuleVocabulary, BandRangeTextCarriesBothEdgesWithUnits)
     EXPECT_TRUE(Has(text, "\xC2\xB0")) << text;
     EXPECT_FALSE(Has(Lower(text), "band")) << "the label already says Band: " << text;
     EXPECT_FALSE(Has(Lower(text), "condition")) << text;
+}
+
+// The default snow row's high edge is the domain sentinel: the text says it has no limit
+// instead of printing 100000 m.
+TEST(TerrainRuleVocabulary, AHeightBandWithNoUpperEdgeReadsFromItsLowEdgeUp)
+{
+    const auto condition = MakeCondition(Kind::HeightMeters, 900.0f, 100000.0f, 30.0f);
+    const std::string summary = Vocab::ConditionBandSummary(condition, MakeOwningRule());
+    EXPECT_TRUE(Has(summary, "from 900 m up")) << summary;
+    EXPECT_FALSE(Has(summary, "100000")) << summary;
+    EXPECT_EQ(Vocab::ConditionBandRangeText(condition), "900 m - No limit");
+}
+
+TEST(TerrainRuleVocabulary, TheHeightRangeNoteNamesTheTerrainsRangeInMeters)
+{
+    EXPECT_EQ(Vocab::HeightRangeNote({0.0f, 1200.0f}, TerrainDomain::Planar),
+              "Height conditions are meters above this terrain's base: 0 m to 1200 m.");
+    EXPECT_EQ(Vocab::HeightRangeNote({-3000.0f, 3000.0f}, TerrainDomain::Spherical),
+              "Height conditions are meters above the planet's radius: -3000 m to 3000 m.");
+    EXPECT_TRUE(Vocab::HeightRangeNote({0.0f, 0.0f}, TerrainDomain::Planar).empty());
+    EXPECT_EQ(Vocab::FormatHeightRange({0.0f, 1200.0f}), "0 m to 1200 m");
+}
+
+// A refused kind loads with the default kind as a placeholder: the text must not read its band in that unit.
+TEST(TerrainRuleVocabulary, ARefusedConditionReadsAsRefusedNotInItsPlaceholderUnit)
+{
+    auto condition = MakeCondition(Kind::SlopeDegrees, 0.9f, 1.0f, 0.0f);
+    condition.RefusedKind = 3;
+    EXPECT_EQ(Vocab::RefusedKindLabel(condition.RefusedKind), "Refused (kind 3)");
+    const std::string summary = Vocab::ConditionBandSummary(condition, MakeOwningRule());
+    EXPECT_EQ(summary.rfind("Refused kind: this band (0.9 to 1)", 0), 0u) << summary;
+    EXPECT_FALSE(Has(summary, "\xC2\xB0")) << summary;
+    EXPECT_EQ(Vocab::ConditionBandRangeText(condition), "0.9 - 1");
 }
 
 // ---- Rule strength in the caption (finding 8) -----------------------------
@@ -695,7 +837,7 @@ TEST(TerrainRuleVocabulary, AFullStrengthReplaceRuleSaysItTakesTheGround)
 // one sentence fails here even if it keeps both phrases somewhere.
 TEST(TerrainRuleVocabulary, TheTwoModesDoNotProduceTheSameCaption)
 {
-    const auto condition = MakeCondition(Kind::HeightMetres, 100.0f, 400.0f, 20.0f);
+    const auto condition = MakeCondition(Kind::HeightMeters, 100.0f, 400.0f, 20.0f);
     EXPECT_NE(Vocab::ConditionBandSummary(condition, MakeOwningRule(1.0f, false)),
               Vocab::ConditionBandSummary(condition, MakeOwningRule(1.0f, true)));
 }
@@ -962,8 +1104,7 @@ TEST(TerrainRuleVocabulary, NoCaptionCarriesATrailingZero)
 {
     for (const auto& pair : {std::pair<Kind, float>{Kind::SlopeDegrees, 34.0f},
                             std::pair<Kind, float>{Kind::SlopeDegrees, 4.0f},
-                            std::pair<Kind, float>{Kind::HeightMetres, 400.0f},
-                            std::pair<Kind, float>{Kind::HeightNormalized, 0.5f},
+                            std::pair<Kind, float>{Kind::HeightMeters, 400.0f},
                             std::pair<Kind, float>{Kind::Noise, 1.0f}})
     {
         const std::string text = Vocab::FormatConditionValue(pair.first, pair.second);

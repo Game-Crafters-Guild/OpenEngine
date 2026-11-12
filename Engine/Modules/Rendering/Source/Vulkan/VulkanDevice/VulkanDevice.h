@@ -32,6 +32,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
@@ -578,6 +579,12 @@ class VulkanDevice : public IDevice
 
     // Window presentation abstraction methods for backend compatibility
     WindowTargetHandle CreateWindowTarget(void* windowHandle, uint32_t width, uint32_t height) override;
+    // With a `dispatch` and no active target, vkCreateSwapchainKHR runs on a job of `dispatch`; otherwise the target
+    // is made on the calling thread. The surface, the queries and everything after the driver call stay on this thread.
+    bool CreateAndActivateWindowTarget(void* windowHandle, uint32_t width, uint32_t height,
+                                       WindowTargetHandle* outTarget = nullptr,
+                                       const WindowTargetJobDispatch& dispatch = {}) override;
+    bool HasWindowTargetCreationFailed(WindowTargetHandle target) const override;
     bool DestroyWindowTarget(WindowTargetHandle target) override;
     bool DrainWindowTarget(WindowTargetHandle target, uint64_t timeoutNs = ~0ull) override;
     bool SetActiveWindowTarget(WindowTargetHandle target) override;
@@ -1137,6 +1144,50 @@ class VulkanDevice : public IDevice
     uint64_t m_ActiveWindowTargetLastGraphicsTimelineValue = 0;
     uint32_t m_ActiveWindowTargetLastArmedFrameIndex = UINT32_MAX;
     uint64_t m_WindowTargetRetirementFrameCounter = 0;
+
+    // The inputs of one vkCreateSwapchainKHR, filled on the owner thread. CreateSwapchainFromPlan points the
+    // create info at queueFamilyIndices, so a copy of the plan stays valid.
+    struct SwapchainCreatePlan
+    {
+        VkSwapchainCreateInfoKHR createInfo{};
+        std::array<uint32_t, 2> queueFamilyIndices{};
+        VkSurfaceFormatKHR surfaceFormat{};
+        uint32_t surfaceMinImageCount = 0;
+        uint32_t surfaceMaxImageCount = 0;
+    };
+    // The vkCreateSwapchainKHR of a dispatched CreateAndActivateWindowTarget, shared with the job that makes the call. The job reads
+    // only `device` and `plan`, writes `swapchain` and `result`, then sets `done` under `mutex`.
+    struct PendingSwapchainCreation
+    {
+        VkDevice device = VK_NULL_HANDLE;
+        SwapchainCreatePlan plan;
+        std::mutex mutex;
+        std::condition_variable doneChanged;
+        bool done = false;
+        VkSwapchainKHR swapchain = VK_NULL_HANDLE;
+        VkResult result = VK_ERROR_INITIALIZATION_FAILED;
+        std::chrono::steady_clock::time_point begun{};
+    };
+    // Set while the active window target waits for its swapchain. Only the active target can be pending:
+    // every call that changes the active target or tears targets down resolves it first.
+    std::shared_ptr<PendingSwapchainCreation> m_PendingSwapchain;
+    static constexpr std::chrono::milliseconds kWaitForPendingSwapchainForever = std::chrono::milliseconds::max();
+    // BeginFrame's wait for the pending swapchain, then the frame is skipped so the caller pumps its messages. A
+    // driver that sends a message to the window thread from the call completes it after that pump. Above the
+    // driver call's measured cold time (design row: start-up round 20, the swapchain off the main thread).
+    static constexpr std::chrono::milliseconds kPendingSwapchainFrameWait{1500};
+    // The window target whose pending swapchain creation failed, 0 if none. Its id is never reused.
+    uint64_t m_FailedWindowTargetId = 0;
+
+    bool PrepareSwapchain(uint32_t width, uint32_t height, SwapchainCreatePlan& outPlan);
+    void ApplySwapchainPlanProperties(const SwapchainCreatePlan& plan);
+    bool AdoptSwapchain(VkSwapchainKHR swapchain, const SwapchainCreatePlan& plan);
+    // The swapchain job body: one driver call, then the result under the mutex.
+    static void RunPendingSwapchainCreation(PendingSwapchainCreation& pending);
+    // Waits up to `timeout` for the pending swapchain and adopts it. Returns true when nothing is pending or the
+    // swapchain is adopted; false while the job still runs or when the creation failed. A failed creation logs
+    // the error, destroys the pending target and records it in m_FailedWindowTargetId.
+    bool ResolvePendingSwapchain(std::chrono::milliseconds timeout);
 
     WindowTargetState CaptureWindowTargetState() const;
     void ApplyWindowTargetState(const WindowTargetState& state);

@@ -2,6 +2,7 @@
 
 #include "Components/Transform.h"
 #include "ECS/Entity.h"
+#include "Mathematics/Matrix4x4.h"
 #include "Mathematics/Vector3.h"
 #include "Spline/SplineTypes.h"
 #include "Types/Types.h"
@@ -49,7 +50,7 @@ void StandPathOnGround(ECS::World& world, std::span<Mathematics::Vector3> points
 Components::Transform NewPathPlacement(std::span<const Mathematics::Vector3> points);
 // Makes `entity`, placed by `worldMatrix`, a path: an open spline of `type` through `points`
 // (world), entity-local, knot radius 0. The entity's WorldTransform is set to `worldMatrix`.
-void AddPathParts(ECS::World& world, ECS::EntityHandle entity, const float32 (&worldMatrix)[16],
+void AddPathParts(ECS::World& world, ECS::EntityHandle entity, const Mathematics::Matrix4x4& worldMatrix,
                   std::span<const Mathematics::Vector3> points, Spline::SplineType type);
 
 // The path's knots in the world; empty without its spline.

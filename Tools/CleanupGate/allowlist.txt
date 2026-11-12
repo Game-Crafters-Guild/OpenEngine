@@ -2,7 +2,7 @@
 # are counted apart from the baseline; the gate fails when the file has more sites than the count, and asks to lower or
 # delete the entry when it has fewer.
 
-Apps/Editor/Include/UndoRedo/EntityComponentsEdit.h:one_free_function_file:1                 # CommitEntityComponentsEdit, CaptureEntityComponents and RestoreEntityComponents; the gate does not see the two whose signatures wrap
+Apps/Editor/Include/UI/Controls/SeedField.h:named_for_a_function:1                           # the class SeedField; the rule ignores the classes a file defines (#5208)
 Apps/Editor/Source/DebugServer/EditorDebugServer.cpp:atomic_spin:1                           # the debug server's socket thread
 Apps/Editor/Source/DebugServer/EditorDebugServer.cpp:sleep_poll:1                            # the debug server's socket thread
 Apps/Editor/Source/DebugServer/EditorDebugServer.cpp:std_thread:1                            # the debug server's socket thread
@@ -12,31 +12,45 @@ Apps/Editor/Source/DeviceLossSurfacer.cpp:std_thread:1                          
 Apps/Editor/Source/Diagnostics/MainThreadHangWatchdog.cpp:atomic_spin:1                      # a watchdog (must not depend on the pool it watches)
 Apps/Editor/Source/Diagnostics/MainThreadHangWatchdog.cpp:sleep_poll:1                       # a watchdog (must not depend on the pool it watches)
 Apps/Editor/Source/Diagnostics/MainThreadHangWatchdog.cpp:std_thread:2                       # a watchdog (must not depend on the pool it watches)
+Apps/Editor/Source/Inspectors/InspectorOverrideRows.h:one_free_function_file:1               # BindFieldRow and AttachOverrideMenu; the gate does not see BindFieldRow, whose last parameter defaults to {}
+Apps/Editor/Source/Panels/BuildPanel/ExportRequirementsSection.cpp:add_child_calls:1        # one notice per requirement of the enabled platforms, known at run time; the .uxml holds the fixed parts
+Apps/Editor/Source/Panels/BuildPanel/ExportRequirementsSection.cpp:control_creations:1      # one notice per requirement of the enabled platforms, known at run time; the .uxml holds the fixed parts
+Apps/Editor/Source/Panels/BuildPanel/ExportRequirementsSection.cpp:files_assembling_ui:1    # one notice per requirement of the enabled platforms, known at run time; the .uxml holds the fixed parts
+Apps/Editor/Source/Panels/BuildPanel/ExportRequirementsSection.cpp:named_for_a_function:1   # the class ExportRequirementsSection; the rule ignores the classes a file defines (#5208)
+Apps/Editor/Source/Panels/BuildPanel/ExportRequirementsSection.h:named_for_a_function:1     # the class ExportRequirementsSection; the rule ignores the classes a file defines (#5208)
 Apps/Editor/Source/Panels/LogChannelPopover.cpp:add_child_calls:1                            # no layout file can name the search field; #5156
 Apps/Editor/Source/Panels/LogChannelPopover.cpp:control_creations:1                          # no layout file can name the search field; #5156
 Apps/Editor/Source/Panels/LogChannelPopover.cpp:files_assembling_ui:1                        # no layout file can name the search field; #5156
 Apps/Editor/Source/Panels/ProjectPicker/ProjectCard.cpp:named_for_a_function:1               # the class ProjectCard; the rule ignores the classes a file defines (#5208)
 Apps/Editor/Source/Panels/ProjectPicker/ProjectCard.h:named_for_a_function:1                 # the class ProjectCard; the rule ignores the classes a file defines (#5208)
+Apps/Editor/Source/Panels/Scribe/ScribePanel.cpp:add_child_calls:13                          # one row per state, item and name of the open program, and the heading, notice, fields and action rows of the selected row; the two prompts go on the window root; the .uxml holds the fixed parts
+Apps/Editor/Source/Panels/Scribe/ScribePanel.cpp:control_creations:10                        # one row per state, item and name of the open program, and the fields of the selected row; the .uxml holds the fixed parts
+Apps/Editor/Source/Panels/Scribe/ScribePanel.cpp:files_assembling_ui:1                       # one row per state, item and name of the open program, and the fields of the selected row; the .uxml holds the fixed parts
 Apps/Editor/Source/Prefabs/PrefabEditorRegistration.cpp:add_child_calls:3                    # the dialog attaches as the eight before it (modal mount #5071); the two Inspector banners mount their controls
 Apps/Editor/Source/Prefabs/PrefabEditorRegistration.cpp:files_assembling_ui:1                # attaches as the eight dialogs before it; the shared modal mount is #5071
 Apps/Editor/Source/Prefabs/PrefabEditorRegistration.cpp:imperative_no_asset:1                # attaches as the eight dialogs before it; the shared modal mount is #5071
 Apps/Editor/Source/Projects/SubprocessStream.cpp:std_thread:1                                # a process host (pipes block)
 Apps/Editor/Source/SceneView/SceneViewExposureHintOverlay.cpp:add_child_calls:1              # ViewOverlay::Present builds an overlay's element into the layer the host gives it, as every view overlay does; the host could place what Present returns
 Apps/Editor/Source/SceneView/SceneViewExposureHintOverlay.cpp:files_assembling_ui:1          # ViewOverlay::Present builds an overlay's element into the layer the host gives it, as every view overlay does; the host could place what Present returns
-Apps/Editor/Source/Terrain/SphereSculptSaver.cpp:one_free_function_file:1                    # FlushDirtySphereSculpt, the sculpt saver's one entry point beside TerrainZonePayloadSaver.cpp; the gate names the condition at line 53
+Apps/Editor/Source/SceneView/SceneViewNoticeOverlay.cpp:add_child_calls:2                    # ViewOverlay::Present builds the overlay's banner and notice into the layer the host gives it, as every view overlay does
 Apps/Editor/Source/UI/Controls/EditorTitleBar.cpp:add_child_calls:1                            # one heading per menu the native toolbar reports at run time; the .uxml holds the fixed parts
 Apps/Editor/Source/UI/Controls/EditorTitleBar.cpp:control_creations:2                          # one heading per menu the native toolbar reports at run time; the .uxml holds the fixed parts
 Apps/Editor/Source/UI/Controls/EditorTitleBar.cpp:files_assembling_ui:1                        # one heading per menu the native toolbar reports at run time; the .uxml holds the fixed parts
+Apps/Editor/Source/UI/Controls/SeedField.cpp:named_for_a_function:1                          # the class SeedField; the rule ignores the classes a file defines (#5208)
+Apps/Editor/Source/UI/Controls/SetupStepList.cpp:add_child_calls:2                             # a fix notice only for a failed or warning step, its kind from the step; each row from its .uxml joins the rows container
+Apps/Editor/Source/UI/Controls/SetupStepList.cpp:control_creations:1                           # a fix notice only for a failed or warning step, its kind from the step; the .uxml holds the row
+Apps/Editor/Source/UI/Controls/SetupStepList.cpp:files_assembling_ui:1                         # a fix notice only for a failed or warning step, its kind from the step; the .uxml holds the row
 Apps/Editor/Source/main.cpp:debug_output:1                                                   # crash handler: writes to the debugger after the logger may be gone
 Apps/Editor/Source/main.cpp:printf_output:14                                                 # crash handler: writes to stderr after the logger may be gone
+Engine/Include/Engine/Build/ExportRequirements.h:named_for_a_function:1                      # the struct ExportRequirement; the rule ignores the classes a file defines (#5208)
 Engine/Include/Engine/Rendering/WorldDrawBuilder.h:std_thread_id_info:1                      # a thread-affinity check: the one off-pool submitter
 Engine/Include/Platform/Thread.h:sleep_poll:1                                                # Platform::SleepPrecise, the engine's one sleep
-Engine/Include/Scene/PrefabSpawn.h:one_free_function_file:1                                  # SpawnPrefab and DespawnPrefab; the gate does not see SpawnPrefab, whose signature wraps
+Engine/Include/Scripting/ScriptingABI.h:float_ptr:1                                          # C ABI out-parameter: a scalar, the bar's max, as every GE_UIElement getter returns one
 Engine/Modules/CBTTerrain/Source/CBTInstance.cpp:manual_barrier:20                           # the CBT shadow chain's resources and passes move into the render graph (#4809)
-Engine/Modules/CBTTerrain/Source/CBTResources.cpp:create_buffer:8                            # the CBT shadow chain's resources and passes move into the render graph (#4809)
+Engine/Modules/CBTTerrain/Source/CBTResources.cpp:create_buffer:6                            # the CBT shadow chain's resources and passes move into the render graph (#4809)
 Engine/Modules/CBTTerrain/Source/CBTResources.cpp:create_command_list:1                      # the CBT shadow chain's resources and passes move into the render graph (#4809)
 Engine/Modules/CBTTerrain/Source/CBTResources.cpp:create_texture:6                           # the CBT shadow chain's resources and passes move into the render graph (#4809)
-Engine/Modules/CBTTerrain/Source/CBTResources.cpp:destroy_resource:24                        # the CBT shadow chain's resources and passes move into the render graph (#4809)
+Engine/Modules/CBTTerrain/Source/CBTResources.cpp:destroy_resource:20                        # the CBT shadow chain's resources and passes move into the render graph (#4809)
 Engine/Modules/CBTTerrain/Source/CBTResources.cpp:manual_barrier:1                           # the CBT shadow chain's resources and passes move into the render graph (#4809)
 Engine/Modules/CBTTerrain/Source/CBTResources.cpp:queue_submit:1                             # the CBT shadow chain's resources and passes move into the render graph (#4809)
 Engine/Modules/CBTTerrainECS/Source/TerrainShadowFieldLit.cpp:create_texture:1               # the CBT shadow chain's resources and passes move into the render graph (#4809)
@@ -47,6 +61,7 @@ Engine/Modules/FileWatcher/Include/FileWatcher/FileWatcher.h:std_thread:1       
 Engine/Modules/FileWatcher/Source/FileWatcher.cpp:atomic_spin:4                              # a file watcher (OS blocking wait and its stop checks)
 Engine/Modules/FileWatcher/Source/FileWatcher.cpp:native_thread:1                            # a file watcher (OS blocking wait)
 Engine/Modules/FileWatcher/Source/FileWatcher.cpp:std_thread:1                               # a file watcher (OS blocking wait)
+Engine/Modules/Input/Include/Input/Gamepad/GamepadPoller.h:std_thread_id_info:1                # a thread-affinity check: gamepad discovery never runs on the frame thread
 Engine/Modules/JobSystem/Include/JobSystem/ConcurrentQueue.h:malloc_free:2                   # the job system's own allocator (task slabs, queues, job records)
 Engine/Modules/JobSystem/Include/JobSystem/ConcurrentQueue.h:raw_delete:1                    # the job system's own allocator (task slabs, queues, job records)
 Engine/Modules/JobSystem/Include/JobSystem/JobCounter.h:raw_delete:1                         # the job system's own allocator (task slabs, queues, job records)
@@ -66,6 +81,10 @@ Engine/Modules/Logger/Source/LoggerInternals.h:std_thread_id_info:1             
 Engine/Modules/Logger/Source/Logger.cpp:future_promise:3                                     # the log flush thread (Logger is below JobSystem)
 Engine/Modules/Logger/Source/Logger.cpp:sleep_poll:1                                         # the log flush thread (Logger is below JobSystem)
 Engine/Modules/Logger/Source/Logger.cpp:std_thread:1                                         # the log flush thread (Logger is below JobSystem)
+Engine/Modules/Mathematics/Include/Mathematics/Vector3.h:loose_feature_file:1                # the fp32 and fp64 vectors share one stem and two one-line bodies; one template or one folder is #6937
+Engine/Modules/Mathematics/Include/Mathematics/Vector3F64.h:duplicate_helper_bodies:2        # the fp32 and fp64 vectors share one stem and two one-line bodies; one template or one folder is #6937
+Engine/Modules/Mathematics/Include/Mathematics/Vector3F64.h:loose_feature_file:1             # the fp32 and fp64 vectors share one stem and two one-line bodies; one template or one folder is #6937
+Engine/Modules/Mathematics/Include/Mathematics/Vector3Int.h:loose_feature_file:1             # the int32, fp32 and fp64 vectors share one stem; one template or one folder is #6937
 Engine/Modules/Ocean/Include/Ocean/OceanTypes.h:raw_array:6                                  # GPU upload struct: the shader's layout (two vec4 pads, the shoreline pad and three per-octave float[16] runs)
 Engine/Modules/Ocean/Include/Ocean/OceanWaterMaterial.h:raw_array:1                          # GPU upload struct: the shader's layout (the pad after the point count)
 Engine/Modules/Ocean/Source/Systems/OceanExtractionSystem.cpp:raw_array:3                    # the per-octave float[16] runs of OceanFFTParamsGPU, and the color out-array of Components::ResolveLightColorIntensity
@@ -81,8 +100,8 @@ Engine/Modules/Rendering/Include/Rendering/Core/TextureManager.h:create_texture:
 Engine/Modules/Rendering/Include/Rendering/Core/TextureManager.h:destroy_resource:1          # the resource manager that owns the resource
 Engine/Modules/Rendering/Include/Rendering/Core/ViewParamsLayout.h:raw_array:2               # GPU upload struct: the shader's layout
 Engine/Modules/Rendering/Include/Rendering/Sky/SkyRenderer.h:raw_array:1                     # GPU upload struct: the std140 pad before AtmosphereUBO mieAbsorption, implicit in GLSL
-Engine/Modules/Rendering/Source/Core/GPUScene.cpp:create_buffer:10                           # GPUScene owns the scene's persistent instance, mesh and visibility buffers
-Engine/Modules/Rendering/Source/Core/GPUScene.cpp:destroy_resource:10                        # GPUScene owns the scene's persistent instance, mesh and visibility buffers
+Engine/Modules/Rendering/Source/Core/GPUScene.cpp:create_buffer:6                            # GPUScene owns the scene's per-slot instance buffers and its mesh table
+Engine/Modules/Rendering/Source/Core/GPUScene.cpp:destroy_resource:8                         # GPUScene owns the scene's per-slot instance buffers and its mesh table
 Engine/Modules/Rendering/Source/DirectX12/D3D12CommandList.cpp:raw_array:2                   # a GPU backend: the graphics API's own form, or the CommandList interface's signature it overrides
 Engine/Modules/Rendering/Source/DirectX12/D3D12CommandList.h:raw_array:1                     # a GPU backend: the graphics API's own form, or the CommandList interface's signature it overrides
 Engine/Modules/Rendering/Source/Metal/MetalClearTexel.h:raw_array:5                          # a GPU backend: the graphics API's own form, or the CommandList interface's signature it overrides
@@ -91,20 +110,27 @@ Engine/Modules/Rendering/Source/Metal/MetalCommandList.h:raw_array:2            
 Engine/Modules/Rendering/Source/Vulkan/VulkanCommandList.cpp:raw_array:1                     # a GPU backend: the graphics API's own form, or the CommandList interface's signature it overrides
 Engine/Modules/Rendering/Source/Vulkan/VulkanCommandList.h:raw_array:1                       # a GPU backend: the graphics API's own form, or the CommandList interface's signature it overrides
 Engine/Modules/Rendering/Source/Vulkan/VulkanDevice/VulkanDevice.cpp:raw_array:1                          # a GPU backend: the graphics API's own form, or the CommandList interface's signature it overrides
+Engine/Modules/Rendering/Source/Vulkan/VulkanDevice/VulkanDevice.h:condition_variable:1                       # the timed wait on the swapchain job of a window target (Rendering is below JobSystem)
 Engine/Modules/Rendering/Source/Vulkan/VulkanPipelineCache/VulkanPipelineCache.cpp:malloc_free:2                 # frees the buffer the C runtime's _dupenv_s allocated
 Engine/Modules/Rendering/Source/Vulkan/VulkanSharedInstance.cpp:raw_new:1                    # a process-lifetime registry, never destroyed, so it outlives static destruction
 Engine/Modules/Rendering/Source/WebGPU/WebGpuCommandList.h:raw_array:1                       # a GPU backend: the graphics API's own form, or the CommandList interface's signature it overrides
 Engine/Modules/Rendering/Source/WebGPU/WebGpuDevice.cpp:raw_delete:1                         # user data for a WebGPU C callback, freed by that callback
 Engine/Modules/Rendering/Source/WebGPU/WebGpuDevice.cpp:raw_new:1                            # user data for a WebGPU C callback, freed by that callback
+Engine/Modules/SpatialGrid/Include/SpatialGrid/GridOverlap.h:saturate_std_clamp01:1          # a double: the shape tests use doubles only, and Math::Clamp01 takes a float (#7007)
 Engine/Modules/SplineRecipes/Include/SplineRecipes/FenceMiterVariants.h:std_unordered_map:1  # a key with a hash and no ordering
 Engine/Modules/SplineRecipes/Include/SplineRecipes/SplineChunkCommit.h:std_unordered_map:1   # a key with a hash and no ordering; the scene-wide chunk map would insert quadratically into a flat map
-Engine/Modules/SplineRecipes/Source/PlacementGroundGap.cpp:one_free_function_file:1          # two measures; the gate sees only the local HalfAxis, not the two whose signatures wrap
 Engine/Modules/TerrainECS/Source/AreaFlatten/AreaReferenceSurface.cpp:raw_array:3            # one float64 per neighbor side, indexed by side: a stencil, not a vector
+Engine/Modules/TerrainECS/Source/TerrainPageTableRing.cpp:destroy_resource:2         # the page table ring that owns the resource
 Engine/Modules/Types/Include/Types/InlineVector.h:raw_delete:1                               # a container releasing its own heap block, taken through the global operator new so the allocation counter sees it
+Engine/Modules/UI/Source/Controls/Foldout.cpp:control_creations:6                       # the header's parts, its status badge and the content box, built in code until #6723 moves them to .uxml
+Engine/Modules/UI/Source/Controls/ProgressBar.cpp:files_assembling_ui:1                      # the track's one fill, built in code as Slider and Toggle build their parts; the move to .uxml is #6568
+Engine/Modules/UI/Source/Controls/ProgressBar.cpp:imperative_no_asset:1                      # the track's one fill, built in code as Slider and Toggle build their parts; the move to .uxml is #6568
 Engine/Source/Assets/ModelAssetLoadGltf.cpp:float_ptr:7                                      # importer: a pointer into the glTF file's own attribute arrays
 Engine/Source/Core/Application.cpp:sleep_poll:1                                              # the frame pacer's tail yield
 Engine/Source/Engine/Build/CancellableShellProcess.cpp:atomic_spin:1                         # a process host (pipes block)
 Engine/Source/Engine/Build/CancellableShellProcess.cpp:std_thread:2                          # a process host (pipes block)
+Engine/Source/Engine/Build/ExportRequirements.cpp:named_for_a_function:1                     # the struct ExportRequirement; the rule ignores the classes a file defines (#5208)
+Engine/Source/Engine/Rendering/MaterialSystemTesting.h:free_functions_beside_hub:1           # test seams of MaterialSystem; the game-facing MaterialSystem.h holds no test-only symbol
 Engine/Source/Engine/Rendering/Pipeline/Nodes/RenderScaleUpscaleNode.cpp:raw_array:1         # GPU upload struct: the shader's layout
 Engine/Source/Engine/Rendering/Pipeline/Nodes/ScreenSpaceReflectionsNode.cpp:raw_array:1     # GPU upload struct: the shader's layout
 Engine/Source/Engine/Rendering/StagingViewPool.cpp:create_texture:1                          # a staging view output outlives every frame: the UI samples it between on-demand renders
@@ -134,7 +160,7 @@ Engine/Source/Scene/PrefabOverrideWriter.h:std_unordered_set:1                  
 Engine/Source/Scene/PrefabOverrideWriter.h:string_key_unordered_set:1                        # the tags of every entity of a whole scene: a sorted insert is linear
 Engine/Source/Scene/PrefabPlacement.cpp:string_key_unordered_set:2                           # whole-scene id sets built once per command; `AllocateUniqueSceneEntityId` owns the type; the scene id index is #5072
 Engine/Source/Scene/PrefabPlacement.h:string_key_unordered_set:1                             # whole-scene id sets built once per command; `AllocateUniqueSceneEntityId` owns the type; the scene id index is #5072
-Engine/Source/Scene/PrefabSpawn.cpp:one_free_function_file:1                                 # SpawnTemplate, SpawnPrefab and DespawnPrefab; the gate does not see the two whose signatures wrap
 Engine/Source/Scene/SceneDoc.h:string_key_unordered_set:1                                    # the tags of every entity of a whole scene: a sorted insert is linear
 Engine/Source/Scene/SceneIO.cpp:std_unordered_map:4                                          # keyed per entity of a whole scene (the save context's tag map, the members by entity): a sorted insert is linear
 Engine/Source/Scene/SceneIO.cpp:std_unordered_set:7                                          # keyed per entity of a whole scene (the excluded set, the created ids): a sorted insert is linear
+Engine/Source/Scripting/UIElementValueABI.cpp:float_ptr:1                                    # C ABI out-parameter: a scalar, the bar's max, as every GE_UIElement getter returns one

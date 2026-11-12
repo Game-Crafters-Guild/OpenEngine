@@ -157,7 +157,8 @@ void RenderingLoop::Update(ECS::World& world, float32 deltaTime) {
         {
             const uint32_t frameIdx = device->GetFrameIndex();
             m_RenderServices->GetPerFrameWritePool().BeginFrame(frameIdx);
-            m_RenderServices->GetSkinPaletteAtlas().BeginFrame(m_RenderServices->GetPerFrameWritePool());
+            m_RenderServices->GetSkinPaletteAtlas().BeginFrame(
+                m_RenderServices->GetPerFrameWritePool(), SkeletonStore::Instance().GetLivePaletteBoneCount());
             // Age each runtime's palette offset into its previous-frame field.
             // Must sit between the atlas's new frame and the producers below:
             // at this point AtlasPaletteOffsetBones still names LAST frame's
@@ -221,7 +222,10 @@ void RenderingLoop::Update(ECS::World& world, float32 deltaTime) {
         // waits for a load), then bind the skeletons of the entities the
         // service has completed.
         BindChangedMeshRenderers(world, *m_RenderServices, m_MeshBindGate, m_SceneResolves);
-        m_SceneResolves.Step(world, *m_RenderServices, kResolveFrameSlice);
+        const auto resolveStart = std::chrono::steady_clock::now();
+        m_SceneResolves.Step(world, *m_RenderServices, m_ResolveSlice);
+        m_LastResolveStepTime =
+            std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - resolveStart);
         BindChangedSkinnedMeshAnimation(world, m_SkeletonResolveState, m_SceneResolves);
     }
 

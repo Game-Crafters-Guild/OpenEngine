@@ -46,7 +46,8 @@ typedef enum GE_Result {
     GE_Result_NotFound = -3,
     GE_Result_NotInitialized = -4,
     GE_Result_AlreadyInitialized = -5,
-    GE_Result_BufferFull = -6
+    GE_Result_BufferFull = -6,
+    GE_Result_Busy = -7            // The same operation is already running; retry later
 } GE_Result;
 
 typedef enum GE_LogLevel {
@@ -201,7 +202,8 @@ GE_API uint32_t GE_CDECL GE_ScriptingGetAbiVersion(void);
 // 3.2 adds GE_Animator_PollEventsOnEntity and GE_AnimationEventRecord (AnimatorABI.h) — additive, minor bump.
 // 4.0 removes the GE_Input_* exports and GE_InputActionState: scripts reach Input through its generated
 // table (GE_Input_GetInterface). It adds GE_GetLastScriptError.
-static const uint32_t GE_ABI_VERSION_CURRENT = GE_ABI_VERSION_ENCODE(4u, 0u);
+// 4.1 adds GE_Result_Busy, which GE_SwapPreloadedContext returns while another swap runs — additive, minor bump.
+static const uint32_t GE_ABI_VERSION_CURRENT = GE_ABI_VERSION_ENCODE(4u, 1u);
 
 // Forward declarations for function pointer types used in the interface
 typedef GE_Result (GE_CDECL *GE_Log_Fn)(GE_LogLevel level, const char* msg, uint32_t msgLen);
@@ -475,6 +477,13 @@ GE_API GE_Result GE_CDECL GE_UIElement_SetDropdownSelectedIndex(uint64_t instanc
 // the option's VALUE is the field value, read through GE_UIElement_GetValueText.
 GE_API GE_Result GE_CDECL GE_UIElement_GetDropdownSelectedLabel(uint64_t instanceId, char* buffer,
                                                                 int32_t bufferLen, int32_t* outLen);
+// A progress bar's range end and its indeterminate state. A max of 0 or less, or one that is not
+// finite, is GE_Result_InvalidArg; a new max clamps the bar's value again. The bar's value goes
+// through GE_UIElement_GetValueFloat and GE_UIElement_SetValueFloat.
+GE_API GE_Result GE_CDECL GE_UIElement_GetProgressMax(uint64_t instanceId, float* outMax);
+GE_API GE_Result GE_CDECL GE_UIElement_SetProgressMax(uint64_t instanceId, float max);
+GE_API GE_Result GE_CDECL GE_UIElement_GetProgressIndeterminate(uint64_t instanceId, int32_t* outIndeterminate);
+GE_API GE_Result GE_CDECL GE_UIElement_SetProgressIndeterminate(uint64_t instanceId, int32_t indeterminate);
 
 // Orders the element among its siblings, as CSS z-index does: a higher value is drawn in front of the siblings and
 // found first by the pointer; equal values keep document order. The value replaces the stylesheet's z-index for this
@@ -629,21 +638,9 @@ GE_API GE_Result GE_CDECL GE_CleanupOldContext(const char* assemblyPathUtf8, uin
 GE_API GE_Result GE_CDECL GE_ClearCompilerCache(void);
 GE_API GE_Result GE_CDECL GE_GetCompilerStats(void);
 
-// HotReload callback registration
-//
-// Engine.dll exports the five GE_PreloadAssemblyContext / GE_SwapPreloadedContext /
-// GE_CleanupOldContext / GE_ClearCompilerCache / GE_GetCompilerStats entry points
-// above. By default these dispatch to no-op stubs (used by Player builds and
-// tests with the CLR disabled). GameEngine.Native.dll holds the real CoreCLR-
-// backed implementations and, at module load, calls GE_RegisterHotReloadCallbacks
-// to wire its function pointers into Engine.dll's dispatcher table so editor /
-// player hot-reload flows through the actual CLR domain swap.
-//
-// This indirection exists because Engine.dll's HotReloadTasks / IncrementalCompilation
-// Task call these entry points internally — if Engine.dll PRIVATE-linked them from
-// GameEngine.Native (the pre-Phase-1 arrangement), the two SHARED libraries form a
-// link cycle. With the dispatcher pattern, GameEngine.Native depends on Engine.dll
-// but Engine.dll does not depend on GameEngine.Native, and the link graph is acyclic.
+// Engine.dll exports the five entry points above. Each one calls the function that GameEngine.Native.dll
+// registers at load with GE_RegisterHotReloadCallbacks, or returns GE_Result_Ok if none is registered.
+// This table keeps Engine.dll free of a link to GameEngine.Native.dll.
 typedef struct GE_HotReloadCallbacks {
     GE_PreloadAssemblyContext_Fn PreloadAssemblyContext;
     GE_SwapPreloadedContext_Fn   SwapPreloadedContext;

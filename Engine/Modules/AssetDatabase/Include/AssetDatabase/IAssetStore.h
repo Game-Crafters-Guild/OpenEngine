@@ -81,6 +81,8 @@ class IAssetStore
     // Key/value metadata helpers.
     virtual bool SetKeyValue(const GUID& guid, const std::string& key, const std::string& value, std::string* outError = nullptr) = 0;
     virtual bool TryGetKeyValue(const GUID& guid, const std::string& key, std::string& outValue) const = 0;
+    // Removes `key` from the asset's kv. True when the asset has a record, also when it had no such key.
+    virtual bool RemoveKeyValue(const GUID& guid, const std::string& key, std::string* outError = nullptr) = 0;
 
     // Redirects (optional, Unreal-style).
     virtual bool AddRedirect(const GUID& from, const GUID& to, std::string* outError = nullptr) = 0;

@@ -10,9 +10,10 @@
 	height: 0px;
 }
 
+/* The width follows the longest row; PrefabOverridesList.cpp caps it at the bar's width. */
 .prefab-overrides {
 	position: absolute;
-	width: 400px;
+	min-width: 400px;
 	padding: var(--ui_spacing_md);
 }
 
@@ -36,7 +37,7 @@
 	text-overflow: ellipsis;
 }
 
-.prefab-overrides-against {
+.prefab-overrides-prefab {
 	flex-shrink: 0;
 	font-size: var(--ui_font_size_small);
 	color: var(--ui_color_text_dim);
@@ -183,13 +184,13 @@
 	background-image-tint: var(--ui_color_text);
 }
 
-/* The glyphs of the override menu's Apply and Revert entries (EditorIcons kCube and kReset). */
+/* The glyphs of the override menu's Apply and Revert entries (EditorIcons kCube and kRevert). */
 .prefab-override-action-icon-apply {
 	background-image: url("editor:Icons/Cube.svg");
 }
 
 .prefab-override-action-icon-revert {
-	background-image: url("editor:Icons/ResetReload.svg");
+	background-image: url("editor:Icons/Revert.svg");
 }
 
 /* Discard keeps the row's height: a row is as tall as the icon buttons. */

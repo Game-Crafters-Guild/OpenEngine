@@ -14,6 +14,8 @@ namespace GameEngine::EditorIcons
     inline constexpr const char* kClose = "editor:Icons/xclose.svg";
     // Restore-shaped actions.
     inline constexpr const char* kReset = "editor:Icons/ResetReload.svg";
+    // Back to the source's value (a prefab's): a distinct glyph, so Revert and Reset never look alike in one menu.
+    inline constexpr const char* kRevert = "editor:Icons/Revert.svg";
     // Creation.
     inline constexpr const char* kPlus = "editor:Icons/plus.svg";
     // Files and navigation.

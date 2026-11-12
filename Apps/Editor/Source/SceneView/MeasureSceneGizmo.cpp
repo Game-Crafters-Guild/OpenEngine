@@ -77,7 +77,7 @@ bool GetEntityWorldMatrix(ECS::World* world,
 
     if (const auto* transform = world->GetComponent<Components::Transform>(entity))
     {
-        Mathematics::Matrix4x4 local = Mathematics::Matrix4x4::FromColumnMajor(transform->matrix);
+        Mathematics::Matrix4x4 local = transform->ToMatrix4x4(transform->GetPosition() - Mathematics::WorldPosition{});
         if (const auto* parent = world->GetComponent<Components::Parent>(entity);
             parent && parent->Entity.IsValid())
         {
@@ -95,7 +95,7 @@ bool GetEntityWorldMatrix(ECS::World* world,
 
     if (const auto* worldTransform = world->GetComponent<Components::WorldTransform>(entity))
     {
-        out = Mathematics::Matrix4x4::FromColumnMajor(worldTransform->matrix);
+        out = worldTransform->ToMatrix4x4(worldTransform->GetPosition() - Mathematics::WorldPosition{});
         return true;
     }
 

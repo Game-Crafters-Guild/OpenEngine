@@ -171,7 +171,7 @@ bool ModelAssetParser::ExtractDependencies(const GUID& referrer,
 // image is tracked, and the files read for the decode must be the ones it copies, so
 // ModelAsset::ResolveDecodeInputs asks the same manager.
 AssetDecodeInputs ModelAssetParser::ResolveDecodeInputs(
-    const AssetMetadata& metadata, const Vector<uint8>& bytes, AssetManager& /*assetManager*/) const
+    const AssetMetadata& metadata, std::span<const uint8> bytes, AssetManager& /*assetManager*/) const
 {
     return {.Files = ModelAsset::ResolveDecodeInputs(bytes, metadata.Path)};
 }

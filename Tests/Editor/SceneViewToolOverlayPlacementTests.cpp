@@ -52,7 +52,8 @@ struct ToolStripScene
         Fixture.ViewportW = kViewportWidth;
         Fixture.ViewportH = viewportHeight;
         Fixture.ExtraSheets = {"Assets/UI/theme/scene-view.css", "Assets/UI/theme/views.css",
-                               "Assets/UI/controls/Button.css", "Assets/UI/panels/SceneViewPanel.css"};
+                               GE_UI_MODULE_SOURCE_DIR "/Assets/UI/controls/Button.css",
+                               "Assets/UI/panels/SceneViewPanel.css"};
 
         auto panel = std::make_unique<UIElement>();
         panel->AddClass("sceneview-panel");

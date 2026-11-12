@@ -84,7 +84,7 @@ bool RetargetMap::Load()
     return ParseJson(text);
 }
 
-bool RetargetMap::LoadFromData(const Vector<uint8>& data)
+bool RetargetMap::LoadFromData(std::span<const uint8> data)
 {
     SetState(AssetState::Loading);
     const std::string text(reinterpret_cast<const char*>(data.data()), data.size());

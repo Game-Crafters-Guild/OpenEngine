@@ -4,9 +4,12 @@
 #include "JobSystem/Types.h"
 #include <atomic>
 #include <cassert>
+#include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <utility>
 #include <vector>
 #include <any>
 #include <string>
@@ -251,6 +254,8 @@ private:
      */
     struct TaskData {
         std::atomic<TaskStatus> Status{TaskStatus::Pending};
+        // The TaskDataRef owners. A TaskData in the freelist keeps 1: the owner that next acquires it.
+        std::atomic<std::uint32_t> Owners{1};
         std::any Result;
         String ErrorMessage;
         std::exception_ptr Exception{nullptr};
@@ -316,10 +321,8 @@ private:
         // still forces the fence, and notify_all reaches every parked
         // waiter.
         //
-        // Recycle: reset (with a Debug assert of 0) in RecycleTaskData —
-        // a live waiter holds a SharedPtr ref for the whole Wait(), so the
-        // registry drain's use_count()==1 exclusivity proof already
-        // guarantees no waiter exists at recycle time.
+        // A waiter holds a reference for the whole Wait(), so no waiter
+        // exists when the last owner resets the TaskData.
         std::atomic<std::uint32_t> Waiters{0};
 
         // Callback storage. CallbackMutex guards the three vectors and the
@@ -383,23 +386,70 @@ private:
                    currentStatus == TaskStatus::Cancelled;
         }
     };
-    
+
+    /**
+     * @brief An owning reference to a pooled TaskData. A copy adds an owner. The release
+     * that ends the last owner resets the TaskData and puts it back in the TaskData freelist.
+     */
+    class TaskDataRef {
+    public:
+        TaskDataRef() = default;
+        TaskDataRef(std::nullptr_t) noexcept {}
+        TaskDataRef(const TaskDataRef& other) noexcept : m_Data(other.m_Data) {
+            if (m_Data != nullptr) {
+                // Relaxed is enough: the copied reference keeps the TaskData alive.
+                m_Data->Owners.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+        TaskDataRef(TaskDataRef&& other) noexcept : m_Data(std::exchange(other.m_Data, nullptr)) {}
+        TaskDataRef& operator=(TaskDataRef other) noexcept {
+            std::swap(m_Data, other.m_Data);
+            return *this;
+        }
+        ~TaskDataRef() { Reset(); }
+
+        /// A TaskData from the freelist, or a new one when the freelist is empty. The caller is its only owner.
+        static TaskDataRef Acquire();
+
+        void Reset() noexcept {
+            TaskData* const data = std::exchange(m_Data, nullptr);
+            // The acq_rel decrement orders the access of every owner before the last owner's reset.
+            if (data != nullptr && data->Owners.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+                Recycle(data);
+            }
+        }
+
+        TaskData* operator->() const noexcept { return m_Data; }
+        explicit operator bool() const noexcept { return m_Data != nullptr; }
+
+        /// The owner count. It is exact only while no other thread can add an owner.
+        std::uint32_t OwnerCount() const noexcept { return m_Data->Owners.load(std::memory_order_relaxed); }
+
+    private:
+        explicit TaskDataRef(TaskData* data) noexcept : m_Data(data) {}
+
+        // Resets the per-task fields and puts `data` in the freelist; deletes it when the freelist is full.
+        static void Recycle(TaskData* data) noexcept;
+
+        TaskData* m_Data = nullptr;
+    };
+
     TaskId m_TaskId{0};
     WorkStealingThreadPool* m_JobSystem{nullptr};
-    SharedPtr<TaskData> m_Data;
+    TaskDataRef m_Data;
 
     /**
      * @brief Adopting constructor (pool-internal, slice 6): binds to an
      * existing TaskData without touching the pool's registry. Used on the
      * Submit(F&&) fast path — ONE GetOrCreateTaskData per task; the returned
-     * handle, the envelope, and the execute side adopt that SharedPtr.
+     * handle, the envelope, and the execute side adopt that reference.
      */
-    TaskHandle(TaskId taskId, WorkStealingThreadPool* jobSystem, SharedPtr<TaskData> data);
+    TaskHandle(TaskId taskId, WorkStealingThreadPool* jobSystem, TaskDataRef data);
 
     /**
      * @brief Get or create task data
      */
-    SharedPtr<TaskData> GetTaskData() const;
+    TaskDataRef GetTaskData() const;
 
     /**
      * @brief Fire the Cancelled event set (waiter notify + failure callbacks)
@@ -414,7 +464,7 @@ private:
      * registry sweep that is the shutting-down thread itself, so task
      * callbacks must not block on other task handles.
      */
-    static void FireCancelledOn(const SharedPtr<TaskData>& data);
+    static void FireCancelledOn(const TaskDataRef& data);
 
     /**
      * @brief Gated completion notify (ops C2 + the fence). Call ONLY after
@@ -423,7 +473,7 @@ private:
      * (full interleaving table at TaskData::Waiters). Skips the
      * CompletionMutex + notify_all entirely when no waiter is registered.
      */
-    static void NotifyWaitersAfterTerminal(const SharedPtr<TaskData>& data);
+    static void NotifyWaitersAfterTerminal(const TaskDataRef& data);
 
     /**
      * @brief Execute callbacks for status change

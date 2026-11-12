@@ -28,7 +28,7 @@ bool SceneAsset::Load()
     return true;
 }
 
-bool SceneAsset::LoadFromData(const Vector<uint8>& data)
+bool SceneAsset::LoadFromData(std::span<const uint8> data)
 {
     m_Text.assign(reinterpret_cast<const char*>(data.data()), data.size());
     return true;

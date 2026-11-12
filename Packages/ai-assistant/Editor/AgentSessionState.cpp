@@ -18,6 +18,10 @@ AgentSessionState& AgentSessionState::Get()
     return state;
 }
 
+AgentSessionState::AgentSessionState() : m_ModelsUrl(ClaudeApiProvider::kModelsEndpoint)
+{
+}
+
 std::shared_ptr<IAgentProvider> AgentSessionState::Provider(std::string_view providerId)
 {
     std::string executable;
@@ -43,8 +47,23 @@ std::shared_ptr<IAgentProvider> AgentSessionState::Provider(std::string_view pro
     else if (providerId == CodexSessionProvider::kId)
         connection.Provider = std::make_shared<CodexSessionProvider>(executable, directory);
     else
-        connection.Provider = std::make_shared<ClaudeApiProvider>();
+        connection.Provider = std::make_shared<ClaudeApiProvider>(m_ApiKeys, m_ModelsUrl);
     return connection.Provider;
+}
+
+ApiKeyStore AgentSessionState::ApiKeys() const
+{
+    std::lock_guard lock(m_Mutex);
+    return m_ApiKeys;
+}
+
+void AgentSessionState::UseApiConnectionForTesting(ApiKeyStore keys, std::string modelsUrl)
+{
+    std::lock_guard lock(m_Mutex);
+    m_ApiKeys = std::move(keys);
+    m_ModelsUrl = std::move(modelsUrl);
+    Connection& connection = FindOrAdd(ClaudeApiProvider::kId);
+    connection.Provider.reset();
 }
 
 std::shared_ptr<CliSessionProvider> AgentSessionState::SessionProvider(std::string_view providerId)

@@ -23,7 +23,7 @@ static void Populate(World& w, int N){
 }
 
 TEST(ParallelPerfTest, DISABLED_ParallelWithinReasonableFactorVsSequential) {
-    JobSystem::WorkStealingThreadPool js; // defaults to hardware_concurrency
+    JobSystem::WorkStealingThreadPool js; // one worker per processor the process may run on
     World w(&js);
 
     const int N=2000; // tiny for debug/CI stability

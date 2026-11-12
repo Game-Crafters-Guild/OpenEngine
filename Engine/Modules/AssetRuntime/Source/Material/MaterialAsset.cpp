@@ -20,6 +20,7 @@
 #include <initializer_list>
 #include <regex>
 #include <sstream>
+#include <string_view>
 #include <unordered_set>
 
 #include <nlohmann/json.hpp>
@@ -302,7 +303,7 @@ static std::string CanonicalLightingModel(const std::string& authored)
 
 // A .material's JSON. A file that is not JSON, or a field of a type it cannot hold, is refused
 // with the reason in `outErrors`; the parse never throws (the web build has no exception catching).
-static bool ParseJsonMaterial(const std::string& text, MaterialDocument& outDoc, std::vector<std::string>& outErrors)
+static bool ParseJsonMaterial(std::string_view text, MaterialDocument& outDoc, std::vector<std::string>& outErrors)
 {
     nlohmann::json j;
     std::string parseError;
@@ -378,6 +379,9 @@ static bool ParseJsonMaterial(const std::string& text, MaterialDocument& outDoc,
     std::string textureFilter = "Trilinear";
     reader.Read(j, "textureFilter", textureFilter);
     outDoc.textureFilter = MaterialTextureFilterFromString(textureFilter);
+    std::string patternSymmetry = "None";
+    reader.Read(j, "patternSymmetry", patternSymmetry);
+    outDoc.patternSymmetry = MaterialPatternSymmetryFromString(patternSymmetry);
 
     ParseProperties(j, outDoc);
 
@@ -564,7 +568,7 @@ bool MaterialAsset::Load()
 {
     try
     {
-        Vector<uint8> bytes;
+        ByteBuffer bytes;
         if (!ReadFileBytesShared(GetPath(), bytes))
         {
             SetState(AssetState::Failed);
@@ -580,12 +584,11 @@ bool MaterialAsset::Load()
     }
 }
 
-bool MaterialAsset::LoadFromData(const Vector<uint8>& data)
+bool MaterialAsset::LoadFromData(std::span<const uint8> data)
 {
     try
     {
-        std::string text;
-        text.assign(reinterpret_cast<const char*>(data.data()), data.size());
+        const std::string_view text(reinterpret_cast<const char*>(data.data()), data.size());
 
         m_Doc = MaterialDocument{};
         m_Errors.clear();
@@ -638,9 +641,9 @@ void MaterialAsset::Unload()
     SetState(AssetState::Unloaded);
 }
 
-bool MaterialAsset::ParseFromText(const std::string& text, const std::filesystem::path& sourcePathForRelativeErrors)
+bool MaterialAsset::ParseFromText(std::string_view text, const std::filesystem::path& sourcePathForRelativeErrors)
 {
-    const std::string trimmed = TrimWhitespace(text);
+    const std::string_view trimmed = TrimWhitespaceView(text);
     if (trimmed.empty())
     {
         m_Errors.push_back("MaterialAsset: expected JSON object.");
@@ -654,10 +657,10 @@ bool MaterialAsset::ParseFromText(const std::string& text, const std::filesystem
         AssetRegistry* registry = nullptr;
         if (AssetManager* am = AssetManager::GetThreadCurrent())
             registry = &am->GetRegistry();
-        return ParseMaterialX(text, sourcePathForRelativeErrors, registry, m_Doc, m_Errors);
+        return ParseMaterialX(std::string(text), sourcePathForRelativeErrors, registry, m_Doc, m_Errors);
     }
     if (trimmed.front() != '{')
-        return ParseUnityMaterial(text, sourcePathForRelativeErrors, m_Doc, m_Errors);
+        return ParseUnityMaterial(std::string(text), sourcePathForRelativeErrors, m_Doc, m_Errors);
     return ParseJsonMaterial(text, m_Doc, m_Errors);
 }
 
@@ -718,6 +721,8 @@ nlohmann::json SerializeMaterialDocument(const MaterialDocument& doc)
         j["customVertexShader"] = true;
     if (doc.textureFilter != MaterialTextureFilter::Trilinear)
         j["textureFilter"] = MaterialTextureFilterToString(doc.textureFilter);
+    if (doc.patternSymmetry != MaterialPatternSymmetry::None)
+        j["patternSymmetry"] = MaterialPatternSymmetryToString(doc.patternSymmetry);
 
     // Omitted when empty so existing (keyword-free) materials stay byte-identical.
     if (!doc.keywords.empty())

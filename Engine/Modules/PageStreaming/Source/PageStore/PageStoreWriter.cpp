@@ -73,11 +73,17 @@ std::string PageStoreWriter::OpenForPatch(const std::filesystem::path& existing,
     return {};
 }
 
-std::string PageStoreWriter::AddPresentPages(std::span<const uint8> present)
+std::string PageStoreWriter::AddPresentPages(std::span<const PageAddress> added)
 {
     if (!m_File)
         return "no page store is being written";
-    m_Layout = PageStreaming::AddPresentPages(m_Layout, present);
+    std::optional<PageStoreLayout> grown = PageStreaming::AddPresentPages(m_Layout, added);
+    if (!grown)
+    {
+        Abandon();
+        return "a page to add is outside the page store's levels";
+    }
+    m_Layout = std::move(*grown);
     if (!MovePagesUnderHead())
     {
         Abandon();

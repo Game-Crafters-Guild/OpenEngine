@@ -14,6 +14,8 @@
 
 #include <gtest/gtest.h>
 
+#include "TerrainTestHelpers.h"
+
 #include "Components/Terrain/Terrain.h"
 #include "Components/Terrain/TerrainModifierEffects.h"
 #include "Components/Terrain/TerrainModifierVolume.h"
@@ -84,13 +86,6 @@ TerrainRuleSample SampleWithSlopeNormalized(float32 slope)
     return s;
 }
 
-TerrainRuleSample SampleWithHeightNormalized(float32 heightNorm)
-{
-    TerrainRuleSample s{};
-    s.HeightNormalized = heightNorm;
-    return s;
-}
-
 // ---- Bake harness ---------------------------------------------------------
 // Mirrors TerrainModifierVolumeTests: one complete bake over its own terrain and
 // services, so two arms differing only in HOW the surface is authored compare
@@ -148,10 +143,7 @@ TerrainHandle CreateBakedTerrain(TerrainService& svc, uint32 dim = kHeightmapDim
 {
     const TerrainHandle handle = svc.CreateTerrain(MakeTestConfig(dim));
     auto* data = svc.GetTerrainData(handle);
-    FillHeightfieldBaseRegion(data->Heightfield, Components::TerrainBaseSource::ProceduralNoise,
-                              nullptr, 0, 0,
-                              static_cast<int32>(dim) - 1,
-                              static_cast<int32>(dim) - 1);
+    TerrainTests::SeedNoiseBaseHeightmap(svc, data->Heightfield);
     data->MarkFullDirty();
     svc.RebuildQuadtree(handle);
     data->ResetSplatmapAndCommitRange();
@@ -161,9 +153,9 @@ TerrainHandle CreateBakedTerrain(TerrainService& svc, uint32 dim = kHeightmapDim
 Components::WorldTransform IdentityAt(float32 x, float32 y, float32 z)
 {
     Components::WorldTransform xf{};
-    xf.matrix[12] = x;
-    xf.matrix[13] = y;
-    xf.matrix[14] = z;
+    xf.Position.X = x;
+    xf.Position.Y = y;
+    xf.Position.Z = z;
     return xf;
 }
 
@@ -176,7 +168,7 @@ ECS::EntityHandle CreateTerrainEntity(ECS::World& world, TerrainHandle handle)
     terrain.HeightScale = kHeightScale;
     terrain.TerrainDataHandle = handle.Index;
     terrain.TerrainDataGeneration = handle.Generation;
-    terrain.BaseSource = Components::TerrainBaseSource::ProceduralNoise;
+    TerrainTests::UseNoiseBaseHeightmap(terrain);
     world.AddComponentImmediate<Components::Terrain>(e, terrain);
     world.AddComponentImmediate<Components::WorldTransform>(e, Components::WorldTransform{});
     return e;
@@ -365,30 +357,27 @@ TEST(TerrainSurfaceRuleCondition, EachKindReadsItsOwnMeasurement)
     TerrainRuleSample sample{};
     sample.SlopeNormalized = 0.25f;
     sample.SlopeDegrees = 34.0f;
-    sample.HeightMetres = 410.0f;
-    sample.HeightNormalized = 0.8f;
+    sample.HeightMeters = 410.0f;
 
     EXPECT_FLOAT_EQ(TerrainRuleConditionValue(TerrainRuleConditionKind::SlopeNormalized, sample), 0.25f);
     EXPECT_FLOAT_EQ(TerrainRuleConditionValue(TerrainRuleConditionKind::SlopeDegrees, sample), 34.0f);
-    EXPECT_FLOAT_EQ(TerrainRuleConditionValue(TerrainRuleConditionKind::HeightMetres, sample), 410.0f);
-    EXPECT_FLOAT_EQ(TerrainRuleConditionValue(TerrainRuleConditionKind::HeightNormalized, sample), 0.8f);
+    EXPECT_FLOAT_EQ(TerrainRuleConditionValue(TerrainRuleConditionKind::HeightMeters, sample), 410.0f);
 }
 
-TEST(TerrainSurfaceRuleCondition, MetresAndNormalizedHeightAreIndependentInputs)
+TEST(TerrainSurfaceRuleCondition, MetersBandReadsTheSameAtEveryHeightScale)
 {
-    // The pair that makes a permanent migration possible: a metres band and a
-    // normalized band over the SAME texel answer differently, because one tracks
-    // the terrain's live range and the other does not.
-    TerrainRuleSample sample{};
-    sample.HeightMetres = 410.0f;
-    sample.HeightNormalized = 0.2f;
-
-    const auto metres = Band(TerrainRuleConditionKind::HeightMetres, 400.0f, 500.0f, 0.0f);
-    const auto normalized = Band(TerrainRuleConditionKind::HeightNormalized, 0.6f, 1.0f, 0.0f);
-    EXPECT_FLOAT_EQ(TerrainRuleConditionWeightForValue(
-                        metres, TerrainRuleConditionValue(metres.Kind, sample)), 1.0f);
-    EXPECT_FLOAT_EQ(TerrainRuleConditionWeightForValue(
-                        normalized, TerrainRuleConditionValue(normalized.Kind, sample)), 0.0f);
+    // The same ground, 700 m above the base, stored on a terrain at Height Scale 256 (a sample
+    // past the band) and on one whose range is 0 to 1300 m. A meters row answers the same on both.
+    const auto rock = Band(TerrainRuleConditionKind::HeightMeters, 650.0f, 1.0e5f, 100.0f);
+    for (const float32 heightScale : {256.0f, 1300.0f})
+    {
+        const TerrainRuleSample sample =
+            MakeTerrainRuleSample(0.0f, 1.0f, 0.0f, 700.0f / heightScale, heightScale, 0.0f, 0.0f);
+        EXPECT_NEAR(sample.HeightMeters, 700.0f, 1.0e-3f) << "heightScale " << heightScale;
+        EXPECT_FLOAT_EQ(TerrainRuleConditionWeightForValue(rock, TerrainRuleConditionValue(rock.Kind, sample)),
+                        1.0f)
+            << "heightScale " << heightScale;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -403,14 +392,14 @@ TEST(TerrainSurfaceRule, ConditionsMultiplyRatherThanMinOrAdd)
     TerrainSurfaceRule rule{};
     rule.ConditionCount = 2;
     rule.Conditions[0] = Band(TerrainRuleConditionKind::SlopeNormalized, 0.0f, 0.0f, 0.4f);
-    rule.Conditions[1] = Band(TerrainRuleConditionKind::HeightNormalized, 0.0f, 0.0f, 0.6f);
+    rule.Conditions[1] = Band(TerrainRuleConditionKind::HeightMeters, 0.0f, 0.0f, 60.0f);
 
     TerrainRuleSample sample{};
-    sample.SlopeNormalized = 0.2f;    // half of the 0.4 feather
-    sample.HeightNormalized = 0.3f;   // half of the 0.6 feather
+    sample.SlopeNormalized = 0.2f; // half of the 0.4 feather
+    sample.HeightMeters = 30.0f;   // half of the 60 m feather
 
     EXPECT_FLOAT_EQ(TerrainRuleConditionWeightForValue(rule.Conditions[0], 0.2f), 0.5f);
-    EXPECT_FLOAT_EQ(TerrainRuleConditionWeightForValue(rule.Conditions[1], 0.3f), 0.5f);
+    EXPECT_FLOAT_EQ(TerrainRuleConditionWeightForValue(rule.Conditions[1], 30.0f), 0.5f);
     EXPECT_FLOAT_EQ(EvaluateTerrainSurfaceRuleWeight(rule, sample, ZeroNoise), 0.25f);
 }
 
@@ -419,13 +408,13 @@ TEST(TerrainSurfaceRule, ThreeConditionsCompoundTheirFalloffs)
     TerrainSurfaceRule rule{};
     rule.ConditionCount = 3;
     rule.Conditions[0] = Band(TerrainRuleConditionKind::SlopeNormalized, 0.0f, 0.0f, 0.4f);
-    rule.Conditions[1] = Band(TerrainRuleConditionKind::HeightNormalized, 0.0f, 0.0f, 0.6f);
-    rule.Conditions[2] = Band(TerrainRuleConditionKind::HeightMetres, 0.0f, 0.0f, 100.0f);
+    rule.Conditions[1] = Band(TerrainRuleConditionKind::SlopeDegrees, 0.0f, 0.0f, 60.0f);
+    rule.Conditions[2] = Band(TerrainRuleConditionKind::HeightMeters, 0.0f, 0.0f, 100.0f);
 
     TerrainRuleSample sample{};
     sample.SlopeNormalized = 0.2f;
-    sample.HeightNormalized = 0.3f;
-    sample.HeightMetres = 50.0f;
+    sample.SlopeDegrees = 30.0f;
+    sample.HeightMeters = 50.0f;
     EXPECT_FLOAT_EQ(EvaluateTerrainSurfaceRuleWeight(rule, sample, ZeroNoise), 0.125f);
 }
 
@@ -434,11 +423,11 @@ TEST(TerrainSurfaceRule, AnyZeroConditionZerosTheRow)
     TerrainSurfaceRule rule{};
     rule.ConditionCount = 2;
     rule.Conditions[0] = Band(TerrainRuleConditionKind::SlopeNormalized, 0.0f, 0.2f, 0.0f);
-    rule.Conditions[1] = Band(TerrainRuleConditionKind::HeightNormalized, 0.0f, 1.0f, 0.0f);
+    rule.Conditions[1] = Band(TerrainRuleConditionKind::HeightMeters, 0.0f, 100.0f, 0.0f);
 
     TerrainRuleSample sample{};
     sample.SlopeNormalized = 0.9f; // outside a hard band
-    sample.HeightNormalized = 0.5f;
+    sample.HeightMeters = 50.0f;
     EXPECT_FLOAT_EQ(EvaluateTerrainSurfaceRuleWeight(rule, sample, ZeroNoise), 0.0f);
 }
 
@@ -555,8 +544,8 @@ TEST(TerrainSurfaceRulesBake, AConditionRestrictsWhereTheRowWrites)
         fx.Rules[0].Replace = true;
         fx.Rules[0].ConditionCount = 1;
         // Only the upper part of the terrain's range.
-        fx.Rules[0].Conditions[0] =
-            Band(TerrainRuleConditionKind::HeightNormalized, 0.75f, 1.0f, 0.05f);
+        fx.Rules[0].Conditions[0] = Band(TerrainRuleConditionKind::HeightMeters, 0.75f * kHeightScale,
+                                         kHeightScale, 0.05f * kHeightScale);
         w.AddComponentImmediate<TerrainSurfaceRulesEffect>(volume, fx);
     });
 
@@ -819,9 +808,10 @@ TEST(TerrainSurfaceRulesBake, AnOutOfRangePaintLayerWarnsOncePerBakeWholeOrInBan
     EXPECT_EQ(warningsFromOneBake(nullptr), 1u) << "whole";
     std::size_t pooled = 0;
     {
+        // Declared before the pool: the job can still be inside set_value() after the wait returns.
+        std::promise<void> started;
         JobSystem::WorkStealingThreadPool pool(4);
         JobSystem::JobCounter counter;
-        std::promise<void> started;
         auto workerStarted = started.get_future();
         pool.Run([&]() {
             started.set_value();

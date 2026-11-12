@@ -1628,6 +1628,23 @@ MatchRec MakeMatch(const CSSRule& rule, const Stylesheet& sheet, uint32_t sheetI
     return MatchRec{&rule, sheet.Origin, rule.Selector.Spec, sheetIndex};
 }
 
+// Cascade order, lowest first: user-agent under everything else, then specificity, then a
+// control's own sheet under an author sheet, then sheet order, then source order within a sheet.
+bool CascadeOrderLess(const MatchRec& a, const MatchRec& b)
+{
+    const bool aUserAgent = a.Origin == StyleOrigin::UserAgent;
+    const bool bUserAgent = b.Origin == StyleOrigin::UserAgent;
+    if (aUserAgent != bUserAgent)
+        return aUserAgent;
+    if (auto c = a.Spec <=> b.Spec; c != 0)
+        return c < 0;
+    if (a.Origin != b.Origin)
+        return a.Origin < b.Origin;
+    if (a.SheetIndex != b.SheetIndex)
+        return a.SheetIndex < b.SheetIndex;
+    return a.Rule->Order < b.Rule->Order;
+}
+
 #if GE_DEBUG_INSTRUMENTATION
 // Walks every stylesheet's candidate rules with the *live* matcher
 // (dynamic pseudos resolved against ElementState), mirroring the
@@ -2278,17 +2295,7 @@ void CSSParser::ComputeStyleInto(ResolvedStyle& out,
         }
     }
 
-    // Cascade order, lowest first: origin (user-agent under author), then specificity, then sheet
-    // order, then source order within a sheet.
-    std::stable_sort(matches.begin(), matches.end(), [](const MatchRec& a, const MatchRec& b)
-                     {
-	        if (a.Origin != b.Origin)
-	            return a.Origin < b.Origin;
-	        if (auto c = a.Spec <=> b.Spec; c != 0)
-	            return c < 0;
-	        if (a.SheetIndex != b.SheetIndex)
-	            return a.SheetIndex < b.SheetIndex;
-	        return a.Rule->Order < b.Rule->Order; });
+    std::stable_sort(matches.begin(), matches.end(), CascadeOrderLess);
 
     for (const MatchRec& m : matches)
     {
@@ -2354,12 +2361,13 @@ void CSSParser::ComputeStyleInto(ResolvedStyle& out,
 
     // !important cascade tier: normal-priority declarations run first, then
     // important-priority declarations run last so they overwrite. Within each
-    // tier, the walk order is already (origin, specificity, sheetIndex, source order)
+    // tier, the walk order is already the CascadeOrderLess order
     // ascending from the stable_sort on `matches` above, so last-wins
     // semantics within a tier are preserved. stable_partition keeps that
     // intra-tier order while moving !important refs to the tail. CSS reverses
     // origin order for important declarations; nothing here needs to, because
-    // the only user-agent sheet has none (UI/Source/DefaultStylesheet.cpp).
+    // the only user-agent sheet has none (UI/Source/DefaultStylesheet.cpp), and
+    // Control against Author is a tie rule like source order, which CSS keeps.
     //
     // Fast path: most elements match only normal-priority declarations.
     // Scan once to detect any !important ref; if there are none, skip the

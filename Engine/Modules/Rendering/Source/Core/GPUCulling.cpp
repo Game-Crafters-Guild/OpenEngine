@@ -18,12 +18,6 @@ namespace GameEngine
 namespace Rendering
 {
 
-void MakeFrustumPlanesCameraRelative(Vector4* planes, const Vector3& origin)
-{
-    for (int p = 0; p < 6; ++p)
-        planes[p].w += planes[p].x * origin.x + planes[p].y * origin.y + planes[p].z * origin.z;
-}
-
 // Phase 6-ii: visibility-union shader loader (set once at engine init).
 namespace
 {
@@ -62,23 +56,25 @@ constexpr uint32_t kOcclusionPhaseBNameCode = 0xFDu; // "GPUCulling.View{n}.C253
 
 // set 0 for hzb_culling.comp: instance/cullingData/visibility/prevVisible SSBOs,
 // the HZB combined image sampler, the stats SSBO and the per-material
-// deformation margins.
+// deformation margins. The shader declares the instance, culling-data and margin
+// buffers `readonly`, so the layout marks them read-only too.
 DescriptorSetLayoutDesc MakeHzbCullingDescriptorSetLayout()
 {
     DescriptorSetLayoutDesc layout{};
     layout.debugName = "HzbCulling_SetLayout";
-    auto addStorage = [&](uint32_t binding, const char* name)
+    auto addStorage = [&](uint32_t binding, const char* name, uint32_t flags = 0u)
     {
         DescriptorBinding b{};
         b.binding = binding;
         b.type = DescriptorType::StorageBuffer;
         b.count = 1;
         b.shaderStages = kShaderStageCompute;
+        b.flags = flags;
         b.debugName = name;
         layout.bindings.push_back(b);
     };
-    addStorage(0, "InstanceBuffer");
-    addStorage(1, "CullingDataBuffer");
+    addStorage(0, "InstanceBuffer", kDescriptorBindingReadOnlyStorage);
+    addStorage(1, "CullingDataBuffer", kDescriptorBindingReadOnlyStorage);
     addStorage(2, "VisibilityBuffer");
     addStorage(3, "PrevVisibleBuffer");
     DescriptorBinding hzb{};
@@ -89,7 +85,7 @@ DescriptorSetLayoutDesc MakeHzbCullingDescriptorSetLayout()
     hzb.debugName = "HZB";
     layout.bindings.push_back(hzb);
     addStorage(5, "OcclusionStatsBuffer");
-    addStorage(6, "DeformationMarginBuffer");
+    addStorage(6, "DeformationMarginBuffer", kDescriptorBindingReadOnlyStorage);
     return layout;
 }
 
@@ -103,12 +99,8 @@ void FillCullingDataFromView(const ViewCullingInput& view, uint32_t sliceInstanc
     cd.viewProjMatrix = view.viewProjMatrix;
     for (int p = 0; p < 6; ++p)
         cd.frustumPlanes[0][p] = view.frustumPlanes[p];
-    // Camera-relative frustum test (Earth-scale precision). cameraPosition carries
-    // the render origin the shader subtracts from boundingCenter; the planes are
-    // translated by the same origin so the test stays small-magnitude. Origin
-    // (0,0,0) => both are no-ops and this is byte-identical to the world-space test.
-    cd.cameraPosition = view.cameraRelativeOrigin;
-    MakeFrustumPlanesCameraRelative(cd.frustumPlanes[0], view.cameraRelativeOrigin);
+    // The planes and the view are already relative to the origin of this sector.
+    cd.originSector = view.originSector;
     cd.nearPlane = view.nearPlane;
     cd.cameraForward = view.cameraForward;
     cd.farPlane = view.farPlane;
@@ -194,14 +186,17 @@ void GPUCullingPipeline::ReprovisionAfterDeviceRebuild()
     // Per-view occlusion history: re-import first-touches to all-visible.
     m_PrevVisible.clear();
 
-    // Reset the one-shot pipeline guards so Ensure*/Create* recompiles the PSOs
-    // (the concrete pipeline cache was cleared; SPIR-V + interned descs survive).
+    // Reset the pipeline ids and the one-shot guards, so Ensure*/Create* intern
+    // and build the PSOs again on the rebuilt device.
+    m_VisibilityUnionPipelineId = {};
     m_VisibilityUnionPipeline = INVALID_PIPELINE_HANDLE;
     m_VisibilityUnionPipelineAttempted = false;
     m_VisibilityUnionLoadFailureLogged = false;
+    m_RuntimeVisibilityPipelineId = {};
     m_RuntimeVisibilityPipeline = INVALID_PIPELINE_HANDLE;
     m_RuntimeVisibilityPipelineAttempted = false;
     m_RuntimeVisibilityLoadFailureLogged = false;
+    m_HzbCullingPipelineId = {};
     m_HzbCullingPipeline = INVALID_PIPELINE_HANDLE;
     m_HzbCullingPipelineAttempted = false;
     m_HzbCullingLoadFailureLogged = false;
@@ -219,9 +214,24 @@ bool GPUCullingPipeline::CreateVisibilityUnionPipeline()
         return true;
     if (m_VisibilityUnionPipelineAttempted)
         return false;
-
-    if (!m_Device)
+    const ComputePipelineId id = InternVisibilityUnionPipeline();
+    if (!id.IsValid())
         return false;
+    m_VisibilityUnionPipelineAttempted = true;
+    m_VisibilityUnionPipeline = m_Device->GetOrCreateComputePipeline(id);
+    if (!m_VisibilityUnionPipeline.IsValid())
+    {
+        std::cerr << "GPUCullingPipeline: failed to create visibility_union compute pipeline"
+                  << std::endl;
+        return false;
+    }
+    return true;
+}
+
+ComputePipelineId GPUCullingPipeline::InternVisibilityUnionPipeline()
+{
+    if (m_VisibilityUnionPipelineId.IsValid() || !m_Device)
+        return m_VisibilityUnionPipelineId;
 
     // Missing bytes are not latched — retried on a later call once the
     // loader environment is ready; the failure logs once.
@@ -237,9 +247,8 @@ bool GPUCullingPipeline::CreateVisibilityUnionPipeline()
                       << "); visibility union path deferred" << std::endl;
             m_VisibilityUnionLoadFailureLogged = true;
         }
-        return false;
+        return {};
     }
-    m_VisibilityUnionPipelineAttempted = true;
 
     // 3 SSBO bindings — match visibility_union.comp set 0:
     //   0: VisibilityBuffer  (read)
@@ -263,16 +272,8 @@ bool GPUCullingPipeline::CreateVisibilityUnionPipeline()
     cd.PushConstants.Size      = sizeof(VisibilityUnionPC);
     cd.PushConstants.StageMask = kShaderStageCompute;
     cd.DebugName               = "GPUCulling_VisibilityUnion";
-
-    const auto id = m_Device->InternComputePipeline(cd);
-    m_VisibilityUnionPipeline = m_Device->GetOrCreateComputePipeline(id);
-    if (!m_VisibilityUnionPipeline.IsValid())
-    {
-        std::cerr << "GPUCullingPipeline: failed to create visibility_union compute pipeline"
-                  << std::endl;
-        return false;
-    }
-    return true;
+    m_VisibilityUnionPipelineId = m_Device->InternComputePipeline(cd);
+    return m_VisibilityUnionPipelineId;
 }
 
 void GPUCullingPipeline::SubmitView(const ViewCullingInput& input)
@@ -315,9 +316,24 @@ bool GPUCullingPipeline::CreateRuntimeVisibilityPipeline()
         return true;
     if (m_RuntimeVisibilityPipelineAttempted)
         return false;
-
-    if (!m_Device)
+    const ComputePipelineId id = InternRuntimeVisibilityPipeline();
+    if (!id.IsValid())
         return false;
+    m_RuntimeVisibilityPipelineAttempted = true;
+    m_RuntimeVisibilityPipeline = m_Device->GetOrCreateComputePipeline(id);
+    if (!m_RuntimeVisibilityPipeline.IsValid())
+    {
+        std::cerr << "GPUCullingPipeline: failed to create runtime_visibility_aggregate compute pipeline"
+                  << std::endl;
+        return false;
+    }
+    return true;
+}
+
+ComputePipelineId GPUCullingPipeline::InternRuntimeVisibilityPipeline()
+{
+    if (m_RuntimeVisibilityPipelineId.IsValid() || !m_Device)
+        return m_RuntimeVisibilityPipelineId;
 
     // Missing bytes are not latched — retried on a later call once the
     // loader environment is ready; the failure logs once.
@@ -333,9 +349,8 @@ bool GPUCullingPipeline::CreateRuntimeVisibilityPipeline()
                       << loadErr << "); runtime-visibility-gated skinning deferred" << std::endl;
             m_RuntimeVisibilityLoadFailureLogged = true;
         }
-        return false;
+        return {};
     }
-    m_RuntimeVisibilityPipelineAttempted = true;
 
     // 3 SSBO bindings — match runtime_visibility_aggregate.comp set 0:
     //   0: AnyVisibleFlags    (read)
@@ -359,16 +374,8 @@ bool GPUCullingPipeline::CreateRuntimeVisibilityPipeline()
     cd.PushConstants.Size      = sizeof(RuntimeVisibilityPC);
     cd.PushConstants.StageMask = kShaderStageCompute;
     cd.DebugName               = "GPUCulling_RuntimeVisibility";
-
-    const auto id = m_Device->InternComputePipeline(cd);
-    m_RuntimeVisibilityPipeline = m_Device->GetOrCreateComputePipeline(id);
-    if (!m_RuntimeVisibilityPipeline.IsValid())
-    {
-        std::cerr << "GPUCullingPipeline: failed to create runtime_visibility_aggregate compute pipeline"
-                  << std::endl;
-        return false;
-    }
-    return true;
+    m_RuntimeVisibilityPipelineId = m_Device->InternComputePipeline(cd);
+    return m_RuntimeVisibilityPipelineId;
 }
 
 bool GPUCullingPipeline::EnsureHzbCullingPipeline()
@@ -377,8 +384,35 @@ bool GPUCullingPipeline::EnsureHzbCullingPipeline()
         return true;
     if (m_HzbCullingPipelineAttempted)
         return false;
-    if (!m_Device)
+    const ComputePipelineId id = InternHzbCullingPipeline();
+    if (!id.IsValid())
         return false;
+    m_HzbCullingPipelineAttempted = true;
+    m_HzbCullingPipeline = m_Device->GetOrCreateComputePipeline(id);
+    if (!m_HzbCullingPipeline.IsValid())
+    {
+        std::cerr << "GPUCullingPipeline: failed to create hzb_culling compute pipeline" << std::endl;
+        return false;
+    }
+    return true;
+}
+
+void GPUCullingPipeline::RequestOcclusionViewPipelines()
+{
+    if (!m_Device)
+        return;
+    for (const ComputePipelineId id :
+         {InternHzbCullingPipeline(), InternVisibilityUnionPipeline(), InternRuntimeVisibilityPipeline()})
+    {
+        if (id.IsValid())
+            m_Device->RequestComputePipeline(id);
+    }
+}
+
+ComputePipelineId GPUCullingPipeline::InternHzbCullingPipeline()
+{
+    if (m_HzbCullingPipelineId.IsValid() || !m_Device)
+        return m_HzbCullingPipelineId;
 
     // Missing bytes are not latched — retried once the loader environment is
     // ready; the failure logs once.
@@ -395,9 +429,8 @@ bool GPUCullingPipeline::EnsureHzbCullingPipeline()
                       << std::endl;
             m_HzbCullingLoadFailureLogged = true;
         }
-        return false;
+        return {};
     }
-    m_HzbCullingPipelineAttempted = true;
 
     ComputePipelineDesc cd{};
     cd.ComputeShader = std::make_shared<const std::vector<uint8_t>>(std::move(shaderBytes));
@@ -406,15 +439,8 @@ bool GPUCullingPipeline::EnsureHzbCullingPipeline()
     cd.PushConstants.Size = sizeof(HzbCullPC);
     cd.PushConstants.StageMask = kShaderStageCompute;
     cd.DebugName = "GPUCulling_HzbCulling";
-
-    const auto id = m_Device->InternComputePipeline(cd);
-    m_HzbCullingPipeline = m_Device->GetOrCreateComputePipeline(id);
-    if (!m_HzbCullingPipeline.IsValid())
-    {
-        std::cerr << "GPUCullingPipeline: failed to create hzb_culling compute pipeline" << std::endl;
-        return false;
-    }
-    return true;
+    m_HzbCullingPipelineId = m_Device->InternComputePipeline(cd);
+    return m_HzbCullingPipelineId;
 }
 
 SamplerHandle GPUCullingPipeline::EnsureHzbSampler()
@@ -781,7 +807,7 @@ void GPUCullingPipeline::BuildCullingElisionBlob(ElisionInputBlob& blob,
     blob.Append(m_ElisionCtx.DepthDynamicEpoch);
     blob.Append(scene.GetContentEpoch());
     blob.Append(scene.GetInstanceCount());
-    blob.Append(scene.GetMaxInstances());
+    blob.Append(scene.GetInstanceCapacity());
 
     // Physical identities: a realloc/recreate yields fresh (undefined or
     // first-touch-filled) GPU content under otherwise matching inputs.
@@ -816,11 +842,12 @@ void GPUCullingPipeline::BuildCullingElisionBlob(ElisionInputBlob& blob,
         appendMat(v.projMatrix);
         appendMat(v.viewProjMatrix);
         appendPlanes(v.frustumPlanes, 6);
-        appendVec3(v.cameraPosition);
         blob.Append(v.nearPlane);
         appendVec3(v.cameraForward);
         blob.Append(v.farPlane);
-        appendVec3(v.cameraRelativeOrigin);
+        blob.Append(v.originSector.x);
+        blob.Append(v.originSector.y);
+        blob.Append(v.originSector.z);
         blob.Append(v.firstInstance);
         blob.Append(v.instanceCount);
         blob.Append(v.renderLayerMask.Bits);
@@ -857,11 +884,12 @@ void GPUCullingPipeline::BuildCullingElisionBlob(ElisionInputBlob& blob,
             appendMat(g.lightVP[c]);
             appendPlanes(g.frustumPlanes[c], 6);
         }
-        appendVec3(g.cameraPosition);
         blob.Append(g.nearPlane);
         appendVec3(g.cameraForward);
         blob.Append(g.farPlane);
-        appendVec3(g.cameraRelativeOrigin);
+        blob.Append(g.originSector.x);
+        blob.Append(g.originSector.y);
+        blob.Append(g.originSector.z);
         blob.Append(g.firstInstance);
         blob.Append(g.instanceCount);
         blob.Append(g.renderLayerMask.Bits);
@@ -1066,7 +1094,7 @@ void GPUCullingPipeline::EndFrameRG()
     // Per-view dispatches.
     const size_t kMinInstanceBufferSize = 1024;
     const uint32_t instanceBytes = static_cast<uint32_t>(std::max(
-        kMinInstanceBufferSize, static_cast<size_t>(scene->GetMaxInstances()) * sizeof(GPUInstance)));
+        kMinInstanceBufferSize, static_cast<size_t>(scene->GetInstanceCapacity()) * sizeof(GPUInstance)));
     for (size_t i = 0; !elide.Skip && i < m_PendingViews.size(); ++i)
     {
         const ViewCullingInput& view = m_PendingViews[i];
@@ -1136,12 +1164,8 @@ void GPUCullingPipeline::EndFrameRG()
         for (uint32_t c = 0; c < g.cascadeCount; ++c)
             for (int p = 0; p < 6; ++p)
                 cd.frustumPlanes[c][p] = g.frustumPlanes[c][p];
-        // Camera-relative shadow-caster culling (Earth-scale precision): the same
-        // origin the world pass uses, translating each live cascade's planes and
-        // fed to the shader via cameraPosition. Origin (0,0,0) => byte-identical.
-        cd.cameraPosition = g.cameraRelativeOrigin;
-        for (uint32_t c = 0; c < g.cascadeCount; ++c)
-            MakeFrustumPlanesCameraRelative(cd.frustumPlanes[c], g.cameraRelativeOrigin);
+        // The group's planes are relative to the origin of the parent view's sector.
+        cd.originSector = g.originSector;
         cd.nearPlane = g.nearPlane;
         cd.cameraForward = g.cameraForward;
         cd.farPlane = g.farPlane;
@@ -1268,7 +1292,7 @@ void GPUCullingPipeline::ScheduleOcclusionCullPass(RenderGraph::RGFrame& frame, 
         const size_t kMinInstanceBufferSize = 1024;
         const uint32_t instanceBytes = static_cast<uint32_t>(
             std::max(kMinInstanceBufferSize,
-                     static_cast<size_t>(scene->GetMaxInstances()) * sizeof(GPUInstance)));
+                     static_cast<size_t>(scene->GetInstanceCapacity()) * sizeof(GPUInstance)));
         const uint64_t key =
             (static_cast<uint64_t>(r.input.viewId) << 16) | kOcclusionPhaseBNameCode;
         ScheduleHzbCullPass(frame, sceneRG.Instances, instanceBytes, m_FrameVisRG, prevVis,
@@ -1485,7 +1509,7 @@ void GPUCullingPipeline::ScheduleRuntimeVisibilityAggregate(RenderGraph::RGFrame
     const uint32_t cap = kRuntimeVisibleCapacity;
     const uint32_t flagsBytesU = static_cast<uint32_t>(m_AnyViewVisibleUBytes);
     const size_t instBytes =
-        std::max<size_t>(1024, static_cast<size_t>(scene->GetMaxInstances()) * sizeof(GPUInstance));
+        std::max<size_t>(1024, static_cast<size_t>(scene->GetInstanceCapacity()) * sizeof(GPUInstance));
 
     frame.AddPass("GPUCulling.RuntimeVisibilityAggregate",
                   static_cast<int32_t>(PassPhase::kEarlySetup),

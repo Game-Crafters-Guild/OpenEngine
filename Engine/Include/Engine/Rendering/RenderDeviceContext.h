@@ -56,6 +56,9 @@ class RenderDeviceContext final
         void* windowHandle = nullptr;
         uint32 width = 0;
         uint32 height = 0;
+        // The window's swapchain is created on a job of this channel while the caller continues, and the device
+        // waits for it before the first frame. Null creates it on the calling thread.
+        JobSystem::JobChannel* windowTargetChannel = nullptr;
 
         // Create and own RenderServices for this device.
         bool createRenderServices = false;
@@ -90,17 +93,6 @@ class RenderDeviceContext final
     bool HasWindowTarget() const { return m_WindowTarget.IsValid(); }
     bool ActivateWindowTarget() const;
     bool RecreateWindowTargetSwapchain(uint32 width, uint32 height) const;
-
-    // Compile and execute whatever rendering infrastructure this context owns.
-    // Dispatches to RenderServices when available.
-    struct CompileAndExecuteResult
-    {
-        double compileMs = 0.0;
-        double executeMs = 0.0;
-        double variantCompileMs = 0.0;
-        double prewarmMs = 0.0;
-    };
-    CompileAndExecuteResult CompileAndExecuteRenderGraph();
 
     // Advanced: release ownership (callers take over lifetime).
     std::unique_ptr<Rendering::IDevice> ReleaseDevice();

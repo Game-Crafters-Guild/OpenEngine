@@ -73,6 +73,7 @@ class FontAtlas;
 namespace RenderGraph
 {
 class RGFrame;
+class RGContext;
 struct RGTexture;
 enum class RGLoadOp : uint8_t; // defined in RGFrame.h; fwd-declared to keep it out of this header
 }
@@ -101,6 +102,8 @@ namespace UI
 template <typename T> class FrameBufferRing; // forward
 struct UIPrimitive;                          // forward
 struct UIClipRect;                           // forward
+class UIOpaqueInteriors;                     // forward
+struct UIOpaqueInterior;                     // forward
 class UITextureRegistry;                     // forward
 }
 
@@ -458,6 +461,10 @@ class UIManager
     //   < 1.0 sharpens (edges pushed toward 0/1)
     float GetTextSmoothingGamma() const { return m_TextSmoothingGamma; }
     void SetTextSmoothingGamma(float gamma) { m_TextSmoothingGamma = std::max(0.1f, gamma); }
+
+    /// On by default. Off, the UI draw shades every primitive in painter's order; the pixels
+    /// are the same and the GPU cost is higher.
+    void SetOpaquePrePassEnabled(bool enabled) { m_OpaquePrePassEnabled = enabled; }
     // Subpixel RGB text AA (ClearType-style, opt-in, default off). Glyph
     // coverage is evaluated per display subpixel (RGB stripe, R leftmost) and
     // blended per channel via dual-source blending — ~3x horizontal resolution
@@ -976,6 +983,7 @@ public:
         DrainBail         = 0x400u,  // invariant break, or a culled element became visible
         RangelessContent  = 0x800u,  // content mark on an element that owns no primitive range
         FontResolved      = 0x1000u, // a font install changed text measurement or glyphs
+        TooltipArrow      = 0x2000u, // the tooltip arrow moved, turned or appeared
     };
 
     // Update profiling (CPU-side). Populated when update profiling is enabled.
@@ -1758,7 +1766,27 @@ public:
     Rendering::GraphicsPipelineId m_SdfPipelineIdSubpixel{};
     Rendering::GraphicsPipelineId m_SdfPipelineIdEncoded{};
     Rendering::GraphicsPipelineId m_SdfPipelineIdSubpixelEncoded{};
+    // The four main draws that test the opaque pre-pass depth, at encoded * 2 + subpixel.
+    // The four above carry no depth state, for a pass with no depth attachment.
+    std::array<Rendering::GraphicsPipelineId, 4> m_SdfPipelineIdOverPrePass{};
     Rendering::DescriptorSetLayoutDesc m_SdfSsboSetLayout;  // set 0: primitive + clip SSBOs
+
+    // The opaque pre-pass (UIOpaqueInteriors): its interiors, their ring, and
+    // a linear and an encoded pipeline. Off under the compat profile and when
+    // the shaders are not staged; the main draw then runs alone.
+    std::unique_ptr<UI::UIOpaqueInteriors> m_SdfOpaqueInteriors;
+    std::unique_ptr<UI::FrameBufferRing<UI::UIOpaqueInterior>> m_SdfOpaqueRing;
+    std::vector<uint8_t> m_UiOpaqueVertShader;
+    std::vector<uint8_t> m_UiOpaqueFragShader;
+    std::vector<uint8_t> m_UiOpaqueFragShaderEncoded;
+    bool m_OpaquePrePassEnabled = true;
+    bool m_SdfOpaqueAvailable = false;
+    bool m_SdfOpaqueEncodedAvailable = false;
+    Rendering::PipelineDesc m_SdfOpaquePipelineDesc;
+    Rendering::PipelineDesc m_SdfOpaquePipelineDescEncoded;
+    Rendering::GraphicsPipelineId m_SdfOpaquePipelineId{};
+    Rendering::GraphicsPipelineId m_SdfOpaquePipelineIdEncoded{};
+    Rendering::DescriptorSetLayoutDesc m_SdfOpaqueSetLayout; // set 0: the interiors
 
     // SDF push constants (minimal — clips are in SSBO)
     struct SdfPushConstants
@@ -1818,6 +1846,8 @@ public:
     // Stage 2 part 3: ring buffer for the DrawOrder SSBO. Size mirrors
     // m_DrawOrder; each entry is a uint32_t slot index into m_PersistentPrimitives.
     std::unique_ptr<UI::FrameBufferRing<uint32_t>> m_SdfDrawOrderRing;
+    // Reads the primitive ring's capacity for the ring sizing tests.
+    friend struct UIManagerSdfRingAccess;
 
     // SDF texture registry (font atlas pages, background images -> bindless indices)
     std::unique_ptr<UI::UITextureRegistry> m_SdfTextureRegistry;
@@ -1848,6 +1878,11 @@ public:
     bool m_SdfCompatProfile = false;
 
     void EnsureSdfPipelineDesc();
+    void EnsureSdfOpaquePipelineDesc();
+    // Draws the opaque interiors front to back; the UI pass's first draw.
+    void RecordSdfOpaquePrePass(Rendering::RenderGraph::RGContext& ctx, const SdfPushConstants& pc,
+                                Rendering::BufferHandle opaqueBuf, uint32_t opaqueCount,
+                                bool blendEncoded);
     void InitSdfRenderer();
 
     // Create the three SSBO ring buffers. Shared by InitSdfRenderer and the

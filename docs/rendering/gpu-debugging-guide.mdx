@@ -216,6 +216,59 @@ the panel CLI to trigger a capture, and returns the newest `.rgp` written after
 the trigger. Every spawned CLI's output goes to `build/mcp-rgp-logs/`, and those
 paths are in the tool result. Read them first when a capture comes back empty.
 
+## Per-pass GPU times and pipeline statistics
+
+`get_gpu_profiler` lists every render graph pass of the main window's last
+resolved frame with its CPU time (`cpuMs`) and GPU time (`gpuSpanMs`). Call it
+once with `{"enabled": true}` to start the timestamps; the rows arrive a few
+frames later.
+
+A GPU time says how long a pass takes, not why. To see which stage does the
+work, call it with `{"stats": true}`. Each pass row then also has `stats`, the
+pass's pipeline-statistics counters, which the GPU counts over that pass's own
+work:
+
+| Counter | What it counts |
+|---------|----------------|
+| `inputAssemblyVertices`, `inputAssemblyPrimitives` | Vertices and primitives the draws fed in |
+| `vertexShaderInvocations` | Vertex shader runs |
+| `clippingInvocations` | Primitives that reached clipping |
+| `clippingPrimitives` | Primitives that clipping passed on to rasterization; off-screen primitives drop here |
+| `fragmentShaderInvocations` | Fragment shader runs |
+| `computeShaderInvocations` | Compute shader runs |
+
+How to read them:
+
+- Many fragment shader runs for few primitives: most of the pass's work is
+  fragment work (overdraw, a full-screen effect, a large transparent surface).
+- Many vertex shader runs and few fragment shader runs: most of the pass's
+  work is vertex work, or most primitives are culled or are smaller than a pixel.
+- `clippingPrimitives` well below `clippingInvocations`: many primitives are
+  off screen, and the vertex work on them is wasted.
+
+Things to know:
+
+- The counters are off by default. A frame with them on is not a timing frame:
+  every pass records inline, and each pass on the graphics queue has a query
+  around it. Turn them off with `{"stats": false}` before you read times.
+- Counts are exact for one GPU, but GPUs count reused vertices differently.
+  Compare counts on the same machine.
+- A row without counters while they are on has `statsMissing` with the reason,
+  for example a pass on an async compute queue. When
+  `pipelineStatistics.supported` is false, the GPU or the graphics backend has
+  no such queries (the engine's Metal and WebGPU backends do not record them).
+- With counters on, a pass that several producers draw in has `scopes`: one row
+  per producer, named `<pass name>.<scope name>`. The scope name is the name the
+  producer registered: `Instances` for the entity batches, and each feature's
+  own name (`Terrain`, `Grass`, `Particles`). The work of the pass that no
+  producer holds is in the row `<pass name>.Other`, which is there only when
+  that work is not zero. The scope rows of a pass add up to the pass row, so do
+  not add a scope row to a total.
+- `lastFrame.skippedPasses` lists the passes that a feature did not record this
+  frame, with the reason: `cached` (the target holds an earlier frame's
+  content), `deferred` (the frame's budget moved the pass to a later frame) or
+  `missingInput` (an input the pass needs was not there this frame).
+
 ## Key engine tools
 
 | Tool | Use |
@@ -227,3 +280,4 @@ paths are in the tool result. Read them first when a capture comes back empty.
 | `get_render_graph_pass_detail passName` | Inspect per-pass resource accesses |
 | `get_render_graph_resources type aliveOnly` | List all RG resources |
 | `get_render_graph_dependencies` | Check pass ordering |
+| `get_gpu_profiler enabled stats` | Per-pass CPU and GPU times, and pipeline-statistics counters |

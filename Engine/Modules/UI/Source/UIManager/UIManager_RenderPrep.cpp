@@ -6,6 +6,7 @@
 #include "Rendering/Core/Pipeline/PipelineDescTranslator.h"
 #include "Rendering/Core/Pipeline/PipelineTypes.h"
 #include "Rendering/Materials/Shader/ShaderProfileDefines.h"
+#include "../UIOpaqueInteriors.h"
 #include "UI/UIFrameBufferRing.h"
 #include "UI/UIPrimitive.h"
 #include "UI/UITextureRegistry.h"
@@ -13,22 +14,14 @@
 using namespace GameEngine;
 using namespace GameEngine::Rendering;
 
-// Initial capacity for per-frame SSBO ring buffers (element count, not bytes).
-// Sized to comfortably cover editor steady state (~50k primitive slots)
-// without exercising the FrameBufferRing auto-grow path on startup.
-//   primitives  : 262144 * 144B = 36 MB / frame
-//   clips       :   1024 *  64B = 64 KB / frame
-//   draw order  :  32768 *   4B = 128 KB / frame
-//   transforms  :    256 *  32B =   8 KB / frame
-// At 3 frames-in-flight per UIManager: ~108 MB primitives, plus clips/order.
-// Elliptical corner radii cost the +16B/primitive and +16B/clip in those
-// figures -- about +12 MB of persistent ring at this capacity. Capacities are
-// element counts and every stride is sizeof-driven, so these numbers are
-// documentation, not configuration.
-static constexpr size_t kInitialPrimCapacity      = 262144;
+// Initial element counts per frame of the SDF SSBO rings; each ring doubles when a frame needs more.
+// The primitive ring starts small: the editor's start-up layout uses about 1000 slots, a game HUD fewer.
+// A small first allocation fits an existing memory block, so frame 0 does not wait for a new one.
+static constexpr size_t kInitialPrimCapacity      = 4096;
 static constexpr size_t kInitialClipCapacity      = 1024;
 static constexpr size_t kInitialDrawOrderCapacity = 32768;
 static constexpr size_t kInitialTransformCapacity = 256;
+static constexpr size_t kInitialOpaqueCapacity    = 256;
 
 namespace
 {
@@ -67,6 +60,9 @@ void UIManager::CreateSdfRingBuffers()
 
     m_SdfTransformRing = std::make_unique<UI::FrameBufferRing<UI::UITransformSlot>>();
     m_SdfTransformRing->Create(m_Device, framesInFlight, kInitialTransformCapacity, "UISdfTransforms");
+
+    m_SdfOpaqueRing = std::make_unique<UI::FrameBufferRing<UI::UIOpaqueInterior>>();
+    m_SdfOpaqueRing->Create(m_Device, framesInFlight, kInitialOpaqueCapacity, "UISdfOpaqueInteriors");
 }
 
 void UIManager::InitSdfRenderer()
@@ -146,6 +142,7 @@ void UIManager::HealDeviceResourcesIfRebuilt()
         m_SdfClipRing.reset();
         m_SdfDrawOrderRing.reset();
         m_SdfTransformRing.reset();
+        m_SdfOpaqueRing.reset();
         CreateSdfRingBuffers();
     }
 
@@ -154,11 +151,14 @@ void UIManager::HealDeviceResourcesIfRebuilt()
     // pipeline is the device-side self-heal — the concrete cache probes
     // IsPipelineAlive and recreates rather than serving a handle that outlived
     // its device (Device.cpp). These are cleared to stay consistent with
-    // InvalidateRenderPassStateAfterTargetChange, which drops all four.
+    // InvalidateRenderPassStateAfterTargetChange, which drops them all.
     m_SdfPipelineId = {};
     m_SdfPipelineIdSubpixel = {};
     m_SdfPipelineIdEncoded = {};
     m_SdfPipelineIdSubpixelEncoded = {};
+    m_SdfPipelineIdOverPrePass = {};
+    m_SdfOpaquePipelineId = {};
+    m_SdfOpaquePipelineIdEncoded = {};
 
     // Cached primitives store texture SLOT INDICES, and the heal just reset the
     // registry's slot space. Without this the editor sitting idle after a
@@ -193,6 +193,9 @@ void UIManager::InvalidateRenderPassStateAfterTargetChange()
     m_SdfPipelineIdSubpixel = {};
     m_SdfPipelineIdEncoded = {};
     m_SdfPipelineIdSubpixelEncoded = {};
+    m_SdfPipelineIdOverPrePass = {};
+    m_SdfOpaquePipelineId = {};
+    m_SdfOpaquePipelineIdEncoded = {};
 }
 
 void UIManager::EnsureSdfPipelineDesc()
@@ -342,12 +345,71 @@ void UIManager::EnsureSdfPipelineDesc()
     }
 
     m_SdfPipelineDesc = std::move(pd);
+    if (!compat)
+        EnsureSdfOpaquePipelineDesc();
     m_SdfPipelineReady = true;
 
     Logger::Log::Info("[UI] SDF pipeline descriptor configured (subpixel variant {}, encoded "
                       "variant {}).",
                       m_SdfSubpixelVariantAvailable ? "available" : "unavailable",
                       m_SdfEncodedVariantAvailable ? "available" : "unavailable");
+}
+
+void UIManager::EnsureSdfOpaquePipelineDesc()
+{
+    // Optional like the other twins: without the shaders the main draw runs
+    // alone and renders the same pixels.
+    try
+    {
+        if (m_UiOpaqueVertShader.empty())
+            m_UiOpaqueVertShader = Utils::LoadShaderFile(SdfShaderPath(false, "ui_opaque", "vert").c_str());
+        if (m_UiOpaqueFragShader.empty())
+            m_UiOpaqueFragShader = Utils::LoadShaderFile(SdfShaderPath(false, "ui_opaque", "frag").c_str());
+        if (m_UiOpaqueFragShaderEncoded.empty())
+            m_UiOpaqueFragShaderEncoded =
+                Utils::LoadShaderFile(SdfShaderPath(false, "ui_opaque_encoded", "frag").c_str());
+    }
+    catch (const std::exception& e)
+    {
+        Logger::Log::Warning("[UI] Opaque pre-pass shaders unavailable ({}); the UI draw runs without it.",
+                             e.what());
+        m_UiOpaqueVertShader.clear();
+        m_UiOpaqueFragShader.clear();
+        m_UiOpaqueFragShaderEncoded.clear();
+    }
+
+    m_SdfOpaqueSetLayout = {};
+    m_SdfOpaqueSetLayout.debugName = "UISdfOpaqueSet";
+    m_SdfOpaqueSetLayout.bindings.push_back({0, DescriptorType::StorageBuffer, 1, kShaderStageVertex,
+                                             "OpaqueInteriors", kDescriptorBindingReadOnlyStorage});
+
+    // Opaque fills replace the target: no blend. The front-to-back order lets
+    // the depth test reject an interior that a later one already covers.
+    PipelineDesc pd{};
+    pd.type = PipelineType::Graphics;
+    pd.topology = PrimitiveTopology::TriangleList;
+    pd.EnableBlending(false);
+    pd.SetCullingMode(CullModeFlagBits::None);
+    pd.colorAttachmentFormats.push_back(0u); // auto
+    pd.depthStencilState.depthTestEnable = true;
+    pd.depthStencilState.depthWriteEnable = true;
+    pd.depthStencilState.depthCompareOp = CompareOp::Greater;
+    pd.pushConstantSize = static_cast<uint32_t>(sizeof(SdfPushConstants));
+    pd.pushConstantStagesMask = kShaderStageVertex | kShaderStageFragment;
+    pd.descriptorSetLayouts.push_back(m_SdfOpaqueSetLayout);
+    pd.vertexShader = m_UiOpaqueVertShader;
+    pd.pixelShader = m_UiOpaqueFragShader;
+    pd.debugName = "UI_Opaque";
+
+    m_SdfOpaqueAvailable = !m_UiOpaqueVertShader.empty() && !m_UiOpaqueFragShader.empty();
+    m_SdfOpaqueEncodedAvailable = m_SdfOpaqueAvailable && !m_UiOpaqueFragShaderEncoded.empty();
+    if (m_SdfOpaqueEncodedAvailable)
+    {
+        m_SdfOpaquePipelineDescEncoded = pd;
+        m_SdfOpaquePipelineDescEncoded.pixelShader = m_UiOpaqueFragShaderEncoded;
+        m_SdfOpaquePipelineDescEncoded.debugName = "UI_Opaque_Encoded";
+    }
+    m_SdfOpaquePipelineDesc = std::move(pd);
 }
 
 UIManager::SdfFrameData UIManager::PrepareSdfFrameData()
@@ -513,6 +575,23 @@ UIManager::SdfFrameData UIManager::PrepareSdfFrameData()
     {
         Logger::Log::Warning("[UI] SDF transform ring upload failed (count={}).", totalTransformSlots);
         return fd;
+    }
+
+    // The opaque interiors rebuild only when a store they read moved.
+    if (m_SdfOpaqueAvailable && m_OpaquePrePassEnabled)
+    {
+        m_SdfOpaqueInteriors->Refresh({m_PersistentPrimitives, m_PersistentClipRects, m_DrawOrder,
+                                      m_PrimitiveStoreVersion, m_ClipStoreVersion,
+                                      m_DrawOrderStoreVersion});
+        const std::vector<UI::UIOpaqueInterior>& interiors = m_SdfOpaqueInteriors->Interiors();
+        m_SdfOpaqueRing->BeginFrame(frameIndex);
+        if (!interiors.empty() &&
+            !m_SdfOpaqueRing->UploadIfChanged(frameIndex, interiors.data(), interiors.size(),
+                                              m_SdfOpaqueInteriors->Version()))
+        {
+            Logger::Log::Warning("[UI] SDF opaque ring upload failed (count={}).", interiors.size());
+            return fd;
+        }
     }
 
     fd.UploadsOk = true;

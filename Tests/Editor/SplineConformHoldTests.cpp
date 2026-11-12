@@ -90,8 +90,7 @@ class SplineConformHoldTests : public PendingBvhGridTest
     {
         const GameEngine::ECS::EntityHandle entity = m_World.CreateEntity();
         Components::WorldTransform transform{};
-        transform.matrix[12] = x;
-        transform.matrix[14] = z;
+        transform.Position = GameEngine::Mathematics::WorldPosition{x, 0.0, z};
         m_World.AddComponentImmediate(entity, transform);
         Components::LocalBounds bounds{};
         bounds.Box.halfExtents = Vector3(kGridSize * 0.5f, 0.5f, kGridSize * 0.5f);
@@ -145,10 +144,9 @@ class SplineConformHoldTests : public PendingBvhGridTest
         renderer.modelAssetGuid.Set(m_BoxGuid);
         m_World.AddComponentImmediate(slab, renderer);
         Components::WorldTransform transform{};
-        transform.matrix[0] = 6.0f;
-        transform.matrix[10] = 4.0f;
-        transform.matrix[13] = 1.0f;
-        transform.matrix[14] = 0.5f;
+        transform.Basis[0].x = 6.0f;
+        transform.Basis[2].z = 4.0f;
+        transform.Position = GameEngine::Mathematics::WorldPosition{0.0, 1.0, 0.5};
         transform.Version = 1u;
         m_World.AddComponentImmediate(slab, transform);
         Components::LocalBounds bounds{};
@@ -156,15 +154,20 @@ class SplineConformHoldTests : public PendingBvhGridTest
         m_World.AddComponentImmediate(slab, bounds);
     }
 
-    // The local matrices of the pieces under `parent`, sorted: they change when a piece moves.
-    std::vector<std::vector<float>> PiecePosesUnder(GameEngine::ECS::EntityHandle parent)
+    // The local poses (position, then basis columns) of the pieces under `parent`, sorted: they
+    // change when a piece moves.
+    std::vector<std::vector<double>> PiecePosesUnder(GameEngine::ECS::EntityHandle parent)
     {
-        std::vector<std::vector<float>> poses;
+        std::vector<std::vector<double>> poses;
         m_World.Query<GameEngine::ECS::Read<Components::Transform>, GameEngine::ECS::Read<Components::Parent>>().Each(
             [&](GameEngine::ECS::EntityHandle, const Components::Transform& transform, const Components::Parent& link)
             {
-                if (link.Entity == parent)
-                    poses.emplace_back(std::begin(transform.matrix), std::end(transform.matrix));
+                if (link.Entity != parent)
+                    return;
+                const auto& p = transform.Position;
+                const auto& b = transform.Basis;
+                poses.push_back({p.X, p.Y, p.Z, b[0].x, b[0].y, b[0].z, b[1].x, b[1].y, b[1].z, b[2].x, b[2].y,
+                                 b[2].z});
             });
         std::sort(poses.begin(), poses.end());
         return poses;
@@ -368,12 +371,16 @@ TEST_F(SplineConformHoldTests, ARoadEditedWhileItsPavedRegionIsHeldKeepsItsStrip
         UpdateRecipes(controllers, renderServices);
         lidMoved = (ChunkCentersUnder(square) - lidBefore).LengthSquared() > 0.0f;
         if (!lidMoved)
+        {
             EXPECT_EQ((ChunkCentersUnder(road) - roadBefore).LengthSquared(), 0.0f)
                 << "the strip rebuilt on the old trims on update " << i;
+        }
         roadHeld |= controllers.BuildStates().ReasonOf(m_World, road) ==
                     GameEngine::SplineRecipes::kHeldForPickingDataReason;
         if (i == 2)
+        {
             ASSERT_NE(MeshBvhCache::Instance().GetOrBuild(m_Guid, 0, Grid()), nullptr);
+        }
     }
     EXPECT_TRUE(roadHeld) << "the region never held, so the test saw no pending BVH";
     EXPECT_TRUE(lidMoved) << "the region never built once the BVH was published";
@@ -400,12 +407,12 @@ TEST_F(SplineConformHoldTests, AFenceRidesAMeshThatArrivesUnderItAfterItsFirstBu
 
     GameEngine::SplineRecipes::SplineFenceController controller;
     UpdateUntilSettled(controller, renderServices);
-    const std::vector<std::vector<float>> beforeTheMesh = PiecePosesUnder(fence);
+    const std::vector<std::vector<double>> beforeTheMesh = PiecePosesUnder(fence);
     ASSERT_FALSE(beforeTheMesh.empty()) << "the fence built no pieces";
 
     AddSlabUnderTheRun();
     UpdateUntilSettled(controller, renderServices);
-    const std::vector<std::vector<float>> afterTheMesh = PiecePosesUnder(fence);
+    const std::vector<std::vector<double>> afterTheMesh = PiecePosesUnder(fence);
     // A settled fence requests the scene TLAS once per update and casts no conform ray.
     const GameEngine::uint64 requestsBefore = GameEngine::Scene::GetSceneTlas(m_World).GetRequestCountForTesting();
     UpdateUntilSettled(controller, renderServices);
@@ -415,7 +422,7 @@ TEST_F(SplineConformHoldTests, AFenceRidesAMeshThatArrivesUnderItAfterItsFirstBu
 
     GameEngine::SplineRecipes::SplineFenceController firstBuild;
     UpdateUntilSettled(firstBuild, renderServices);
-    const std::vector<std::vector<float>> builtOverTheMesh = PiecePosesUnder(fence);
+    const std::vector<std::vector<double>> builtOverTheMesh = PiecePosesUnder(fence);
     EXPECT_NE(builtOverTheMesh, beforeTheMesh) << "positive control: the fence does not reach the mesh";
     EXPECT_EQ(afterTheMesh, builtOverTheMesh) << "the fence kept the ground it measured before the mesh arrived";
     firstBuild.Shutdown(m_World, &renderServices);
@@ -437,12 +444,12 @@ TEST_F(SplineConformHoldTests, APlacementRidesAMeshThatArrivesUnderItAfterItsFir
 
     GameEngine::SplineRecipes::SplinePlacementController controller;
     UpdateUntilSettled(controller, renderServices);
-    const std::vector<std::vector<float>> beforeTheMesh = PiecePosesUnder(row);
+    const std::vector<std::vector<double>> beforeTheMesh = PiecePosesUnder(row);
     ASSERT_FALSE(beforeTheMesh.empty()) << "the placement built no tiles";
 
     AddSlabUnderTheRun();
     UpdateUntilSettled(controller, renderServices);
-    const std::vector<std::vector<float>> afterTheMesh = PiecePosesUnder(row);
+    const std::vector<std::vector<double>> afterTheMesh = PiecePosesUnder(row);
     // A settled row requests the scene TLAS once per update and casts no conform ray.
     const GameEngine::uint64 requestsBefore = GameEngine::Scene::GetSceneTlas(m_World).GetRequestCountForTesting();
     UpdateUntilSettled(controller, renderServices);
@@ -452,7 +459,7 @@ TEST_F(SplineConformHoldTests, APlacementRidesAMeshThatArrivesUnderItAfterItsFir
 
     GameEngine::SplineRecipes::SplinePlacementController firstBuild;
     UpdateUntilSettled(firstBuild, renderServices);
-    const std::vector<std::vector<float>> builtOverTheMesh = PiecePosesUnder(row);
+    const std::vector<std::vector<double>> builtOverTheMesh = PiecePosesUnder(row);
     EXPECT_NE(builtOverTheMesh, beforeTheMesh) << "positive control: the tiles do not reach the mesh";
     EXPECT_EQ(afterTheMesh, builtOverTheMesh) << "the tiles kept the ground they measured before the mesh arrived";
     firstBuild.Shutdown(m_World);

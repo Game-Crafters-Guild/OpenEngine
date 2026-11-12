@@ -107,6 +107,7 @@ target_link_libraries(TransformMathTests
 	    GTest::gtest
 	    GTest::gtest_main
 	)
+target_include_directories(TransformMathTests PRIVATE ${CMAKE_SOURCE_DIR}/Tests)  # DeathTestChild.h
 
 
 set_target_properties(AnimationSystemTests TimelinePlaybackTests PROPERTIES

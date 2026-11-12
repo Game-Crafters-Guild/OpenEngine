@@ -20,12 +20,6 @@ struct SceneViewFrameTimings
     double terminalPassesMs = 0.0; // BuildWindowTerminalPasses + debug callbacks
     double rgCompileMs = 0.0;
     double rgExecuteMs = 0.0;
-    // First-use SPIR-V variant compile time. Front-loaded by
-    // RenderServices::PrewarmActiveVariants before rg->Compile so it no
-    // longer inflates rgExecuteMs; reported here so the spike is still
-    // visible in render_stats.
-    double variantCompileMs = 0.0;
-    double prewarmMs = 0.0;
     double presentMs = 0.0;
     // Application::GetFrameCount() of the frame these were measured in.
     std::uint64_t frameIndex = 0;

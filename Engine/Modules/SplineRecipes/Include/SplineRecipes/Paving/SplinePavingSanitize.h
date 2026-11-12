@@ -10,8 +10,9 @@ namespace GameEngine::SplineRecipes
 // equal recipes compare equal.
 Components::SplinePaving SanitizePavingRecipe(const Components::SplinePaving& authored);
 
-// The paving with its look fields (the materials and the shadow flags) and its ground authority at
-// their defaults: two recipes whose geometry keys are equal build the same meshes. A look change
+// The paving with its look fields (the paving and curb materials and the shadow flags) and its ground
+// authority at their defaults: two recipes whose geometry keys are equal build the same meshes. The
+// seam course's material stays: it selects the course's tint. A look change
 // rebinds the chunks; a ground authority change reaches them through the terrain's surface revision.
 Components::SplinePaving PavingGeometryKey(const Components::SplinePaving& recipe);
 

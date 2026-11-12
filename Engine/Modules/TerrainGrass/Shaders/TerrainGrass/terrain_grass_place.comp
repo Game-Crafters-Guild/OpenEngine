@@ -95,6 +95,8 @@ struct TerrainParamsEntry
     uint GrassControlBindless;
     uint ColorMapBindless;
     float GrassGroundTintHeight;
+    float LatticeOverhangX;
+    float LatticeOverhangZ;
 };
 
 struct GrassBladeInstance
@@ -165,7 +167,7 @@ layout(std430, set = 0, binding = 3) GE_COHERENT buffer TerrainGrassIndirectArgs
     // Slots the admitted cells reserve across both LODs — the pool's fill level. Written by the
     // plan kernel, which is also what the draw records carry, so the two cannot disagree.
     uint CandidatesConsidered;
-    uint CellsVisible;
+    uint CellsCounted;
     // Of those slots, how many produced a blade. The gap is the mask's rejections, standing as
     // zero-size instances: this is the number that says what the dead-slot cost is on real content.
     uint AcceptedBlades;
@@ -174,7 +176,7 @@ layout(std430, set = 0, binding = 3) GE_COHERENT buffer TerrainGrassIndirectArgs
     // Pool size, written by the CPU beside the draw records' constant fields so the GPU and the
     // readback measure against the same number.
     uint Capacity;
-    uint _CounterPad0;
+    uint CellsPlaced;
     uint _CounterPad1;
     uint _CounterPad2;
 } Args;
@@ -194,88 +196,8 @@ layout(std430, set = 0, binding = 1) buffer TerrainGrassCellPlanBuffer
 
 // Per-workgroup accepted tally, reduced to ONE atomic per cell rather than one per blade.
 shared uint sAccepted[gl_WorkGroupSize.x];
-
-// The compat arm reads every map through the named bindings below and never touches
-// the material texture slots this include declares at set 1; declaring them anyway
-// would name a set the compute layout does not carry, which a backend that pads
-// argument buffers from the layout (Metal) rejects at pipeline creation.
-#if !defined(GE_COMPAT_PROFILE)
-#include "Includes/bindless_textures.glsl"
-#endif
-
-// The terrain lattice helper (CBT_LatticeTextureUV) the unified map taps read through. Spelled
-// "cbt_atlas.glsl": this stage's compile has the CBT directory on its include path.
-#include "cbt_atlas.glsl"
-
-// Unified-map existence bits (Terrain/TerrainTypes.h mirror): on the compat profile the bindless
-// indices are always 0, so map existence rides these flags and the taps read the NAMED bindings.
-#if defined(GE_COMPAT_PROFILE)
-const uint kTerrainFlagHasHeightmap = 4u;
-const uint kTerrainFlagHasNormalmap = 8u;
-const uint kTerrainFlagHasSplatmap = 16u;
-#define GRASS_MISSING_HEIGHTMAP(tp) ((tp.Flags & kTerrainFlagHasHeightmap) == 0u)
-#define GRASS_HAS_NORMALMAP(tp) ((tp.Flags & kTerrainFlagHasNormalmap) != 0u)
-#define GRASS_HAS_SPLATMAP(tp) ((tp.Flags & kTerrainFlagHasSplatmap) != 0u)
-#else
-#define GRASS_MISSING_HEIGHTMAP(tp) (tp.HeightmapBindless == 0u)
-#define GRASS_HAS_NORMALMAP(tp) (tp.NormalmapBindless != 0u)
-#define GRASS_HAS_SPLATMAP(tp) (tp.SplatmapBindless != 0u)
-#endif
-
-// Every terrain map tap below is an explicit-LOD data lookup, so one macro carries the
-// whole profile fork: the full profile indexes the bindless array, compat reads a named binding
-// declared just below (WebGPU exposes no binding arrays).
-//
-// Each tap names BOTH the bindless index and the compat texture; each arm expands only its own
-// operand, so the other name never has to exist in that profile. Every index keeps its desktop
-// meaning (0 = nothing bound) in both arms, so the callers' guards are untouched — the compat
-// build just writes 0 or 1 there, because the texture itself is what carries the binding.
-//
-// A macro, not a function: the default arm then preprocesses to exactly the call it always was,
-// which is what makes the desktop SPIR-V byte-identical.
-#if defined(GE_COMPAT_PROFILE)
-#define grassMapTap(mapIndex, mapTex, uv) textureLod(sampler2D(mapTex, gGrassMapSampler), uv, 0.0)
-#define grassMapSize(mapIndex, mapTex) textureSize(sampler2D(mapTex, gGrassMapSampler), 0)
-#else
-#define grassMapTap(mapIndex, mapTex, uv) textureLod(GE_BTEX(mapIndex, GE_TS_CLAMP), uv, 0.0)
-#define grassMapSize(mapIndex, mapTex) textureSize(GE_BTEX(mapIndex, GE_TS_CLAMP), 0)
-#endif
-// A unified height, normal, splat or grass control map read at a terrain UV: those maps are
-// terrain lattices (CBT_LatticeTextureUV), so the blade stands on the surface the terrain draws.
-#define grassLatticeTap(mapIndex, mapTex, uv) \
-    grassMapTap(mapIndex, mapTex, CBT_LatticeTextureUV(uv, vec2(grassMapSize(mapIndex, mapTex))))
-
-#if defined(GE_COMPAT_PROFILE)
-// WebGPU exposes no binding arrays, so the four unified maps this shader reads are named bindings in
-// grass's own set. One sampler serves all of them: every tap here is a clamped explicit-LOD data
-// lookup (GE_TS_CLAMP on the bindless arm).
-layout(set = 0, binding = 13) uniform texture2D gGrassHeightmap;
-layout(set = 0, binding = 14) uniform texture2D gGrassNormalmap;
-layout(set = 0, binding = 15) uniform texture2D gGrassSplatmap;
-layout(set = 0, binding = 18) uniform texture2D gGrassControlmap;
-layout(set = 0, binding = 19) uniform sampler gGrassMapSampler;
-#define GRASS_SPLAT_TAP_UNIFIED(bindlessIndex, uv) grassLatticeTap(bindlessIndex, gGrassSplatmap, uv)
-#else
-// The paged terrain's page-table words (the height table, then the surface table: the CBT's binding-22
-// ring slot), its height cache and its surface plane caches, for cbt_surface_pages.glsl.
-layout(std430, set = 0, binding = 5) readonly buffer GrassPageTableBuffer
-{
-    uint Words[];
-} gPageTable;
-layout(set = 0, binding = 21) uniform sampler2D gPageCache;
-layout(set = 0, binding = 22) uniform sampler2D cbt_SurfaceSplat;
-layout(set = 0, binding = 23) uniform sampler2D cbt_SurfaceNormal;
-layout(set = 0, binding = 24) uniform sampler2D cbt_SurfaceGrass;
-layout(set = 0, binding = 25) uniform sampler2D cbt_SurfaceColor;
-#define GRASS_SURFACE_SET 0
-#define GRASS_SURFACE_PARAMS_BINDING 4
-#endif
-// The surface page resolve (its struct only on the compat profile, which has no pages).
-#include "cbt_surface_pages.glsl"
-
-// The ground resolve, shared with terrain_grass_surface.glsl so a blade's placement mask and its
-// ground color read one answer.
-#include "TerrainGrass/grass_surface_pages.glsl"
+// The terrain maps and pages, the ground resolve and the ground height, shared with the classify kernel.
+#include "TerrainGrass/grass_ground_height.glsl"
 #include "Includes/terrain_grass_canopy.glsl"
 
 #if !defined(GE_COMPAT_PROFILE)
@@ -320,21 +242,18 @@ layout(std140, set = 0, binding = 6) uniform GrassPlaceParamsBuffer
     vec4 ViewRotCol0;      // xyz = view matrix column 0, w = viewport height in pixels
     vec4 ViewRotCol1;      // xyz = view matrix column 1
     vec4 ViewRotCol2;      // xyz = view matrix column 2, w = projection Y scale (uP[1][1])
-    // Worst case across every active grass terrain: x = densest blades/m² at the camera,
-    // y = flattest falloff. Read by terrain_grass_plan.comp, whose budget fit needs a term that
-    // dominates every per-terrain value; declared here because both kernels bind this same block.
+    // Worst case across every active grass terrain: x = densest blades/m² at the camera, y = flattest
+    // falloff, z = thinnest blade (0 for cards), w = shortest blade. Read by the plan kernel's budget
+    // fit; declared here because both kernels bind this same block.
     vec4 Summary;
     // This view's render origin (Cam.uRenderOriginSector): xyz = sector, w = sector size in metres.
     // The root colour's projection UVs are anchored to it, as the ground's are.
     ivec4 RenderOriginSector;
+    vec2 FloorThinning; // x = widest blade, y = far-thinning dial; read by the plan kernel
+    float BladeReach;   // read by the classify kernel
+    float MaxBladeHeight; // read by the classify kernel
 } Place;
 
-// Width, in pixels, that a blade is never allowed to project below. Under about a pixel a blade
-// stops being a shape and becomes a sampling decision: it survives in one screen column and not the
-// next, and moves between them as the camera turns. That is the grazing-angle hatch, and it is a
-// geometry problem — no AA mode resolves a sliver it is only ever handed a fraction of.
-// The width of the whole leaf.
-const float kGrassMinPixelWidth = 1.5;
 // Divide guard for the perspective term below, in view-space metres. Not the near plane: it exists
 // only so a blade at or behind the eye cannot divide by zero.
 const float kGrassMinProjectionDepth = 0.001;
@@ -402,13 +321,6 @@ vec3 grassRenderOriginWorld()
 }
 #endif
 
-float sampleHeight01(TerrainParamsEntry tp, vec2 uv)
-{
-    if (GRASS_MISSING_HEIGHTMAP(tp))
-        return 0.0;
-    return grassLatticeTap(tp.HeightmapBindless, gGrassHeightmap, uv).r;
-}
-
 vec3 sampleTerrainNormalWS(TerrainParamsEntry tp, vec2 uv)
 {
     if (GRASS_HAS_NORMALMAP(tp))
@@ -471,12 +383,9 @@ GrassGround grassGroundAt(uint row, TerrainParamsEntry tp, vec2 uv, vec2 worldXZ
 {
     GrassGround g;
     g.Pages = CBT_SurfPagesNone();
-#if defined(GE_COMPAT_PROFILE)
-    g.Height01 = sampleHeight01(tp, uv);
-#else
-    bool heightPaged = GrassSurface_HeightPaged(row);
-    g.Height01 = heightPaged ? GrassSurface_PagedHeight01(uv) : sampleHeight01(tp, uv);
-    if (heightPaged)
+    g.Height01 = GrassGroundHeight01(row, tp, uv);
+#if !defined(GE_COMPAT_PROFILE)
+    if (GrassSurface_HeightPaged(row))
     {
         vec3 rootWS = vec3(worldXZ.x, tp.WorldOriginY + g.Height01 * tp.HeightScale, worldXZ.y);
         g.Pages = GrassSurface_Pages(row, tp, uv, grassGroundPixelFootprint(tp, uv, rootWS));
@@ -531,8 +440,9 @@ int resolveTerrainForPoint(vec2 p)
         TerrainParamsEntry t = terrains[i];
         if ((t.GrassEnabled & 1u) == 0u)
             continue;
-        if (p.x >= t.WorldOriginX && p.x <= t.WorldOriginX + t.WorldSizeX &&
-            p.y >= t.WorldOriginZ && p.y <= t.WorldOriginZ + t.WorldSizeZ)
+        // The authored size, not the tile lattice's WorldSizeX/Z: no blade past the terrain's edge.
+        if (p.x >= t.WorldOriginX && p.x <= t.WorldOriginX + t.WorldSizeX - t.LatticeOverhangX &&
+            p.y >= t.WorldOriginZ && p.y <= t.WorldOriginZ + t.WorldSizeZ - t.LatticeOverhangZ)
             return i;
     }
     return -1;
@@ -652,7 +562,7 @@ uint emitCellSlots()
                         float randomScale = max(0.0, 1.0 + (s.ScaleRand * 2.0 - 1.0) * randomScaleAmount);
                         float bladeScale = randomScale * growth;
                         float bladeHeight = max(0.0, stp.GrassBladeHeight) * bladeScale
-                            * mix(0.65, 1.35, s.ScaleRand);
+                            * mix(0.65, kGrassBladeHeightJitterMax, s.ScaleRand);
                         if (clumped)
                         {
                             // Folded into the height the instance already carries: some tufts
@@ -664,12 +574,12 @@ uint emitCellSlots()
                                 * GrassClumpTaperMultiplier(clump.DistanceCells, stp.GrassClumpTaper);
                         }
                         float bladeWidth = max(0.0, stp.GrassBladeWidth) * bladeScale
-                            * mix(0.65, 1.25, s.WidthRand);
+                            * mix(0.65, kGrassBladeWidthJitterMax, s.WidthRand);
                         bool card = (stp.GrassEnabled & 4u) != 0u;
                         if (card)
                         {
                             float cardSize = max(0.0, stp.GrassTextureSize) * bladeScale
-                                * mix(0.85, 1.15, s.WidthRand);
+                                * mix(0.85, kGrassCardSizeJitterMax, s.WidthRand);
                             bladeHeight = cardSize;
                             bladeWidth = cardSize;
                         }

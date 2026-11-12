@@ -1,10 +1,10 @@
-// The surface planes of a paged planar terrain at a point, from one locate (CBT_SurfPagesAt) that the
-// terrain fragment and the grass placement share. The resolve exists off GE_COMPAT_PROFILE only; there the
-// includer declares gPageTable (a ring slot: height table, then surface table), gPageCache and the plane caches.
+// The surface planes of a paged terrain at a point, from one locate (CBT_SurfPagesAtPoint) that the
+// terrain fragment and the grass placement share. Off GE_COMPAT_PROFILE only: the includer declares
+// gPageTable (height table, then surface table), gPageCache and the plane caches.
 #ifndef CBT_SURFACE_PAGES_GLSL
 #define CBT_SURFACE_PAGES_GLSL
 
-// The surface planes of a paged planar terrain at a point. Resolved false: no page answers there.
+// The surface planes of a paged terrain at a point. Resolved false: no page answers there.
 struct CBTSurfacePages
 {
     bool Resolved;
@@ -126,16 +126,13 @@ void CBT_SurfPagesAdd(inout CBTSurfacePages pages, CBTPagePoint point, uint leve
         pages.Color += weight * CBT_SurfPlaneTap(cbt_SurfaceColor, x, z);
 }
 
-// The surface planes at terrain UV `uv` of a paged planar terrain `worldSizeX` x `worldSizeZ` meters,
-// for a pixel `footprint` meters across: one locate on the surface table at word `base` serves every
-// plane in `planes`. A plane the terrain does not have reads as unpaged: grass (1, 1), color 0.
-CBTSurfacePages CBT_SurfPagesAt(vec2 uv, float footprint, float worldSizeX, float worldSizeZ, uint base, uint planes)
+// The surface planes at page point `point` and level `lambda` of the surface table `field` at word `base`,
+// planar or planet: one locate serves every plane in `planes`. A plane the terrain does not have reads as
+// unpaged: grass (1, 1), color 0.
+CBTSurfacePages CBT_SurfPagesAtPoint(CBTPagePoint point, float lambda, CBTPageField field, uint base, uint planes)
 {
     CBTSurfacePages pages = CBT_SurfPagesNone();
     gCbtPageRegion = base;
-    CBTPageField field = CBT_SurfPageField(base);
-    float lambda = CBT_SurfPageLevel(footprint, worldSizeX, worldSizeZ, field.Level0SamplesX, field.Level0SamplesZ);
-    CBTPagePoint point = CBT_PagePointAtUV(uv.x, uv.y, field);
     CBTPageLocation location = CBT_PageLocate(point, lambda, field);
     if (location.Count > 0u)
     {
@@ -151,6 +148,15 @@ CBTSurfacePages CBT_SurfPagesAt(vec2 uv, float footprint, float worldSizeX, floa
     }
     gCbtPageRegion = 0u;
     return pages;
+}
+
+// The surface planes at terrain UV `uv` of a paged planar terrain `worldSizeX` x `worldSizeZ` meters,
+// for a pixel `footprint` meters across, from the surface table at word `base` (CBT_SurfPagesAtPoint).
+CBTSurfacePages CBT_SurfPagesAt(vec2 uv, float footprint, float worldSizeX, float worldSizeZ, uint base, uint planes)
+{
+    CBTPageField field = CBT_SurfPageField(base);
+    float lambda = CBT_SurfPageLevel(footprint, worldSizeX, worldSizeZ, field.Level0SamplesX, field.Level0SamplesZ);
+    return CBT_SurfPagesAtPoint(CBT_PagePointAtUV(uv.x, uv.y, field), lambda, field, base, planes);
 }
 
 #endif // !GE_COMPAT_PROFILE

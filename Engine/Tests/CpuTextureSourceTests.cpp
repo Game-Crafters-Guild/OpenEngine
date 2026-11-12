@@ -634,10 +634,10 @@ TEST_F(CpuTextureTest, ActualNavigationThenLateHookUploadsItsFirstRevisionInTheS
     ASSERT_TRUE(sourceMap.IsValid());
     auto actor = world.Create();
     Components::Transform transform;
-    transform.matrix[12] = 2.5f;
-    transform.matrix[14] = 2.5f;
+    transform.Position = Mathematics::WorldPosition{2.5, 0.0, 2.5};
     Components::WorldTransform worldTransform;
-    std::memcpy(worldTransform.matrix, transform.matrix, sizeof(transform.matrix));
+    worldTransform.Position = transform.Position;
+    worldTransform.Basis = transform.Basis;
     Components::NavigationAgent agent;
     agent.Speed = 3.5f;
     agent.Acceleration = 100.f;
@@ -674,12 +674,12 @@ TEST_F(CpuTextureTest, ActualNavigationThenLateHookUploadsItsFirstRevisionInTheS
         void OnDestroy(ECS::World&) override {}
         void OnUpdate(ECS::World& world, float) override
         {
-            InputX = world.GetComponent<Components::WorldTransform>(Actor)->matrix[12];
+            InputX = (world.GetComponent<Components::WorldTransform>(Actor)->GetPosition() - Mathematics::WorldPosition{}).x;
         }
         void OnPostSimulation(ECS::World& world, float) override
         {
             ++Posts;
-            PresentedX = world.GetComponent<Components::WorldTransform>(Actor)->matrix[12];
+            PresentedX = (world.GetComponent<Components::WorldTransform>(Actor)->GetPosition() - Mathematics::WorldPosition{}).x;
             world.GetComponentForWrite<Components::MeshRenderer>(Actor)->RenderLayers = GameEngine::Rendering::RenderLayerMask::FromLayer(1);
             CpuTextureSourceDesc desc{{world.GetWorldId(), world.GetLifecycleResetGeneration()},
                                       HashStringId("LateSight"),
@@ -697,7 +697,7 @@ TEST_F(CpuTextureTest, ActualNavigationThenLateHookUploadsItsFirstRevisionInTheS
     services.Textures().ObserveCpuTextureWorld({world.GetWorldId(), world.GetLifecycleResetGeneration()});
     services.Textures().FlushPendingUploads();
     PathfindingECS::NavigationMovementSystem{}.Update(world, .1f);
-    ASSERT_GT(actor.Get<Components::WorldTransform>()->matrix[12], publisher.InputX);
+    ASSERT_GT(actor.Get<Components::WorldTransform>()->Position.X, publisher.InputX);
     NativePostSimulationSystem bridge(&services);
     bridge.Update(world, .1f);
     EXPECT_GT(publisher.PresentedX, publisher.InputX);

@@ -3,7 +3,7 @@
 #include "Assets/AssetDecodeGate.h"
 #include "JobSystem/WorkStealingThreadPool.h"
 
-#include <algorithm>
+#include <functional>
 
 namespace GameEngine {
 
@@ -25,9 +25,13 @@ bool TextureCookWorkers::RunBands(uint32 bandCount, std::function<bool(uint32)> 
     textureSlot.TryAcquire = [&gate] { return gate.TryAcquire(AssetDecodeGate::Work::Texture); };
     textureSlot.Release = [&gate] { gate.Release(AssetDecodeGate::Work::Texture); };
 
+    // One helper queued for each free texture slot, read again before each band
+    // the calling thread takes, so the level gets the slots other work gives back.
+    const std::function<size_t()> freeTextureSlots = [&gate] { return gate.FreeTextureSlots(); };
+
     JobSystem::ParallelForOptions options;
-    // As many helpers as the gate has texture slots free now.
-    options.Helpers = std::min<size_t>(bandCount > 0 ? bandCount - 1 : 0, gate.FreeTextureSlots());
+    options.Helpers = 0;
+    options.HelpersToKeepQueued = &freeTextureSlots;
     options.HelperPriority = JobSystem::JobPriority::Background;
     options.Stop = &stopRequested;
     options.Admission = &textureSlot;

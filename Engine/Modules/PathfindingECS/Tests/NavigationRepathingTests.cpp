@@ -75,17 +75,11 @@ protected:
         entity.Set(state);
 
         Components::Transform xf{};
-        xf.matrix[0] = 1.0f; xf.matrix[5] = 1.0f; xf.matrix[10] = 1.0f; xf.matrix[15] = 1.0f;
-        xf.matrix[12] = startX;
-        xf.matrix[13] = 0.0f;
-        xf.matrix[14] = startZ;
+        xf.Position = Mathematics::WorldPosition{startX, 0.0, startZ};
         entity.Set(xf);
 
         Components::WorldTransform wt{};
-        wt.matrix[0] = 1.0f; wt.matrix[5] = 1.0f; wt.matrix[10] = 1.0f; wt.matrix[15] = 1.0f;
-        wt.matrix[12] = startX;
-        wt.matrix[13] = 0.0f;
-        wt.matrix[14] = startZ;
+        wt.Position = xf.Position;
         entity.Set(wt);
 
         m_World->ProcessCommands();
@@ -220,10 +214,10 @@ TEST_F(NavigationRepathingTest, ProximityKeepsTheAgentRadiusFromBlockedCells)
     {
         auto* xf = agentEntity.GetForWrite<Components::Transform>();
         auto* wt = agentEntity.GetForWrite<Components::WorldTransform>();
-        xf->matrix[12] = x;
-        xf->matrix[14] = z;
-        wt->matrix[12] = x;
-        wt->matrix[14] = z;
+        xf->Position.X = x;
+        xf->Position.Z = z;
+        wt->Position.X = x;
+        wt->Position.Z = z;
         auto* state = agentEntity.GetForWrite<Components::NavigationAgentState>();
         state->PathDirty = false;
         state->CurrentPathPointIndex = 1;

@@ -309,10 +309,10 @@ TEST_P(SceneUnsigned64RoundTrip, PreservesAllBitsThroughSaveLoadAndResave)
     for (int pass = 0; pass < 2; ++pass)
     {
         ECS::World loaded;
-        Scene::SceneDegradation degradation;
         Scene::SceneReadOptions options;
-        options.outDegradation = &degradation;
-        ASSERT_TRUE(Scene::ReadSceneInto(loaded, path, options)) << Scene::GetLastSceneIOError().message;
+        const Scene::SceneInstantiateResult readResult = Scene::ReadSceneInto(loaded, path, options);
+        const Scene::SceneDegradation& degradation = readResult.Degradation;
+        ASSERT_TRUE(readResult) << readResult.Error->message;
         EXPECT_TRUE(degradation.skips.empty());
         const auto actual = OnlyProbe(loaded);
         EXPECT_EQ(actual.Unsigned, expected.Unsigned);
@@ -346,11 +346,11 @@ TEST_P(SceneSigned64RoundTrip, PreservesSignedValueOnAdditiveLoad)
     SceneIntegerProbe prior;
     prior.Unsigned = 123;
     const auto existing = loaded.Create(prior).GetHandle();
-    Scene::SceneDegradation degradation;
-    Scene::SceneReadOptions options;
-    options.clearWorldFirst = false;
-    options.outDegradation = &degradation;
-    ASSERT_TRUE(Scene::ReadSceneInto(loaded, path, options));
+    Scene::SceneInstantiateOptions options;
+    options.ClearWorldFirst = false;
+    const Scene::SceneInstantiateResult loadResult = Scene::ReadSceneInto(loaded, path, {}, options);
+    ASSERT_TRUE(loadResult);
+    const Scene::SceneDegradation& degradation = loadResult.Degradation;
     EXPECT_TRUE(degradation.skips.empty());
     ASSERT_NE(loaded.GetComponent<SceneIntegerProbe>(existing), nullptr);
     EXPECT_EQ(loaded.GetComponent<SceneIntegerProbe>(existing)->Unsigned, 123u);
@@ -394,10 +394,10 @@ TEST_P(SceneIntegerDegradation, KeepsDefaultAndPreservesRejectedTextOnSave)
         ASSERT_TRUE(file.good());
     }
     ECS::World loaded;
-    Scene::SceneDegradation degradation;
     Scene::SceneReadOptions options;
-    options.outDegradation = &degradation;
-    ASSERT_TRUE(Scene::ReadSceneInto(loaded, path, options)) << Scene::GetLastSceneIOError().message;
+    const Scene::SceneInstantiateResult readResult = Scene::ReadSceneInto(loaded, path, options);
+    const Scene::SceneDegradation& degradation = readResult.Degradation;
+    ASSERT_TRUE(readResult) << readResult.Error->message;
     ASSERT_EQ(degradation.skips.size(), 1u);
     EXPECT_EQ(degradation.skips[0].field, field);
     EXPECT_TRUE(degradation.skips[0].preserved);
@@ -409,10 +409,10 @@ TEST_P(SceneIntegerDegradation, KeepsDefaultAndPreservesRejectedTextOnSave)
     ASSERT_TRUE(Scene::WriteSceneFile(loaded, path));
     EXPECT_NE(ReadText(path).find(assignment), std::string::npos);
     ECS::World reloaded;
-    degradation.skips.clear();
-    ASSERT_TRUE(Scene::ReadSceneInto(reloaded, path, options));
-    ASSERT_EQ(degradation.skips.size(), 1u);
-    EXPECT_TRUE(degradation.skips[0].preserved);
+    const Scene::SceneInstantiateResult reread = Scene::ReadSceneInto(reloaded, path, options);
+    ASSERT_TRUE(reread);
+    ASSERT_EQ(reread.Degradation.skips.size(), 1u);
+    EXPECT_TRUE(reread.Degradation.skips[0].preserved);
     const auto again = OnlyProbe(reloaded);
     EXPECT_EQ(again.Unsigned, 7u);
     EXPECT_EQ(again.Signed, -7);

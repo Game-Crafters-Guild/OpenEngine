@@ -2,13 +2,17 @@
 // note's numbers, the request set's closure under parents, the page cache's residency, and the CPU
 // mirror of the paged resolve (parity, the fallback walk, ring continuity, parked quiescence).
 
+#include "CBTTerrain/CBTLayout.h"
 #include "TerrainECS/PageLevelRule.h"
+#include "TerrainECS/PageTable.h"
 #include "TerrainECS/PagedHeightSampler.h"
 #include "TerrainECS/TerrainAtlas.h"
+#include "TerrainECS/TerrainPages.h"
 
 #include "PageStreaming/PageCache.h"
 #include "PageStreaming/PageStore/PageStoreFormat.h"
 #include "PageStreaming/PageTableEntry.h"
+#include "Types/FlatMap.h"
 
 #include <gtest/gtest.h>
 
@@ -23,6 +27,8 @@
 #include <numbers>
 #include <random>
 #include <set>
+#include <span>
+#include <string>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -87,7 +93,7 @@ std::set<std::tuple<uint32, uint32, uint32>> SurfaceRequests(PageRequestArea are
 }
 
 
-// The desktop surface field's slots (kDesktopSurfacePages).
+// A surface field's slots: the pinned levels of a planar wedge request take their quarter.
 constexpr uint32 kSurfaceSlots = 2048u;
 
 // The wedge model by bearing angles (the planets design 3.5): the footprint's corner bearings meet
@@ -221,7 +227,9 @@ TEST(PageLevelRule, TheWedgeRefinesInTheViewAndAtTheFootOnly)
             EXPECT_FALSE(wedge.count(key)) << "level-0 page " << x << "," << z << " behind the camera";
         }
         else if (centerX > 0.0f && std::abs(std::atan2(centerZ, centerX)) < camera.HorizontalHalfFov)
+        {
             EXPECT_TRUE(wedge.count(key)) << "level-0 page " << x << "," << z << " in the view";
+        }
     }
     EXPECT_GT(behind, 0u) << "the disc requests no level-0 page behind the camera: the test proves nothing";
     const std::size_t levels = PageStreaming::BuildPageStoreLevels(terrain.SamplesX, terrain.SamplesZ).size();
@@ -229,8 +237,10 @@ TEST(PageLevelRule, TheWedgeRefinesInTheViewAndAtTheFootOnly)
     {
         const auto [level, x, z] = key;
         if (level + 1u < levels)
+        {
             EXPECT_TRUE(wedge.count(Key(PageStreaming::PageAddress{0, uint8(level), x, z}.Parent())))
                 << "level " << level << " page without its parent";
+        }
     }
 }
 
@@ -1244,6 +1254,244 @@ TEST(PagedHeightResolve, APageWhoseBlockPoolIsFullWaitsForABlockThenTakesItsEntr
 
     table.SetEntry(PageAddress{0, 0, 100, 5}, PageStreaming::kNoPage);
     EXPECT_TRUE(ResidentOf(table).empty()) << "a block with nothing resident under it is freed";
+}
+
+namespace
+{
+
+// The target sizes of design large-planar-terrains, section 1, at 0.5 m: level-0 samples a side of a
+// 250 km plane, of one face of a 600 km planet and of one Earth face.
+constexpr uint32 kPlane250KmSamples = 500001u;
+constexpr uint32 kPlanet600KmFaceSamples = 1900545u;
+constexpr uint32 kEarthFaceSamples = 20185089u;
+constexpr float32 kTargetTexelMeters = 0.5f;
+
+// One target's field: a planar terrain has one face, a planet six.
+struct TargetField
+{
+    const char* Name = "";
+    uint32 Samples = 0;
+    uint32 Faces = 1;
+};
+
+constexpr std::array<TargetField, 5> kTargetFields{{
+    {"250 km plane", kPlane250KmSamples, 1u},
+    {"600 km planet's face as a plane", kPlanet600KmFaceSamples, 1u},
+    {"600 km planet", kPlanet600KmFaceSamples, PageStreaming::kPageStoreMaxFaces},
+    {"Earth face as a plane", kEarthFaceSamples, 1u},
+    {"Earth planet", kEarthFaceSamples, PageStreaming::kPageStoreMaxFaces},
+}};
+
+// The empty table of a target under a shipped profile, with the profile's slots and the budget
+// TerrainPages gives it.
+PageTable TargetTable(const TargetField& target, const HeightPageProfile& profile)
+{
+    PageTable table;
+    table.Reset(target.Samples, target.Samples, target.Faces, profile.Slots,
+                PageTableBudget{profile.DenseTableWords, profile.TableMidBlocks, profile.TableLeafBlocks});
+    return table;
+}
+
+// A random page finer than the floor, under the floor page (rootX, rootZ) of face 0.
+PageAddress RandomPageUnderFloorPage(const PageTable& table, uint32 rootX, uint32 rootZ, std::mt19937& random)
+{
+    const uint32 level = uint32(random() % table.FloorLevel());
+    const uint32 below = table.FloorLevel() - level;
+    const PageStreaming::PageStoreLevel& shape = table.Levels()[level];
+    const uint32 x = std::min((rootX << below) + uint32(random() % (1u << below)), shape.PagesX - 1u);
+    const uint32 z = std::min((rootZ << below) + uint32(random() % (1u << below)), shape.PagesZ - 1u);
+    return PageAddress{0, uint8(level), x, z};
+}
+
+// A random page of face 0 on the floor level or coarser.
+PageAddress RandomDensePage(const PageTable& table, std::mt19937& random)
+{
+    const uint32 denseLevels = uint32(table.Levels().size()) - table.FloorLevel();
+    const uint32 level = table.FloorLevel() + uint32(random() % denseLevels);
+    const PageStreaming::PageStoreLevel& shape = table.Levels()[level];
+    return PageAddress{0, uint8(level), uint32(random() % shape.PagesX), uint32(random() % shape.PagesZ)};
+}
+
+// The indices of the words that differ between two packs of one table.
+std::vector<uint32> ChangedWords(std::span<const uint32> before, std::span<const uint32> after)
+{
+    std::vector<uint32> changed;
+    for (uint32 word = 0; word < after.size(); ++word)
+        if (before[word] != after[word])
+            changed.push_back(word);
+    return changed;
+}
+
+} // namespace
+
+TEST(PagedHeightResolve, TheShippedProfilesTableTheTargetSizesAtTheModelsWordsFloorsAndTiers)
+{
+    // The words at binding 22 (header, fades, table), the floor level and the tiers of blocks. A lookup
+    // below the floor reads the floor directory, then one block for each tier. On desktop the six-face
+    // Earth table has floor 10, and one Earth face as a plane has floor 8 and about twice the words.
+    struct Expected
+    {
+        TargetField Target;
+        const char* ProfileName = "";
+        HeightPageProfile Profile;
+        uint64 Words = 0;
+        uint32 FloorLevel = 0;
+        uint32 Tiers = 0;
+    };
+    const std::array<Expected, 10> cases{{
+        {kTargetFields[0], "desktop", kDesktopHeightPages, 572634u, 3u, 1u},  // 2.18 MiB
+        {kTargetFields[1], "desktop", kDesktopHeightPages, 724011u, 5u, 1u},  // 2.76 MiB
+        {kTargetFields[2], "desktop", kDesktopHeightPages, 1636000u, 6u, 1u}, // 6.24 MiB
+        {kTargetFields[3], "desktop", kDesktopHeightPages, 988444u, 8u, 2u},  // 3.77 MiB
+        {kTargetFields[4], "desktop", kDesktopHeightPages, 487780u, 10u, 2u}, // 1.86 MiB
+        {kTargetFields[0], "Deck", kSteamDeckHeightPages, 167921u, 4u, 1u},   // 0.64 MiB
+        {kTargetFields[1], "Deck", kSteamDeckHeightPages, 564154u, 6u, 1u},   // 2.15 MiB
+        {kTargetFields[2], "Deck", kSteamDeckHeightPages, 240914u, 7u, 2u},
+        {kTargetFields[3], "Deck", kSteamDeckHeightPages, 278031u, 9u, 2u},
+        {kTargetFields[4], "Deck", kSteamDeckHeightPages, 242668u, 11u, 2u},
+    }};
+    for (const Expected& expected : cases)
+    {
+        SCOPED_TRACE(std::string(expected.Target.Name) + ", " + expected.ProfileName);
+        const PageTable table = TargetTable(expected.Target, expected.Profile);
+        EXPECT_EQ(CBTTerrain::kCBTPageFadeOffsetWords + expected.Profile.Slots + table.Words().size(), expected.Words);
+        EXPECT_EQ(table.FloorLevel(), expected.FloorLevel);
+        EXPECT_EQ(table.TierCount(), expected.Tiers);
+    }
+}
+
+TEST(PagedHeightResolve, TheTieredTableOfA250KmPlaneResolvesAsAMirrorOfItsResidentSetOnRandomSets)
+{
+    // The desktop table of 500,001 x 500,001 samples: levels 12 to 3 dense, one tier of blocks for
+    // levels 2 to 0. The fine pages fall under at most 150 floor pages, within the 160 leaf blocks,
+    // so no page waits and the table holds every page of the mirror.
+    constexpr uint32 kFloorPagesInUse = 150u;
+    const uint32 slots = kDesktopHeightPages.Slots;
+    PageTable table = TargetTable(kTargetFields[0], kDesktopHeightPages);
+    ASSERT_EQ(table.FloorLevel(), 3u);
+    ASSERT_EQ(table.TierCount(), 1u);
+    const PageStreaming::PageStoreLevel& floorShape = table.Levels()[table.FloorLevel()];
+    std::mt19937 random(500001u);
+    // The four corners (on the far edges a block's grid passes the level's last page), then random ones.
+    std::vector<std::pair<uint32, uint32>> roots{{0u, 0u},
+                                                 {floorShape.PagesX - 1u, 0u},
+                                                 {0u, floorShape.PagesZ - 1u},
+                                                 {floorShape.PagesX - 1u, floorShape.PagesZ - 1u}};
+    while (roots.size() < kFloorPagesInUse)
+        roots.emplace_back(uint32(random() % floorShape.PagesX), uint32(random() % floorShape.PagesZ));
+
+    FlatMap<PageAddress, uint32> mirror;
+    uint32 slot = 0;
+    uint32 compared = 0;
+    for (int round = 0; round < 40; ++round)
+    {
+        // Pages arrive and leave; the set stays within the cache's slots.
+        for (uint32 i = 0; i < 64u; ++i)
+        {
+            if (!mirror.Empty() && (random() % 3u == 0u || mirror.Size() >= slots))
+            {
+                const PageAddress page = std::next(mirror.begin(), std::ptrdiff_t(random() % mirror.Size()))->first;
+                table.SetEntry(page, PageStreaming::kNoPage);
+                mirror.Erase(page);
+                continue;
+            }
+            const std::pair<uint32, uint32> root = roots[random() % roots.size()];
+            const PageAddress page = random() % 4u == 0u ? RandomDensePage(table, random)
+                                                         : RandomPageUnderFloorPage(table, root.first, root.second, random);
+            const uint32 entry = PageStreaming::PackPageEntry(slot++ % slots, page.Level);
+            table.SetEntry(page, entry);
+            mirror.InsertOrAssign(page, entry);
+        }
+        std::vector<PageAddress> mirrored;
+        for (const auto& [page, entry] : mirror)
+        {
+            ASSERT_EQ(table.Entry(page), entry)
+                << "round " << round << " L" << int(page.Level) << "(" << page.X << "," << page.Z << ")";
+            ASSERT_EQ(PageResolveGlsl::Entry(table, page), entry)
+                << "the GLSL walk, round " << round << " L" << int(page.Level) << "(" << page.X << "," << page.Z << ")";
+            // Its neighbor along X reads its own entry or none: no write strays to it.
+            const PageAddress neighbor{0, page.Level, page.X ^ 1u, page.Z};
+            if (neighbor.X < table.Levels()[page.Level].PagesX)
+            {
+                const uint32* held = mirror.Find(neighbor);
+                ASSERT_EQ(table.Entry(neighbor), held != nullptr ? *held : PageStreaming::kNoPage)
+                    << "round " << round << " L" << int(neighbor.Level) << "(" << neighbor.X << "," << neighbor.Z << ")";
+            }
+            mirrored.push_back(page);
+            ++compared;
+        }
+        ASSERT_EQ(ResidentOf(table), mirrored) << "round " << round;
+        std::vector<PageAddress> late;
+        table.TakeLateEntries(late);
+        ASSERT_TRUE(late.empty()) << "no page waited for a block, round " << round;
+    }
+    EXPECT_GT(compared, 10000u) << "the sets left too few pages resident to compare";
+}
+
+TEST(PagedHeightResolve, ALevelSwapBelowTheFloorRewritesOnlyTheWordsOfOneBlock)
+{
+    // A level-1 page gives way to its four level-0 children: the children arrive, then the parent
+    // leaves. On the plane both levels are in a block of the one tier; on the Earth face, in a block of
+    // the second tier.
+    for (const TargetField& target : {kTargetFields[0], kTargetFields[3]})
+    {
+        SCOPED_TRACE(target.Name);
+        PageTable table = TargetTable(target, kDesktopHeightPages);
+        ASSERT_GT(table.FloorLevel(), 1u);
+        const PageStreaming::PageStoreLevel& level1 = table.Levels()[1];
+        const PageAddress parent{0, 1, level1.PagesX / 2u, level1.PagesZ / 3u};
+        // The parent's sibling shares its block; the level-0 page at a corner takes another block.
+        table.SetEntry(parent, PageStreaming::PackPageEntry(1, 1));
+        table.SetEntry(PageAddress{0, 1, parent.X ^ 1u, parent.Z}, PageStreaming::PackPageEntry(2, 1));
+        table.SetEntry(PageAddress{0, 0, 3u, 5u}, PageStreaming::PackPageEntry(3, 0));
+        const std::vector<uint32> before(table.Words().begin(), table.Words().end());
+
+        for (uint32 child = 0; child < 4u; ++child)
+            table.SetEntry(PageAddress{0, 0, parent.X * 2u + child % 2u, parent.Z * 2u + child / 2u},
+                           PageStreaming::PackPageEntry(4u + child, 0));
+        table.SetEntry(parent, PageStreaming::kNoPage);
+
+        const std::vector<uint32> changed = ChangedWords(before, table.Words());
+        ASSERT_EQ(changed.size(), 5u) << "the four children's entries and the parent's";
+        // The last tier's descriptor: the block's words, then the pool's first word.
+        const uint32 descriptor = (table.TierCount() - 1u) * PageResolveGlsl::CBT_PAGE_TIER_WORDS;
+        const uint32 blockWords = table.Words()[descriptor + 2u];
+        const uint32 poolOffset = table.Words()[descriptor + 3u];
+        for (uint32 word : changed)
+        {
+            ASSERT_GE(word, poolOffset) << "word " << word << " is before the leaf pool";
+            EXPECT_EQ((word - poolOffset) / blockWords, (changed.front() - poolOffset) / blockWords)
+                << "word " << word << " is in another block";
+        }
+    }
+}
+
+TEST(PagedHeightResolve, ThePinnedLevelsOfEveryTargetStayInsideTheDenseTier)
+{
+    // The pins are the coarsest levels within a quarter of the slots (128 pages on desktop), never finer
+    // than 16 m. A pinned page has a dense entry, so pinning takes no floor directory word and no block.
+    for (const auto& [profile, profileName] :
+         {std::pair{kDesktopHeightPages, "desktop"}, std::pair{kSteamDeckHeightPages, "Deck"}})
+        for (const TargetField& target : kTargetFields)
+        {
+            SCOPED_TRACE(std::string(target.Name) + ", " + profileName);
+            PageTable table = TargetTable(target, profile);
+            const uint32 firstPinned =
+                FirstPinnedPageLevel(table.Levels(), target.Faces, kTargetTexelMeters, profile.Slots);
+            EXPECT_GE(firstPinned, table.FloorLevel());
+            uint32 pinned = 0;
+            for (uint32 level = firstPinned; level < table.Levels().size(); ++level)
+                for (uint32 face = 0; face < target.Faces; ++face)
+                    for (uint32 z = 0; z < table.Levels()[level].PagesZ; ++z)
+                        for (uint32 x = 0; x < table.Levels()[level].PagesX; ++x)
+                            table.SetEntry(PageAddress{uint8(face), uint8(level), x, z},
+                                           PageStreaming::PackPageEntry(pinned++ % profile.Slots, level));
+            EXPECT_LE(pinned, profile.Slots / 4u) << "the pins take at most a quarter of the slots";
+            const std::span<const uint32> words = table.Words();
+            EXPECT_TRUE(std::all_of(words.begin() + table.DirectoryOffset(), words.end(),
+                                    [](uint32 word) { return word == PageStreaming::kNoPage; }))
+                << "a pinned page took a floor directory word or a block";
+        }
 }
 
 namespace

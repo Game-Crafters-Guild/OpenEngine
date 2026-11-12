@@ -1,0 +1,7 @@
+<!-- SeedField (Apps/Editor/Include/UI/Controls/SeedField.h): the seed's integer field, then the dice
+     button that picks a new seed. The classes are the contract with SeedField.cpp; SeedField.css
+     styles every part. -->
+<UIElement class="seed-field-group">
+  <IntField class="seed-field-input" />
+  <Button class="seed-field-new" />
+</UIElement>

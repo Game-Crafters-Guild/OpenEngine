@@ -32,7 +32,7 @@ struct EntityContactEvent
     // The physics event's state, contact point and impulse. The normal is in world space and points
     // from other into self: a body resting on the ground gets +Y as self.
     Physics::ContactState state = Physics::ContactState::Persist;
-    Physics::Vector3 point{0.0f, 0.0f, 0.0f};
+    Physics::WorldPosition point{};
     Physics::Vector3 normal{0.0f, 1.0f, 0.0f};
     float32 impulse = 0.0f;
 

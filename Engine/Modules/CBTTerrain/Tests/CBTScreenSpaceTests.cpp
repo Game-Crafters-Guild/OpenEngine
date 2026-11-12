@@ -16,6 +16,7 @@
 #include <utility>
 #include <vector>
 
+#include "CBTTerrain/CBTDemandTuning.h"
 #include "CBTTerrain/CBTInstance.h"
 #include "CBTTerrain/CBTKernelSet.h"
 #include "CBTTerrain/CBTLayout.h"
@@ -593,7 +594,7 @@ std::vector<uint8_t> MakeRow(uint32_t slot, uint32_t generation)
     std::vector<uint8_t> row(16, 0);
     std::memcpy(row.data() + 0, &slot, 4);
     std::memcpy(row.data() + 4, &generation, 4);
-    // LodBias (float, +8) and Pad (+12) stay 0.
+    // TileKey (+8) stays 0, the key of tile (0, 0); Fade (+12) stays 0.
     return row;
 }
 } // namespace
@@ -784,8 +785,7 @@ void PackSlotInto(std::vector<float>& atlas, uint32_t atlasDim, uint32_t slotStr
 // tiles map to 4 slots (slot = tz*2 + tx) so slots 1 and 2 have col!=row; each holds a DISTINCT base
 // height. Every terrain corner must read ITS tile's slot. Under a col/row swap slots 1<->2 read each
 // other's base -> the per-corner check fails (DISCRIMINATOR: swap interiorX/interiorY in
-// CBT_AtlasSlotUV to falsify). Slot 3's row carries a COARSE LodBias to prove LodBias is a hint,
-// never a height-sample input.
+// CBT_AtlasSlotUV to falsify). Each row carries the TileKey of its tile, so every row resolves.
 TEST_F(CBTScreenSpaceTest, AtlasResolve2x2DistinctSlotsCatchColRowSwap)
 {
     CBTInstance instance;
@@ -818,18 +818,15 @@ TEST_F(CBTScreenSpaceTest, AtlasResolve2x2DistinctSlotsCatchColRowSwap)
     ASSERT_TRUE(atlasTex.IsValid());
     instance.SetAtlasSource(0u, atlasTex);
 
-    // Row (tileIndex = tz*tilesX + tx = s) -> slot s. Slot 3 carries a coarse LodBias hint.
+    // Row (tileIndex = tz*tilesX + tx = s) -> slot s, keyed (tz << 16) | tx like CBT_AtlasTileKey.
     std::vector<uint8_t> rows(4u * 16u, 0);
     for (uint32_t s = 0; s < 4u; ++s)
     {
         std::memcpy(rows.data() + s * 16u + 0u, &s, 4);
         const uint32_t gen = 1u;
         std::memcpy(rows.data() + s * 16u + 4u, &gen, 4);
-        if (s == 3u)
-        {
-            const float lodCoarse = 1.0f;
-            std::memcpy(rows.data() + s * 16u + 8u, &lodCoarse, 4);
-        }
+        const uint32_t tileKey = ((s / 2u) << 16u) | (s % 2u);
+        std::memcpy(rows.data() + s * 16u + 8u, &tileKey, 4);
     }
     instance.UploadAtlasRows(0u, rows.data(), 4u);
 
@@ -905,8 +902,11 @@ GameEngine::Terrain::HeightfieldData MakeCliffAndSlopeHeightfield()
 CBTFrameParams MakeLatticeTerrainParams()
 {
     constexpr float kView = 1024.0f;
+    // The whole terrain on screen (NDC [0, 1], 2 px per meter), so the cliff's cell is in the frustum. A cap
+    // facet (4 m legs) projects 32 px^2 against the 16 px^2 split area and an 11.3 px split edge against the
+    // 8 px split edge, so the area metric and the planar criterion both refine to the cap.
     float ortho[16];
-    MakeOrthoTopDown(2.0f / kLatticeTerrainSize, ortho);
+    MakeOrthoTopDown(1.0f / kLatticeTerrainSize, ortho);
     return MakeParams(ortho, kLatticeTerrainSize, kLatticeTerrainSize, 0.0f, 0.0f, kLatticeHeightScale,
                       kLatticeOriginY, kView, kView, 8.0f, 4.0f);
 }
@@ -1319,6 +1319,9 @@ TEST_F(CBTScreenSpaceTest, NoDirtyRegionIsQuiescent)
     MakeOrthoTopDown(a, ortho);
     CBTFrameParams params = MakeParams(ortho, kSize, kSize, 0.0f, 0.0f, 0.0f, 0.0f, kView, kView,
                                        32.0f, 16.0f);
+    // The right half of the terrain is off the frustum. The shipped keep ceiling holds it at its depth, so the
+    // converged tree has no standing merge candidate at the frustum edge.
+    params.DemandTuning[1] = kOffFrustumKeepOcc;
 
     // Converge (empty dirty rect throughout — the default CBTClassifyDesc rect).
     CBTClassifyDesc converge{};
@@ -1747,15 +1750,12 @@ TEST_F(CBTScreenSpaceTest, SustainedDirtyRegionDoesNotOscillate)
     const float a = 2.0f / kSize;
     float ortho[16];
     MakeOrthoTopDown(a, ortho);
-    // Split at 40 px / merge at 20 px. The root split edge projects to ~1448 px and a
-    // LEB bisection scales the longest edge by 1/sqrt(2) per level (1448 -> 45.3 ->
-    // 32.0 -> 22.6 ...), so metric convergence lands the finest bisectors at ~32 px:
-    // STRICTLY inside the dead-band (20 < 32 < 40). That is the population the pre-fix
-    // dirty code (merge threshold raised to screen.z=40) collapses — 32 < 40 => merge
-    // => coarser => 45.3 > 40 => split back => period-2 oscillation. The fix keeps the
-    // merge threshold at screen.w=20 (32 > 20 => hold), so the density stays frozen.
+    // The area metric splits above 40^2/4 = 400 px^2 and merges a parent below 2 x 20^2/4 = 200 px^2. The finest
+    // bisectors land at 256 px^2 with parents at 512 px^2, inside the dead band, so the density stays frozen.
     CBTFrameParams params = MakeParams(ortho, kSize, kSize, 0.0f, 0.0f, 0.0f, 0.0f, kView, kView,
                                        40.0f, 20.0f);
+    // The shipped keep ceiling holds the off-frustum right half at its depth (no standing merge at the edge).
+    params.DemandTuning[1] = kOffFrustumKeepOcc;
 
     // Converge under the plain screen-space metric (empty dirty rect). The depth cap
     // is deliberately generous (16) so convergence is METRIC-limited, not cap-pinned.
@@ -1879,13 +1879,22 @@ TEST_F(CBTScreenSpaceTest, VisibleRecordDrawInputWellFormed)
     }
 
     // Phase 2: shift the terrain fully out of the frustum (worldX in [10*size,11*size]
-    // -> NDC x in [20,22], right of the frustum). Ortho projection is translation-
-    // invariant in edge length, so the tree stays refined (ALL > 0) while every bisector
-    // is culled -> the VISIBLE record must degrade to a safe no-op, not garbage.
+    // -> NDC x in [20,22], right of the frustum). The off-frustum field merges one level per
+    // frame and a merged facet draws as modified, so the tree runs until it rests (ALL > 0, the
+    // roots at least); then every bisector is culled -> the VISIBLE record must degrade to a
+    // safe no-op, not garbage.
     CBTFrameParams offScreen = MakeParams(ortho, kSize, kSize, 10.0f * kSize, 10.0f * kSize, 0.0f,
                                           0.0f, kView, kView, edgePx * 0.15f, edgePx * 0.075f);
-    for (uint32_t i = 0; i < 3u; ++i, ++frame)
-        RunClassify(*m_Device, instance, offScreen, converge, frame);
+    prev = 0xFFFFFFFFu;
+    stable = 0;
+    for (uint32_t i = 0; i < 32u && stable < 2u; ++i, ++frame)
+    {
+        const uint32_t c = RunClassify(*m_Device, instance, offScreen, converge, frame);
+        const bool merging = instance.ReadWorkQueueCounter(kWQSimplifyClassCounter) != 0;
+        stable = (c == prev && !merging) ? (stable + 1u) : 0u;
+        prev = c;
+    }
+    ASSERT_GE(stable, 2u) << "the off-screen tree never came to rest";
 
     EXPECT_EQ(instance.ReadDrawIndexCount(kDrawStreamVisible), 0u)
         << "fully off-screen terrain did not cull to an empty visible stream";
@@ -1924,6 +1933,8 @@ TEST_F(CBTScreenSpaceTest, FrustumCullingBinsVisibleSubset)
     // frustum halves carry many bisectors.
     CBTFrameParams params = MakeParams(ortho, kSize, kSize, 0.0f, 0.0f, 0.0f, 0.0f, kView, kView,
                                        edgePx * 0.15f, edgePx * 0.075f);
+    // The shipped keep ceiling holds the culled half at its depth, so the converged tree is quiescent.
+    params.DemandTuning[1] = kOffFrustumKeepOcc;
 
     CBTClassifyDesc converge{};
     converge.Mode = kClassifyScreenSpace;
@@ -2126,8 +2137,8 @@ TEST(CBTOriginReconstruction, RelativeCornerExactAtEarthRadius)
 }
 
 // (2) Active-origin Classify == world-space Classify where both are fp32-accurate. Two runs
-// of the SAME planar scene: sector 0 (world), and an ACTIVE origin (sector 48 ~ 49 km, past
-// the 32,768 m activation radius yet fp32-crisp) whose viewProjRel is the same ortho rebased
+// of the SAME planar scene: sector 0 (world), and an ACTIVE origin (sector 48 ~ 49 km,
+// still fp32-crisp) whose viewProjRel is the same ortho rebased
 // by that origin. viewProjRel*(corner-origin) == ortho*corner exactly at this scale, so the
 // screen-space split metric and the ALL-stream tessellation must match — proving the rebased
 // path reconstructs the world decision (and that the active branch does not perturb the decode).
@@ -2236,14 +2247,10 @@ TEST_F(CBTScreenSpaceTest, OriginSectorStepIsTransparentNoReseed)
     EXPECT_EQ(stepValidation, 0u) << "the origin step corrupted neighbor links";
 }
 
-// Arc slice S2 — view-prioritised split metric on the PLANAR domain (design §6 gate 5: the pool is
-// global, so the redistribution must be validated in both domains, not just the sphere). A large
-// flat terrain viewed at a grazing angle saturates the shared 131072-slot pool; the near patch (a
-// disc around the camera's look-at point) is frozen at the pool median with the bias OFF and gets
-// markedly finer with it ON, while the pool stays saturated and validation stays green. Directional
-// (planar detail is set by terrain size, not a fixed metre target, so the oracle is ON < OFF under
-// saturation, not the sphere's absolute < 5 m). Perspective camera => a near/far gradient the bias
-// can act on (a top-down ortho pose, as the other planar tests use, has no gradient by design).
+// The view-prioritized split metric on the planar domain: at a 3 px target, 1600x900 px of ground asks for more
+// facets than the pool holds. With the bias on, the far band coarsens, the field fits with no rollback, and the near
+// patch is at most one LEB level coarser than with the bias off. The area metric holds the near patch at the target,
+// so the oracle pins "not coarser", a weaker pin than "finer".
 TEST_F(CBTScreenSpaceTest, ViewPriorityNearPatchPlanar)
 {
     using namespace GameEngine::Mathematics;
@@ -2341,10 +2348,13 @@ TEST_F(CBTScreenSpaceTest, ViewPriorityNearPatchPlanar)
     // to redistribute and the oracle is vacuous).
     EXPECT_GT(off.Scan.Live, kDefaultBisectorPoolSize * 85u / 100u)
         << "the planar pose did not saturate the pool — enlarge the terrain / lower the TPE";
-    // Redistribution: the near patch gets markedly finer with the bias on (planar target is
-    // directional, not the sphere's absolute < 5 m).
-    EXPECT_LT(on.Scan.NearMedEdge, off.Scan.NearMedEdge * 0.7)
-        << "view-priority did not refine the planar near patch under saturation (gate 5, planar)";
+    // Redistribution. The area metric holds the near patch at the screen target in both arms, so the bias
+    // cannot make it finer; it frees the far band instead. The ON arm fits the pool with no rollback, and its
+    // near median is no coarser than the OFF arm's by more than one LEB level (sqrt 2): the saturated arm's
+    // allocation order moves its near median by up to one level between runs.
+    EXPECT_EQ(on.Overflow, 0) << "the planar near-bias did not bring the saturated field under the pool";
+    EXPECT_LE(on.Scan.NearMedEdge, off.Scan.NearMedEdge * 1.41421356 * 1.01)
+        << "view-priority coarsened the planar near patch under saturation (gate 5, planar)";
     // Still saturated (redistributed, not un-saturated) and conformity/validation green both ways.
     EXPECT_GT(on.Scan.Live, kDefaultBisectorPoolSize / 2u)
         << "the planar near-bias un-saturated the pool — re-tune the contention ramp";

@@ -1,8 +1,10 @@
 #include "ShaderGraph/GraphPreview/GraphPreviewAtlas.h"
 
+#include "Engine/Rendering/CameraUtils.h"
 #include "Engine/Rendering/IEnvironmentSource.h"
 #include "Engine/Rendering/ImageBasedLightingFeature.h"
 #include "Engine/Rendering/PipelineVariantCache.h"
+#include "Engine/Rendering/RenderOrigin.h"
 
 #include "Components/Rendering/Light.h"
 #include "Components/Rendering/LightPhotometry.h"
@@ -264,7 +266,11 @@ bool GraphPreviewAtlas::ContentDigestMoved()
 void GraphPreviewAtlas::EnsureView()
 {
     if (m_CameraId == 0)
+    {
         m_CameraId = m_Services->Views().AllocateCamera("Editor Graph Preview Atlas Camera");
+        // The atlas uploads its own camera and view block; the registry holds the same camera for the ranges.
+        m_Services->Views().SetCameraData(m_CameraId, BuildCameraData(), {kNearZ, kFarZ});
+    }
     if (m_ViewId == 0)
     {
         m_ViewId = m_Services->Views().AllocateView("Editor Graph Preview Atlas View", m_CameraId,
@@ -365,14 +371,7 @@ Rendering::CameraData GraphPreviewAtlas::BuildCameraData() const
     cam.view = viewM;
     cam.proj = projM;
     cam.viewProj = viewProjM;
-    // Render origin is inactive here (sector 0), so the rebased matrices
-    // equal the full-world ones and the shader takes the full-world path.
-    cam.viewRel = viewM;
-    cam.viewProjRel = viewProjM;
-    cam.cameraPos.x = kEyeX;
-    cam.cameraPos.y = kEyeY;
-    cam.cameraPos.z = kEyeZ;
-    cam.cameraPos.w = 0.0f;
+    GameEngine::Engine::Renderer::SetCameraEye(cam, GameEngine::Mathematics::WorldPosition::FromVector3(eye));
     return cam;
 }
 
@@ -559,11 +558,25 @@ void GraphPreviewAtlas::TickRG(uint64_t windowId, UIManager* ui, RG::RGFrame& fr
         std::memcpy(vp.ge_viewProj, cam.viewProj.Data(), sizeof(vp.ge_viewProj));
         std::memcpy(vp.ge_proj, cam.proj.Data(), sizeof(vp.ge_proj));
         std::memcpy(vp.ge_prevViewProj, cam.viewProj.Data(), sizeof(vp.ge_prevViewProj));
-        vp.ge_nearFar[0] = kNearZ;
-        vp.ge_nearFar[1] = kFarZ;
+        const auto depthTerms = Engine::Renderer::ProjectionDepthTerms::Of(cam.proj);
+        vp.ge_depthTerms[0] = depthTerms.M22;
+        vp.ge_depthTerms[1] = depthTerms.M32;
+        vp.ge_depthTerms[2] = depthTerms.M23;
+        vp.ge_depthTerms[3] = depthTerms.M33;
+        vp.ge_viewRanges[0] = kNearZ;
+        vp.ge_viewRanges[1] = kFarZ;
         vp.ge_cameraPosWS[0] = kEyeX;
         vp.ge_cameraPosWS[1] = kEyeY;
         vp.ge_cameraPosWS[2] = kEyeZ;
+        // The relative frame, filled as ViewParamsUploadNode fills it. The preview has no previous frame.
+        const GameEngine::Mathematics::Matrix4x4 invViewRel = GameEngine::Mathematics::Inverse(cam.viewRel);
+        std::memcpy(vp.ge_viewRel, cam.viewRel.Data(), sizeof(vp.ge_viewRel));
+        std::memcpy(vp.ge_invViewRel, invViewRel.Data(), sizeof(vp.ge_invViewRel));
+        std::memcpy(vp.ge_prevViewProjRel, cam.viewProjRel.Data(), sizeof(vp.ge_prevViewProjRel));
+        for (int axis = 0; axis < 3; ++axis)
+            vp.ge_cameraPosRel[axis] = invViewRel[3][axis];
+        for (int axis = 0; axis < 4; ++axis)
+            vp.ge_renderOrigin[axis] = static_cast<float>(cam.renderOriginSector[axis]);
         vp.ge_screenSize[0] = static_cast<float>(GraphPreviewAtlasLayout::kCellPx);
         vp.ge_screenSize[1] = static_cast<float>(GraphPreviewAtlasLayout::kCellPx);
         vp.ge_screenSize[2] = 1.0f / vp.ge_screenSize[0];

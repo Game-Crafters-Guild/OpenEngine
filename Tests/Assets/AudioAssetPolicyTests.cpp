@@ -3,17 +3,25 @@
 #include "Core/Engine.h"
 #include "Core/Application.h"
 
+#include "AssetCore/SharedFileRead.h"
 #include "Assets/AssetManager.h"
 #include "Assets/AssetRegistry.h"
+#include "Assets/AssetTasks.h"
 #include "Assets/AudioAsset.h"
+#include "Assets/ParserRegistry.h"
+#include "Assets/Parsers/AudioAssetParser.h"
 
 #include "Audio/AudioSystem.h"
 
 #include "TestTempDir.h"
 
+#include <atomic>
 #include <filesystem>
 #include <fstream>
+#include <memory>
+#include <span>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 using namespace GameEngine;
@@ -117,6 +125,35 @@ protected:
     AssetManager* assetManager = nullptr;
 };
 
+// Records the address of the buffer that a load reads a WAV file into: the reader thread gives that buffer
+// to ResolveDecodeInputs before it moves the buffer to the decode job. The audio parser does the rest.
+class ReadBufferProbeParser : public AssetParser
+{
+public:
+    AssetType GetAssetType() const override { return AssetType::Audio; }
+    std::vector<std::string> GetSupportedExtensions() const override { return {".wav"}; }
+    int GetPriority() const override { return 1000; }
+    std::string GetName() const override { return "ReadBufferProbeParser"; }
+
+    AssetParseResult Parse(const AssetMetadata& metadata, AssetManager& assetManager) override
+    {
+        return m_Inner.Parse(metadata, assetManager);
+    }
+
+    AssetDecodeInputs ResolveDecodeInputs([[maybe_unused]] const AssetMetadata& metadata, std::span<const uint8> bytes,
+                                          [[maybe_unused]] AssetManager& assetManager) const override
+    {
+        ReadBuffer.store(bytes.data(), std::memory_order_release);
+        return {};
+    }
+
+    /// The address of the bytes of the last read, set on the reader thread.
+    mutable std::atomic<const uint8*> ReadBuffer{nullptr};
+
+private:
+    AudioAssetParser m_Inner;
+};
+
 } // namespace
 
 // Auto decodes a WAV to PCM whatever its length: streaming uncompressed PCM gains nothing and
@@ -167,6 +204,55 @@ TEST_F(AudioAssetPolicyTests, MetaOverridesLoadPolicyToStream)
     EXPECT_EQ(audio->GetPCMFrameCount(), 0u);
     EXPECT_EQ(audio->GetPCMFloatData(), nullptr);
     EXPECT_GT(audio->GetEncodedDataSize(), 0u);
+}
+
+// A streamed clip that DecodeAssetPayload decodes keeps the buffer it is handed as its encoded data.
+// Each hop to the clip moves the buffer, so a copy on any hop gives a different address.
+TEST_F(AudioAssetPolicyTests, StreamedDecodeKeepsTheBufferItIsHanded)
+{
+    const auto path = testDir / "decode_stream.wav";
+    WriteTestWavFile(path, 44100, 2, 16, 1.0f);
+    const GUID guid = RegisterAudio(path);
+
+    AssetRegistry& reg = assetManager->GetRegistry();
+    ASSERT_TRUE(reg.SetMetaValue(path, "audio.loadPolicy", "Stream"));
+    AssetMetadata metadata;
+    ASSERT_TRUE(reg.TryGetAssetMetadata(path, metadata));
+
+    ByteBuffer bytes;
+    ASSERT_TRUE(ReadFileBytesShared(path, bytes));
+    const uint8* const handedBuffer = bytes.Data();
+    const uint64 handedSize = bytes.Size();
+
+    const SharedPtr<Asset> asset = DecodeAssetPayload(*assetManager, guid, metadata, std::move(bytes));
+    ASSERT_TRUE(asset);
+    auto* audio = dynamic_cast<AudioAsset*>(asset.get());
+    ASSERT_TRUE(audio);
+    ASSERT_TRUE(audio->HasEncodedData());
+    EXPECT_EQ(audio->GetEncodedData(), handedBuffer);
+    EXPECT_EQ(audio->GetEncodedDataSize(), handedSize);
+}
+
+// A streamed clip that a load through the AssetManager decodes keeps the buffer that the file is read into.
+// Each hop from the reader to the clip moves the buffer, so a copy on any hop gives a different address.
+TEST_F(AudioAssetPolicyTests, StreamedLoadKeepsTheBufferTheFileIsReadInto)
+{
+    const auto path = testDir / "load_stream.wav";
+    WriteTestWavFile(path, 44100, 2, 16, 1.0f);
+    const GUID guid = RegisterAudio(path);
+    ASSERT_TRUE(assetManager->GetRegistry().SetMetaValue(path, "audio.loadPolicy", "Stream"));
+
+    const auto probe = std::make_shared<ReadBufferProbeParser>();
+    ASSERT_TRUE(assetManager->GetParserRegistry().RegisterParser(probe, probe->GetPriority()));
+
+    auto asset = assetManager->LoadAssetAsync(guid, AssetLoadPriority::High).get();
+    ASSERT_TRUE(asset);
+    auto* audio = dynamic_cast<AudioAsset*>(asset.get());
+    ASSERT_TRUE(audio);
+    ASSERT_TRUE(audio->HasEncodedData());
+    const uint8* const readBuffer = probe->ReadBuffer.load(std::memory_order_acquire);
+    ASSERT_NE(readBuffer, nullptr);
+    EXPECT_EQ(audio->GetEncodedData(), readBuffer);
 }
 
 TEST_F(AudioAssetPolicyTests, AudioSystemInitializeFailureIsGraceful)

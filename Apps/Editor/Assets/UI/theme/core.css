@@ -246,18 +246,9 @@ button.icon-button,
 .icon-button:hover,
 .icon-button:active,
 .icon-button.pressed,
-button.icon-button:hover,
-button.icon-button:active,
-button.icon-button.pressed,
-.button.icon-button:hover,
-.button.icon-button:active,
-.button.icon-button.pressed,
 .icon-button.secondary:hover,
 .icon-button.secondary:active,
-.icon-button.secondary.pressed,
-button.icon-button.secondary:hover,
-button.icon-button.secondary:active,
-button.icon-button.secondary.pressed {
+.icon-button.secondary.pressed {
 	background-color: transparent;
 	border-color: transparent;
 }
@@ -281,9 +272,7 @@ button.icon-button.dragging,
 	opacity: 0.35;
 }
 
-.menulist-icon:hover,
-button.menulist-icon:hover,
-.button.menulist-icon:hover {
+.menulist-icon:hover {
 	opacity: 1.0;
 	background-color: transparent !important;
 }
@@ -342,9 +331,7 @@ button.drag-ghost,
 	opacity: 1.0;
 }
 
-.settings-icon:hover,
-button.settings-icon:hover,
-.button.settings-icon:hover {
+.settings-icon:hover {
 	background-color: transparent;
 	background-image-tint: rgba(255, 255, 255, 1.0);
 }
@@ -362,9 +349,7 @@ button.settings-icon:hover,
 	opacity: 1.0;
 }
 
-.xclose-icon:hover,
-button.xclose-icon:hover,
-.button.xclose-icon:hover {
+.xclose-icon:hover {
 	background-color: transparent;
 	background-image-tint: rgba(255, 255, 255, 1.0);
 }
@@ -376,9 +361,7 @@ button.xclose-icon:hover,
 	opacity: 0.35;
 }
 
-.fullscreen-icon:hover,
-button.fullscreen-icon:hover,
-.button.fullscreen-icon:hover {
+.fullscreen-icon:hover {
 	opacity: 1.0;
 	background-color: transparent !important;
 }
@@ -399,9 +382,7 @@ button.fullscreen-icon.pressed,
 	opacity: 0.35;
 }
 
-.stop-icon:hover,
-button.stop-icon:hover,
-.button.stop-icon:hover {
+.stop-icon:hover {
 	opacity: 1.0;
 	background-color: transparent !important;
 }
@@ -431,47 +412,29 @@ button.stop-icon:hover,
 }
 
 .play-icon:hover,
-button.play-icon:hover,
-.button.play-icon:hover,
 .play-icon:active,
-button.play-icon:active,
-.button.play-icon:active,
-.play-icon.pressed,
-button.play-icon.pressed,
-.button.play-icon.pressed {
+.play-icon.pressed {
 	opacity: 1.0;
 	background-image: url("editor:Icons/playactive.svg");
 	background-color: transparent !important;
 }
 
 .play-backward-icon:hover,
-button.play-backward-icon:hover,
-.button.play-backward-icon:hover,
 .play-backward-icon:active,
-button.play-backward-icon:active,
-.button.play-backward-icon:active,
-.play-backward-icon.pressed,
-button.play-backward-icon.pressed,
-.button.play-backward-icon.pressed {
+.play-backward-icon.pressed {
 	opacity: 1.0;
 	background-image: url("editor:Icons/playbackwardactive.svg");
 	background-color: transparent !important;
 }
 
 .pause-icon:hover,
-button.pause-icon:hover,
-.button.pause-icon:hover,
-.pause-icon:active,
-button.pause-icon:active,
-.button.pause-icon:active {
+.pause-icon:active {
 	opacity: 1.0;
 	background-image: url("editor:Icons/pause_on.svg");
 	background-color: transparent !important;
 }
 
-.pause-icon.pressed,
-button.pause-icon.pressed,
-.button.pause-icon.pressed {
+.pause-icon.pressed {
 	opacity: 1.0;
 	background-image: url("editor:Icons/pause_on.svg");
 	background-color: transparent !important;
@@ -490,9 +453,7 @@ button.pause-icon.pressed,
 	opacity: 1.0;
 }
 
-.node-icon:hover,
-button.node-icon:hover,
-.button.node-icon:hover {
+.node-icon:hover {
 	background-color: transparent;
 	background-image-tint: rgba(255, 255, 255, 1.0);
 }
@@ -508,17 +469,9 @@ button.node-icon:hover,
 }
 
 .loop-icon:hover,
-button.loop-icon:hover,
-.button.loop-icon:hover,
 .loop-icon:active,
-button.loop-icon:active,
-.button.loop-icon:active,
 .loop-icon.pressed,
-button.loop-icon.pressed,
-.button.loop-icon.pressed,
 .loop-icon.active,
-button.loop-icon.active,
-.button.loop-icon.active,
 button.loop-icon.secondary.active,
 .button.loop-icon.secondary.active {
 	opacity: 1.0;
@@ -537,17 +490,9 @@ button.loop-icon.secondary.active,
 }
 
 .sync-playhead-icon:hover,
-button.sync-playhead-icon:hover,
-.button.sync-playhead-icon:hover,
 .sync-playhead-icon:active,
-button.sync-playhead-icon:active,
-.button.sync-playhead-icon:active,
 .sync-playhead-icon.pressed,
-button.sync-playhead-icon.pressed,
-.button.sync-playhead-icon.pressed,
 .sync-playhead-icon.active,
-button.sync-playhead-icon.active,
-.button.sync-playhead-icon.active,
 button.sync-playhead-icon.secondary.active,
 .button.sync-playhead-icon.secondary.active {
 	opacity: 1.0;
@@ -565,14 +510,8 @@ button.sync-playhead-icon.secondary.active,
 }
 
 .record-icon:hover,
-button.record-icon:hover,
-.button.record-icon:hover,
 .record-icon:active,
-button.record-icon:active,
-.button.record-icon:active,
-.record-icon.pressed,
-button.record-icon.pressed,
-.button.record-icon.pressed {
+.record-icon.pressed {
 	opacity: 1.0;
 	background-color: transparent !important;
 	border-color: transparent !important;
@@ -649,9 +588,7 @@ button.toolbar-record-icon.vhs-record-red,
 	opacity: 0.35;
 }
 
-.save-icon:hover,
-button.save-icon:hover,
-.button.save-icon:hover {
+.save-icon:hover {
 	opacity: 1.0;
 	background-color: transparent !important;
 }
@@ -841,9 +778,7 @@ button.save-icon:hover,
 	opacity: 0.35;
 }
 
-.draw-curve-icon:hover,
-button.draw-curve-icon:hover,
-.button.draw-curve-icon:hover {
+.draw-curve-icon:hover {
 	opacity: 1.0;
 	background-color: transparent !important;
 }
@@ -936,16 +871,12 @@ button.draw-curve-icon:hover,
 	opacity: 0.35;
 }
 
-/* Hidden until proper icon art lands; previously used star.png as a placeholder. */
+/* Hidden until these buttons have icon art. */
 .stacked-curves-icon,
 button.stacked-curves-icon,
 .button.stacked-curves-icon,
 .normalized-curves-icon,
-button.normalized-curves-icon,
-.button.normalized-curves-icon,
 .buffer-snapshot-icon,
-button.buffer-snapshot-icon,
-.button.buffer-snapshot-icon,
 .swap-buffer-icon {
 	display: none;
 }
@@ -966,9 +897,11 @@ button.buffer-snapshot-icon,
 	opacity: 0.35;
 }
 
+/* button.eye-icon:hover outranks .node-graph-toolbar-preview-button:hover in node-graph.css, which comes later. */
 .copy-icon:hover,
 .paste-icon:hover,
 .eye-icon:hover,
+button.eye-icon:hover,
 .fold-icon:hover,
 .expand-outline-icon:hover,
 .contract-outline-icon:hover,
@@ -994,36 +927,7 @@ button.buffer-snapshot-icon,
 .euler-filter-icon:hover,
 .lattice-icon:hover,
 .bone-icon:hover,
-.star-icon:hover,
-button.copy-icon:hover,
-button.paste-icon:hover,
-button.eye-icon:hover,
-button.fold-icon:hover,
-button.expand-outline-icon:hover,
-button.contract-outline-icon:hover,
-button.folder-open-icon:hover,
-button.frame-all-icon:hover,
-button.frame-selected-curves-icon:hover,
-button.fit-height-icon:hover,
-button.snap-time-icon:hover,
-button.snap-value-icon:hover,
-button.linear-curve-icon:hover,
-button.stepped-curve-icon:hover,
-button.spline-curve-icon:hover,
-button.smooth-lowpass-icon:hover,
-button.smooth-peak-icon:hover,
-button.simplify-curve-icon:hover,
-button.draw-curve-icon:hover,
-button.ease-ease-icon:hover,
-button.ease-out-icon:hover,
-button.ease-in-icon:hover,
-button.toggle-keytool-icon:hover,
-button.add-key-marker-icon:hover,
-button.add-noise-icon:hover,
-button.euler-filter-icon:hover,
-button.lattice-icon:hover,
-button.bone-icon:hover,
-button.star-icon:hover {
+.star-icon:hover {
 	opacity: 1.0;
 	background-color: transparent !important;
 }
@@ -1036,9 +940,7 @@ button.star-icon:hover {
 	opacity: 0.35;
 }
 
-.box-icon:hover,
-button.box-icon:hover,
-.button.box-icon:hover {
+.box-icon:hover {
 	opacity: 1.0;
 	background-color: transparent !important;
 }
@@ -1051,9 +953,7 @@ button.box-icon:hover,
 	opacity: 0.35;
 }
 
-.computer-icon:hover,
-button.computer-icon:hover,
-.button.computer-icon:hover {
+.computer-icon:hover {
 	opacity: 1.0;
 	background-color: transparent !important;
 }
@@ -1066,9 +966,7 @@ button.computer-icon:hover,
 	opacity: 0.35;
 }
 
-.link-icon:hover,
-button.link-icon:hover,
-.button.link-icon:hover {
+.link-icon:hover {
 	opacity: 1.0;
 	background-color: transparent !important;
 }
@@ -1081,9 +979,7 @@ button.link-icon:hover,
 	opacity: 0.35;
 }
 
-.pin-icon:hover,
-button.pin-icon:hover,
-.button.pin-icon:hover {
+.pin-icon:hover {
 	opacity: 1.0;
 	background-color: transparent !important;
 }
@@ -1096,9 +992,7 @@ button.pin-icon:hover,
 	opacity: 0.35;
 }
 
-.info-icon:hover,
-button.info-icon:hover,
-.button.info-icon:hover {
+.info-icon:hover {
 	opacity: 1.0;
 	background-color: transparent !important;
 }
@@ -1111,9 +1005,7 @@ button.info-icon:hover,
 	opacity: 0.35;
 }
 
-.game-controller-icon:hover,
-button.game-controller-icon:hover,
-.button.game-controller-icon:hover {
+.game-controller-icon:hover {
 	opacity: 1.0;
 	background-color: transparent !important;
 }
@@ -1126,9 +1018,7 @@ button.game-controller-icon:hover,
 	opacity: 0.35;
 }
 
-.mixer-icon:hover,
-button.mixer-icon:hover,
-.button.mixer-icon:hover {
+.mixer-icon:hover {
 	opacity: 1.0;
 	background-color: transparent !important;
 }
@@ -1141,9 +1031,7 @@ button.mixer-icon:hover,
 	opacity: 0.35;
 }
 
-.brush-icon:hover,
-button.brush-icon:hover,
-.button.brush-icon:hover {
+.brush-icon:hover {
 	opacity: 1.0;
 	background-color: transparent !important;
 }
@@ -1156,9 +1044,7 @@ button.brush-icon:hover,
 	opacity: 0.35;
 }
 
-.eraser-icon:hover,
-button.eraser-icon:hover,
-.button.eraser-icon:hover {
+.eraser-icon:hover {
 	opacity: 1.0;
 	background-color: transparent !important;
 }
@@ -1171,9 +1057,7 @@ button.eraser-icon:hover,
 	opacity: 0.35;
 }
 
-.gizmo-rotate-icon:hover,
-button.gizmo-rotate-icon:hover,
-.button.gizmo-rotate-icon:hover {
+.gizmo-rotate-icon:hover {
 	opacity: 1.0;
 	background-color: transparent !important;
 }
@@ -1186,9 +1070,7 @@ button.gizmo-rotate-icon:hover,
 	opacity: 0.35;
 }
 
-.eyedropper-icon:hover,
-button.eyedropper-icon:hover,
-.button.eyedropper-icon:hover {
+.eyedropper-icon:hover {
 	opacity: 1.0;
 	background-color: transparent !important;
 }
@@ -1201,9 +1083,7 @@ button.eyedropper-icon:hover,
 	opacity: 0.35;
 }
 
-.arrow-up-icon:hover,
-button.arrow-up-icon:hover,
-.button.arrow-up-icon:hover {
+.arrow-up-icon:hover {
 	opacity: 1.0;
 	background-color: transparent !important;
 }
@@ -1216,9 +1096,7 @@ button.arrow-up-icon:hover,
 	opacity: 0.35;
 }
 
-.arrow-down-icon:hover,
-button.arrow-down-icon:hover,
-.button.arrow-down-icon:hover {
+.arrow-down-icon:hover {
 	opacity: 1.0;
 	background-color: transparent !important;
 }
@@ -1231,9 +1109,7 @@ button.arrow-down-icon:hover,
 	opacity: 0.35;
 }
 
-.trash-icon:hover,
-button.trash-icon:hover,
-.button.trash-icon:hover {
+.trash-icon:hover {
 	opacity: 1.0;
 	background-color: transparent !important;
 }
@@ -1246,9 +1122,7 @@ button.trash-icon:hover,
 	opacity: 0.35;
 }
 
-.stats-icon:hover,
-button.stats-icon:hover,
-.button.stats-icon:hover {
+.stats-icon:hover {
 	opacity: 1.0;
 	background-color: transparent !important;
 }
@@ -1261,9 +1135,7 @@ button.stats-icon:hover,
 	opacity: 0.35;
 }
 
-.pulse-icon:hover,
-button.pulse-icon:hover,
-.button.pulse-icon:hover {
+.pulse-icon:hover {
 	opacity: 1.0;
 	background-color: transparent !important;
 }
@@ -1276,9 +1148,7 @@ button.pulse-icon:hover,
 	opacity: 0.35;
 }
 
-.pie-chart-icon:hover,
-button.pie-chart-icon:hover,
-.button.pie-chart-icon:hover {
+.pie-chart-icon:hover {
 	opacity: 1.0;
 	background-color: transparent !important;
 }
@@ -1291,9 +1161,7 @@ button.pie-chart-icon:hover,
 	opacity: 0.35;
 }
 
-.film-icon:hover,
-button.film-icon:hover,
-.button.film-icon:hover {
+.film-icon:hover {
 	opacity: 1.0;
 	background-color: transparent !important;
 }
@@ -1306,9 +1174,7 @@ button.film-icon:hover,
 	opacity: 0.35;
 }
 
-.alarm-icon:hover,
-button.alarm-icon:hover,
-.button.alarm-icon:hover {
+.alarm-icon:hover {
 	opacity: 1.0;
 	background-color: transparent !important;
 }
@@ -1321,9 +1187,7 @@ button.alarm-icon:hover,
 	opacity: 0.35;
 }
 
-.alert-circle-icon:hover,
-button.alert-circle-icon:hover,
-.button.alert-circle-icon:hover {
+.alert-circle-icon:hover {
 	opacity: 1.0;
 	background-color: transparent !important;
 }
@@ -1336,9 +1200,7 @@ button.alert-circle-icon:hover,
 	opacity: 0.35;
 }
 
-.hardware-chip-icon:hover,
-button.hardware-chip-icon:hover,
-.button.hardware-chip-icon:hover {
+.hardware-chip-icon:hover {
 	opacity: 1.0;
 	background-color: transparent !important;
 }
@@ -1351,9 +1213,7 @@ button.hardware-chip-icon:hover,
 	opacity: 0.35;
 }
 
-.timer-icon:hover,
-button.timer-icon:hover,
-.button.timer-icon:hover {
+.timer-icon:hover {
 	opacity: 1.0;
 	background-color: transparent !important;
 }
@@ -1371,9 +1231,7 @@ button.timer-icon:hover,
 	background-image-tint: rgba(255, 255, 255, 0.84);
 }
 
-.checkmark-icon:hover,
-button.checkmark-icon:hover,
-.button.checkmark-icon:hover {
+.checkmark-icon:hover {
 	opacity: 1.0;
 	background-color: transparent;
 	background-image-tint: rgba(255, 255, 255, 1.0);
@@ -1391,9 +1249,7 @@ button.checkmark-icon:hover,
 	background-color: transparent;
 }
 
-.checkmark-circle-icon:hover,
-button.checkmark-circle-icon:hover,
-.button.checkmark-circle-icon:hover {
+.checkmark-circle-icon:hover {
 	opacity: 1.0;
 	background-color: transparent;
 }
@@ -1411,9 +1267,7 @@ button.checkmark-circle-icon:hover,
 	opacity: 1.0;
 }
 
-.script-icon:hover,
-button.script-icon:hover,
-.button.script-icon:hover {
+.script-icon:hover {
 	background-color: transparent;
 	background-image-tint: rgba(255, 255, 255, 1.0);
 }
@@ -1431,9 +1285,7 @@ button.script-icon:hover,
 	opacity: 1.0;
 }
 
-.book-icon:hover,
-button.book-icon:hover,
-.button.book-icon:hover {
+.book-icon:hover {
 	background-color: transparent;
 	background-image-tint: rgba(255, 255, 255, 1.0);
 }
@@ -1451,9 +1303,7 @@ button.book-icon:hover,
 	opacity: 1.0;
 }
 
-.undo-icon:hover,
-button.undo-icon:hover,
-.button.undo-icon:hover {
+.undo-icon:hover {
 	background-color: transparent;
 	background-image-tint: rgba(255, 255, 255, 1.0);
 }
@@ -1472,9 +1322,7 @@ button.undo-icon:hover,
 	outline: none;
 }
 
-.grid-view-icon:hover,
-button.grid-view-icon:hover,
-.button.grid-view-icon:hover {
+.grid-view-icon:hover {
 	background-image-tint: #CCCCCC;
 	opacity: 1.0;
 	background-color: transparent !important;
@@ -1484,16 +1332,12 @@ button.grid-view-icon:hover,
 	outline: none;
 }
 
-.grid-view-icon:focus,
-button.grid-view-icon:focus,
-.button.grid-view-icon:focus {
+.grid-view-icon:focus {
 	outline: none;
 	border-width: 0px;
 }
 
-.grid-view-icon.active,
-button.grid-view-icon.active,
-.button.grid-view-icon.active {
+.grid-view-icon.active {
 	background-image-tint: #808080;
 	opacity: 1.0;
 	border-width: 0px;
@@ -1515,9 +1359,7 @@ button.grid-view-icon.active,
 	outline: none;
 }
 
-.list-view-icon:hover,
-button.list-view-icon:hover,
-.button.list-view-icon:hover {
+.list-view-icon:hover {
 	background-image-tint: #CCCCCC;
 	opacity: 1.0;
 	background-color: transparent !important;
@@ -1527,16 +1369,12 @@ button.list-view-icon:hover,
 	outline: none;
 }
 
-.list-view-icon:focus,
-button.list-view-icon:focus,
-.button.list-view-icon:focus {
+.list-view-icon:focus {
 	outline: none;
 	border-width: 0px;
 }
 
-.list-view-icon.active,
-button.list-view-icon.active,
-.button.list-view-icon.active {
+.list-view-icon.active {
 	background-image-tint: #808080;
 	opacity: 1.0;
 	border-width: 0px;
@@ -1618,17 +1456,13 @@ button.list-view-icon.active,
 	border-width: 0px;
 }
 
-.assets-view-toggle-toolbar .icon-button.active,
-.assets-view-toggle-toolbar button.icon-button.active,
-.assets-view-toggle-toolbar .button.icon-button.active {
+.assets-view-toggle-toolbar .icon-button.active {
 	background-color: transparent;
 	border-color: transparent;
 	border-width: 0px;
 }
 
-.assets-view-toggle-toolbar .icon-button,
-.assets-view-toggle-toolbar button.icon-button,
-.assets-view-toggle-toolbar .button.icon-button {
+.assets-view-toggle-toolbar .icon-button {
 	width: 16px;
 	height: 16px;
 	min-width: 16px;
@@ -1661,9 +1495,7 @@ button.list-view-icon.active,
    ========================================== */
 
 /* Base layout button structure */
-.layout-button,
-button.layout-button,
-.button.layout-button {
+.layout-button {
 	display: flex;
 	flex-direction: row;
 	align-items: center;
@@ -1692,20 +1524,17 @@ button.layout-button.layout-button-base,
 	color: #ffffff;
 }
 
-button.layout-button.layout-button-hover,
 .layout-button.layout-button-hover {
 	background-color: #242424;
 	border-color: #1a1a1a;
 	color: #ffffff;
 }
 
-button.layout-button.layout-button-pressed,
 .layout-button.layout-button-pressed {
 	background-color: #2a3a4a;
 	border-color: #1a2a3a;
 }
 
-button.layout-button.layout-button-selected,
 .layout-button.layout-button-selected {
 	background-color: #242424;
 	border-color: #1a1a1a;
@@ -1753,15 +1582,12 @@ button.layout-button:hover,
 	color: #ffffff;
 }
 
-button.layout-button:active,
-button.layout-button.pressed,
 .layout-button:active,
 .layout-button.pressed {
 	background-color: #242424;
 	border-color: #1a1a1a;
 }
 
-button.layout-button:focus,
 .layout-button:focus {
 	outline: none;
 }
@@ -1774,15 +1600,12 @@ button.layout-button.active,
 	color: #ffffff;
 }
 
-button.layout-button.active:hover,
 .layout-button.active:hover {
 	background-color: #242424;
 	border-color: #1a1a1a;
 	color: #ffffff;
 }
 
-button.layout-button.active:active,
-button.layout-button.active.pressed,
 .layout-button.active:active,
 .layout-button.active.pressed {
 	background-color: #242424;
@@ -2235,8 +2058,8 @@ button.layout-button.active.pressed,
    one indicator that must be legible when it appears is the faintest thing on
    the toolbar. :hover already restores full opacity for the same reason.
 
-   Placed last, and at .button.icon-button specificity, so it outranks the
-   per-icon `.button.<name>-icon` rules that set the resting value. */
+   Placed last, and at .icon-button:focus-visible specificity, so it outranks
+   the per-icon `.<name>-icon` rules that set the resting value. */
 .icon-button:focus-visible,
 button.icon-button:focus-visible,
 .button.icon-button:focus-visible {

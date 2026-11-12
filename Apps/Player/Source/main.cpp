@@ -594,7 +594,7 @@ static int PlayerMainImpl(int argc, char** argv)
         if (!app.Initialize())
         {
             Logger::Log::Error("Player: Failed to initialize");
-            return -1;
+            return GameEngine::Application::kInitializeFailedExitCode;
         }
         const int exitCode = app.Run();
         app.Shutdown();

@@ -136,10 +136,12 @@ void VcsLogViewer::BuildUI(GameEngine::UIManager* uiManager)
     if (auto* root = uiManager->GetRootElement())
     {
         root->AddChild(std::move(panelRoot));
-        uiManager->PostToUI([uiManager, this]()
+        // The action captures only the panel root. It runs only while that root is in the tree.
+        UIElement* panel = m_PanelRoot;
+        panel->PostSafeAction([panel]()
         {
-            if (m_PanelRoot && m_UIManager == uiManager)
-                uiManager->FocusElement(m_PanelRoot);
+            if (UIManager* manager = panel->GetOwnerManager())
+                manager->FocusElement(panel);
         });
     }
     else

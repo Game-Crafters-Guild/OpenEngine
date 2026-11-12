@@ -44,6 +44,9 @@ class Log
     static void Initialize(const Config& config);
     static void Shutdown();
     static void AddSink(std::unique_ptr<LogSink> sink);
+    /// Flushes, then removes every sink. Every record logged before the call reaches the sinks it removes;
+    /// a record logged at the same time reaches the sinks installed when it is dispatched.
+    /// Do not call it from a sink: the sinks' mutex is held there, so the call deadlocks.
     static void ClearSinks();
     static void SetLogLevel(LogLevel level);
     static LogLevel GetLogLevel();

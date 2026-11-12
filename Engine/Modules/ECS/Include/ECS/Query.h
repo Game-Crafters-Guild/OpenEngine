@@ -734,7 +734,7 @@ void Query<Ts...>::BatchEach(Func&& func)
 // - Optional<T> components pass nullptr when the archetype lacks the column. Callbacks
 //   MUST check for null before dereferencing optional pointers.
 // - Callers must ensure no structural changes (entity create/destroy, add/remove component,
-//   CompactChunks, PruneEmptyArchetypes) run on the same World during iteration.
+//   CompactAllChunks, PruneEmptyArchetypes) run on the same World during iteration.
 template <QualifiedComponent... Ts>
 template <typename Func>
 void Query<Ts...>::ParallelBatchEach(Func&& func, [[maybe_unused]] std::size_t minBatchSize)

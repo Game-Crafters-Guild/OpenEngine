@@ -8,9 +8,13 @@ class TerrainMaterialLibraryAsset;
 
 namespace Components
 {
-struct Terrain;
 struct TerrainSurfaceRulesEffect;
 } // namespace Components
+
+namespace ECS
+{
+struct EntityHandle;
+} // namespace ECS
 
 // The Surface Rules effect's body: the rule list, each row's result material and
 // blend mode, and each condition's range-band widget.
@@ -22,12 +26,12 @@ struct TerrainSurfaceRulesEffect;
 // the file where terrain inspector code goes rather than the file that registers
 // terrain inspectors.
 //
-// `terrain` and `library` are resolved by the caller and may be null: a rules
-// effect can be authored on a volume in a scene with no terrain in it yet, and
-// the row falls back to the semantic channel names when it is.
+// The caller resolves `terrainEntity` and `library`. Both can be empty: a rules effect can be
+// authored on a volume in a scene with no terrain yet, and the rows then show the semantic
+// channel names.
 void AddTerrainSurfaceRuleRows(const InspectorContext& ctx,
                                const Components::TerrainSurfaceRulesEffect& effect,
-                               const Components::Terrain* terrain,
+                               ECS::EntityHandle terrainEntity,
                                TerrainMaterialLibraryAsset* library);
 
 } // namespace GameEngine

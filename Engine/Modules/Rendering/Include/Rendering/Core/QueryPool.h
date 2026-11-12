@@ -65,6 +65,19 @@ namespace Rendering {
         std::chrono::high_resolution_clock::time_point CpuTimestamp;
     };
 
+    /// @brief Counters of one pipeline-statistics query, in Vulkan result order, over the
+    /// bracketed GPU work only. Devices count reused vertices differently, so compare
+    /// counts within one device.
+    struct PipelineStatistics {
+        uint64_t InputAssemblyVertices = 0;
+        uint64_t InputAssemblyPrimitives = 0;
+        uint64_t VertexShaderInvocations = 0;
+        uint64_t ClippingInvocations = 0;   // primitives that reached the clipping stage
+        uint64_t ClippingPrimitives = 0;    // primitives that left it for rasterization
+        uint64_t FragmentShaderInvocations = 0;
+        uint64_t ComputeShaderInvocations = 0;
+    };
+
     /**
      * @brief Abstract GPU profiling and query management interface
      *
@@ -88,7 +101,7 @@ namespace Rendering {
         struct Config {
             uint32_t MaxTimestampQueries = 1024;
             uint32_t MaxOcclusionQueries = 256;
-            uint32_t MaxPipelineStatsQueries = 64;
+            uint32_t MaxPipelineStatsQueries = 256;
             uint32_t FramesInFlight = 3;
             bool EnableValidation = true;
             bool SupportsHostQueryReset = false;
@@ -213,10 +226,18 @@ namespace Rendering {
         virtual void EndOcclusionQuery(CommandList* commandList, uint32_t queryIndex) = 0;
 
         /**
+         * @brief True when the device can record pipeline-statistics queries
+         *        (Vulkan: the pipelineStatisticsQuery feature).
+         */
+        virtual bool SupportsPipelineStatistics() const = 0;
+
+        /**
          * @brief Begin pipeline statistics collection
-         * @param commandList Command list to record into
+         * @param commandList Command list to record into, on a graphics-capable queue,
+         *        outside a render pass instance
          * @param name Debug name for the statistics
-         * @return Query index for later retrieval
+         * @return Query index for later retrieval; UINT32_MAX when unsupported or the
+         *         frame's queries are used up
          */
         virtual uint32_t BeginPipelineStats(CommandList* commandList, const std::string& name = "") = 0;
 
@@ -244,12 +265,15 @@ namespace Rendering {
         virtual bool GetOcclusionResult(uint32_t queryIndex, QueryResult& outResult) = 0;
 
         /**
-         * @brief Get pipeline statistics result
-         * @param queryIndex Query index
-         * @param outResult Output result
-         * @return true if result is available
+         * @brief Get the counters of a completed pipeline statistics query
+         *
+         * Served from the readback BeginFrame(slot) makes after the slot's fence
+         * wait; the values stay until the slot's next frame begins its first query.
+         * @param queryIndex Query index from BeginPipelineStats
+         * @param outStatistics Output counters
+         * @return true if the query executed and its counters are available
          */
-        virtual bool GetPipelineStatsResult(uint32_t queryIndex, QueryResult& outResult) = 0;
+        virtual bool GetPipelineStatsResult(uint32_t queryIndex, PipelineStatistics& outStatistics) const = 0;
 
         /**
          * @brief Get current frame profiling statistics

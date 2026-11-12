@@ -84,10 +84,10 @@ void SetSpeed(ProbeSystem& probe, ECS::EntityHandle entity, float speed)
     probe.Speed = speed;
 }
 
-bool TryNearest(ProbeSystem& probe, Mathematics::Vector3 point, ECS::EntityHandle& outEntity)
+bool TryNearest(ProbeSystem& probe, Mathematics::WorldPosition point, ECS::EntityHandle& outEntity)
 {
     ++ProbeSystem::Calls();
-    (void)point;
+    probe.LastPoint = point;
     outEntity = probe.Nearest;
     return probe.Nearest.IsValid();
 }

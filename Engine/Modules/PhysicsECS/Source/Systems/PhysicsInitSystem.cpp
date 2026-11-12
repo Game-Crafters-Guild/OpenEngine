@@ -40,68 +40,14 @@ namespace
 static GameEngine::Components::Transform TransformFromWorld(const GameEngine::Components::WorldTransform& wt)
 {
     GameEngine::Components::Transform t;
-    for (int i = 0; i < 16; ++i)
-    {
-        t.matrix[i] = wt.matrix[i];
-    }
+    t.Position = wt.Position;
+    t.Basis = wt.Basis;
     return t;
 }
 
 // A dirty region at most this fraction of the total sample grid takes the
 // cheap in-place update (tier 1); anything larger pays the full rebuild.
 constexpr float64 kInPlaceRegionMaxFraction = 0.25;
-
-// Padding applied to heightfield wake boxes so bodies resting just outside
-// the exact region bounds (or above/below the sampled heights) still wake.
-constexpr float32 kWakeBoxPaddingMeters = 2.0f;
-
-// World-space AABB of a sample-space region of a heightfield collider. The region is a
-// box in the shape's LOCAL frame — [gridX*scaleX, height*heightScale, gridZ*scaleZ] offset
-// by the shape Offset — transformed by the body's full world matrix (rotation + translation
-// + any scale) into a world AABB. Transforming the 8 local corners is essential for rotated
-// bodies (the planet's per-face heightfields are yawed so their local Y is the face normal);
-// for a planar unrotated body the matrix is identity-rotation and this reduces to the old
-// axis-aligned mapping.
-static Physics::AABB HeightFieldRegionWorldBox(const GameEngine::Components::WorldTransform& wt,
-                                               const GameEngine::Components::HeightFieldColliderShape& shape,
-                                               uint32 sampleCount,
-                                               int32 minX, int32 minZ, int32 maxX, int32 maxZ,
-                                               float32 minRawHeight, float32 maxRawHeight)
-{
-    const float32 scaleX = shape.sizeX / static_cast<float32>(sampleCount - 1);
-    const float32 scaleZ = shape.sizeZ / static_cast<float32>(sampleCount - 1);
-
-    // Local-space AABB extents (the shape Offset centres the grid at local origin).
-    const float32 lx[2] = {-shape.sizeX * 0.5f + static_cast<float32>(minX) * scaleX,
-                           -shape.sizeX * 0.5f + static_cast<float32>(maxX) * scaleX};
-    const float32 ly[2] = {minRawHeight * shape.heightScale, maxRawHeight * shape.heightScale};
-    const float32 lz[2] = {-shape.sizeZ * 0.5f + static_cast<float32>(minZ) * scaleZ,
-                           -shape.sizeZ * 0.5f + static_cast<float32>(maxZ) * scaleZ};
-
-    const float32* m = wt.matrix; // column-major: world = M * (local, 1)
-    Physics::Vector3 lo(std::numeric_limits<float32>::max(), std::numeric_limits<float32>::max(),
-                        std::numeric_limits<float32>::max());
-    Physics::Vector3 hi(std::numeric_limits<float32>::lowest(),
-                        std::numeric_limits<float32>::lowest(),
-                        std::numeric_limits<float32>::lowest());
-    for (float32 x : lx)
-        for (float32 y : ly)
-            for (float32 z : lz)
-            {
-                const float32 wx = m[0] * x + m[4] * y + m[8] * z + m[12];
-                const float32 wy = m[1] * x + m[5] * y + m[9] * z + m[13];
-                const float32 wz = m[2] * x + m[6] * y + m[10] * z + m[14];
-                lo.x = std::min(lo.x, wx); lo.y = std::min(lo.y, wy); lo.z = std::min(lo.z, wz);
-                hi.x = std::max(hi.x, wx); hi.y = std::max(hi.y, wy); hi.z = std::max(hi.z, wz);
-            }
-
-    Physics::AABB box;
-    box.min = Physics::Vector3(lo.x - kWakeBoxPaddingMeters, lo.y - kWakeBoxPaddingMeters,
-                               lo.z - kWakeBoxPaddingMeters);
-    box.max = Physics::Vector3(hi.x + kWakeBoxPaddingMeters, hi.y + kWakeBoxPaddingMeters,
-                               hi.z + kWakeBoxPaddingMeters);
-    return box;
-}
 
 // True while the body owns a backend body or shape. Not the same as initialized:
 // an edit that asks for a rebuild clears initialized and leaves the old body
@@ -207,6 +153,13 @@ bool GatherMeshCollider(const Physics::PhysicsWorld& pw, ECS::EntityHandle entit
     return changed;
 }
 
+// A heightfield collider rebuilt this update and the world box over its old and new surfaces.
+struct RebuildWake
+{
+    ECS::EntityHandle Collider{};
+    Physics::AABB Box{};
+};
+
 // A body built this update and whether its backend body is kinematic.
 struct BuiltBody
 {
@@ -262,8 +215,8 @@ struct PhysicsInitSystem::WorldScratch
     // Bodies that must be torn down and recreated even though they are still
     // valid — e.g. a heightfield whose source data version changed mid-sim.
     std::unordered_set<ECS::EntityHandle, ECS::EntityHandleHash> RebuildBodies;
-    // Footprints of the heightfields rebuilt this frame, woken once the bodies exist again.
-    std::vector<Physics::AABB> RebuildWakeBoxes;
+    // The heightfields rebuilt this frame with their footprints, settled once the bodies exist again.
+    std::vector<RebuildWake> RebuildWakes;
     ECS::Query<ECS::Read<GameEngine::Components::WorldTransform>, ECS::Write<GameEngine::Components::PhysicsBody>> Bodies;
     // Bodies the last build pass found no collider for, sorted by id, with the structural version
     // and the column write gate at the start of that frame. A body the backend refused is not
@@ -374,7 +327,7 @@ void PhysicsInitSystem::Update(ECS::World& world, float32 deltaTime)
     auto& heightFieldColliders = m_Scratch->HeightFieldColliders;
     auto& meshColliders = m_Scratch->MeshColliders;
     auto& rebuildBodies = m_Scratch->RebuildBodies;
-    auto& rebuildWakeBoxes = m_Scratch->RebuildWakeBoxes;
+    auto& rebuildWakes = m_Scratch->RebuildWakes;
     auto& bodiesWithoutCollider = m_Scratch->BodiesWithoutCollider;
 
     // Entry samples (ChangeGate contract): a write or structural change made while this frame
@@ -575,11 +528,11 @@ void PhysicsInitSystem::Update(ECS::World& world, float32 deltaTime)
                     rebuildBodies.insert(ResolveBodyEntity(e, owner));
                     // Wake over the whole footprint spanning old and new
                     // heights — the rebuild replaces all geometry.
-                    rebuildWakeBoxes.push_back(HeightFieldRegionWorldBox(
+                    rebuildWakes.push_back({e, HeightFieldRegionWorldBox(
                         wt, shape, N,
                         0, 0, static_cast<int32>(N - 1), static_cast<int32>(N - 1),
                         std::min(fullMin, shape.builtMinHeight),
-                        std::max(fullMax, shape.builtMaxHeight)));
+                        std::max(fullMax, shape.builtMaxHeight))});
                 }
 
                 shape.builtMinHeight = fullMin;
@@ -756,7 +709,6 @@ void PhysicsInitSystem::Update(ECS::World& world, float32 deltaTime)
 
             // Extract body pose + scale from world transform.
             const auto wtAsTransform = TransformFromWorld(wt);
-            const auto pos = wtAsTransform.GetPosition();
             const auto rot = wtAsTransform.GetRotation();
             const auto scl = wtAsTransform.GetScale();
             const Physics::Vector3 bodyScale{scl.x, scl.y, scl.z};
@@ -823,7 +775,7 @@ void PhysicsInitSystem::Update(ECS::World& world, float32 deltaTime)
                         break;
 
                     // Child local TRS (relative to body)
-                    const auto childPos = c.Local.GetPosition();
+                    const auto childPos = c.Local.GetPosition() - GameEngine::Mathematics::WorldPosition{};
                     const auto childRot = c.Local.GetRotation();
                     const auto childScl = c.Local.GetScale();
 
@@ -859,7 +811,7 @@ void PhysicsInitSystem::Update(ECS::World& world, float32 deltaTime)
             body.shape = rootShape;
 
             Physics::BodySettings bs{};
-            bs.position = Physics::Vector3(pos.x, pos.y, pos.z);
+            bs.position = wt.Position;
             { const auto& q = rot.GetGLM(); bs.rotation = Physics::Quaternion(q.w, q.x, q.y, q.z); }
             bs.shape = body.shape;
 
@@ -894,10 +846,17 @@ void PhysicsInitSystem::Update(ECS::World& world, float32 deltaTime)
         MarkKinematicBodies(world, builtBodies);
     }
 
-    // Wake sleeping dynamics over every heightfield footprint that was
-    // rebuilt this frame (the bodies now exist again, so the sweep sticks).
-    for (const auto& box : rebuildWakeBoxes)
-        pw->ActivateBodiesInAABB(box);
+    // Settle the dynamic bodies over every heightfield footprint that was rebuilt this frame (the
+    // bodies now exist again, so the wake sticks): a body the new surface buried moves on top of it.
+    for (const RebuildWake& wake : rebuildWakes)
+    {
+        const auto* wt = world.GetComponent<GameEngine::Components::WorldTransform>(wake.Collider);
+        const auto* shape = world.GetComponent<GameEngine::Components::HeightFieldColliderShape>(wake.Collider);
+        if (wt && shape)
+            SettleBodiesOnHeightField(*pw, *wt, *shape, wake.Box);
+        else
+            pw->ActivateBodiesInAABB(wake.Box);
+    }
 
     bodiesWithoutCollider.clear();
     m_Scratch->Bodies.Each([pw, &byBody, &bodiesWithoutCollider](ECS::EntityHandle e,
@@ -914,7 +873,7 @@ void PhysicsInitSystem::Update(ECS::World& world, float32 deltaTime)
     heightFieldColliders.clear();
     meshColliders.clear();
     rebuildBodies.clear();
-    rebuildWakeBoxes.clear();
+    rebuildWakes.clear();
 }
 
 } // namespace GameEngine::PhysicsECS

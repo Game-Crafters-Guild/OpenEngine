@@ -80,12 +80,13 @@ void RenameLayoutModal::Show(const std::string& title, const std::string& initia
 
     if (m_NameField)
     {
-        if (auto* mgr = GetOwnerManager())
+        if (GetOwnerManager())
         {
             TextField* field = m_NameField;
-            mgr->PostToUI([mgr, field]()
+            field->PostSafeAction([field]()
             {
-                mgr->FocusElement(field);
+                if (UIManager* manager = field->GetOwnerManager())
+                    manager->FocusElement(field);
                 field->SelectAll();
             });
         }

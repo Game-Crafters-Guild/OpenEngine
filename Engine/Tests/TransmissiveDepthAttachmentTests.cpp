@@ -19,6 +19,7 @@
 
 #include "RGPassQuery.h"
 #include "SharedHeadlessDevice.h"
+#include "TestCameraEye.h"
 
 #include <utility>
 #include <vector>
@@ -172,7 +173,7 @@ PassDepthDecl DeclareTransmissiveWorld(Rendering::IDevice* device, uint32_t samp
     cd.view = Mathematics::Matrix4x4::Identity();
     cd.proj = Mathematics::Matrix4x4::Identity();
     cd.viewProj = Mathematics::Matrix4x4::Identity();
-    rs.Views().SetCameraData(camId, cd);
+    rs.Views().SetCameraData(camId, ::GameEngine::Tests::TestCameraWithEye(cd), {0.1f, 1000.0f});
     const ViewId viewId = rs.Views().AllocateView("TransView", camId);
     rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
     Rendering::ViewClearConfig clear{};
@@ -294,7 +295,7 @@ PassDepthDecl DeclareLateTransparentWorld(Rendering::IDevice* device, uint32_t s
     cd.view = Mathematics::Matrix4x4::Identity();
     cd.proj = Mathematics::Matrix4x4::Identity();
     cd.viewProj = Mathematics::Matrix4x4::Identity();
-    rs.Views().SetCameraData(camId, cd);
+    rs.Views().SetCameraData(camId, ::GameEngine::Tests::TestCameraWithEye(cd), {0.1f, 1000.0f});
     const ViewId viewId = rs.Views().AllocateView("LateView", camId);
     rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
     Rendering::ViewClearConfig clear{};
@@ -465,7 +466,7 @@ ReflectionSliceDecl DeclareGlassUnderReflections(Rendering::IDevice* device, boo
     cd.view = Mathematics::Matrix4x4::Identity();
     cd.proj = Mathematics::Matrix4x4::Identity();
     cd.viewProj = Mathematics::Matrix4x4::Identity();
-    rs.Views().SetCameraData(camId, cd);
+    rs.Views().SetCameraData(camId, ::GameEngine::Tests::TestCameraWithEye(cd), {0.1f, 1000.0f});
     const ViewId viewId = rs.Views().AllocateView("GlassReflectView", camId);
     rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
     Rendering::ViewClearConfig clear{};

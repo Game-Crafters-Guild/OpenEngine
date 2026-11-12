@@ -9,6 +9,7 @@
 #include <GLFW/glfw3native.h>
 #include "MenuIconBitmap_Win32.h"
 #include <algorithm>
+#include <functional>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -97,6 +98,10 @@ public:
         m_CommandCallback = std::move(cb);
     }
 
+    void SetCloseHandler(std::function<void()> cb) override {
+        m_CloseHandler = std::move(cb);
+    }
+
     void SetStateProvider(StateProviderCallback cb) override {
         m_StateProvider = std::move(cb);
     }
@@ -161,8 +166,14 @@ public:
 
         UINT flags = TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD;
         UINT cmd = TrackPopupMenuEx(m_Menu, flags, pt.x, pt.y, hwnd, nullptr);
+        // The menu is closed when TrackPopupMenuEx returns. Copy the handler first:
+        // the command can replace it or delete this menu.
+        const std::function<void()> onClose = m_CloseHandler;
         if (cmd != 0 && m_CommandCallback) {
             m_CommandCallback(static_cast<uint32_t>(cmd));
+        }
+        if (onClose) {
+            onClose();
         }
     }
 
@@ -264,6 +275,7 @@ private:
     std::unordered_map<std::string, HBITMAP> m_IconBitmaps;
     uint32_t m_NextSubMenuId = 1;
     CommandCallback m_CommandCallback;
+    std::function<void()> m_CloseHandler;
     StateProviderCallback m_StateProvider;
 };
 

@@ -10,6 +10,11 @@ namespace GameEngine
 
 class SceneViewController;
 
+namespace Mathematics
+{
+struct Vector3;
+}
+
 class SceneViewMeasureOverlay final : public UIElement
 {
 public:
@@ -28,6 +33,7 @@ public:
     SceneViewMeasureOverlay();
     ~SceneViewMeasureOverlay() override = default;
 
+    /// The overlay reads the measures of this controller's world.
     void SetSceneController(SceneViewController* controller) { m_Controller = controller; }
     void Tick();
     void SetMeasureToolEnabled(bool enabled);
@@ -39,12 +45,12 @@ public:
 
     void BeginMeasure(float viewX,
                       float viewY,
-                      const std::array<float, 3>& world,
+                      const Mathematics::Vector3& world,
                       bool is2D,
                       bool showComponents);
     void UpdateMeasure(float viewX,
                        float viewY,
-                       const std::array<float, 3>& world,
+                       const Mathematics::Vector3& world,
                        bool showComponents);
     void EndMeasure();
     void CancelMeasure();

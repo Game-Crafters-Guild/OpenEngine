@@ -101,7 +101,7 @@ void ModifyVertex(inout VertexOutput v, InstanceData inst)
         // collapse onto the centre and it rasterizes nothing. The extent multiplies the corner offsets
         // by exactly 1 otherwise, so a sprite outside the fade lands on the same pixels as without it.
         float nearFade = GE_ParticleFadesNearCamera(alignment, inst.particleAnimation.z)
-            ? GE_ParticleNearFade((Cam.uV * vec4(center, 1.0)).xyz, 0.5 * length(vec2(width, height)), ge_nearFar.x)
+            ? GE_ParticleNearFade((Cam.uV * vec4(center, 1.0)).xyz, 0.5 * length(vec2(width, height)), ge_viewRanges.x)
             : 1.0;
         v.custom0.a *= nearFade;
         v.particleNearFade = nearFade;

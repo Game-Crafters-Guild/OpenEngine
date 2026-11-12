@@ -49,8 +49,7 @@ class CompileConcurrencyGate
 {
   public:
     // Enqueues `work` onto the pool. `priority` selects the pool lane; the
-    // gate preserves it for queued work so a background variant-miss stays off
-    // the Normal lane when it is finally dispatched.
+    // gate keeps it for queued work, so bulk warm-up stays on the Background lane when it is dispatched.
     using DispatchFn = std::function<void(std::function<void()>, JobSystem::JobPriority)>;
 
     CompileConcurrencyGate(uint32_t cap, DispatchFn dispatch)
@@ -61,7 +60,8 @@ class CompileConcurrencyGate
     // Admit `work` if fewer than `cap` tasks are running, else hold it in the
     // pending queue for its lane. Admitted work is dispatched via the injected
     // executor and, on completion, frees its slot and pumps the next pending
-    // task (Background lane first). Never runs `work` inline on the calling
+    // task (Normal lane first, as the pool). Awaited work has a waiting thread: it takes
+    // no slot and goes to the executor at once. Never runs `work` inline on the calling
     // thread. If the dispatch executor throws while admitting (task-envelope
     // allocation failure), the reserved slot is released, any concurrently
     // stranded pending job is pumped, and the exception propagates.
@@ -105,10 +105,9 @@ class CompileConcurrencyGate
     mutable std::mutex m_Mutex;
     uint32_t m_Running = 0;
     uint32_t m_HighWater = 0;
-    // Two lanes mirroring the pool's two-class contract instead of flattening
-    // it: Background holds user-visible draw-time variant misses, Normal holds
-    // bulk prewarm/base compiles. OnJobFinished drains Background first so a
-    // material that a draw is waiting on jumps ahead of the prewarm backlog.
+    // Two lanes in the pool's order: Normal holds the compiles and pipeline builds a load or a
+    // frame waits on, Background holds bulk project warm-up. OnJobFinished drains Normal first,
+    // so a slot does not go to Background work while Normal work waits in the gate.
     std::deque<std::function<void()>> m_PendingBackground;
     std::deque<std::function<void()>> m_PendingNormal;
     // Set by Close: Submit destroys its work instead of queueing or admitting it.

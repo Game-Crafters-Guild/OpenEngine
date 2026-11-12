@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AssetCore/Asset.h"
+#include "Types/ByteBuffer.h"
 #include "Types/Types.h"
 
 namespace GameEngine {
@@ -72,12 +73,15 @@ public:
     bool Load() override;
 
     /**
-     * @brief Load audio from memory data (for async loading)
+     * @brief Load audio from memory data. Copies `data` into the asset; the decode
+     * path hands its buffer over through LoadFromDataWithRuntimeSettings instead.
      */
-    bool LoadFromData(const Vector<uint8>& data) override;
+    bool LoadFromData(std::span<const uint8> data) override;
 
     // Extended load entry point used by the Asset pipeline which has access to per-asset metadata.
-    bool LoadFromDataWithRuntimeSettings(const Vector<uint8>& data, const RuntimeSettings& settings, size_t fileSizeBytes = 0);
+    // Takes the encoded bytes by value: a streamed clip keeps them as its encoded data, so a
+    // caller that moves its buffer in hands it over without a copy.
+    bool LoadFromDataWithRuntimeSettings(ByteBuffer data, const RuntimeSettings& settings, size_t fileSizeBytes = 0);
 
     /**
      * @brief Unload audio from memory
@@ -132,9 +136,9 @@ public:
      */
     uint64 GetDataSize() const { return static_cast<uint64>(m_PcmData.size() * sizeof(float)); }
 
-    const uint8* GetEncodedData() const { return m_EncodedData.empty() ? nullptr : m_EncodedData.data(); }
-    uint64 GetEncodedDataSize() const { return static_cast<uint64>(m_EncodedData.size()); }
-    bool HasEncodedData() const { return !m_EncodedData.empty(); }
+    const uint8* GetEncodedData() const { return m_EncodedData.Size() == 0 ? nullptr : m_EncodedData.Data(); }
+    uint64 GetEncodedDataSize() const { return static_cast<uint64>(m_EncodedData.Size()); }
+    bool HasEncodedData() const { return m_EncodedData.Size() != 0; }
 
     /**
      * @brief Check if audio is compressed
@@ -146,7 +150,7 @@ public:
      */
     uint64 GetSampleCount() const { return m_FrameCount; }
 
-    size_t GetMemoryUsage() const override { return (m_PcmData.size() * sizeof(float)) + m_EncodedData.size(); }
+    size_t GetMemoryUsage() const override { return (m_PcmData.size() * sizeof(float)) + m_EncodedData.Size(); }
 
 protected:
     /**
@@ -177,7 +181,7 @@ private:
     Vector<float> m_PcmData;     // interleaved f32 PCM
     uint64 m_FrameCount = 0;
 
-    Vector<uint8> m_EncodedData; // present when loadPolicy==Stream (or for debugging)
+    ByteBuffer m_EncodedData; // present when loadPolicy==Stream (or for debugging)
     bool m_IsCompressed = false;
 
     DISALLOW_COPY_AND_ASSIGN(AudioAsset);

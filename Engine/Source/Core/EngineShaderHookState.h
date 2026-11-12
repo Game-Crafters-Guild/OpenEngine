@@ -16,6 +16,7 @@ struct EngineCore::ShaderHookState
     Rendering::Utils::ShaderPathResolverFunc Resolver = Rendering::Utils::GetShaderPathResolver();
     Rendering::ShaderPackageRebuildActionFunc RebuildAction = Rendering::GetShaderPackageRebuildAction();
     ShaderCacheRoots CacheRoots = ShaderProgramAsset::GetShaderCacheRoots();
+    Rendering::PrecompiledShaderFiles PrecompiledShaders = Rendering::GetPrecompiledShaderFiles();
 
     ~ShaderHookState()
     {
@@ -23,6 +24,7 @@ struct EngineCore::ShaderHookState
         Rendering::Utils::SetShaderPathResolver(Resolver);
         Rendering::SetShaderPackageRebuildAction(RebuildAction);
         ShaderProgramAsset::SetShaderCacheRoots(std::move(CacheRoots));
+        Rendering::SetPrecompiledShaderFiles(std::move(PrecompiledShaders));
     }
 };
 } // namespace GameEngine

@@ -2,14 +2,19 @@
 #include "BlockingThreads.h"
 #include "JobChannelState.h"
 #include "JobSystem/TaskDependencyGraph.h"
+#include "JobSystem/TaskSlabPool.h"
+#include "Memory/ScratchScope.h"
 #include "Platform/Thread.h"
 #include <algorithm>
+#include <bit>
 #include <cassert>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <deque>
 #include <iterator>
+#include <memory>
+#include <memory_resource>
 #include <utility>
 
 #if defined(_MSC_VER)
@@ -17,6 +22,11 @@
 #endif
 
 namespace JobSystem {
+
+// MSVC pads an over-aligned class, and every struct that holds one by value, and reports C4324, an error in this
+// build; test fixtures hold pools by value. So the pool's line groups use char padding, not alignas.
+static_assert(alignof(WorkStealingThreadPool) <= alignof(std::max_align_t),
+              "WorkStealingThreadPool must not be over-aligned");
 
 namespace
 {
@@ -33,15 +43,19 @@ namespace
     constexpr uint32 kSpinPauseMax = 32;
     constexpr uint32 kSpinYieldPeriod = 64;
 
+    // Workers per word of the idle mask.
+    constexpr size_t kIdleMaskBits = 64;
+
     // Inline-mode stack bound: nested execute-at-publish frames allowed on a
     // thread before further tasks are deferred to the trampoline queue. Deep
     // enough for short chains; joins explicitly drain deferred work so reaching
     // the bound cannot strand a child. The bound fits the 1 MiB wasm stack.
     constexpr int kMaxInlineExecutionDepth = 64;
 
-    // The occupancy names of the two compute classes. Static literals, so a
+    // The occupancy names of the compute classes. Static literals, so a
     // reader compares by pointer.
     constexpr const char kNormalJobName[] = "Normal";
+    constexpr const char kAwaitedJobName[] = "Awaited";
     constexpr const char kBackgroundJobName[] = "Background";
 
     struct DeferredInlineTask
@@ -120,7 +134,15 @@ namespace
         {
             return context.Channel;
         }
-        return context.Class == JobPriority::Background ? kBackgroundJobName : kNormalJobName;
+        switch (context.Class) {
+            case JobPriority::Awaited:
+                return kAwaitedJobName;
+            case JobPriority::Background:
+                return kBackgroundJobName;
+            case JobPriority::Normal:
+                break;
+        }
+        return kNormalJobName;
     }
 } // namespace
 
@@ -134,10 +156,16 @@ namespace
         entry.Kind = kind;
         entry.Index = static_cast<uint32>(index);
         entry.Running = slot.Running.load(std::memory_order_relaxed);
-        // A Normal job's slot carries no start time of its own.
-        const bool timed = entry.Running != nullptr && entry.Running != kNormalJobName;
+        // Only Background and channel jobs carry a start time (JobBodyScope).
+        const bool timed =
+            entry.Running != nullptr && entry.Running != kNormalJobName && entry.Running != kAwaitedJobName;
         entry.SinceNs = timed ? slot.SinceNs.load(std::memory_order_relaxed) : 0;
         return entry;
+    }
+
+    const char* LimitName(AvailableProcessors::Limit limit)
+    {
+        return limit == AvailableProcessors::Limit::AffinityMask ? "the process affinity mask" : "the machine";
     }
 } // namespace
 
@@ -228,6 +256,34 @@ thread_local std::vector<PendingCleanupEntry> t_pendingCleanup;
 std::atomic<TaskId> WorkStealingThreadPool::m_NextTaskId{1};
 
 WorkStealingThreadPool::WorkStealingThreadPool(size_t numThreads, size_t blockingThreadBudget) {
+    // offsetof on a class that is not standard-layout is conditionally supported: clang and GCC warn, and support it.
+#if defined(__clang__) || defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Winvalid-offsetof"
+#endif
+    constexpr size_t queuesOffset = offsetof(WorkStealingThreadPool, m_Queues);
+    // The reference layout from m_Queues to m_Counters: the pool's timings are measured at its offsets. Lead puts Queues
+    // at m_Queues's offset modulo alignof(std::max_align_t), so the copy pads as the pool does at any pointer size.
+    // m_PadKeepsCounterPlacement puts m_Counters where this layout does, a full line after the park handles.
+    struct MeasuredLayout
+    {
+        char Lead[alignof(std::max_align_t) + queuesOffset % alignof(std::max_align_t)];
+        LaneQueues Queues;
+        std::condition_variable Condition;
+        std::mutex Mutex;
+        CounterLines Counters;
+    };
+    constexpr size_t handlesEnd = offsetof(WorkStealingThreadPool, m_IdleMaskWords) + sizeof(m_IdleMaskWords);
+    constexpr size_t counterOffset = offsetof(WorkStealingThreadPool, m_Counters);
+    constexpr size_t measuredQueuesToCounters = offsetof(MeasuredLayout, Counters) - offsetof(MeasuredLayout, Queues);
+#if defined(__clang__) || defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+    static_assert(counterOffset == queuesOffset + measuredQueuesToCounters,
+                  "m_PadKeepsCounterPlacement no longer puts m_Counters at #7045's offset");
+    static_assert(handlesEnd + GameEngine::kFalseSharingSeparation <= counterOffset + offsetof(CounterLines, QueuedTasks),
+                  "the park handles and the first counter share a line");
+
     if (numThreads == 0) {
         // Inline mode: no workers, no wake protocol; submissions execute on
         // the submitting thread at the publish points.
@@ -248,11 +304,11 @@ WorkStealingThreadPool::WorkStealingThreadPool(size_t numThreads, size_t blockin
     // The slabs fork tasks can hold at once on this pool, provisioned before
     // the first fork so that no fork takes a heap allocation: the helper and
     // queue-visit envelopes (kMaxUnstartedForkTasksPerWorker unstarted in
-    // each of the two lanes and one running, per worker), a run block for
+    // each lane and one running, per worker), a run block for
     // each of them, and the forking caller's block. Each further caller
     // forking at the same time adds one block. A visit a refused Run
     // publishes takes its slab from the freelist's stock.
-    const size_t claimHelperEnvelopes = (2 * kMaxUnstartedForkTasksPerWorker + 1) * numThreads;
+    const size_t claimHelperEnvelopes = (kJobPriorityCount * kMaxUnstartedForkTasksPerWorker + 1) * numThreads;
     Detail::ProvisionTaskSlabs(2 * claimHelperEnvelopes + 1);
     // Every record exists before any thread that writes one: the workers
     // start below, blocking threads on a channel's first dispatch.
@@ -264,19 +320,28 @@ WorkStealingThreadPool::WorkStealingThreadPool(size_t numThreads, size_t blockin
     }
 
     // Initialize workers using unique_ptr to avoid copy constructor issues.
-    // Workers take *this for their global-lane ConsumerTokens; both lanes
-    // are fully constructed before this line.
+    // Workers take *this for their global-lane ConsumerTokens; every lane
+    // is fully constructed before this line.
     workers.reserve(numThreads);
     for (size_t i = 0; i < numThreads; ++i) {
         workers.emplace_back(MakeUnique<Worker>(*this));
     }
+
+    // The wake state exists before any worker thread starts.
+    m_ParkSlotCount = numThreads;
+    m_ParkSlots = MakeUnique<GameEngine::FalseSharingPadded<ParkSlot>[]>(numThreads);
+    m_IdleMaskWords = (numThreads + kIdleMaskBits - 1) / kIdleMaskBits;
+    m_IdleMask = MakeUnique<GameEngine::FalseSharingPadded<std::atomic<uint64>>[]>(m_IdleMaskWords);
 
     // Start worker threads with dependency-aware loop
     for (size_t i = 0; i < numThreads; ++i) {
         workers[i]->Thread = std::thread(&WorkStealingThreadPool::DependencyAwareWorkerLoop, this, i);
     }
 
-    Logger::Log::Info("JobSystem: WorkStealingThreadPool initialized with {} worker threads", numThreads);
+    const AvailableProcessors available = AvailableProcessors::Query();
+    Logger::Log::Info("JobSystem: WorkStealingThreadPool initialized with {} worker threads; the process may run on {} "
+                      "processors (limited by {})",
+                      numThreads, available.Count, LimitName(available.LimitedBy));
 }
 
 WorkStealingThreadPool::~WorkStealingThreadPool() {
@@ -292,7 +357,7 @@ WorkStealingThreadPool::~WorkStealingThreadPool() {
 
 TaskHandle WorkStealingThreadPool::SubmitToGraph(UniquePtr<TaskBase> task,
                                                   std::span<const TaskId> dependencies) {
-    if (shutdown_requested.load()) {
+    if (m_ShutdownRequested.load()) {
         return TaskHandle(); // Return invalid handle
     }
 
@@ -348,7 +413,7 @@ bool WorkStealingThreadPool::CancelTask(TaskId taskId) {
 }
 
 bool WorkStealingThreadPool::CancelPendingArbitrated(TaskId taskId,
-                                                     const SharedPtr<TaskHandle::TaskData>& data) {
+                                                     const TaskHandle::TaskDataRef& data) {
     // F12: the TaskData status atomic is the SINGLE cancel/execute arbiter.
     // The executing worker CASes Pending -> Running at dequeue; we CAS
     // Pending -> Cancelled here. Exactly one side wins; the winner owns the
@@ -394,7 +459,7 @@ bool WorkStealingThreadPool::LinkSubmitDependency(const TaskHandle& dependency) 
     if (dependency.m_JobSystem != this) {
         return false;
     }
-    const SharedPtr<TaskHandle::TaskData>& data = dependency.m_Data;
+    const TaskHandle::TaskDataRef& data = dependency.m_Data;
     if (!data || data->IsDone()) {
         // F8: terminal dependencies add no edge — the dependent runs and
         // observes the outcome through its handle, exactly like an absent
@@ -505,134 +570,32 @@ void WorkStealingThreadPool::AbandonSubmitDuringShutdown(TaskId taskId) {
     }
 }
 
-SharedPtr<TaskHandle::TaskData> WorkStealingThreadPool::GetOrCreateTaskData(TaskId taskId) {
-    SharedPtr<TaskHandle::TaskData> result;
-    SharedPtr<TaskHandle::TaskData> recycle[kPendingCleanupBatch];
-    std::vector<SharedPtr<TaskHandle::TaskData>> deferDrop; // rarely allocates
-    size_t recycled = 0;
-    {
-        std::lock_guard<std::mutex> lock(m_TaskDataMutex);
+namespace {
+// A Submit task holds one envelope slab and one TaskData, so this queue keeps as many TaskData
+// as the slab freelist keeps slabs. It holds void*, because TaskHandle::TaskData is private.
+using TaskDataQueue = FreelistQueue<void*, kTaskSlabPoolCapacity>;
 
-        // Drain deferred cleanups under the same lock as the insert. This is
-        // amortized free for callers that hit the lock anyway; the per-task
-        // CleanupTaskData() fast path stays lock-free.
-        recycled = DrainPendingCleanupLocked(recycle, deferDrop);
-
-        auto it = m_TaskDataRegistry.find(taskId);
-        if (it != m_TaskDataRegistry.end()) {
-            result = it->second;
-        } else {
-            // Freelist entries are pristine (reset in RecycleTaskData).
-            result = AcquireTaskData();
-            m_TaskDataRegistry[taskId] = result;
-        }
-    }
-    // Reset + pool the recycled entries OUTSIDE the registry lock (their
-    // stale results/callbacks can run user destructors). deferDrop's shared
-    // entries drop their possibly-last references at scope exit, also
-    // outside the lock.
-    CommitRecycledTaskData(recycle, recycled);
-    return result;
-}
-
-size_t WorkStealingThreadPool::DrainPendingCleanupLocked(
-    SharedPtr<TaskHandle::TaskData> (&recycle)[kPendingCleanupBatch],
-    std::vector<SharedPtr<TaskHandle::TaskData>>& deferDrop) {
-    size_t recycled = 0;
-    // Consume only THIS pool's entries; foreign pools' entries stay parked
-    // for their own drains (pointer equality only — see the buffer comment).
-    // erase_if keeps the vector's capacity, like the pre-tag clear() did
-    // (allocation diet). No user code runs inside the predicate (every
-    // erased entry's ref is moved out first), so the buffer cannot be
-    // mutated reentrantly while erase_if iterates.
-    std::erase_if(t_pendingCleanup, [&](const PendingCleanupEntry& entry) {
-        if (entry.Pool != this) {
-            return false;
-        }
-        auto it = m_TaskDataRegistry.find(entry.Id);
-        if (it == m_TaskDataRegistry.end()) {
-            return true; // duplicate cleanup — a prior drain already erased it
-        }
-        // use_count() == 1 means the registry holds the LAST reference: every
-        // new reference is minted under m_TaskDataMutex (GetOrCreateTaskData,
-        // TryGetTaskData, the shutdown sweep's snapshot) or copied from an
-        // already-existing handle/envelope — at count 1 neither source
-        // exists, so the count cannot rise concurrently and the object is
-        // exclusively ours to recycle (slice 6: restores the TaskData
-        // Release() optimisation with an exclusivity proof).
-        if (recycled < kPendingCleanupBatch && it->second.use_count() == 1) {
-            recycle[recycled++] = std::move(it->second);
-        } else {
-            // The registry's reference may become the LAST one between the
-            // use_count() read above and the erase — handles drop their
-            // references WITHOUT this mutex, so "a count>1 erase only drops
-            // a reference" is not guaranteed. Destroying a TaskData runs
-            // user destructors (stale std::any results, callback
-            // std::functions), which must never happen under
-            // m_TaskDataMutex: a destructor that re-enters the pool would
-            // self-deadlock. Move the ref out and drop it after unlock
-            // (audit fix).
-            deferDrop.push_back(std::move(it->second));
-        }
-        m_TaskDataRegistry.erase(it);
-        return true;
-    });
-    // use_count() is a RELAXED load (this is why shared_ptr::unique() was
-    // deprecated): observing the dying owner's 2->1 decrement above gives no
-    // happens-before with that owner's earlier writes to TaskData fields
-    // (MarkFailed's ErrorMessage buffer, the std::any Result). RecycleTaskData
-    // mutates those same fields, so pair with the owner's release-decrement
-    // here. Free on x86 (the lock-prefixed decrement is already ordered);
-    // required on ARM64 — the macOS Editor ships.
-    if (recycled > 0) {
-        std::atomic_thread_fence(std::memory_order_acquire);
-    }
-    return recycled;
-}
-
-void WorkStealingThreadPool::CommitRecycledTaskData(
-    SharedPtr<TaskHandle::TaskData> (&recycle)[kPendingCleanupBatch], size_t count) {
-    for (size_t i = 0; i < count; ++i) {
-        RecycleTaskData(std::move(recycle[i]));
-    }
-}
-
-ConcurrentQueue<SharedPtr<TaskHandle::TaskData>>&
-WorkStealingThreadPool::TaskDataFreelist() {
-    // IMMORTAL for the same reason as the slab freelist (TaskSlabPool.cpp):
-    // recycles can run during static destruction; a destructed freelist would
-    // UAF. The constructed capacity is the retention cap — try_enqueue never
-    // allocates new blocks, so at most kTaskDataFreelistCapacity pristine
-    // TaskData (~500B each) are ever pinned.
-    static constexpr size_t kTaskDataFreelistCapacity = 256;
-    static auto* const s_Freelist =
-        new ConcurrentQueue<SharedPtr<TaskHandle::TaskData>>(
-            kTaskDataFreelistCapacity);
+// The reset TaskData that wait for their next task. It is never destroyed, because a handle can
+// release its TaskData during static destruction.
+TaskDataQueue& TaskDataFreelist() {
+    static auto* const s_Freelist = new TaskDataQueue(kTaskSlabPoolCapacity);
     return *s_Freelist;
 }
+} // namespace
 
-SharedPtr<TaskHandle::TaskData> WorkStealingThreadPool::AcquireTaskData() {
-    SharedPtr<TaskHandle::TaskData> data;
+TaskHandle::TaskDataRef TaskHandle::TaskDataRef::Acquire() {
+    void* data = nullptr;
     if (TaskDataFreelist().try_dequeue(data)) {
-        return data;
+        return TaskDataRef(static_cast<TaskData*>(data));
     }
-    return JobSystem::MakeShared<TaskHandle::TaskData>();
+    return TaskDataRef(MakeUnique<TaskData>().release());
 }
 
-void WorkStealingThreadPool::RecycleTaskData(SharedPtr<TaskHandle::TaskData> data) {
-    if (!data) {
-        return;
-    }
-    // Reset to pristine BEFORE pooling. Runs outside the registry mutex
-    // (CommitRecycledTaskData) because destroying the stale result/callback
-    // set can run user destructors.
+void TaskHandle::TaskDataRef::Recycle(TaskData* data) noexcept {
+    // The last owner runs this, so no other thread can read the fields. The reset can run user
+    // destructors (the result, the callbacks).
+    assert(data->Waiters.load(std::memory_order_relaxed) == 0 && "JobSystem: recycling a TaskData with a registered waiter");
     data->Status.store(TaskStatus::Pending, std::memory_order_relaxed);
-    // No waiter can exist here: a live Wait() holds its own SharedPtr ref for
-    // the whole wait, which the drain's use_count()==1 exclusivity proof
-    // excludes. The store is belt-and-braces for the pooled reuse.
-    assert(data->Waiters.load(std::memory_order_relaxed) == 0 &&
-           "JobSystem: recycling a TaskData with a registered waiter");
-    data->Waiters.store(0, std::memory_order_relaxed);
     data->Result.reset();
     data->Exception = nullptr;
     data->ErrorMessage.clear();
@@ -642,13 +605,59 @@ void WorkStealingThreadPool::RecycleTaskData(SharedPtr<TaskHandle::TaskData> dat
     data->HasCallbacks.store(false, std::memory_order_relaxed);
     data->GraphLinked.store(false, std::memory_order_relaxed);
     data->GraphManaged.store(false, std::memory_order_relaxed);
-
-    // Bounded, non-allocating: over-cap entries simply die here (the
-    // last-owner destructor reclaims them).
-    TaskDataFreelist().try_enqueue(std::move(data));
+    data->Owners.store(1, std::memory_order_relaxed);
+    if (!TaskDataFreelist().try_enqueue(data)) {
+        const UniquePtr<TaskData> overflow(data); // The freelist is full: delete the TaskData.
+    }
 }
 
-SharedPtr<TaskHandle::TaskData> WorkStealingThreadPool::TryGetTaskData(TaskId taskId) const {
+void WorkStealingThreadPool::TaskDataReleaseBatch::Add(TaskHandle::TaskDataRef data) {
+    assert(Count < kPendingCleanupBatch &&
+           "TaskDataReleaseBatch: a drain erases at most kPendingCleanupBatch entries; CleanupTaskData drains at that size");
+    Entries[Count++] = std::move(data);
+}
+
+TaskHandle::TaskDataRef WorkStealingThreadPool::GetOrCreateTaskData(TaskId taskId) {
+    TaskHandle::TaskDataRef result;
+    TaskDataReleaseBatch released;
+    {
+        std::lock_guard<std::mutex> lock(m_TaskDataMutex);
+
+        // Drain deferred cleanups under the same lock as the insert. This is
+        // amortized free for callers that hit the lock anyway; the per-task
+        // CleanupTaskData() fast path stays lock-free.
+        DrainPendingCleanupLocked(released);
+
+        auto it = m_TaskDataRegistry.find(taskId);
+        if (it != m_TaskDataRegistry.end()) {
+            result = it->second;
+        } else {
+            result = TaskHandle::TaskDataRef::Acquire();
+            m_TaskDataRegistry[taskId] = result;
+        }
+    }
+    return result;
+}
+
+void WorkStealingThreadPool::DrainPendingCleanupLocked(TaskDataReleaseBatch& released) {
+    // Consume only this pool's entries; the entries of other pools stay for
+    // their own drains (pointer equality only, see the buffer comment). No
+    // user code runs in the predicate, so erase_if iterates a stable buffer.
+    std::erase_if(t_pendingCleanup, [&](const PendingCleanupEntry& entry) {
+        if (entry.Pool != this) {
+            return false;
+        }
+        auto it = m_TaskDataRegistry.find(entry.Id);
+        if (it == m_TaskDataRegistry.end()) {
+            return true; // duplicate cleanup — a prior drain already erased it
+        }
+        released.Add(std::move(it->second));
+        m_TaskDataRegistry.erase(it);
+        return true;
+    });
+}
+
+TaskHandle::TaskDataRef WorkStealingThreadPool::TryGetTaskData(TaskId taskId) const {
     std::lock_guard<std::mutex> lock(m_TaskDataMutex);
     auto it = m_TaskDataRegistry.find(taskId);
     return it != m_TaskDataRegistry.end() ? it->second : nullptr;
@@ -668,15 +677,19 @@ void WorkStealingThreadPool::SetSpinConfigForTest(uint32 spinWindowUs, uint32 ma
 }
 
 uint32 WorkStealingThreadPool::GetSpinningCountForTests() const {
-    return m_NumSpinning.load(std::memory_order_seq_cst);
+    return m_Counters.NumSpinning.load(std::memory_order_seq_cst);
 }
 
-uint32 WorkStealingThreadPool::GetSleepingCountForTests() const {
-    return m_NumSleeping.load(std::memory_order_seq_cst);
+uint32 WorkStealingThreadPool::GetIdleCountForTests() const {
+    uint32 idle = 0;
+    for (size_t i = 0; i < m_IdleMaskWords; ++i) {
+        idle += static_cast<uint32>(std::popcount(m_IdleMask[i].Value.load(std::memory_order_seq_cst)));
+    }
+    return idle;
 }
 
 uint64 WorkStealingThreadPool::GetBatchNotifyCountForTests() const {
-    return m_BatchNotifiesForTests.load(std::memory_order_relaxed);
+    return m_Counters.BatchNotifiesForTests.load(std::memory_order_relaxed);
 }
 
 size_t WorkStealingThreadPool::GetTaskDataRegistrySizeForTests() const {
@@ -685,7 +698,7 @@ size_t WorkStealingThreadPool::GetTaskDataRegistrySizeForTests() const {
 }
 
 uint32 WorkStealingThreadPool::GetBackgroundQueuedForTests() const {
-    return m_BackgroundQueued.load(std::memory_order_relaxed);
+    return m_Counters.BackgroundQueued.load(std::memory_order_relaxed);
 }
 
 void WorkStealingThreadPool::SetSleepBackstopForTest(uint32 backstopUs) {
@@ -703,13 +716,18 @@ JobSystemStatistics WorkStealingThreadPool::GetStatistics() const {
         if (thread.Kind != JobSystemStatistics::ThreadKind::Worker || thread.Running == nullptr) {
             continue;
         }
-        ++(thread.Running == kBackgroundJobName ? stats.Background : stats.Normal).Running;
+        JobSystemStatistics::Lane& lane = thread.Running == kBackgroundJobName ? stats.Background
+                                          : thread.Running == kAwaitedJobName  ? stats.Awaited
+                                                                               : stats.Normal;
+        ++lane.Running;
     }
-    // m_QueuedTasks counts both lanes; the Background occupancy counter can
-    // run ahead of it during a producer's publish window, hence the floor.
-    const uint32 queued = m_QueuedTasks.load(std::memory_order_relaxed);
-    const uint32 background = m_BackgroundQueued.load(std::memory_order_relaxed);
-    stats.Normal.Queued = queued > background ? queued - background : 0;
+    // m_Counters.QueuedTasks counts every lane; an occupancy counter can run ahead of
+    // it during a producer's publish window, hence the floor.
+    const uint32 queued = m_Counters.QueuedTasks.load(std::memory_order_relaxed);
+    const uint32 awaited = m_Counters.AwaitedQueued.load(std::memory_order_relaxed);
+    const uint32 background = m_Counters.BackgroundQueued.load(std::memory_order_relaxed);
+    stats.Normal.Queued = queued > awaited + background ? queued - awaited - background : 0;
+    stats.Awaited.Queued = awaited;
     stats.Background.Queued = background;
 
     // Strong references under the registry mutex, each channel read under
@@ -731,16 +749,18 @@ JobSystemStatistics WorkStealingThreadPool::GetStatistics() const {
 
     stats.GlobalPushes = m_Census.GlobalPushes.load(std::memory_order_relaxed);
     stats.LocalPushes = m_Census.LocalPushes.load(std::memory_order_relaxed);
+    stats.AwaitedPushes = m_Census.AwaitedPushes.load(std::memory_order_relaxed);
     stats.BackgroundPushes = m_Census.BackgroundPushes.load(std::memory_order_relaxed);
     stats.GlobalPops = m_Census.GlobalPops.load(std::memory_order_relaxed);
     stats.LocalPops = m_Census.LocalPops.load(std::memory_order_relaxed);
     stats.StealPops = m_Census.StealPops.load(std::memory_order_relaxed);
+    stats.AwaitedPops = m_Census.AwaitedPops.load(std::memory_order_relaxed);
     stats.BackgroundPops = m_Census.BackgroundPops.load(std::memory_order_relaxed);
     stats.StealMisses = m_Census.StealMisses.load(std::memory_order_relaxed);
     stats.EmptyLoopsWithBacklog = m_Census.EmptyLoopsWithBacklog.load(std::memory_order_relaxed);
     stats.BackstopTimeouts = m_Census.BackstopTimeouts.load(std::memory_order_relaxed);
-    stats.TasksExecuted = stats.GlobalPops + stats.LocalPops + stats.StealPops + stats.BackgroundPops +
-                          (m_BlockingThreads ? m_BlockingThreads->JobsRun() : 0);
+    stats.TasksExecuted = stats.GlobalPops + stats.LocalPops + stats.StealPops + stats.AwaitedPops +
+                          stats.BackgroundPops + (m_BlockingThreads ? m_BlockingThreads->JobsRun() : 0);
     return stats;
 }
 
@@ -773,6 +793,7 @@ void WorkStealingThreadPool::BindBlockingThread(size_t index) {
 uint64 WorkStealingThreadPool::GetPublishedJobCount() const {
     return m_Census.GlobalPushes.load(std::memory_order_relaxed) +
            m_Census.LocalPushes.load(std::memory_order_relaxed) +
+           m_Census.AwaitedPushes.load(std::memory_order_relaxed) +
            m_Census.BackgroundPushes.load(std::memory_order_relaxed);
 }
 
@@ -814,6 +835,34 @@ std::atomic<void (*)(WorkStealingThreadPool::TaggedVisitPoint)> g_TaggedVisitHoo
 
 void WorkStealingThreadPool::SetTaggedVisitHookForTests(void (*hook)(TaggedVisitPoint point)) {
     g_TaggedVisitHook.store(hook, std::memory_order_release);
+}
+
+namespace {
+std::atomic<void (*)(WorkStealingThreadPool::WakePoint, size_t)> g_WakeHook{nullptr};
+
+void CallWakeHook(WorkStealingThreadPool::WakePoint point, size_t workerId) {
+    if (auto hook = g_WakeHook.load(std::memory_order_acquire)) {
+        hook(point, workerId);
+    }
+}
+} // namespace
+
+void WorkStealingThreadPool::SetWakeHookForTests(void (*hook)(WakePoint point, size_t workerId)) {
+    g_WakeHook.store(hook, std::memory_order_release);
+}
+
+WorkStealingThreadPool::WakeCountsForTests WorkStealingThreadPool::GetWakeCountsForTests() const {
+    WakeCountsForTests counts;
+    counts.Claims = m_WakeClaimsForTests.load(std::memory_order_relaxed);
+    counts.Consumed = m_WakeConsumedForTests.load(std::memory_order_relaxed);
+    counts.Merged = m_WakeMergedForTests.load(std::memory_order_relaxed);
+    counts.StaleConsumed = m_WakeStaleForTests.load(std::memory_order_relaxed);
+    for (size_t i = 0; i < m_ParkSlotCount; ++i) {
+        ParkSlot& slot = m_ParkSlots[i].Value;
+        std::lock_guard<std::mutex> lock(slot.Mutex);
+        counts.FlagsSet += slot.Signaled ? 1 : 0;
+    }
+    return counts;
 }
 #endif
 
@@ -887,7 +936,7 @@ class WorkStealingThreadPool::TaggedQueueVisit {
 };
 
 void WorkStealingThreadPool::PublishTaggedQueueVisit(JobCounter::TaggedJobs& jobs, JobPriority lane) {
-    std::atomic<uint32>& unstarted = m_UnstartedForkTasks[static_cast<size_t>(lane)];
+    std::atomic<uint32>& unstarted = m_Counters.UnstartedForkTasks[static_cast<size_t>(lane)];
     if (ReserveForkTasks(unstarted, 1, kMaxUnstartedForkTasksPerWorker * GetWorkerCount()) == 1) {
         EnqueueWork(TaggedQueueVisit(jobs, &unstarted), lane);
         return;
@@ -986,7 +1035,7 @@ void WorkStealingThreadPool::Wait(JobCounter& counter) {
 }
 
 void WorkStealingThreadPool::Shutdown() {
-    if (shutdown_requested.exchange(true)) {
+    if (m_ShutdownRequested.exchange(true)) {
         return; // Already shutdown
     }
 
@@ -1021,16 +1070,16 @@ void WorkStealingThreadPool::Shutdown() {
     // reads the gate under the mutex of the FIFO it appends to, so its job
     // either precedes a drain or is handed back.
 
-    // Notify all workers to stop. The empty lock/unlock pairs with the
-    // sleeper's increment+predicate evaluation under the same mutex (§7
-    // Hazard B): either a sleeper's predicate observes the flag, or it is
-    // already atomically blocked inside wait_for and receives the notify.
-    // An unlocked notify_all here can race a worker between its predicate
-    // and its block, stranding it until the backstop timeout.
-    {
-        std::lock_guard<std::mutex> lk(globalMutex);
+    // Wake every parked worker to stop. The flag store comes before each slot
+    // lock, and a worker reads the flag under its slot lock before it blocks
+    // (§7 Hazard B): it sees the flag, or it is blocked when the notify lands.
+    for (size_t i = 0; i < m_ParkSlotCount; ++i) {
+        ParkSlot& slot = m_ParkSlots[i].Value;
+        {
+            std::lock_guard<std::mutex> lock(slot.Mutex);
+        }
+        slot.Condition.notify_one();
     }
-    globalCondition.notify_all();
     if (m_BlockingThreads) {
         m_BlockingThreads->WakeForShutdown();
     }
@@ -1054,7 +1103,7 @@ void WorkStealingThreadPool::Shutdown() {
 #if GE_DEBUG_INSTRUMENTATION
     // F4: spinner tokens are RAII-guarded; with every worker joined, none may
     // remain armed.
-    assert(m_NumSpinning.load(std::memory_order_seq_cst) == 0 &&
+    assert(m_Counters.NumSpinning.load(std::memory_order_seq_cst) == 0 &&
            "JobSystem: spinner token leaked past worker join");
 
     // F20 conservation tripwire: with the post-join drain done, every queue
@@ -1079,7 +1128,8 @@ void WorkStealingThreadPool::Shutdown() {
     // waiters were woken by the registry sweep above (or by the racing
     // submitter's own F13e cancel).
     auto allQueuesEmpty = [this] {
-        bool empty = m_GlobalQueue.size_approx() == 0 && m_BackgroundQueue.size_approx() == 0;
+        bool empty = m_Queues.Global.size_approx() == 0 && m_Queues.Awaited.size_approx() == 0 &&
+                     m_Queues.Background.size_approx() == 0;
         for (const auto& worker : workers) {
             empty = empty && worker->LocalQueue.size_approx() == 0;
         }
@@ -1088,21 +1138,24 @@ void WorkStealingThreadPool::Shutdown() {
     const uint64 epochBefore = m_CounterBracketEpoch.load(std::memory_order_seq_cst);
     const uint32 racersBefore = m_CounterRacersInFlight.load(std::memory_order_seq_cst);
     const bool queuesEmptyBefore = allQueuesEmpty();
-    [[maybe_unused]] const uint32 queuedSnapshot = m_QueuedTasks.load(std::memory_order_seq_cst);
+    [[maybe_unused]] const uint32 queuedSnapshot = m_Counters.QueuedTasks.load(std::memory_order_seq_cst);
+    [[maybe_unused]] const uint32 awaitedSnapshot = m_Counters.AwaitedQueued.load(std::memory_order_seq_cst);
     [[maybe_unused]] const uint32 backgroundSnapshot =
-        m_BackgroundQueued.load(std::memory_order_seq_cst);
-    [[maybe_unused]] const size_t pendingSnapshot = pendingTasks.load(std::memory_order_seq_cst);
+        m_Counters.BackgroundQueued.load(std::memory_order_seq_cst);
+    [[maybe_unused]] const size_t pendingSnapshot = m_Counters.PendingTasks.load(std::memory_order_seq_cst);
     const bool queuesEmptyAfter = allQueuesEmpty();
     const uint32 racersAfter = m_CounterRacersInFlight.load(std::memory_order_seq_cst);
     const uint64 epochAfter = m_CounterBracketEpoch.load(std::memory_order_seq_cst);
     if (racersBefore == 0 && racersAfter == 0 && epochBefore == epochAfter &&
         queuesEmptyBefore && queuesEmptyAfter) {
         assert(queuedSnapshot == 0 &&
-               "JobSystem: m_QueuedTasks out of conservation (queues empty, no tasks in flight)");
+               "JobSystem: m_Counters.QueuedTasks out of conservation (queues empty, no tasks in flight)");
+        assert(awaitedSnapshot == 0 &&
+               "JobSystem: m_Counters.AwaitedQueued out of conservation (queues empty, no tasks in flight)");
         assert(backgroundSnapshot == 0 &&
-               "JobSystem: m_BackgroundQueued out of conservation (queues empty, no tasks in flight)");
+               "JobSystem: m_Counters.BackgroundQueued out of conservation (queues empty, no tasks in flight)");
         assert(pendingSnapshot == 0 &&
-               "JobSystem: pendingTasks out of conservation (queues empty, no tasks in flight)");
+               "JobSystem: m_Counters.PendingTasks out of conservation (queues empty, no tasks in flight)");
     }
 #endif
 
@@ -1130,7 +1183,7 @@ void WorkStealingThreadPool::ReleaseQueuedAndParkedWork() {
     // (shutting-down) thread. Contract: task callbacks must not block on
     // other task handles; a callback that Wait()s here has no workers left to
     // complete its target.
-    Vector<SharedPtr<TaskHandle::TaskData>> snapshot;
+    Vector<TaskHandle::TaskDataRef> snapshot;
     {
         std::lock_guard<std::mutex> lock(m_TaskDataMutex);
         snapshot.reserve(m_TaskDataRegistry.size());
@@ -1176,8 +1229,8 @@ void WorkStealingThreadPool::DrainQueuesOnThisThread() {
     // Cancelled and return.
     //
     // Counter bookkeeping matches a worker dequeue exactly (F20):
-    // m_QueuedTasks releases at the physical dequeue via AccountDequeuedTask,
-    // pendingTasks after each task is disposed of (executed or
+    // m_Counters.QueuedTasks releases at the physical dequeue via AccountDequeuedTask,
+    // m_Counters.PendingTasks after each task is disposed of (executed or
     // cancelled+freed) — the conservation tripwire must not be able to tell
     // drained tasks from executed ones, and each envelope is consumed once.
     //
@@ -1192,7 +1245,7 @@ void WorkStealingThreadPool::DrainQueuesOnThisThread() {
     // another; emptying them one after another would let phase 3 run a job
     // whose handle dependency is still queued. Those envelopes never touched
     // the pool's counters, so they skip AccountDequeuedTask and the
-    // pendingTasks decrement (DrainedTask::PoolCounted). A blocking-FIFO
+    // m_Counters.PendingTasks decrement (DrainedTask::PoolCounted). A blocking-FIFO
     // envelope holds its channel slot; destroying it releases the slot, and
     // with the gate set the release promotes nothing.
 
@@ -1203,7 +1256,7 @@ void WorkStealingThreadPool::DrainQueuesOnThisThread() {
     for (;;) {
         // Phase 1: dequeue everything reachable into a local list. Every
         // dequeue in this drain is TOKENLESS: all of a Worker's
-        // ConsumerTokens (local queue AND the two global lanes) are
+        // ConsumerTokens (local queue AND the global lanes) are
         // thread-affine to that worker's thread and must never be used from
         // this one (same rule as the steal path). The tokenless heuristic's
         // #360 unfairness is irrelevant here — the drain loops until every
@@ -1225,20 +1278,29 @@ void WorkStealingThreadPool::DrainQueuesOnThisThread() {
         for (;;) {
             bool found = false;
             UniquePtr<TaskBase> task;
-            while (m_GlobalQueue.try_dequeue(task)) {
+            // The Awaited and Background lanes drain ungated, with the
+            // disposal and lane recording the Background lane's comment states.
+            while (m_Queues.Awaited.try_dequeue(task)) {
+                m_Counters.AwaitedQueued.fetch_sub(1, std::memory_order_relaxed);
+                m_Census.AwaitedPops.fetch_add(1, std::memory_order_relaxed);
+                AccountDequeuedTask(0);
+                drained.push_back({std::move(task), /*PoolCounted=*/true, ComputeContext(JobPriority::Awaited)});
+                found = true;
+            }
+            while (m_Queues.Global.try_dequeue(task)) {
                 // Census pops count PHYSICAL dequeues from a lane, whichever
                 // path consumes them — the push/pop conservation identity
                 // must hold across a drain too (a participating Wait can
                 // leave its no-op visit for the shutdown drain to consume).
                 m_Census.GlobalPops.fetch_add(1, std::memory_order_relaxed);
-                AccountDequeuedTask();
+                AccountDequeuedTask(0);
                 drained.push_back({std::move(task), /*PoolCounted=*/true, ComputeContext(JobPriority::Normal)});
                 found = true;
             }
             for (auto& worker : workers) {
                 while (worker->LocalQueue.try_dequeue(task)) {
                     m_Census.LocalPops.fetch_add(1, std::memory_order_relaxed);
-                    AccountDequeuedTask();
+                    AccountDequeuedTask(0);
                     drained.push_back({std::move(task), /*PoolCounted=*/true, ComputeContext(JobPriority::Normal)});
                     found = true;
                 }
@@ -1251,17 +1313,17 @@ void WorkStealingThreadPool::DrainQueuesOnThisThread() {
             // paragraph for the decision). The lane is recorded beside the
             // envelope, because phase 3 executes one mixed list and a bare
             // Background task still runs as Background there.
-            while (m_BackgroundQueue.try_dequeue(task)) {
-                m_BackgroundQueued.fetch_sub(1, std::memory_order_relaxed);
+            while (m_Queues.Background.try_dequeue(task)) {
+                m_Counters.BackgroundQueued.fetch_sub(1, std::memory_order_relaxed);
                 m_Census.BackgroundPops.fetch_add(1, std::memory_order_relaxed);
-                AccountDequeuedTask();
+                AccountDequeuedTask(0);
                 drained.push_back({std::move(task), /*PoolCounted=*/true, ComputeContext(JobPriority::Background)});
                 found = true;
             }
 
             if (!found) {
-                bool empty = m_GlobalQueue.size_approx() == 0 &&
-                             m_BackgroundQueue.size_approx() == 0;
+                bool empty = m_Queues.Global.size_approx() == 0 && m_Queues.Awaited.size_approx() == 0 &&
+                             m_Queues.Background.size_approx() == 0;
                 for (const auto& worker : workers) {
                     empty = empty && worker->LocalQueue.size_approx() == 0;
                 }
@@ -1287,7 +1349,7 @@ void WorkStealingThreadPool::DrainQueuesOnThisThread() {
             }
             CancelUnrunEnvelope(std::move(entry.Task));
             if (entry.PoolCounted)
-                pendingTasks.fetch_sub(1, std::memory_order_relaxed);
+                m_Counters.PendingTasks.fetch_sub(1, std::memory_order_relaxed);
         }
 
         // Phase 3: execute the bare tasks. They are caller-barrier releasers
@@ -1298,7 +1360,7 @@ void WorkStealingThreadPool::DrainQueuesOnThisThread() {
             if (entry.Task) {
                 ExecuteTaskOptimized(std::move(entry.Task), entry.Context);
                 if (entry.PoolCounted)
-                    pendingTasks.fetch_sub(1, std::memory_order_relaxed);
+                    m_Counters.PendingTasks.fetch_sub(1, std::memory_order_relaxed);
             }
         }
     }
@@ -1334,7 +1396,7 @@ void WorkStealingThreadPool::CancelUnrunEnvelope(UniquePtr<TaskBase> task) {
     // Fast-path envelopes carry their TaskData inline; use it directly (one
     // fewer registry round-trip, and still correct if the registry entry is
     // already gone).
-    SharedPtr<TaskHandle::TaskData> data =
+    TaskHandle::TaskDataRef data =
         task->HasInlineTaskData() ? static_cast<Detail::HandleTask*>(task.get())->GetTaskData()
                                   : TryGetTaskData(taskId);
     if (data) {
@@ -1397,11 +1459,10 @@ void WorkStealingThreadPool::UnregisterChannel(const Detail::JobChannelState* ch
 }
 
 void WorkStealingThreadPool::ReleaseFinishedTasks() {
-    // At use_count() == 1 only the registry holds the task and no reference can be minted without
-    // m_TaskDataMutex (the drain's proof). A Completed or Failed task's envelope already ran, so the
-    // erase cannot resurrect it (F12); its id left in a cleanup batch drains later as a duplicate.
-    Vector<SharedPtr<TaskHandle::TaskData>> released;
-    size_t stillHeld = 0;
+    // A held entry stays: a graph task's completer holds it after its terminal store and still finds it by id.
+    // Under m_TaskDataMutex OwnerCount() == 1 is exact, because only the registry can mint a reference then.
+    // The erase only drops a reference; the owner count's decrement orders the reset.
+    Vector<TaskHandle::TaskDataRef> released;
     {
         std::lock_guard<std::mutex> lock(m_TaskDataMutex);
         for (auto it = m_TaskDataRegistry.begin(); it != m_TaskDataRegistry.end();) {
@@ -1410,8 +1471,7 @@ void WorkStealingThreadPool::ReleaseFinishedTasks() {
                 ++it;
                 continue;
             }
-            if (it->second.use_count() != 1) {
-                ++stillHeld;
+            if (it->second.OwnerCount() != 1) {
                 ++it;
                 continue;
             }
@@ -1419,14 +1479,8 @@ void WorkStealingThreadPool::ReleaseFinishedTasks() {
             it = m_TaskDataRegistry.erase(it);
         }
     }
-    // Pair with the dying owners' release-decrements, as the drain does.
-    std::atomic_thread_fence(std::memory_order_acquire);
-    // Outside the lock: the reset runs the results' and callbacks' destructors.
-    for (auto& data : released) {
-        RecycleTaskData(std::move(data));
-    }
-    Logger::Log::Debug("JobSystem: released {} finished task(s); {} finished task(s) still referenced",
-                       released.size(), stillHeld);
+    // The references drop after the unlock: a last reference runs the result's and callbacks' destructors.
+    Logger::Log::Debug("JobSystem: released {} finished task(s) from the registry", released.size());
 }
 
 void WorkStealingThreadPool::FlushPendingCleanupOnThisThread() {
@@ -1435,16 +1489,9 @@ void WorkStealingThreadPool::FlushPendingCleanupOnThisThread() {
     if (!ownEntries) {
         return;
     }
-    SharedPtr<TaskHandle::TaskData> recycle[kPendingCleanupBatch];
-    std::vector<SharedPtr<TaskHandle::TaskData>> deferDrop;
-    size_t recycled = 0;
-    {
-        std::lock_guard<std::mutex> lock(m_TaskDataMutex);
-        recycled = DrainPendingCleanupLocked(recycle, deferDrop);
-    }
-    // deferDrop's possibly-last references drop at scope exit, outside the
-    // registry lock.
-    CommitRecycledTaskData(recycle, recycled);
+    TaskDataReleaseBatch released;
+    std::lock_guard<std::mutex> lock(m_TaskDataMutex);
+    DrainPendingCleanupLocked(released);
 }
 
 void WorkStealingThreadPool::DependencyAwareWorkerLoop(size_t workerId) {
@@ -1458,13 +1505,9 @@ void WorkStealingThreadPool::DependencyAwareWorkerLoop(size_t workerId) {
     snprintf(threadName, sizeof(threadName), "Job Worker #%zu", workerId);
     GameEngine::Platform::SetCurrentThreadName(threadName);
 
-    // Gates the spin window on recent productivity: after a sleep cycle that
-    // expired on the backstop timeout (predicate still false), the worker goes
-    // straight back to sleep instead of re-arming a full spin window. Without
-    // this, every backstop expiry at complete idle would burn kSpinWindowUs
-    // per armed spinner per timeout period. The gate never affects the
-    // producer-visible protocol: a non-spinning worker is simply not counted
-    // in m_NumSpinning, which producers already handle via P3/P4.
+    // After a park that ends with nothing queued, the worker parks again without
+    // a spin window, so an idle pool does not spin at each backstop expiry. A
+    // worker that does not spin is not in m_Counters.NumSpinning: a waker claims its idle bit.
     bool spinAllowed = true;
 
     while (true) {
@@ -1473,18 +1516,22 @@ void WorkStealingThreadPool::DependencyAwareWorkerLoop(size_t workerId) {
         // drain — bare tasks execute there, handle/graph tasks are Cancelled.
         // Draining here would execute handle tasks the shutdown contract
         // promises to cancel.
-        if (shutdown_requested.load()) {
+        if (m_ShutdownRequested.load()) {
             break;
         }
 
         UniquePtr<TaskBase> task;
 
-        // 1. local queue (best cache locality), 2. global queue, 3. steal
-        // ring, 4. background lane LAST (gated: one relaxed load when empty).
-        // The lane a task came from is its class: the first three are Normal.
-        JobPriority lane = JobPriority::Normal;
-        bool foundTask = TryGetLocalTask(workerId, task) || TryGetGlobalTask(workerId, task) ||
-                         TryStealTask(workerId, task);
+        // Take the Awaited lane first (a thread waits for it), then the local queue, the global
+        // queue and the steal ring (all three Normal), then the Background lane. The lane a task
+        // came from is its class. An empty class lane costs one relaxed load.
+        JobPriority lane = JobPriority::Awaited;
+        bool foundTask = TryGetAwaitedTask(workerId, task);
+        if (!foundTask) {
+            lane = JobPriority::Normal;
+            foundTask = TryGetLocalTask(workerId, task) || TryGetGlobalTask(workerId, task) ||
+                        TryStealTask(workerId, task);
+        }
         if (!foundTask && TryGetBackgroundTask(workerId, task)) {
             foundTask = true;
             lane = JobPriority::Background;
@@ -1496,44 +1543,29 @@ void WorkStealingThreadPool::DependencyAwareWorkerLoop(size_t workerId) {
 
         if (foundTask) {
             // Common bookkeeping point for EVERY consumed task (normal dequeue
-            // and spin-poll finds): m_QueuedTasks release + wake propagation
-            // happen here, and the pendingTasks decrement stays tied to
+            // and spin-poll finds): m_Counters.QueuedTasks release + wake propagation
+            // happen here, and the m_Counters.PendingTasks decrement stays tied to
             // post-execution (F20 — ECS backpressure semantics).
-            AccountDequeuedTask();
+            AccountDequeuedTask(workerId + 1);
             ExecuteTaskOptimized(std::move(task), ComputeContext(lane));
-            pendingTasks.fetch_sub(1, std::memory_order_relaxed);
+            m_Counters.PendingTasks.fetch_sub(1, std::memory_order_relaxed);
             spinAllowed = true;
             continue;
         }
 
-        // Census: the queued counter says work exists somewhere, but this
-        // worker's full find cycle (own queue, global lanes, steal half-ring)
-        // could not reach it — the sleep predicate below is true, so the
-        // worker immediately re-loops instead of sleeping. Sustained counts
-        // here are the pred-true busy-poll the steal half-scan can cause.
-        if (m_QueuedTasks.load(std::memory_order_relaxed) > 0) {
+        // (S0) Census: a task is queued that this worker's find cycle did not
+        // reach, so the worker loops again without parking. It sets no idle bit.
+        if (m_Counters.QueuedTasks.load(std::memory_order_relaxed) > 0) {
             m_Census.EmptyLoopsWithBacklog.fetch_add(1, std::memory_order_relaxed);
+            spinAllowed = true;
+            continue;
         }
 
-        // No tasks available, wait for new work.
-        std::unique_lock<std::mutex> lock(globalMutex);
-        // Sleeper count is maintained UNDER the mutex, incremented BEFORE the
-        // predicate evaluation (§7 Hazard B): a producer that notifies takes
-        // this mutex first, so either our predicate sees its published task,
-        // or we are atomically blocked inside wait_for when its notify lands.
-        m_NumSleeping.fetch_add(1, std::memory_order_seq_cst);
-        const bool wokenWithWork = globalCondition.wait_for(
-            lock,
-            std::chrono::microseconds(m_SleepBackstopUs.load(std::memory_order_relaxed)),
-            [this] {
-                return shutdown_requested.load() ||
-                       m_QueuedTasks.load(std::memory_order_seq_cst) > 0;
-            });
-        m_NumSleeping.fetch_sub(1, std::memory_order_relaxed);
-        if (!wokenWithWork) {
+        const bool expired = ParkWorker(workerId);
+        spinAllowed = m_ShutdownRequested.load() || m_Counters.QueuedTasks.load(std::memory_order_seq_cst) > 0;
+        if (expired && !spinAllowed) {
             m_Census.BackstopTimeouts.fetch_add(1, std::memory_order_relaxed);
         }
-        spinAllowed = wokenWithWork;
     }
 }
 
@@ -1602,8 +1634,8 @@ void WorkStealingThreadPool::EnqueueTask(UniquePtr<TaskBase> task) {
     m_CounterRacersInFlight.fetch_add(1, std::memory_order_seq_cst);
     m_CounterBracketEpoch.fetch_add(1, std::memory_order_seq_cst);
 #endif
-    pendingTasks.fetch_add(1, std::memory_order_relaxed);
-    m_QueuedTasks.fetch_add(1, std::memory_order_seq_cst); // (P1)
+    m_Counters.PendingTasks.fetch_add(1, std::memory_order_relaxed);
+    m_Counters.QueuedTasks.fetch_add(1, std::memory_order_seq_cst); // (P1)
     PushTask(std::move(task));
 #if GE_DEBUG_INSTRUMENTATION
     m_CounterRacersInFlight.fetch_sub(1, std::memory_order_seq_cst);
@@ -1645,25 +1677,16 @@ void WorkStealingThreadPool::NotifyAfterPublish() {
     // StoreLoad reordering of our (P1) increment below this load against a
     // retiring spinner's (Y)/(Z) pair — acquire/release does not order a store
     // before a later load to a different variable (§7 Hazard A).
-    const uint32 spinning = m_NumSpinning.load(std::memory_order_seq_cst); // (P2)
-    const uint32 queued = m_QueuedTasks.load(std::memory_order_seq_cst);
+    const uint32 spinning = m_Counters.NumSpinning.load(std::memory_order_seq_cst); // (P2)
+    const uint32 queued = m_Counters.QueuedTasks.load(std::memory_order_seq_cst);
     if (spinning >= queued) {
         return;
     }
 
-    // (P3): nobody is sleeping — every worker is busy, spinning (insufficiently,
-    // handled above), or between polls; the next natural dequeue picks it up.
-    if (m_NumSleeping.load(std::memory_order_seq_cst) == 0) {
-        return;
-    }
-
-    // (P4): the empty lock/unlock pairs with the sleeper's increment+predicate
-    // under the same mutex (§7 Hazard B) — this closes the classic lost-wakeup
-    // window that the 1ms backstop used to paper over.
-    {
-        std::lock_guard<std::mutex> lk(globalMutex);
-    }
-    globalCondition.notify_one();
+    // (P3', P4'): claim one idle worker and signal it. An empty mask means
+    // every worker is busy, spinning or between polls, and the next dequeue
+    // takes the task.
+    WakeIdleWorker(0);
 }
 
 void WorkStealingThreadPool::PublishAndWakeBatch(size_t publishedCount) {
@@ -1675,8 +1698,8 @@ void WorkStealingThreadPool::PublishAndWakeBatch(size_t publishedCount) {
     // increments must not sink below these loads against a retiring
     // spinner's (Y)/(Z) pair — a spinner we counted either re-checks after
     // retire and sees our tasks, or retired first and is not counted here.
-    const uint32 spinning = m_NumSpinning.load(std::memory_order_seq_cst); // (P2)
-    const uint32 queued = m_QueuedTasks.load(std::memory_order_seq_cst);
+    const uint32 spinning = m_Counters.NumSpinning.load(std::memory_order_seq_cst); // (P2)
+    const uint32 queued = m_Counters.QueuedTasks.load(std::memory_order_seq_cst);
     const uint32 uncovered = queued > spinning ? queued - spinning : 0;
     const uint32 need =
         static_cast<uint32>(std::min<size_t>(publishedCount, uncovered));
@@ -1684,56 +1707,137 @@ void WorkStealingThreadPool::PublishAndWakeBatch(size_t publishedCount) {
         return; // armed spinners cover the whole backlog (or it drained already)
     }
 
-    // (P3 batch form): nobody sleeping — every worker is busy, spinning
-    // (covered above), or between polls; the next natural dequeue picks the
-    // batch up. Same acceptable staleness as the single-task P3: a worker
-    // concurrently entering the sleep path evaluates its predicate under
-    // globalMutex AFTER our seq_cst (P1) increments and sees the backlog.
-    const uint32 sleepers = m_NumSleeping.load(std::memory_order_seq_cst); // (P3)
-    if (sleepers == 0) {
-        return;
+    // (P3', P4' batch form): the caller claims and signals one idle worker.
+    // The F3 chain (AccountDequeuedTask) wakes one more on every dequeue while
+    // a backlog and idle workers remain, so a wide batch still reaches full width.
+    if (WakeIdleWorker(0)) {
+        m_Counters.BatchNotifiesForTests.fetch_add(1, std::memory_order_relaxed);
     }
-
-    // (P4 batch form): bounded caller-side fan-out. At most kMaxWakePerBatch
-    // sleepers are notified; the worker-side F3 propagation chain
-    // (AccountDequeuedTask) extends the wake front by one on every successful
-    // dequeue while backlog and sleepers remain, so a wide batch still
-    // reaches full worker width. notify_all is rejected (spec: thundering
-    // herd × steal-ring cache thrash).
-    //
-    // The lock acquisition pairs with the sleeper's increment+predicate
-    // sequence under the same mutex (§7 Hazard B), exactly like the
-    // single-task (P4): every sleeper either observes m_QueuedTasks > 0 in
-    // its predicate or is already atomically blocked when the notifies land.
-    // The notifies are issued while the mutex is HELD: releasing first lets
-    // the woken workers' wait_for exits (which must reacquire globalMutex)
-    // interleave with the remaining notifies and with this caller's next
-    // batch publish — measured ~30% worse caller-side in the 13-run storm
-    // bench. Holding the lock keeps the wake batch atomic: all notified
-    // workers queue behind one release edge.
-    const uint32 wakes = std::min({need, sleepers, kMaxWakePerBatch});
-    {
-        std::lock_guard<std::mutex> lk(globalMutex);
-        for (uint32 i = 0; i < wakes; ++i) {
-            globalCondition.notify_one();
-        }
-    }
-    m_BatchNotifiesForTests.fetch_add(wakes, std::memory_order_relaxed);
 }
 
-void WorkStealingThreadPool::AccountDequeuedTask() {
-    m_QueuedTasks.fetch_sub(1, std::memory_order_seq_cst);
+void WorkStealingThreadPool::AccountDequeuedTask(size_t wakeScanStart) {
+    m_Counters.QueuedTasks.fetch_sub(1, std::memory_order_seq_cst);
 
-    // Wake propagation (F3): if a backlog remains and sleepers exist, pass one
-    // wake along. The chain terminates by sleeper exhaustion or queue drain;
-    // it makes bursts self-healing when producer notifies coalesced.
-    if (m_QueuedTasks.load(std::memory_order_seq_cst) > 0 &&
-        m_NumSleeping.load(std::memory_order_seq_cst) > 0) {
-        {
-            std::lock_guard<std::mutex> lk(globalMutex);
-        }
-        globalCondition.notify_one();
+    // Wake propagation (F3): while a backlog remains, pass one wake along to
+    // an idle worker. The chain stops when the mask or the queue is empty.
+    if (m_Counters.QueuedTasks.load(std::memory_order_seq_cst) > 0) {
+        WakeIdleWorker(wakeScanStart);
     }
+}
+
+bool WorkStealingThreadPool::WakeIdleWorker(size_t firstWorker) {
+    // (P3') The count load comes after the waker's seq_cst (P1). A worker raises
+    // the count before it sets its bit and reads the queued count (§7 Hazard A),
+    // so a zero means that no worker can park without seeing the task.
+    if (m_Counters.NumParking.load(std::memory_order_seq_cst) == 0) {
+        return false;
+    }
+    // Scan from the start bit to the end of its word, then the other words,
+    // then the start word's bits below the start bit.
+    const size_t start = firstWorker % m_ParkSlotCount;
+    const uint64 startBit = uint64{1} << (start % kIdleMaskBits);
+    for (size_t step = 0; step <= m_IdleMaskWords; ++step) {
+        const size_t wordIndex = (start / kIdleMaskBits + step) % m_IdleMaskWords;
+        uint64 range = ~uint64{0};
+        if (step == 0) {
+            range = ~(startBit - 1);
+        } else if (step == m_IdleMaskWords) {
+            range = startBit - 1;
+        }
+        // (P3') The mask load comes after the waker's seq_cst (P1), and a worker
+        // sets its bit before it reads the queued count (§7 Hazard A): the
+        // waker sees the bit, or the worker sees the task and does not block.
+        std::atomic<uint64>& word = m_IdleMask[wordIndex].Value;
+        uint64 idle = word.load(std::memory_order_seq_cst) & range;
+        while (idle != 0) {
+            // The claim: the bit is ours only if this fetch_and cleared it.
+            const int bit = std::countr_zero(idle);
+            const uint64 chosen = uint64{1} << bit;
+            const uint64 before = word.fetch_and(~chosen, std::memory_order_seq_cst);
+            if ((before & chosen) != 0) {
+                SignalClaimedWorker(wordIndex * kIdleMaskBits + static_cast<size_t>(bit));
+                return true;
+            }
+            idle = before & range & ~chosen;
+        }
+    }
+    return false;
+}
+
+void WorkStealingThreadPool::SignalClaimedWorker(size_t workerId) {
+#if GE_DEBUG_INSTRUMENTATION
+    m_WakeClaimsForTests.fetch_add(1, std::memory_order_relaxed);
+    CallWakeHook(WakePoint::AfterClaim, workerId);
+#endif
+    // (P4') The flag changes only under the slot lock (§7 Hazard B): the
+    // worker reads it before it blocks, or it is blocked when the notify lands.
+    ParkSlot& slot = m_ParkSlots[workerId].Value;
+    {
+        std::lock_guard<std::mutex> lock(slot.Mutex);
+#if GE_DEBUG_INSTRUMENTATION
+        if (slot.Signaled) {
+            m_WakeMergedForTests.fetch_add(1, std::memory_order_relaxed);
+        }
+#endif
+        slot.Signaled = true;
+    }
+    slot.Condition.notify_one();
+}
+
+bool WorkStealingThreadPool::ParkWorker(size_t workerId) {
+    const uint64 bit = uint64{1} << (workerId % kIdleMaskBits);
+    std::atomic<uint64>& word = m_IdleMask[workerId / kIdleMaskBits].Value;
+#if GE_DEBUG_INSTRUMENTATION
+    CallWakeHook(WakePoint::BeforeIdleBit, workerId);
+#endif
+    // (S1) before (S2), all seq_cst, against a waker's (P1) before its count
+    // and mask loads (§7 Hazard A): the waker sees this count and this bit, or
+    // (S2) sees its task.
+    m_Counters.NumParking.fetch_add(1, std::memory_order_seq_cst);
+    word.fetch_or(bit, std::memory_order_seq_cst);
+#if GE_DEBUG_INSTRUMENTATION
+    CallWakeHook(WakePoint::AfterIdleBit, workerId);
+#endif
+    bool expired = false;
+    if (!m_ShutdownRequested.load() && m_Counters.QueuedTasks.load(std::memory_order_seq_cst) == 0) { // (S2)
+#if GE_DEBUG_INSTRUMENTATION
+        CallWakeHook(WakePoint::BeforeSlotLock, workerId);
+#endif
+        ParkSlot& slot = m_ParkSlots[workerId].Value;
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::microseconds(m_SleepBackstopUs.load(std::memory_order_relaxed));
+        std::unique_lock<std::mutex> lock(slot.Mutex);
+#if GE_DEBUG_INSTRUMENTATION
+        if (slot.Signaled) {
+            m_WakeStaleForTests.fetch_add(1, std::memory_order_relaxed);
+        }
+#endif
+        // (S3) Both flags are read under the slot lock, and wait_until releases
+        // it atomically (§7 Hazard B).
+        while (!slot.Signaled && !m_ShutdownRequested.load()) {
+#if GE_DEBUG_INSTRUMENTATION
+            CallWakeHook(WakePoint::BeforeBlock, workerId);
+#endif
+            if (slot.Condition.wait_until(lock, deadline) == std::cv_status::timeout) {
+                expired = !slot.Signaled;
+                break;
+            }
+        }
+#if GE_DEBUG_INSTRUMENTATION
+        if (slot.Signaled) {
+            m_WakeConsumedForTests.fetch_add(1, std::memory_order_relaxed);
+        }
+#endif
+        slot.Signaled = false;
+    }
+#if GE_DEBUG_INSTRUMENTATION
+    CallWakeHook(WakePoint::BeforeIdleClear, workerId);
+#endif
+    // (S5) A bit already clear here means a waker claimed this worker. Its
+    // flag, if it lands after (S3), makes the next park return at once.
+    word.fetch_and(~bit, std::memory_order_seq_cst);
+    m_Counters.NumParking.fetch_sub(1, std::memory_order_relaxed);
+    return expired;
 }
 
 bool WorkStealingThreadPool::TrySpinPoll(size_t workerId, UniquePtr<TaskBase>& task, JobPriority& lane) {
@@ -1745,12 +1849,12 @@ bool WorkStealingThreadPool::TrySpinPoll(size_t workerId, UniquePtr<TaskBase>& t
     // Bounded token acquisition: at most m_MaxSpinners workers poll at once.
     {
         const uint32 maxSpinners = m_MaxSpinners.load(std::memory_order_relaxed);
-        uint32 current = m_NumSpinning.load(std::memory_order_seq_cst);
+        uint32 current = m_Counters.NumSpinning.load(std::memory_order_seq_cst);
         do {
             if (current >= maxSpinners) {
                 return false;
             }
-        } while (!m_NumSpinning.compare_exchange_weak(current, current + 1,
+        } while (!m_Counters.NumSpinning.compare_exchange_weak(current, current + 1,
                                                       std::memory_order_seq_cst));
     }
 
@@ -1766,7 +1870,7 @@ bool WorkStealingThreadPool::TrySpinPoll(size_t workerId, UniquePtr<TaskBase>& t
             }
         }
         ~SpinToken() { Retire(); }
-    } token{m_NumSpinning};
+    } token{m_Counters.NumSpinning};
 
     bool found = false;
     const auto deadline =
@@ -1774,7 +1878,7 @@ bool WorkStealingThreadPool::TrySpinPoll(size_t workerId, UniquePtr<TaskBase>& t
     uint32 pauseCount = 1;
 
     for (uint32 iteration = 1;; ++iteration) {
-        if (shutdown_requested.load()) {
+        if (m_ShutdownRequested.load()) {
             break;
         }
 
@@ -1784,6 +1888,12 @@ bool WorkStealingThreadPool::TrySpinPoll(size_t workerId, UniquePtr<TaskBase>& t
         // the background lane keeps its scan position (LAST, after the steal
         // attempt) on the same cadence — polling it every iteration would let
         // a background task beat a steal-visible Normal task 7 laps out of 8.
+        // The awaited lane is polled first, every iteration.
+        if (TryGetAwaitedTask(workerId, task)) {
+            lane = JobPriority::Awaited;
+            found = true;
+            break;
+        }
         if (TryGetGlobalTask(workerId, task) ||
             ((iteration % kSpinStealPeriod) == 0 && TryStealTask(workerId, task))) {
             lane = JobPriority::Normal;
@@ -1814,33 +1924,47 @@ bool WorkStealingThreadPool::TrySpinPoll(size_t workerId, UniquePtr<TaskBase>& t
     }
 
     // (Y) Retire BEFORE executing anything found. The caller decrements
-    // m_QueuedTasks at the common bookkeeping point only after this returns,
+    // m_Counters.QueuedTasks at the common bookkeeping point only after this returns,
     // i.e. after (Y): a producer that still observes our armed token also
     // still observes the queued count covering the task we physically hold,
     // so its F2 comparison cannot double-count us against a second task.
     token.Retire();
 
-    if (!found && m_QueuedTasks.load(std::memory_order_seq_cst) > 0) { // (Z)
+    if (!found && m_Counters.QueuedTasks.load(std::memory_order_seq_cst) > 0) { // (Z)
         // A producer may have skipped its notify on our account (P2) between
         // our last poll and (Y). Dequeue-or-notify (F5): take the task if we
-        // can still see it, otherwise hand the wake to a sleeper — never drop.
-        // m_QueuedTasks counts both classes, so the recheck's dequeue attempt
-        // covers the background lane too (last, as everywhere).
-        found = TryGetGlobalTask(workerId, task) || TryStealTask(workerId, task);
-        lane = JobPriority::Normal;
+        // can still see it, otherwise wake an idle worker — never drop.
+        // m_Counters.QueuedTasks counts every class, so the recheck's dequeue attempt
+        // covers the awaited lane (first) and the background lane (last), as everywhere.
+        found = TryGetAwaitedTask(workerId, task);
+        lane = JobPriority::Awaited;
+        if (!found) {
+            found = TryGetGlobalTask(workerId, task) || TryStealTask(workerId, task);
+            lane = JobPriority::Normal;
+        }
         if (!found && TryGetBackgroundTask(workerId, task)) {
             found = true;
             lane = JobPriority::Background;
         }
         if (!found) {
-            {
-                std::lock_guard<std::mutex> lk(globalMutex);
-            }
-            globalCondition.notify_one();
+            WakeIdleWorker(workerId + 1);
         }
     }
 
     return found;
+}
+
+bool WorkStealingThreadPool::TryGetAwaitedTask(size_t workerId, UniquePtr<TaskBase>& task) {
+    // The occupancy gate and the decrement-after-dequeue of TryGetBackgroundTask.
+    if (m_Counters.AwaitedQueued.load(std::memory_order_relaxed) == 0) {
+        return false;
+    }
+    if (m_Queues.Awaited.try_dequeue(workers[workerId]->AwaitedConsumerToken, task)) {
+        m_Counters.AwaitedQueued.fetch_sub(1, std::memory_order_relaxed);
+        m_Census.AwaitedPops.fetch_add(1, std::memory_order_relaxed);
+        return true;
+    }
+    return false;
 }
 
 bool WorkStealingThreadPool::TryGetLocalTask(size_t workerId, UniquePtr<TaskBase>& task) {
@@ -1858,8 +1982,8 @@ bool WorkStealingThreadPool::TryGetGlobalTask(size_t workerId, UniquePtr<TaskBas
     // low-rate producers for the whole lifetime of a sustained flood (full
     // mechanism at Worker::GlobalConsumerToken). Failure semantics match the
     // tokenless path — false means every sub-queue appeared empty at check
-    // time — so callers' m_QueuedTasks relap tolerance is unchanged.
-    if (m_GlobalQueue.try_dequeue(workers[workerId]->GlobalConsumerToken, task)) {
+    // time — so callers' m_Counters.QueuedTasks relap tolerance is unchanged.
+    if (m_Queues.Global.try_dequeue(workers[workerId]->GlobalConsumerToken, task)) {
         m_Census.GlobalPops.fetch_add(1, std::memory_order_relaxed);
         return true;
     }
@@ -1870,21 +1994,21 @@ bool WorkStealingThreadPool::TryGetBackgroundTask(size_t workerId, UniquePtr<Tas
     // The occupancy gate: an empty background lane costs exactly this one
     // relaxed load per scan — the queue itself is never touched (the slice-7
     // lesson: an ungated second global queue taxed every consumer scan).
-    // A stale zero here is benign: the producer's m_QueuedTasks increment
+    // A stale zero here is benign: the producer's m_Counters.QueuedTasks increment
     // keeps the sleep predicate true, so the worker relaps and re-reads.
-    if (m_BackgroundQueued.load(std::memory_order_relaxed) == 0) {
+    if (m_Counters.BackgroundQueued.load(std::memory_order_relaxed) == 0) {
         return false;
     }
     // Token dequeue for the same #360 fairness reason as TryGetGlobalTask:
     // the hole is producer-count-driven, so a background flood (streaming is
     // this lane's steady-state consumer) could starve another background
     // producer identically.
-    if (m_BackgroundQueue.try_dequeue(workers[workerId]->BackgroundConsumerToken, task)) {
+    if (m_Queues.Background.try_dequeue(workers[workerId]->BackgroundConsumerToken, task)) {
         // Decrement AFTER dequeue-success only — paired with the producers'
         // increment-before-push, the counter can never underflow and always
         // over-counts physical occupancy (the safe direction: a transient
         // false-nonzero costs one failed try_dequeue, never a missed task).
-        m_BackgroundQueued.fetch_sub(1, std::memory_order_relaxed);
+        m_Counters.BackgroundQueued.fetch_sub(1, std::memory_order_relaxed);
         m_Census.BackgroundPops.fetch_add(1, std::memory_order_relaxed);
         return true;
     }
@@ -2001,9 +2125,9 @@ void WorkStealingThreadPool::ExecuteTaskOptimized(UniquePtr<TaskBase> task, JobC
             // wakeups on its own thread, and (for graph tasks) already
             // retired the graph node. This side fires NOTHING and drops the
             // envelope — the UniquePtr destructor frees the closure here
-            // (F14). Counters conserve: m_QueuedTasks was released at the
+            // (F14). Counters conserve: m_Counters.QueuedTasks was released at the
             // dequeue-success point and the worker loop decrements
-            // pendingTasks after this returns (F20).
+            // m_Counters.PendingTasks after this returns (F20).
             assert(expected == TaskStatus::Cancelled &&
                    "JobSystem: dequeued task in non-Pending, non-Cancelled state");
             return;
@@ -2119,11 +2243,9 @@ void WorkStealingThreadPool::ExecuteTaskOptimized(UniquePtr<TaskBase> task, JobC
             CompleteLinkedDependency(taskId, success, failureMessage, failureException);
         }
 
-        // Envelope death point, BEFORE the releaser queues the registry
-        // cleanup at scope exit: the deferred drain then usually observes the
-        // registry as the TaskData's last reference and can recycle it
-        // (slice 6). Same ordering vs MarkCompleted as before — the closure
-        // is destroyed after the completion events fire.
+        // Envelope death point, before the releaser queues the registry
+        // cleanup at scope exit (F12). The closure is destroyed after the
+        // completion events fire.
         task.reset();
     }
 }
@@ -2164,7 +2286,7 @@ void WorkStealingThreadPool::ProcessGraphActions(TaskGraphActions& actions, Task
                                                  std::exception_ptr failureException) {
     // F10: runs with NO graph lock held. TaskHandle flips fire user callbacks
     // (which may Submit or Cancel and re-enter the graph), and EnqueueTask
-    // takes the pool's globalMutex for wake notifies.
+    // takes a worker's park-slot mutex to wake it.
     //
     // NOTE: the guarded-TryGetResult contract (a released dependent observes
     // its dependency's TaskData terminal) is carried by CompleteGraphTask's
@@ -2268,36 +2390,14 @@ void WorkStealingThreadPool::ProcessGraphActions(TaskGraphActions& actions, Task
 }
 
 void WorkStealingThreadPool::CleanupTaskData(TaskId taskId) {
-    // INVARIANT (F12): only call this once the task's ENVELOPE is dead —
-    // executed, dropped by the losing worker, retired from the graph, or
-    // consumed by the shutdown drain. The registry entry is the cancel/execute
-    // arbitration state; erasing it while the envelope is still queued lets
-    // the dequeuing worker's GetOrCreateTaskData re-materialize a fresh
-    // Pending TaskData and resurrect a cancelled task.
-    //
-    // Defer the registry erase to the thread-local pending list. The next
-    // GetOrCreateTaskData() call from this thread (or a forced flush) will
-    // drain the batch under the existing Submit-side lock. This collapses
-    // ~2 mutex ops per task to ~1, which is meaningful in DebugFast where
-    // each mutex op carries CRT validation overhead.
-    //
-    // The TaskData shared_ptr ref held by the registry stays alive until
-    // drain — fine, because callers' TaskHandle copies keep their own ref
-    // (via GetTaskData()) until they go out of scope. Entries whose registry
-    // reference is the LAST one are recycled into the thread-local TaskData
-    // pool at drain time (slice 6 — see DrainPendingCleanupLocked for the
-    // exclusivity proof).
+    // Call this only after the task's envelope is dead (F12). An erase while the
+    // envelope is queued lets its worker make a fresh Pending TaskData and run a
+    // cancelled task. The erase waits in this thread's batch, off the registry lock.
     t_pendingCleanup.push_back({this, taskId});
 
-    // Bounded flush: if THIS pool's share of the pending list grows past the
-    // batch threshold, force a drain to keep the registry's high-water mark
-    // sane even on a thread that rarely calls GetOrCreateTaskData. The share
-    // is counted only once the total crosses the threshold — in the
-    // single-pool common case that is exactly the old size check (own ==
-    // total), and the O(size) count is amortized across the batch. Gating on
-    // the OWN count (not the total) keeps foreign residue — bounded per pool
-    // by this same threshold — from turning every push into a fruitless
-    // mutexed drain.
+    // A full share of this pool drains the batch, so the registry stays bounded on a
+    // thread that seldom submits. Entries of other pools do not count: they must
+    // not make each push lock the registry.
     if (t_pendingCleanup.size() >= kPendingCleanupBatch)
     {
         size_t own = 0;
@@ -2309,16 +2409,9 @@ void WorkStealingThreadPool::CleanupTaskData(TaskId taskId) {
         {
             return;
         }
-        SharedPtr<TaskHandle::TaskData> recycle[kPendingCleanupBatch];
-        std::vector<SharedPtr<TaskHandle::TaskData>> deferDrop;
-        size_t recycled = 0;
-        {
-            std::lock_guard<std::mutex> lock(m_TaskDataMutex);
-            recycled = DrainPendingCleanupLocked(recycle, deferDrop);
-        }
-        // deferDrop's possibly-last references drop at scope exit, outside
-        // the registry lock.
-        CommitRecycledTaskData(recycle, recycled);
+        TaskDataReleaseBatch released;
+        std::lock_guard<std::mutex> lock(m_TaskDataMutex);
+        DrainPendingCleanupLocked(released);
     }
 }
 
@@ -2332,18 +2425,18 @@ void WorkStealingThreadPool::EnqueueTaskGlobal(UniquePtr<TaskBase> task, JobPrio
     }
     // Same publish sequence as EnqueueTask (§7): counters BEFORE the push (F5),
     // wake decision after. Always a global lane — never a local queue.
-    // m_QueuedTasks counts BOTH classes, so the wake protocol below is
-    // priority-blind; the background occupancy gate follows the same
+    // m_Counters.QueuedTasks counts every class, so the wake protocol below is
+    // priority-blind; the lane occupancy gate follows the same
     // before-push direction.
 #if GE_DEBUG_INSTRUMENTATION
     // Bracket enter: in-flight FIRST, then epoch (see m_CounterBracketEpoch).
     m_CounterRacersInFlight.fetch_add(1, std::memory_order_seq_cst);
     m_CounterBracketEpoch.fetch_add(1, std::memory_order_seq_cst);
 #endif
-    pendingTasks.fetch_add(1, std::memory_order_relaxed);
-    m_QueuedTasks.fetch_add(1, std::memory_order_seq_cst); // (P1)
-    if (priority == JobPriority::Background) {
-        m_BackgroundQueued.fetch_add(1, std::memory_order_relaxed);
+    m_Counters.PendingTasks.fetch_add(1, std::memory_order_relaxed);
+    m_Counters.QueuedTasks.fetch_add(1, std::memory_order_seq_cst); // (P1)
+    if (std::atomic<uint32>* occupancy = LaneOccupancy(priority)) {
+        occupancy->fetch_add(1, std::memory_order_relaxed);
     }
     PushGlobalQueue(std::move(task), priority);
 #if GE_DEBUG_INSTRUMENTATION
@@ -2353,7 +2446,39 @@ void WorkStealingThreadPool::EnqueueTaskGlobal(UniquePtr<TaskBase> task, JobPrio
 }
 
 ConcurrentQueue<UniquePtr<TaskBase>>& WorkStealingThreadPool::PriorityLane(JobPriority priority) {
-    return priority == JobPriority::Background ? m_BackgroundQueue : m_GlobalQueue;
+    switch (priority) {
+        case JobPriority::Awaited:
+            return m_Queues.Awaited;
+        case JobPriority::Background:
+            return m_Queues.Background;
+        case JobPriority::Normal:
+            break;
+    }
+    return m_Queues.Global;
+}
+
+std::atomic<uint32>* WorkStealingThreadPool::LaneOccupancy(JobPriority priority) {
+    switch (priority) {
+        case JobPriority::Awaited:
+            return &m_Counters.AwaitedQueued;
+        case JobPriority::Background:
+            return &m_Counters.BackgroundQueued;
+        case JobPriority::Normal:
+            break;
+    }
+    return nullptr;
+}
+
+std::atomic<uint64>& WorkStealingThreadPool::LanePushes(JobPriority priority) {
+    switch (priority) {
+        case JobPriority::Awaited:
+            return m_Census.AwaitedPushes;
+        case JobPriority::Background:
+            return m_Census.BackgroundPushes;
+        case JobPriority::Normal:
+            break;
+    }
+    return m_Census.GlobalPushes;
 }
 
 void WorkStealingThreadPool::PushGlobalQueue(UniquePtr<TaskBase> task, JobPriority priority) {
@@ -2363,7 +2488,7 @@ void WorkStealingThreadPool::PushGlobalQueue(UniquePtr<TaskBase> task, JobPriori
     // second allocating queue — the census measured the spill at 0 across
     // ~450k pushes, so the two-queue dance bought nothing and cost every
     // consumer a second empty poll per scan. (The background lane does not
-    // regress that: every poll of it is gated on m_BackgroundQueued.)
+    // regress that: every poll of it is gated on m_Counters.BackgroundQueued.)
     if (!PriorityLane(priority).enqueue(std::move(task))) {
         // A silently dropped task can be a caller-barrier release (B7) or a
         // graph dependency — dropping is a permanent hang, strictly worse
@@ -2373,10 +2498,21 @@ void WorkStealingThreadPool::PushGlobalQueue(UniquePtr<TaskBase> task, JobPriori
         std::fflush(stderr);
         std::abort();
     }
-    auto& pushCounter = priority == JobPriority::Background ? m_Census.BackgroundPushes
-                                                            : m_Census.GlobalPushes;
-    pushCounter.fetch_add(1, std::memory_order_relaxed);
+    LanePushes(priority).fetch_add(1, std::memory_order_relaxed);
     CountPublishedOnThisThread(1);
+}
+
+void WorkStealingThreadPool::PublishInScratchRuns(
+    size_t count,
+    GameEngine::FunctionRef<void(size_t first, size_t run, UniquePtr<TaskBase>* staging, void** slabs)> publishRun) {
+    // The scope is open for every run, and the arrays hold no task after their run's push.
+    GameEngine::Memory::ScratchScope scratch;
+    const size_t room = std::min(count, kMaxBulkRun);
+    const std::span<void*> slabs = scratch.AllocateArrayForOverwrite<void*>(room);
+    std::pmr::vector<UniquePtr<TaskBase>> staging(room, &scratch.Resource());
+    for (size_t first = 0; first < count; first += room) {
+        publishRun(first, std::min(count - first, room), staging.data(), slabs.data());
+    }
 }
 
 void WorkStealingThreadPool::EnqueueBulkGlobal(UniquePtr<TaskBase>* tasks, size_t count,
@@ -2398,9 +2534,7 @@ void WorkStealingThreadPool::EnqueueBulkGlobal(UniquePtr<TaskBase>* tasks, size_
         }
         return;
     }
-    auto& pushCounter = priority == JobPriority::Background ? m_Census.BackgroundPushes
-                                                            : m_Census.GlobalPushes;
-    pushCounter.fetch_add(count, std::memory_order_relaxed);
+    LanePushes(priority).fetch_add(count, std::memory_order_relaxed);
     CountPublishedOnThisThread(count);
 }
 

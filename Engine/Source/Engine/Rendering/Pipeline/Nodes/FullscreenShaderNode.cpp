@@ -63,6 +63,11 @@ class FullscreenShaderNodeRenderer
     static bool HasShaderTextureBinding(
         const FullscreenShaderNode& node, std::string_view binding);
     static std::string MissingServiceTextures(const FullscreenShaderNode& node);
+    static bool IsSkippedBy(const FullscreenShaderNode& node, const PostProcessSettings& settings);
+    // The settings the node's pass reads for one view: the effective settings with the fields derived
+    // from the view's render height. A diagnostic view's Tonemap reads them unexposed and untonemapped.
+    static PostProcessSettings ViewSettings(const FullscreenShaderNode& node, RenderServices& services,
+                                            GameEngine::Rendering::ViewId viewId, uint64 worldId, uint32 renderHeight);
     static const std::string& NodeId(const FullscreenShaderNode& node)
     {
         return node.m_Id;
@@ -837,6 +842,24 @@ void FullscreenShaderNode::Declare(RenderPipelineInstance& instance,
     EnsureCachedResources(m_RenderServices->GetDevice());
 }
 
+void FullscreenShaderNode::RequestPausedViewPipelines(const PausedViewPrewarm& prewarm)
+{
+    // The gates of the live declare (Detail::FullscreenShaderNodeRenderer::Declare): with a missing
+    // package, shader or service texture, or skipWhen fields that all hold, the node draws nothing.
+    if (!m_RequiredPackage.empty() && !prewarm.Services.IsPackageAvailable(m_RequiredPackage))
+        return;
+    EnsureCachedResources(prewarm.Services.GetDevice());
+    if (!m_Device || !m_BasePipelineId.IsValid() ||
+        !Detail::FullscreenShaderNodeRenderer::MissingServiceTextures(*this).empty())
+        return;
+    if (Detail::FullscreenShaderNodeRenderer::IsSkippedBy(
+            *this, Detail::FullscreenShaderNodeRenderer::ViewSettings(*this, prewarm.Services, prewarm.View.id,
+                                                                      prewarm.View.worldId, prewarm.RenderHeight)))
+        return;
+    if (const std::optional<GameEngine::Rendering::PipelineFormatKey> key = prewarm.SingleColorTargetKey(m_OutputRef))
+        m_Device->RequestGraphicsPipeline(m_BasePipelineId, *key);
+}
+
 bool FullscreenShaderNode::HasPassthroughSource() const
 {
     return !m_PassthroughInputName.empty() || m_Inputs.size() == 1;
@@ -938,6 +961,46 @@ bool Detail::FullscreenShaderNodeRenderer::HasShaderTextureBinding(
     return false;
 }
 
+// A node with skipWhen fields is skipped when every field reads its skip value. A field that the
+// settings do not know runs the node.
+bool Detail::FullscreenShaderNodeRenderer::IsSkippedBy(const FullscreenShaderNode& node,
+                                                       const PostProcessSettings& settings)
+{
+    if (node.m_SkipWhenFields.empty())
+        return false;
+    for (const auto& f : node.m_SkipWhenFields)
+    {
+        float v = 0.0f;
+        if (!settings.TryReadField(f.Name, v) || std::abs(v - f.Value) > kSkipEpsilon)
+            return false;
+    }
+    return true;
+}
+
+PostProcessSettings Detail::FullscreenShaderNodeRenderer::ViewSettings(const FullscreenShaderNode& node,
+                                                                      RenderServices& services,
+                                                                      GameEngine::Rendering::ViewId viewId,
+                                                                      uint64 worldId, uint32 renderHeight)
+{
+    PostProcessSettings settings = services.GetEffectivePostProcessSettings(viewId, worldId);
+    // A diagnostic view writes display-range values, not scene radiance, so it
+    // reaches the display unexposed and untonemapped.
+    if (node.m_Id == "Tonemap" && worldId != 0)
+    {
+        auto* shadows = services.GetFeature<ShadowMapRenderFeature>();
+        if (shadows != nullptr && shadows->ShowsDiagnosticValues())
+        {
+            settings.Exposure = 1.0f;
+            settings.AutoExposureActive = false;
+            settings.ViewOutput = PostProcessViewOutput::NoLook; // preserve the diagnostic values
+        }
+    }
+    // The same volume stack can feed views with different render heights, so the
+    // per-view derived push fields (bloom + fog-glow pyramid scales) resolve here.
+    settings.ResolveDerivedForRenderHeight(renderHeight);
+    return settings;
+}
+
 // A shader binding a service texture (kServiceTextures) that its node does not list would get a
 // placeholder of the wrong kind (a 2D texture for the Cube LUT's sampler3D), so the node refuses.
 std::string Detail::FullscreenShaderNodeRenderer::MissingServiceTextures(const FullscreenShaderNode& node)
@@ -1002,44 +1065,15 @@ void Detail::FullscreenShaderNodeRenderer::Declare(
 
     // PP settings evaluated ONCE at declaration — the skip gate and the
     // exec-time push constants must agree (captured by value below).
-    PostProcessSettings settings =
-        services->GetEffectivePostProcessSettings(viewId, worldId);
-    // A diagnostic view writes display-range values, not scene radiance, so it
-    // reaches the display unexposed and untonemapped.
-    if (node.m_Id == "Tonemap" && worldId != 0)
-    {
-        auto* shadows = services->GetFeature<ShadowMapRenderFeature>();
-        if (shadows != nullptr && shadows->ShowsDiagnosticValues())
-        {
-            settings.Exposure = 1.0f;
-            settings.AutoExposureActive = false;
-            settings.ViewOutput = PostProcessViewOutput::NoLook; // preserve the diagnostic values
-        }
-    }
-    // The same volume stack can feed views with different render heights, so the
-    // per-view derived push fields (bloom + fog-glow pyramid scales) resolve here.
-    settings.ResolveDerivedForRenderHeight(d.RenderHeight);
+    const PostProcessSettings settings = ViewSettings(node, *services, viewId, worldId, d.RenderHeight);
 
     // The old SetActivationPredicate, evaluated at declaration: skipped =
     // not declared (+ the chain variable threads through).
-    if (!node.m_SkipWhenFields.empty())
+    if (IsSkippedBy(node, settings))
     {
-        bool skip = true;
-        for (const auto& f : node.m_SkipWhenFields)
-        {
-            float v = 0.0f;
-            if (!settings.TryReadField(f.Name, v) || std::abs(v - f.Value) > kSkipEpsilon)
-            {
-                skip = false; // unknown field or live effect: run
-                break;
-            }
-        }
-        if (skip)
-        {
-            if (node.m_StitchWhenSkipped && node.HasPassthroughSource())
-                node.StitchThrough(d);
-            return;
-        }
+        if (node.m_StitchWhenSkipped && node.HasPassthroughSource())
+            node.StitchThrough(d);
+        return;
     }
 
     // Identity elision (FinalCopy): a pure single-input copy whose input is

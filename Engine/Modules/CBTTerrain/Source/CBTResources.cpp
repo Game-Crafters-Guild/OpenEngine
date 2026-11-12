@@ -158,20 +158,9 @@ bool CBTResources::Initialize(IDevice& device, const CBTKernelSet& kernelSet, ui
         }
         m_PersistentBytes += ubo.size;
 
-        // Sphere sculpt page POOL (binding 16) + page TABLE (binding 20). A planar terrain never reads
-        // them, so the rings start as placeholders that only keep the two bindings valid;
-        // InitializeRoots provisions the full rings when the tree is seeded for the sphere.
-        SculptRings placeholders{};
-        if (!CreateSculptRings(false, 0u, placeholders))
-        {
-            Shutdown();
-            return false;
-        }
-        AdoptSculptRings(placeholders);
-
         // Planet-shading surface params (plan §planet-shading) — a tiny host-visible UNIFORM ring the
         // fragment reads on the graphics side (radius, relief amplitude/frequency/octaves,
-        // sculpt-enabled). Per-slot stride padded to kCBTSurfaceParamsSlotStride so a per-slot
+        // the planet pages). Per-slot stride padded to kCBTSurfaceParamsSlotStride so a per-slot
         // offset-bind meets minUniformBufferOffsetAlignment. Not in the compute descriptor set.
         BufferDesc surf{};
         surf.size = static_cast<size_t>(kCBTFrameParamsRing) * kCBTSurfaceParamsSlotStride;
@@ -196,12 +185,12 @@ bool CBTResources::Initialize(IDevice& device, const CBTKernelSet& kernelSet, ui
         m_PersistentBytes += surf.size;
 
         // Phase E resident-window atlas (bindings 17/18). The indirection SSBO is a
-        // host-visible ring (kCBTFrameParamsRing slots of kAtlasMaxTiles rows), written
+        // host-visible ring (kCBTFrameParamsRing slots of kAtlasWindowRows rows), written
         // once per frame from the residency table — same discipline as the sculpt atlas.
         // Zeroed on create so an atlas-disabled default reads every row as kAtlasNoSlot.
         BufferDesc atlasRows{};
         atlasRows.size = static_cast<size_t>(kCBTFrameParamsRing) *
-                         static_cast<size_t>(kAtlasMaxTiles) * kAtlasRowBytes;
+                         static_cast<size_t>(kAtlasWindowRows) * kAtlasRowBytes;
         atlasRows.usage = static_cast<uint32_t>(BufferUsage::Storage);
         atlasRows.memoryUsage = BufferMemoryUsage::Upload;
         atlasRows.persistent = true;
@@ -389,107 +378,6 @@ bool CBTResources::Initialize(IDevice& device, const CBTKernelSet& kernelSet, ui
     return true;
 }
 
-bool CBTResources::CreateSculptRings(bool spherical, uint32_t pagePoolCount, SculptRings& out)
-{
-    // Spherical: `pagePoolCount` physical pages (radius-INDEPENDENT) and the fixed 6*cap^2 page table,
-    // per ring slot. Placeholder: kSculptPlaceholderSlotWords per slot, a whole
-    // minStorageBufferOffsetAlignment step so the per-slot offset bind stays valid.
-    out = {};
-    out.Spherical = spherical;
-    out.PagePoolCount = spherical ? pagePoolCount : 0u;
-    out.PoolSlotWords = spherical ? pagePoolCount * kSculptPageTexels : kSculptPlaceholderSlotWords;
-    out.TableSlotWords = spherical ? kSculptPageTableEntries : kSculptPlaceholderSlotWords;
-
-    BufferDesc sculpt{};
-    sculpt.size = static_cast<size_t>(kCBTFrameParamsRing) * out.PoolSlotWords * sizeof(float);
-    sculpt.usage = static_cast<uint32_t>(BufferUsage::Storage);
-    sculpt.memoryUsage = BufferMemoryUsage::Upload;
-    sculpt.persistent = true;
-    sculpt.debugName = spherical ? "CBT.SphereSculptPool" : "CBT.SphereSculptPoolPlaceholder";
-    out.Pool = m_Device->CreateBuffer(sculpt);
-
-    BufferDesc sculptTable{};
-    sculptTable.size = static_cast<size_t>(kCBTFrameParamsRing) * out.TableSlotWords * sizeof(uint32_t);
-    sculptTable.usage = static_cast<uint32_t>(BufferUsage::Storage);
-    sculptTable.memoryUsage = BufferMemoryUsage::Upload;
-    sculptTable.persistent = true;
-    sculptTable.debugName = spherical ? "CBT.SphereSculptPageTable" : "CBT.SphereSculptPageTablePlaceholder";
-    out.Table = m_Device->CreateBuffer(sculptTable);
-    if (!out.Pool.IsValid() || !out.Table.IsValid())
-    {
-        Logger::Log::Error("CBTResources: failed to create the sphere sculpt page pool / table SSBO ({}, {} KiB); "
-                           "the previous rings stay bound",
-                           spherical ? "spherical" : "placeholder", (sculpt.size + sculptTable.size) / 1024u);
-        if (out.Pool.IsValid())
-            m_Device->DestroyBuffer(out.Pool);
-        if (out.Table.IsValid())
-            m_Device->DestroyBuffer(out.Table);
-        out = {};
-        return false;
-    }
-    // Zeroed so the default (no edits) reads additive 0; the table defaults to kSculptNoPage
-    // (all-ones), so 0xFF fills every entry.
-    if (void* mapped = m_Device->MapBuffer(out.Pool))
-    {
-        std::memset(mapped, 0, sculpt.size);
-        m_Device->UnmapBuffer(out.Pool);
-    }
-    if (void* mapped = m_Device->MapBuffer(out.Table))
-    {
-        std::memset(mapped, 0xFF, sculptTable.size);
-        m_Device->UnmapBuffer(out.Table);
-    }
-    out.Bytes = sculpt.size + sculptTable.size;
-    return true;
-}
-
-void CBTResources::AdoptSculptRings(const SculptRings& rings)
-{
-    m_SphereSculpt = rings.Pool;
-    m_SphereSculptTable = rings.Table;
-    m_SculptPagePoolCount = rings.PagePoolCount;
-    m_SculptPoolSlotWords = rings.PoolSlotWords;
-    m_SculptTableSlotWords = rings.TableSlotWords;
-    m_SculptRingBytes = rings.Bytes;
-    m_SculptRingsSpherical = rings.Spherical;
-    m_PersistentBytes += rings.Bytes;
-}
-
-void CBTResources::DestroySculptRings()
-{
-    if (m_SphereSculpt.IsValid())
-        m_Device->DestroyBuffer(m_SphereSculpt);
-    m_SphereSculpt = {};
-    if (m_SphereSculptTable.IsValid())
-        m_Device->DestroyBuffer(m_SphereSculptTable);
-    m_SphereSculptTable = {};
-    m_PersistentBytes -= m_SculptRingBytes;
-    m_SculptRingBytes = 0;
-    m_SculptPagePoolCount = 0u;
-    m_SculptPoolSlotWords = 0u;
-    m_SculptTableSlotWords = 0u;
-    m_SculptRingsSpherical = false;
-}
-
-bool CBTResources::ProvisionSculptRings(bool spherical, uint32_t pagePoolCount)
-{
-    if (!m_Ready)
-        return false;
-    if (spherical == m_SculptRingsSpherical)
-        return true;
-    // Create first: a refused allocation leaves the previous rings, and the sets that point at them,
-    // untouched, so the GPU never reads a destroyed buffer.
-    SculptRings next{};
-    if (!CreateSculptRings(spherical, pagePoolCount, next))
-        return false;
-    DestroySculptRings();
-    AdoptSculptRings(next);
-    WriteDescriptorSet();
-    Logger::Log::Info("CBTResources: sphere sculpt rings {} ({} KiB host-visible)",
-                      spherical ? "provisioned" : "released to the placeholder", m_SculptRingBytes / 1024u);
-    return true;
-}
-
 Rendering::DescriptorSetHandle CBTResources::GetDescriptorSet(uint32_t kernelIndex) const
 {
     if (m_KernelSets.empty())
@@ -532,9 +420,6 @@ void CBTResources::WriteOneSet(Rendering::DescriptorSetHandle set,
     for (uint32_t slot = 0; slot < m_TextureRing && has(kCBTHeightTextureBinding); ++slot)
         m_Device->UpdateCombinedImageSamplerBinding(set, kCBTHeightTextureBinding,
                                                     m_BoundHeight[slot], m_HeightSampler, slot);
-    // Binding 16: the whole sphere sculpt ring SSBO (the shader indexes it by frame slot).
-    if (has(kCBTSphereSculptBinding))
-        m_Device->UpdateStorageBufferBinding(set, kCBTSphereSculptBinding, m_SphereSculpt, 0, 0);
     // Binding 17: the whole atlas indirection ring SSBO (the shader indexes it by frame slot).
     if (has(kCBTAtlasRowsBinding))
         m_Device->UpdateStorageBufferBinding(set, kCBTAtlasRowsBinding, m_AtlasRows, 0, 0);
@@ -547,10 +432,6 @@ void CBTResources::WriteOneSet(Rendering::DescriptorSetHandle set,
     for (uint32_t slot = 0; slot < m_TextureRing && has(kCBTAtlasCoarseBinding); ++slot)
         m_Device->UpdateCombinedImageSamplerBinding(set, kCBTAtlasCoarseBinding,
                                                     m_BoundAtlasCoarse[slot], m_HeightSampler, slot);
-    // Binding 20: the whole sphere sculpt page-table ring SSBO (the shader indexes it by frame slot).
-    if (has(kCBTSphereSculptPageTableBinding))
-        m_Device->UpdateStorageBufferBinding(set, kCBTSphereSculptPageTableBinding,
-                                             m_SphereSculptTable, 0, 0);
     // Binding 21: the height-range pyramid (wide arm only; the narrow layouts do not carry it).
     if (has(kCBTHeightRangeBinding) && m_HeightRange.IsValid())
         m_Device->UpdateStorageBufferBinding(set, kCBTHeightRangeBinding, m_HeightRange, 0, 0);
@@ -582,7 +463,7 @@ void CBTResources::UploadFrameParams(uint32_t frameCounter, const CBTFrameParams
                                                   static_cast<size_t>(slot) * sizeof(CBTFrameParams));
     std::memcpy(dst, &params, sizeof(CBTFrameParams));
     // The first word of this frame's page tables travels with the frame that reads it (CBT_PageRingBase).
-    dst->AnalyticParams[kCBTPageRingBaseLane] = static_cast<float>(m_PageTableBaseWord);
+    dst->PageParams[kCBTPageRingBaseLane] = static_cast<float>(m_PageTableBaseWord);
     for (Mathematics::Vector4& rect : dst->SphereDirty)
         rect = Mathematics::Vector4{};
     for (uint32_t i = 0; i < sphereDirty.Count; ++i)
@@ -592,42 +473,6 @@ void CBTResources::UploadFrameParams(uint32_t frameCounter, const CBTFrameParams
         dst->SphereDirty[rect.Face] = Mathematics::Vector4{rect.MinU, rect.MinV, rect.MaxU, rect.MaxV};
     }
     m_Device->UnmapBuffer(m_FrameParams);
-}
-
-void CBTResources::UploadSphereSculptPool(uint32_t frameCounter, const float* pool, uint32_t texelCount)
-{
-    if (!m_SphereSculpt.IsValid() || pool == nullptr)
-        return;
-    if (!m_SculptRingsSpherical)
-        return;
-    const uint32_t poolTexels = m_SculptPoolSlotWords;
-    const uint32_t count = texelCount < poolTexels ? texelCount : poolTexels;
-    const uint32_t slot = CBTFrameRingSlot(frameCounter);
-    void* mapped = m_Device->MapBuffer(m_SphereSculpt);
-    if (!mapped)
-        return;
-    const size_t slotByteBase =
-        static_cast<size_t>(slot) * static_cast<size_t>(poolTexels) * sizeof(float);
-    std::memcpy(static_cast<uint8_t*>(mapped) + slotByteBase, pool,
-                static_cast<size_t>(count) * sizeof(float));
-    m_Device->UnmapBuffer(m_SphereSculpt);
-}
-
-void CBTResources::UploadSphereSculptPageTable(uint32_t frameCounter, const uint32_t* table,
-                                               uint32_t entryCount)
-{
-    if (!m_SphereSculptTable.IsValid() || table == nullptr || !m_SculptRingsSpherical)
-        return;
-    const uint32_t count = entryCount < m_SculptTableSlotWords ? entryCount : m_SculptTableSlotWords;
-    const uint32_t slot = CBTFrameRingSlot(frameCounter);
-    void* mapped = m_Device->MapBuffer(m_SphereSculptTable);
-    if (!mapped)
-        return;
-    const size_t slotByteBase =
-        static_cast<size_t>(slot) * static_cast<size_t>(m_SculptTableSlotWords) * sizeof(uint32_t);
-    std::memcpy(static_cast<uint8_t*>(mapped) + slotByteBase, table,
-                static_cast<size_t>(count) * sizeof(uint32_t));
-    m_Device->UnmapBuffer(m_SphereSculptTable);
 }
 
 BufferHandle CBTResources::CreateHeightChain(uint32_t words)
@@ -953,18 +798,18 @@ void CBTResources::UploadAtlasRows(uint32_t frameCounter, const void* rows, uint
     if (!m_AtlasRows.IsValid())
         return;
     const uint32_t slot = CBTFrameRingSlot(frameCounter);
-    const uint32_t clamped = rowCount < kAtlasMaxTiles ? rowCount : kAtlasMaxTiles;
+    const uint32_t clamped = rowCount < kAtlasWindowRows ? rowCount : kAtlasWindowRows;
     void* mapped = m_Device->MapBuffer(m_AtlasRows);
     if (!mapped)
         return;
     const size_t slotByteBase =
-        static_cast<size_t>(slot) * static_cast<size_t>(kAtlasMaxTiles) * kAtlasRowBytes;
+        static_cast<size_t>(slot) * static_cast<size_t>(kAtlasWindowRows) * kAtlasRowBytes;
     uint8_t* dst = static_cast<uint8_t*>(mapped) + slotByteBase;
     if (rows != nullptr && clamped > 0u)
         std::memcpy(dst, rows, static_cast<size_t>(clamped) * kAtlasRowBytes);
     // Zero the tail past the live rows so a shrunk table never resolves a stale tile
     // (a leftover 0 Slot would read as slot 0 resident; a full 0xFF row is kAtlasNoSlot).
-    const size_t tailRows = static_cast<size_t>(kAtlasMaxTiles) - clamped;
+    const size_t tailRows = static_cast<size_t>(kAtlasWindowRows) - clamped;
     if (tailRows > 0u)
         std::memset(dst + static_cast<size_t>(clamped) * kAtlasRowBytes, 0xFF,
                     tailRows * kAtlasRowBytes);
@@ -993,7 +838,6 @@ void CBTResources::Shutdown()
         if (m_FrameParams.IsValid())
             m_Device->DestroyBuffer(m_FrameParams);
         m_FrameParams = {};
-        DestroySculptRings();
         if (m_SurfaceParams.IsValid())
             m_Device->DestroyBuffer(m_SurfaceParams);
         m_SurfaceParams = {};
@@ -1058,13 +902,6 @@ void CBTResources::ReprovisionAfterDeviceRebuild()
     m_IdentityIndexBuffer = {};
     m_DrawCountBuffer = {};
     m_FrameParams = {};
-    m_SphereSculpt = {};
-    m_SphereSculptTable = {};
-    m_SculptPagePoolCount = 0u;
-    m_SculptPoolSlotWords = 0u;
-    m_SculptTableSlotWords = 0u;
-    m_SculptRingBytes = 0;
-    m_SculptRingsSpherical = false;
     m_SurfaceParams = {};
     m_DefaultHeight = {};
     m_BoundHeight = {};

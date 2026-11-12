@@ -25,6 +25,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <string>
+#include <utility>
 #include <vector>
 
 using GameEngine::AssetManager;
@@ -45,9 +46,9 @@ std::filesystem::path FixturePath(const char* name)
     return GameEngine::TestPaths::StagedRoot() / "Engine/Tests/Fixtures/Audio" / name;
 }
 
-GameEngine::Vector<GameEngine::uint8> ReadFixture(const char* name)
+GameEngine::ByteBuffer ReadFixture(const char* name)
 {
-    GameEngine::Vector<GameEngine::uint8> bytes;
+    GameEngine::ByteBuffer bytes;
     EXPECT_TRUE(GameEngine::ReadFileBytesShared(FixturePath(name), bytes)) << FixturePath(name);
     return bytes;
 }
@@ -105,8 +106,14 @@ TEST(AudioOggVorbis, StreamedClipPlaysThroughPerVoiceDecoder)
     AudioAsset clip(GUID::Generate(), "audio-ogg-vorbis-stream.ogg");
     AudioAsset::RuntimeSettings settings{};
     settings.loadPolicy = GameEngine::AudioLoadPolicy::Stream;
-    ASSERT_TRUE(clip.LoadFromDataWithRuntimeSettings(ReadFixture("tone-440hz-vorbis.ogg"), settings));
+    // A streamed clip keeps the buffer it is handed as its encoded data, not a copy of it.
+    GameEngine::ByteBuffer encoded = ReadFixture("tone-440hz-vorbis.ogg");
+    const GameEngine::uint8* const handedBuffer = encoded.Data();
+    const GameEngine::uint64 handedSize = encoded.Size();
+    ASSERT_TRUE(clip.LoadFromDataWithRuntimeSettings(std::move(encoded), settings));
     ASSERT_TRUE(clip.HasEncodedData());
+    EXPECT_EQ(clip.GetEncodedData(), handedBuffer);
+    EXPECT_EQ(clip.GetEncodedDataSize(), handedSize);
     EXPECT_EQ(clip.GetSampleRate(), kVorbisSampleRate);
     EXPECT_NEAR(clip.GetDuration(), kToneSeconds, 0.01f);
 

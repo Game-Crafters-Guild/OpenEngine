@@ -7,6 +7,8 @@
 #include "Rendering/Core/Pipeline/PipelineDescTranslator.h"
 #include "Rendering/Core/Pipeline/PipelineTypes.h"
 #include "Rendering/Core/RenderGraph/RGFrame.h"
+#include "Rendering/Core/ReverseZ.h"
+#include "../UIOpaqueInteriors.h"
 #include "UI/CaretBlink.h"
 #include "UI/UIFrameBufferRing.h"
 #include "UI/UIPrimitive.h"
@@ -14,6 +16,49 @@
 
 using namespace GameEngine;
 using namespace GameEngine::Rendering;
+
+#if defined(GE_HAVE_YOGA) && GE_HAVE_YOGA
+namespace
+{
+
+// The opaque pre-pass's D16 depth target, at the UI target's size. Invalid
+// when that size is not known at declaration or the target is multisampled.
+RenderGraph::RGTexture CreateOverlayDepth(RenderGraph::RGFrame& frame, RenderGraph::RGTexture target,
+                                          IDevice& device)
+{
+    const RenderGraph::RGResourceDesc& targetDesc = frame.Graph().ResourceDesc(target.Id);
+    uint32_t width = targetDesc.Width;
+    uint32_t height = targetDesc.Height;
+    if ((width == 0 || height == 0) && frame.IsBackbuffer(target))
+        device.GetSwapchainSize(width, height);
+    if (width == 0 || height == 0 || targetDesc.SampleCount != 1)
+        return {};
+
+    TextureDesc desc{};
+    desc.width = width;
+    desc.height = height;
+    desc.depth = 1;
+    desc.mipLevels = 1;
+    desc.arrayLayers = 1;
+    desc.sampleCount = 1;
+    desc.format = static_cast<uint32_t>(TextureFormat::D16_UNORM);
+    desc.usage = static_cast<uint32_t>(TextureUsage::DepthStencil);
+    desc.debugName = "UI Overlay Depth";
+    return frame.CreateTexture("UI Overlay Depth", desc);
+}
+
+// The main draw over the pre-pass depth: it writes no depth, and Greater is strict, so a
+// primitive's own interior, which the pre-pass painted at the equal depth, fails.
+Rendering::PipelineDesc OverPrePassDepth(Rendering::PipelineDesc desc)
+{
+    desc.depthStencilState.depthTestEnable = true;
+    desc.depthStencilState.depthWriteEnable = false;
+    desc.depthStencilState.depthCompareOp = CompareOp::Greater;
+    return desc;
+}
+
+} // namespace
+#endif
 
 // RenderGraph pass of the SDF UI renderer — the only render path since the
 // retained twin was deleted. Declared fresh every frame: no retained pass
@@ -165,6 +210,17 @@ bool UIManager::RenderRG(RenderGraph::RGFrame& frame, RenderGraph::RGTexture tar
     const TextCoverageConstants textCoverage =
         ResolveTextCoverageConstants(m_TextContrast, m_TextBlendGamma, targetSpace);
 
+    // The opaque pre-pass runs when any interior is listed and its pipeline
+    // for this target space is staged; its depth target lives this frame only.
+    const BufferHandle opaqueBuf = m_SdfOpaqueRing ? m_SdfOpaqueRing->GetBuffer() : BufferHandle{};
+    const uint32_t opaqueCount = static_cast<uint32_t>(m_SdfOpaqueInteriors->Interiors().size());
+    const bool opaqueStaged =
+        m_OpaquePrePassEnabled && (blendEncoded ? m_SdfOpaqueEncodedAvailable : m_SdfOpaqueAvailable);
+    const RenderGraph::RGTexture opaqueDepth =
+        uploadsOk && opaqueStaged && opaqueCount > 0 && opaqueBuf.IsValid()
+            ? CreateOverlayDepth(frame, target, *m_Device)
+            : RenderGraph::RGTexture{};
+
     frame.AddPass(
         "UI Overlay", static_cast<int32_t>(PassPhase::kUI),
         [&](RenderGraph::RGPassBuilder& p)
@@ -182,6 +238,17 @@ bool UIManager::RenderRG(RenderGraph::RGFrame& frame, RenderGraph::RGTexture tar
             ops.Clear.Color[2] = 0.0f;
             ops.Clear.Color[3] = 1.0f;
             p.AttachColor(0, target, ops);
+
+            if (opaqueDepth.IsValid())
+            {
+                RenderGraph::RGAttachmentOps depthOps{};
+                depthOps.Load = RenderGraph::RGLoadOp::Clear;
+                depthOps.Store = RenderGraph::RGStoreOp::DontCare;
+                depthOps.Clear.Depth = ReverseZ::kClearFar;
+                p.AttachDepth(opaqueDepth, depthOps);
+                p.Read(frame.ImportExternalBuffer("UISdfOpaque", opaqueBuf),
+                       RenderGraph::RGBufferRead::Storage);
+            }
 
             // SSBO reads (ring buffers rotate per device frame; the import
             // dedups by physical so repeat declares are id-stable).
@@ -206,7 +273,8 @@ bool UIManager::RenderRG(RenderGraph::RGFrame& frame, RenderGraph::RGTexture tar
                 p.Read(rb.Tex, RenderGraph::RGTextureRead::Sampled);
         },
         [this, resolved, primBuf, clipBuf, drawOrderBuf, transformBuf, uploadsOk, outputEncoding,
-         subpixelActive, blendEncoded, textCoverage](RenderGraph::RGContext& ctx)
+         subpixelActive, blendEncoded, textCoverage, opaqueBuf, opaqueCount,
+         opaquePrePass = opaqueDepth.IsValid()](RenderGraph::RGContext& ctx)
         {
             // Slot updates run even on draw-skipped frames: the published
             // producers rendered this frame, and the registry slots must
@@ -242,8 +310,11 @@ bool UIManager::RenderRG(RenderGraph::RGFrame& frame, RenderGraph::RGTexture tar
             if (blendEncoded && !m_SdfEncodedVariantAvailable)
                 return;
 
+            // A pass with no depth attachment takes a pipeline with no depth state.
             Rendering::GraphicsPipelineId& pipelineId =
-                blendEncoded
+                opaquePrePass
+                    ? m_SdfPipelineIdOverPrePass[(blendEncoded ? 2u : 0u) + (subpixelActive ? 1u : 0u)]
+                : blendEncoded
                     ? (subpixelActive ? m_SdfPipelineIdSubpixelEncoded : m_SdfPipelineIdEncoded)
                     : (subpixelActive ? m_SdfPipelineIdSubpixel : m_SdfPipelineId);
             if (!pipelineId.IsValid())
@@ -255,8 +326,8 @@ bool UIManager::RenderRG(RenderGraph::RGFrame& frame, RenderGraph::RGTexture tar
                 pipelineDesc.debugName =
                     blendEncoded ? (subpixelActive ? "UI_SDF_Subpixel_Encoded" : "UI_SDF_Encoded")
                                  : (subpixelActive ? "UI_SDF_Subpixel" : "UI_SDF");
-                pipelineId =
-                    Rendering::PipelineDescTranslator::InternGraphics(*m_Device, pipelineDesc);
+                pipelineId = Rendering::PipelineDescTranslator::InternGraphics(
+                    *m_Device, opaquePrePass ? OverPrePassDepth(pipelineDesc) : pipelineDesc);
             }
             const PipelineHandle pipeline = ctx.GetOrCreatePipelineVariant(pipelineId);
             if (!pipeline.IsValid())
@@ -307,6 +378,12 @@ bool UIManager::RenderRG(RenderGraph::RGFrame& frame, RenderGraph::RGTexture tar
                        : 0.0f);
             if (!primBuf.IsValid() || !drawOrderBuf.IsValid() || !transformBuf.IsValid())
                 return;
+
+            if (opaquePrePass)
+            {
+                RecordSdfOpaquePrePass(ctx, pc, opaqueBuf, opaqueCount, blendEncoded);
+                ctx.Cmd->SetPipeline(pipeline);
+            }
 
             DescriptorSetDesc dsDesc{};
             dsDesc.layout = m_SdfSsboSetLayout;
@@ -387,4 +464,36 @@ bool UIManager::RenderRG(RenderGraph::RGFrame& frame, RenderGraph::RGTexture tar
     (void)targetSpace;
     return false;
 #endif
+}
+
+void UIManager::RecordSdfOpaquePrePass(RenderGraph::RGContext& ctx, const SdfPushConstants& pc,
+                                       BufferHandle opaqueBuf, uint32_t opaqueCount, bool blendEncoded)
+{
+    Rendering::GraphicsPipelineId& pipelineId =
+        blendEncoded ? m_SdfOpaquePipelineIdEncoded : m_SdfOpaquePipelineId;
+    if (!pipelineId.IsValid())
+        pipelineId = Rendering::PipelineDescTranslator::InternGraphics(
+            *m_Device, blendEncoded ? m_SdfOpaquePipelineDescEncoded : m_SdfOpaquePipelineDesc);
+    // A missing pipeline leaves the depth at its clear, where the main draw
+    // passes everywhere: the frame is the painter's-order frame.
+    const PipelineHandle pipeline = ctx.GetOrCreatePipelineVariant(pipelineId);
+    if (!pipeline.IsValid())
+        return;
+
+    DescriptorSetDesc dsDesc{};
+    dsDesc.layout = m_SdfOpaqueSetLayout;
+    dsDesc.debugName = "UISdf_Opaque_Set";
+    dsDesc.transient = true;
+    const DescriptorSetHandle opaqueSet = m_Device->CreateDescriptorSet(dsDesc);
+    if (!opaqueSet.IsValid())
+        return;
+    m_Device->UpdateStorageBufferBinding(opaqueSet, 0, opaqueBuf,
+                                         m_SdfOpaqueRing->GetFrameOffset(m_Device->GetFrameIndex()),
+                                         opaqueCount * sizeof(UI::UIOpaqueInterior));
+
+    ctx.Cmd->SetPipeline(pipeline);
+    ctx.Cmd->BindDescriptorSet(0, opaqueSet, pipeline);
+    ctx.Cmd->SetConstants(0, sizeof(pc), &pc);
+    ctx.Cmd->Draw(/*vertexCount=*/6u, /*instanceCount=*/opaqueCount, /*firstVertex=*/0u,
+                  /*firstInstance=*/0u);
 }

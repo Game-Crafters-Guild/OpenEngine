@@ -87,6 +87,10 @@ public:
 
     void EnsureSizes(uint32 skeletonId, uint32 boneCount);
 
+    // Call after a write to the SkinJointCount of a skeleton that live runtimes can use.
+    // The next GetLivePaletteBoneCount sums the runtimes again.
+    void JointCountsWritten();
+
     // --- Per-instance runtime allocation ---
     // Each model instance gets its own runtime so that multiple instances of
     // the same skeleton animate independently. One instance is often several
@@ -148,6 +152,11 @@ public:
     // freed entries. Lock-free.
     size_t GetRuntimeHighWaterMark() const;
 
+    // Sum of the skin joint counts of the live runtimes: the most palette bones
+    // one frame's producers can write into the atlas. Sums again only after a
+    // CreateRuntime, a freeing ReleaseRuntime or a JointCountsWritten; call from one thread.
+    size_t GetLivePaletteBoneCount();
+
     // Age this frame's palette offsets into the previous-frame fields. Call
     // once per frame from the render loop, after the atlas has begun its new
     // frame and BEFORE any producer publishes an offset: at that instant
@@ -199,6 +208,9 @@ private:
     std::atomic<size_t> m_RuntimeCount{0};                // published after emplace_back
     std::vector<uint32> m_FreeRuntimeIds;                 // recycled runtimeIds available for reuse
     std::atomic<uint64> m_RuntimeCreateEpoch{0};          // see GetRuntimeCreateEpoch()
+    std::atomic<uint64> m_PaletteBonesEpoch{1};           // bumped by create, freeing release and JointCountsWritten
+    uint64 m_SummedPaletteBonesEpoch = 0;                 // epoch of m_SummedPaletteBones
+    size_t m_SummedPaletteBones = 0;
 };
 
 }}} // namespace GameEngine::Engine::Renderer

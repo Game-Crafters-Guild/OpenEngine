@@ -21,7 +21,7 @@ bool NavSurfaceAsset::Load()
 {
     if (GetState() == AssetState::Loaded)
         return true;
-    std::vector<uint8> bytes;
+    ByteBuffer bytes;
     if (!Exists() || !ReadFileBytesShared(GetPath(), bytes))
     {
         Logger::Log::Error("Navigation surface data '{}' could not be read", GetPath().string());
@@ -31,7 +31,7 @@ bool NavSurfaceAsset::Load()
     return LoadFromData(bytes);
 }
 
-bool NavSurfaceAsset::LoadFromData(const Vector<uint8>& data)
+bool NavSurfaceAsset::LoadFromData(std::span<const uint8> data)
 {
     if (GetState() == AssetState::Loaded)
         return true;

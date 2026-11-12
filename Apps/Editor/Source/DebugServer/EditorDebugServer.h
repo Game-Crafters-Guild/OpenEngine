@@ -30,6 +30,8 @@ namespace GameEngine
 // Thread model:
 //   - Network thread: select() loop over listen + all client sockets
 //   - Main thread: handler callbacks execute via FlushPendingRequests()
+//   - A handler registered with HandlerThread::Network runs on the network thread when its
+//     line arrives and is answered at once; it skips the frame queue and the gates
 //
 // Every request passes the gates of the registry the server was built over
 // (Editor::DebugRequestGateRegistry) before its handler runs; a refusing gate answers it.
@@ -57,13 +59,23 @@ class EditorDebugServer
 
     using Handler = std::function<nlohmann::json(const RequestContext& ctx)>;
 
+    // The thread a handler runs on. Main: at the next FlushPendingRequests, after the gates.
+    // Network: when the request arrives, ahead of the requests still in the frame queue; the
+    // handler must be thread-safe and gets no gate scope.
+    enum class HandlerThread
+    {
+        Main,
+        Network,
+    };
+
     // `gates` is consulted for every request and must outlive the server; the editor's
     // server is built over Editor::DebugRequestGateRegistry::Get().
     explicit EditorDebugServer(const Editor::DebugRequestGateRegistry& gates);
     ~EditorDebugServer();
 
     // Register a named handler. Must be called before Start().
-    void RegisterHandler(const std::string& method, Handler handler);
+    void RegisterHandler(const std::string& method, Handler handler,
+                         HandlerThread thread = HandlerThread::Main);
 
     // Start listening. Spawns the network thread and waits for bind/listen to complete.
     bool Start(uint16_t port = 9999);
@@ -160,7 +172,18 @@ class EditorDebugServer
     // response is sent immediately instead of after the poll timeout.
     void WakeNetworkThread();
 
-    std::unordered_map<std::string, Handler> m_Handlers;
+    struct RegisteredHandler
+    {
+        Handler Run;
+        HandlerThread Thread = HandlerThread::Main;
+    };
+
+    // Runs a HandlerThread::Network handler on the network thread and queues its answer.
+    void RunOnNetworkThread(const Handler& handler, uint32_t clientId, const std::string& id,
+                            const nlohmann::json& params);
+
+    // Written only before Start(), so the network thread reads it without a lock.
+    std::unordered_map<std::string, RegisteredHandler> m_Handlers;
     const Editor::DebugRequestGateRegistry& m_Gates;
 
     std::thread m_NetworkThread;

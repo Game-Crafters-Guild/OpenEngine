@@ -40,6 +40,7 @@ using PushValue = std::variant<float, int32_t, uint32_t, std::array<float, 4>>;
 constexpr uint32_t kSize = 8;       // every rig image is kSize x kSize
 constexpr float kPreExposure = 4.0f; // the stored scale of the second run
 constexpr float kPreviousPreExposure = 2.0f;
+constexpr float kSampleDeltaFraction = 0.1f; // the MSAA sample delta bloom reads, as a fraction of the scene
 
 // One run of one shader: its sampled inputs by name, its uniform-buffer members by name, its push
 // constants by name, and the view's ExposureHistory {scale 1, valid 1, P, previous P}.
@@ -460,11 +461,16 @@ TEST_F(PreExposureReader, BloomAndScatteringThresholdsCompareAbsoluteBrightness)
                 {"bloomAntiFlicker", int32_t(1)}, {"bloomDepthVeilEnabled", int32_t(1)},
                 {"bloomDepthVeilIntensity", 0.5f}, {"bloomDepthVeilStart", 0.0f}, {"bloomDepthVeilEnd", 2.0f},
                 {"thresholdFree", int32_t(0)}};
-    run.UniformMembers["ge_nearFar"] = {0.1f, 1000.0f, 0.0f, 0.0f};
+    // The depth terms of a perspective with near 0.1 and far 1000: the depth 0.01 is 9.9 m away.
+    run.UniformMembers["ge_depthTerms"] = {-0.1f / 999.9f, 100.0f / 999.9f, 1.0f, 0.0f};
+    run.UniformMembers["ge_viewRanges"] = {0.1f, 1000.0f, 0.0f, 0.0f};
     run.Textures["uDepth"] = Filled({0.01f, 0.0f, 0.0f, 0.0f});
+    // The MSAA resolve's sample delta is in stored units like the scene, so it scales with P too.
     run.Textures["uHDR"] = Scene();
+    run.Textures["uSampleDelta"] = Scaled(Scene(), kSampleDeltaFraction);
     const Image at1 = Run("bloom_threshold", run)["oColor"];
     run.Textures["uHDR"] = Scaled(Scene(), kPreExposure);
+    run.Textures["uSampleDelta"] = Scaled(Scene(), kSampleDeltaFraction * kPreExposure);
     const Image atP = Run("bloom_threshold", AtPreExposure(run, kPreExposure, kPreExposure))["oColor"];
     ExpectScaled(at1, atP, kPreExposure, 4, "bloom_threshold (rgb and the depth veil in alpha)");
 }
@@ -661,7 +667,8 @@ void IdentityView(RigRun& run)
     for (const char* m : {"ge_view", "ge_invView", "ge_proj", "ge_invProj", "ge_viewProj", "ge_prevViewProj",
                           "prevInvViewProj"})
         run.UniformMembers[m] = identity;
-    run.UniformMembers["ge_nearFar"] = {0.1f, 100.0f, 0.0f, 0.0f};
+    run.UniformMembers["ge_depthTerms"] = {1.0f, 0.0f, 0.0f, 1.0f};
+    run.UniformMembers["ge_viewRanges"] = {0.1f, 100.0f, 0.0f, 0.0f};
     run.UniformMembers["ge_screenSize"] = {float(kSize), float(kSize), 1.0f / kSize, 1.0f / kSize};
 }
 } // namespace

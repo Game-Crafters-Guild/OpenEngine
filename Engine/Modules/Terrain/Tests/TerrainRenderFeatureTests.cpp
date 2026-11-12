@@ -67,12 +67,12 @@ TEST_F(TerrainRenderFeatureTest, TerrainParams_UploadAndRetrieve)
     ASSERT_TRUE(m_Feature->Initialize(m_Device.get()));
 
     TerrainGPUParams params{};
+    const TerrainInstanceInfo info{};
     params.WorldOriginX = 10.0f;
     params.WorldSizeX = 1024.0f;
     params.HeightScale = 128.0f;
 
-    m_Feature->UploadTerrainParamsArray(&params, 1, Terrain::kDefaultTerrainMaterials,
-                                       Terrain::kTerrainLayerRoleCount, 0);
+    m_Feature->UploadTerrainParamsArray({&params, 1u}, {&info, 1u}, Terrain::kDefaultTerrainMaterials, 0);
 
     EXPECT_TRUE(m_Feature->GetTerrainParamsSSBO(0).IsValid());
     EXPECT_EQ(m_Feature->GetTerrainParamsCount(0), 1u);
@@ -467,6 +467,7 @@ TEST_F(TerrainRenderFeatureTest, TerrainParamsRingRotatesThroughEveryElement)
     ASSERT_GT(pacing, 1u) << "a paced device is the premise of this test";
 
     TerrainGPUParams params{};
+    const TerrainInstanceInfo info{};
     params.WorldOriginX = 10.0f;
     params.WorldSizeX = 1024.0f;
     params.HeightScale = 128.0f;
@@ -478,8 +479,7 @@ TEST_F(TerrainRenderFeatureTest, TerrainParamsRingRotatesThroughEveryElement)
     bool cameBackRound = false;
     for (uint32 f = 0; f < kRotationFrameLimit && !cameBackRound; ++f)
     {
-        m_Feature->UploadTerrainParamsArray(&params, 1, Terrain::kDefaultTerrainMaterials,
-                                           Terrain::kTerrainLayerRoleCount, f % pacing);
+        m_Feature->UploadTerrainParamsArray({&params, 1u}, {&info, 1u}, Terrain::kDefaultTerrainMaterials, f % pacing);
         const uint32 slot = m_Feature->GetLastTerrainParamsSlot();
         cameBackRound = !seen.empty() && slot == seen.front();
         if (!cameBackRound)
@@ -514,15 +514,13 @@ TEST_F(TerrainRenderFeatureTest, TerrainParamsRepeatedDeviceIndexHoldsTheElement
     ASSERT_TRUE(m_Feature->Initialize(m_Device.get()));
 
     TerrainGPUParams params{};
+    const TerrainInstanceInfo info{};
     params.WorldSizeX = 512.0f;
 
-    m_Feature->UploadTerrainParamsArray(&params, 1, Terrain::kDefaultTerrainMaterials,
-                                       Terrain::kTerrainLayerRoleCount, 0u);
-    m_Feature->UploadTerrainParamsArray(&params, 1, Terrain::kDefaultTerrainMaterials,
-                                       Terrain::kTerrainLayerRoleCount, 1u);
+    m_Feature->UploadTerrainParamsArray({&params, 1u}, {&info, 1u}, Terrain::kDefaultTerrainMaterials, 0u);
+    m_Feature->UploadTerrainParamsArray({&params, 1u}, {&info, 1u}, Terrain::kDefaultTerrainMaterials, 1u);
     const uint32 first = m_Feature->GetLastTerrainParamsSlot();
-    m_Feature->UploadTerrainParamsArray(&params, 1, Terrain::kDefaultTerrainMaterials,
-                                       Terrain::kTerrainLayerRoleCount, 1u);
+    m_Feature->UploadTerrainParamsArray({&params, 1u}, {&info, 1u}, Terrain::kDefaultTerrainMaterials, 1u);
 
     EXPECT_EQ(m_Feature->GetLastTerrainParamsSlot(), first)
         << "a repeated device index is the same frame, not the next one";
@@ -553,13 +551,80 @@ TEST_F(TerrainRenderFeatureTest, LastUploadBytesAreTheParamsAndMaterialsItWasGiv
     ASSERT_TRUE(m_Feature->Initialize(m_Device.get()));
 
     TerrainGPUParams params{};
+    const TerrainInstanceInfo info{};
     params.WorldSizeX = 512.0f;
     std::vector<TerrainMaterialRecord> materials(Terrain::kDefaultTerrainMaterials,
                                                  Terrain::kDefaultTerrainMaterials + kTerrainLayerRoleCount);
-    m_Feature->UploadTerrainParamsArray(&params, 1, materials.data(), kTerrainLayerRoleCount, 0u);
+    m_Feature->UploadTerrainParamsArray({&params, 1u}, {&info, 1u}, materials, 0u);
     ExpectLastUploadBytes(*m_Feature, params, materials, "first upload");
 
     materials[0].AlbedoR *= 0.5f;
-    m_Feature->UploadTerrainParamsArray(&params, 1, materials.data(), kTerrainLayerRoleCount, 1u);
+    m_Feature->UploadTerrainParamsArray({&params, 1u}, {&info, 1u}, materials, 1u);
     ExpectLastUploadBytes(*m_Feature, params, materials, "after a tint change");
+}
+
+// Grass cells are culled against a box from the lowest to the highest ground the grass terrains
+// hold. A terrain lowered below its transform must widen that box, or the grass in the valley is
+// culled whenever the camera looks down into it.
+TEST_F(TerrainRenderFeatureTest, TheGrassBoxSpansTheHeightsTheTerrainHolds)
+{
+    m_Feature = std::make_unique<TerrainRenderFeature>();
+    ASSERT_TRUE(m_Feature->Initialize(m_Device.get()));
+
+    TerrainGPUParams params{};
+    params.WorldSizeX = 512.0f;
+    params.WorldOriginY = 0.0f;
+    params.HeightScale = 128.0f;
+    params.GrassEnabled = kTerrainGrassBitEnabled;
+    params.GrassDensity = 40.0f;
+    params.GrassBladeHeight = 0.5f;
+    params.GrassBladeWidth = 0.02f;
+    ASSERT_TRUE(TerrainGrassRowPlaces(params)) << "the row must place grass for the summary to read it";
+
+    TerrainInstanceInfo info{};
+    info.WorldOriginY = params.WorldOriginY;
+    info.HeightScale = params.HeightScale;
+    info.WorldMinY = -8.6f;
+    info.WorldMaxY = 0.0f;
+    m_Feature->UploadTerrainParamsArray({&params, 1u}, {&info, 1u}, Terrain::kDefaultTerrainMaterials, 0u);
+
+    const auto summary = m_Feature->GetTerrainGrassPlacementSummary(m_Feature->GetLastTerrainParamsSlot());
+    EXPECT_FLOAT_EQ(summary.WorldMinY, -8.6f);
+    EXPECT_FLOAT_EQ(summary.WorldMaxY, 0.0f);
+}
+
+// The budget fit bounds the floor-band thinning with the summary's blade sizes. A card terrain has
+// no blade width, so the thinnest blade reads 0 and the fit does not thin; the widest is the blade row's.
+TEST_F(TerrainRenderFeatureTest, TheGrassSummaryCarriesTheCardRuleAndTheBladeExtremes)
+{
+    m_Feature = std::make_unique<TerrainRenderFeature>();
+    ASSERT_TRUE(m_Feature->Initialize(m_Device.get()));
+
+    TerrainGPUParams blades{};
+    blades.WorldSizeX = 512.0f;
+    blades.GrassEnabled = kTerrainGrassBitEnabled;
+    blades.GrassDensity = 40.0f;
+    blades.GrassBladeHeight = 0.5f;
+    blades.GrassBladeWidth = 0.032f;
+    TerrainGPUParams cards = blades;
+    cards.GrassEnabled = kTerrainGrassBitEnabled | kTerrainGrassBitTextureCard;
+    cards.GrassTextureCardsPerSquareMeter = 4.0f;
+    cards.GrassBladeHeight = 0.3f;
+    cards.GrassBladeWidth = 0.02f;
+    ASSERT_TRUE(TerrainGrassRowPlaces(blades));
+    ASSERT_TRUE(TerrainGrassRowPlaces(cards));
+
+    const TerrainGPUParams rows[] = {blades, cards};
+    TerrainInstanceInfo infos[] = {TerrainInstanceInfo{}, TerrainInstanceInfo{}};
+    infos[0].GrassFarThinning = 0.25f;
+    infos[1].GrassFarThinning = 0.75f;
+    m_Feature->UploadTerrainParamsArray(rows, infos, Terrain::kDefaultTerrainMaterials, 0u);
+
+    const auto summary = m_Feature->GetTerrainGrassPlacementSummary(m_Feature->GetLastTerrainParamsSlot());
+    EXPECT_FLOAT_EQ(summary.MinBladeWidth, 0.0f) << "a card terrain must turn the fit's thinning off";
+    EXPECT_FLOAT_EQ(summary.MinBladeHeight, 0.3f);
+    EXPECT_FLOAT_EQ(summary.MaxBladeWidth, 0.032f);
+    EXPECT_FLOAT_EQ(summary.MinFarThinning, 0.25f) << "the ring bound needs the lowest dial";
+    EXPECT_FLOAT_EQ(summary.MaxBladeReach, std::max(TerrainGrassBladeReach(blades), TerrainGrassBladeReach(cards)))
+        << "every cell box must hold the farthest vertex of every row";
 }

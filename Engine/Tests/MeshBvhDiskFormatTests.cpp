@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <fstream>
 #include <random>
+#include <string>
 #include <system_error>
 #include <vector>
 
@@ -100,6 +101,13 @@ fs::path PersistedFile(const fs::path& cacheRoot)
             return entry.path();
     }
     return {};
+}
+
+// The cache file of submesh 0 of `guid`, in the layout that MeshBvhDiskFormat.h states.
+fs::path SubmeshZeroFile(const fs::path& cacheRoot, const GUID& guid)
+{
+    return cacheRoot / "MeshBvh" / guid.ToCompactString() /
+           ("sm0_v" + std::to_string(kBvhBuilderVersion) + ".meshbvh");
 }
 
 // Overwrites four bytes of `file` at `offset`.
@@ -352,4 +360,54 @@ TEST_F(MeshBvhDiskFormatTest, RejectsAFlippedPayloadBit)
             ++accepted;
     }
     EXPECT_EQ(accepted, 0) << accepted << " of " << kFlips << " single-bit payload flips loaded";
+}
+
+// Another writer of the same entry (an editor and a Player on one project) stages its file at
+// <entry>.tmp and has it open. The persist stages a file of its own: it does not write into the
+// other file or publish it, and the published entry loads.
+TEST_F(MeshBvhDiskFormatTest, APersistDoesNotShareItsStagedFileWithAnotherWriterOfTheEntry)
+{
+    Mesh source = MakeRandomMesh(400);
+    auto view = ViewOf(source);
+    MeshBvh bvh = MeshBvh::Build(view);
+    const GUID guid = MakeTestGuid();
+    const uint64 hash = ComputeGeometryHash(view);
+    const fs::path entry = SubmeshZeroFile(CacheRoot, guid);
+    ASSERT_TRUE(fs::create_directories(entry.parent_path()));
+    fs::path otherStaged = entry;
+    otherStaged += ".tmp";
+
+    const std::string otherHead(8, 'A');
+    const std::string otherTail(8, 'B');
+    std::ofstream other(otherStaged, std::ios::binary | std::ios::trunc);
+    other << otherHead << std::flush;
+    const bool persisted = PersistBvh(CacheRoot, guid, 0, hash, bvh);
+    other << otherTail << std::flush;
+    other.close();
+
+    ASSERT_TRUE(persisted);
+    MeshBvh restored;
+    EXPECT_TRUE(TryLoadBvh(CacheRoot, guid, 0, hash, view, restored))
+        << "the other writer's bytes are in the published entry";
+    std::ifstream in(otherStaged, std::ios::binary);
+    const std::string staged((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    EXPECT_EQ(staged, otherHead + otherTail) << "the persist wrote into or published the other writer's file";
+}
+
+// A writer that stops between its write and its publish leaves its staged file behind. The next
+// persist of the asset removes it.
+TEST_F(MeshBvhDiskFormatTest, APersistRemovesTheStagedFileOfAWriterThatIsNoLongerRunning)
+{
+    Mesh source = MakeRandomMesh(200);
+    auto view = ViewOf(source);
+    MeshBvh bvh = MeshBvh::Build(view);
+    const GUID guid = MakeTestGuid();
+    const fs::path entry = SubmeshZeroFile(CacheRoot, guid);
+    ASSERT_TRUE(fs::create_directories(entry.parent_path()));
+    fs::path orphan = entry;
+    orphan += ".2147483600-77-0.tmp"; // no process has this id
+    std::ofstream(orphan, std::ios::binary) << "x";
+
+    ASSERT_TRUE(PersistBvh(CacheRoot, guid, 0, ComputeGeometryHash(view), bvh));
+    EXPECT_FALSE(fs::exists(orphan));
 }

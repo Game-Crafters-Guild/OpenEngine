@@ -71,7 +71,7 @@ bool NavGridAsset::Load()
         return false;
     }
 
-    std::vector<uint8> fileData;
+    ByteBuffer fileData;
     if (!ReadFileBytesShared(GetPath(), fileData))
     {
         Logger::Log::Error("Failed to read NavGrid file: {}", GetPath().string());
@@ -82,7 +82,7 @@ bool NavGridAsset::Load()
     return LoadFromData(fileData);
 }
 
-bool NavGridAsset::LoadFromData(const Vector<uint8>& data)
+bool NavGridAsset::LoadFromData(std::span<const uint8> data)
 {
     if (GetState() == AssetState::Loaded)
     {

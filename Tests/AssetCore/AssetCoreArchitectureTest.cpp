@@ -21,9 +21,9 @@ public:
         return true;
     }
 
-    bool LoadFromData(const Vector<uint8>& data) override {
+    bool LoadFromData(std::span<const uint8> data) override {
         m_LoadCalled = true;
-        m_LoadedData = data;
+        m_LoadedData.assign(data.begin(), data.end());
         SetState(AssetState::Loaded);
         return true;
     }

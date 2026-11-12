@@ -78,13 +78,27 @@ struct FinerWindow
     }
     const uint8* Texel(uint32 x, uint32 z) const { return const_cast<FinerWindow*>(this)->Texel(x, z); }
 
+    bool PageIsReady(uint32 px, uint32 pz) const
+    {
+        return PageReady[static_cast<std::size_t>(pz - PagesZ.First) * PagesX.Count() + (px - PagesX.First)] != 0;
+    }
+
     bool Ready(Span pagesX, Span pagesZ) const
     {
         for (uint32 pz = pagesZ.First; pz <= pagesZ.Last; ++pz)
             for (uint32 px = pagesX.First; px <= pagesX.Last; ++px)
-                if (PageReady[static_cast<std::size_t>(pz - PagesZ.First) * PagesX.Count() + (px - PagesX.First)] == 0)
+                if (!PageIsReady(px, pz))
                     return false;
         return true;
+    }
+
+    bool AnyReady(Span pagesX, Span pagesZ) const
+    {
+        for (uint32 pz = pagesZ.First; pz <= pagesZ.Last; ++pz)
+            for (uint32 px = pagesX.First; px <= pagesX.Last; ++px)
+                if (PageIsReady(px, pz))
+                    return true;
+        return false;
     }
 };
 
@@ -164,36 +178,60 @@ bool GatherFinerPage(PageStoreWriter& source, const PageCodec& codec, uint32 lev
     return true;
 }
 
-// The stride samples of page (px, pz) of `level` of `layout`, filtered from the finer samples in
-// `window`. False when the store does not hold the page or the window lacks a finer page it reads.
-bool FilterCoarserPage(const PageStoreLayout& layout, uint32 level, uint32 px, uint32 pz, const FinerWindow& window,
-                       std::vector<uint8>& outSamples)
+// The finer pages that the 3 x 3 taps of coarser sample `sample` read.
+Span TapPages(int64 sample, uint32 finerSamples)
+{
+    return OwningPages({ClampIndex(2 * sample - 1, finerSamples), ClampIndex(2 * sample + 1, finerSamples)});
+}
+
+// The stride samples of page (px, pz) of `level` of `layout`. A sample whose taps read only ready
+// pages of `window` is their filter; another sample keeps its value in `inOutSamples`, the stored
+// page. With `everyTapReady`, every sample is the filter and `inOutSamples` needs no value.
+void FilterCoarserPage(const PageStoreLayout& layout, uint32 level, uint32 px, uint32 pz, const FinerWindow& window,
+                       bool everyTapReady, std::vector<uint8>& inOutSamples)
 {
     const uint32 stride = PageStrideTexels(layout.Header.Format);
     const uint32 apron = (stride - kPageOwnedSamples) / 2u;
     const PageStoreLevel& finer = layout.Levels[level - 1u];
     const PageStoreLevel& shape = layout.Levels[level];
-    if (!layout.FindPresent(PageAddress{0, static_cast<uint8>(level), px, pz}) ||
-        !window.Ready(OwningPages(FinerSamplesRead(px, apron, finer.SamplesX)),
-                      OwningPages(FinerSamplesRead(pz, apron, finer.SamplesZ))))
-        return false;
-    outSamples.resize(static_cast<std::size_t>(stride) * stride * window.TexelBytes);
+    inOutSamples.resize(static_cast<std::size_t>(stride) * stride * window.TexelBytes);
     for (uint32 r = 0; r < stride; ++r)
     {
         const int64 sampleZ = ClampIndex(static_cast<int64>(pz) * kPageOwnedSamples - apron + r, shape.SamplesZ);
+        const Span tapPagesZ = everyTapReady ? Span{} : TapPages(sampleZ, finer.SamplesZ);
         for (uint32 c = 0; c < stride; ++c)
         {
             const int64 sampleX = ClampIndex(static_cast<int64>(px) * kPageOwnedSamples - apron + c, shape.SamplesX);
+            if (!everyTapReady && !window.Ready(TapPages(sampleX, finer.SamplesX), tapPagesZ))
+                continue;
             FilterTaps taps{};
             for (uint32 dz = 0; dz < 3u; ++dz)
                 for (uint32 dx = 0; dx < 3u; ++dx)
                     taps[dz * 3u + dx] = window.Texel(ClampIndex(2 * sampleX - 1 + dx, finer.SamplesX),
                                                       ClampIndex(2 * sampleZ - 1 + dz, finer.SamplesZ));
             FilterCoarserTexel(layout.Header.Filter, taps, window.TexelBytes,
-                               outSamples.data() + (static_cast<std::size_t>(r) * stride + c) * window.TexelBytes);
+                               inOutSamples.data() + (static_cast<std::size_t>(r) * stride + c) * window.TexelBytes);
         }
     }
-    return true;
+}
+
+// How many of the finer pages that a coarser page reads are ready in the window.
+enum class FinerCoverage : uint8
+{
+    None, // or the coarser page is absent: no sample of it can change
+    Some,
+    All,
+};
+
+FinerCoverage CoverageOf(const PageStoreLayout& layout, const PageAddress& address, const FinerWindow& window)
+{
+    const uint32 apron = (PageStrideTexels(layout.Header.Format) - kPageOwnedSamples) / 2u;
+    const PageStoreLevel& finer = layout.Levels[address.Level - 1u];
+    const Span pagesX = OwningPages(FinerSamplesRead(address.X, apron, finer.SamplesX));
+    const Span pagesZ = OwningPages(FinerSamplesRead(address.Z, apron, finer.SamplesZ));
+    if (!layout.FindPresent(address) || !window.AnyReady(pagesX, pagesZ))
+        return FinerCoverage::None;
+    return window.Ready(pagesX, pagesZ) ? FinerCoverage::All : FinerCoverage::Some;
 }
 
 } // namespace
@@ -244,6 +282,33 @@ void PageStorePatcher::EncodePage(uint32 level, std::span<const uint8> samples, 
     m_UnencodedCodec->Encode(level, cropped, PageFootprint{}, outUnencoded);
 }
 
+bool PageStorePatcher::ReadStoredSamples(const PageAddress& address, std::vector<uint8>& outSamples) const
+{
+    const PageFieldFormat format = m_Writer.Layout().Header.Format;
+    const uint32 stride = PageStrideTexels(format);
+    const uint32 texelBytes = PageTexelBytes(format);
+    PageIndexEntry entry;
+    ByteBuffer stored;
+    if (!m_Writer.ReadPage(address, stored, entry))
+        return false;
+    outSamples.resize(static_cast<std::size_t>(stride) * stride * texelBytes);
+    m_Codec->Decode(address.Level, entry, stored, outSamples);
+    if (!m_Unencoded)
+        return true;
+    // The unencoded store holds the exact samples inside the Bc5 page's outer block ring.
+    if (!m_Unencoded->ReadPage(address, stored, entry))
+        return false;
+    const uint32 exactStride = PageStrideTexels(m_Unencoded->Layout().Header.Format);
+    std::vector<uint8> exact(static_cast<std::size_t>(exactStride) * exactStride * texelBytes);
+    m_UnencodedCodec->Decode(address.Level, entry, stored, exact);
+    const uint32 inset = (stride - exactStride) / 2u;
+    const std::size_t rowBytes = static_cast<std::size_t>(exactStride) * texelBytes;
+    for (uint32 r = 0; r < exactStride; ++r)
+        std::memcpy(outSamples.data() + (static_cast<std::size_t>(r + inset) * stride + inset) * texelBytes,
+                    exact.data() + r * rowBytes, rowBytes);
+    return true;
+}
+
 bool PageStorePatcher::HoldsPage(const PageAddress& address, const EncodedPage& encoded,
                                  const EncodedPage& unencoded) const
 {
@@ -292,14 +357,17 @@ bool PageStorePatcher::WritePage(const PageAddress& address, std::span<const uin
     return true;
 }
 
-bool PageStorePatcher::RefilterAncestors(const PageSampleRect& level0Rect)
+bool PageStorePatcher::RefilterAncestors(const std::optional<PageSampleRect>& level0Rect)
 {
     if (!CanPatch())
         return false;
     const PageStoreLevel& level0 = m_Writer.Layout().Levels.front();
-    Span changedX{std::min(level0Rect.MinX, level0.SamplesX - 1u), std::min(level0Rect.MaxX, level0.SamplesX - 1u)};
-    Span changedZ{std::min(level0Rect.MinZ, level0.SamplesZ - 1u), std::min(level0Rect.MaxZ, level0.SamplesZ - 1u)};
-    std::optional<PageSampleRect> changed = PageSampleRect{changedX.First, changedZ.First, changedX.Last, changedZ.Last};
+    std::optional<PageSampleRect> changed;
+    if (level0Rect)
+        changed = PageSampleRect{std::min(level0Rect->MinX, level0.SamplesX - 1u),
+                                 std::min(level0Rect->MinZ, level0.SamplesZ - 1u),
+                                 std::min(level0Rect->MaxX, level0.SamplesX - 1u),
+                                 std::min(level0Rect->MaxZ, level0.SamplesZ - 1u)};
     std::vector<std::optional<PageSampleRect>> written(m_Written.size());
     {
         std::lock_guard lock(m_WrittenMutex);
@@ -374,13 +442,14 @@ bool PageStorePatcher::RefilterLevel(uint32 level, const std::optional<PageSampl
     JobSystem::ParallelFor(m_Pool, remakeCount, [&](std::size_t i) {
         const uint32 px = pagesX.First + static_cast<uint32>(i % pagesX.Count());
         const uint32 pz = pagesZ.First + static_cast<uint32>(i / pagesX.Count());
+        const PageAddress address{0, static_cast<uint8>(level), px, pz};
+        const FinerCoverage coverage = CoverageOf(layout, address, window);
         std::vector<uint8> samples;
-        if (!FilterCoarserPage(layout, level, px, pz, window, samples))
+        if (coverage == FinerCoverage::None || (coverage == FinerCoverage::Some && !ReadStoredSamples(address, samples)))
             return;
+        FilterCoarserPage(layout, level, px, pz, window, coverage == FinerCoverage::All, samples);
         EncodePage(level, samples, encoded[i], unencoded[i]);
-        remake[i] = HoldsPage(PageAddress{0, static_cast<uint8>(level), px, pz}, encoded[i], unencoded[i])
-                        ? PageRemake::Unchanged
-                        : PageRemake::Changed;
+        remake[i] = HoldsPage(address, encoded[i], unencoded[i]) ? PageRemake::Unchanged : PageRemake::Changed;
     });
 
     // A page WritePage wrote is a new input to the level above, whatever this call made of it.

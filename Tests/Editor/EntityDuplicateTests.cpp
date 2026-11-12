@@ -64,7 +64,7 @@
 #include "SplineECS/SplineService.h"
 #include "Terrain/TerrainTypes.h"
 #include "TerrainECS/Components/TerrainPageCollider.h"
-#include "TerrainECS/Components/TerrainPlanetFaceCollider.h"
+#include "TerrainECS/Components/TerrainPlanetPageCollider.h"
 #include "TerrainECS/Systems/TerrainWorldHooks.h"
 #include "TerrainECS/TerrainService.h"
 
@@ -98,6 +98,7 @@ using GameEngine::Editor::UndoRedoService;
 
 using GameEngine::Mathematics::Quaternion;
 using GameEngine::Mathematics::Vector3;
+using GameEngine::Mathematics::WorldPosition;
 
 namespace
 {
@@ -146,7 +147,7 @@ CreatedSplineEntity CreateSplineEntity(World& world, GameEngine::SplineECS::Spli
 
     Entity entity = world.Create();
     entity.Set(Transform::FromTRS(
-        Vector3(10.0f, 0.0f, 2.0f),
+        WorldPosition{10.0, 0.0, 2.0},
         Quaternion(1.0f, 0.0f, 0.0f, 0.0f),
         Vector3(1.0f, 1.0f, 1.0f)));
 
@@ -189,7 +190,7 @@ std::vector<std::uint8_t> CaptureTransformBytes(World& world, EntityHandle entit
 EntityHandle CreateNamedTransformEntity(World& world, const char* name, const Vector3& position)
 {
     Entity entity = world.Create();
-    entity.Set(Transform::FromTRS(position, Quaternion(1.0f, 0.0f, 0.0f, 0.0f), Vector3(1.0f, 1.0f, 1.0f)));
+    entity.Set(Transform::FromTRS(WorldPosition::FromVector3(position), Quaternion(1.0f, 0.0f, 0.0f, 0.0f), Vector3(1.0f, 1.0f, 1.0f)));
 
     Name n{};
     std::strncpy(n.value, name, sizeof(n.value) - 1);
@@ -951,7 +952,7 @@ EntityHandle DuplicateOnce(World& world, EntityHandle root)
 
 using GameEngine::Components::Terrain;
 using GameEngine::Components::TerrainPageCollider;
-using GameEngine::Components::TerrainPlanetFaceCollider;
+using GameEngine::Components::TerrainPlanetPageCollider;
 using GameEngine::TerrainECS::TerrainService;
 
 GameEngine::Terrain::TerrainConfig SingleTerrainConfig()
@@ -1203,14 +1204,16 @@ TEST_F(TerrainEntityDuplicateTests, DuplicateDoesNotInheritColliderPhysicsHandle
     page.PhysicsHandleGeneration = 5;
     world.AddComponentImmediate(pageEntity, page);
 
-    const auto faceEntity = world.CreateEntity();
-    TerrainPlanetFaceCollider face{};
-    face.TerrainEntityIndex = 9;
-    face.TerrainEntityVersion = 1;
-    face.Face = 4;
-    face.PhysicsHandleIndex = 13;
-    face.PhysicsHandleGeneration = 6;
-    world.AddComponentImmediate(faceEntity, face);
+    const auto planetPageEntity = world.CreateEntity();
+    TerrainPlanetPageCollider planetPage{};
+    planetPage.TerrainEntityIndex = 9;
+    planetPage.TerrainEntityVersion = 1;
+    planetPage.Face = 4;
+    planetPage.PageX = 21;
+    planetPage.PageZ = 30;
+    planetPage.PhysicsHandleIndex = 13;
+    planetPage.PhysicsHandleGeneration = 6;
+    world.AddComponentImmediate(planetPageEntity, planetPage);
 
     const auto pageClone = DuplicateOne(world, pageEntity);
     ASSERT_TRUE(pageClone.IsValid());
@@ -1221,22 +1224,23 @@ TEST_F(TerrainEntityDuplicateTests, DuplicateDoesNotInheritColliderPhysicsHandle
     EXPECT_EQ(clonedPage->PhysicsHandleGeneration, 0u);
     EXPECT_EQ(clonedPage->PageX, 3u) << "only the runtime handle is cleared";
 
-    const auto faceClone = DuplicateOne(world, faceEntity);
-    ASSERT_TRUE(faceClone.IsValid());
-    const auto* clonedFace = world.GetComponent<TerrainPlanetFaceCollider>(faceClone);
-    ASSERT_NE(clonedFace, nullptr);
-    EXPECT_EQ(clonedFace->PhysicsHandleIndex, 0u)
-        << "the copy names the source face's heightfield physics handle";
-    EXPECT_EQ(clonedFace->PhysicsHandleGeneration, 0u);
-    EXPECT_EQ(clonedFace->Face, 4u) << "only the runtime handle is cleared";
+    const auto planetPageClone = DuplicateOne(world, planetPageEntity);
+    ASSERT_TRUE(planetPageClone.IsValid());
+    const auto* clonedPlanetPage = world.GetComponent<TerrainPlanetPageCollider>(planetPageClone);
+    ASSERT_NE(clonedPlanetPage, nullptr);
+    EXPECT_EQ(clonedPlanetPage->PhysicsHandleIndex, 0u)
+        << "the copy names the source planet page's heightfield physics handle";
+    EXPECT_EQ(clonedPlanetPage->PhysicsHandleGeneration, 0u);
+    EXPECT_EQ(clonedPlanetPage->Face, 4u) << "only the runtime handle is cleared";
+    EXPECT_EQ(clonedPlanetPage->PageX, 21u);
 
     // The originals are untouched.
     const auto* sourcePage = world.GetComponent<TerrainPageCollider>(pageEntity);
     ASSERT_NE(sourcePage, nullptr);
     EXPECT_EQ(sourcePage->PhysicsHandleIndex, 11u);
-    const auto* sourceFace = world.GetComponent<TerrainPlanetFaceCollider>(faceEntity);
-    ASSERT_NE(sourceFace, nullptr);
-    EXPECT_EQ(sourceFace->PhysicsHandleIndex, 13u);
+    const auto* sourcePlanetPage = world.GetComponent<TerrainPlanetPageCollider>(planetPageEntity);
+    ASSERT_NE(sourcePlanetPage, nullptr);
+    EXPECT_EQ(sourcePlanetPage->PhysicsHandleIndex, 13u);
 }
 
 // A copied PhysicsBody carries the ORIGINAL's body and shape handles, and those
@@ -1265,12 +1269,6 @@ protected:
         settings.maxContactConstraints = 1024;
         settings.tempAllocatorBytes = 16u * 1024u * 1024u;
         PhysicsWorldService::Initialize(settings);
-
-        // Writeback reads an alpha PhysicsStepSystem owns in a function-scope
-        // static. Pin it so no earlier test in this process decides which pose
-        // these assertions read. Nothing here steps the world, so bodies stay
-        // exactly where they were created.
-        PhysicsWorldService::SetRenderInterpolationAlpha(1.0f);
     }
 
     void TearDown() override
@@ -1289,8 +1287,9 @@ protected:
 
         WorldTransform wt{};
         const Transform local =
-            Transform::FromTRS(position, Quaternion(1.0f, 0.0f, 0.0f, 0.0f), Vector3(1.0f, 1.0f, 1.0f));
-        std::memcpy(wt.matrix, local.matrix, sizeof(wt.matrix));
+            Transform::FromTRS(WorldPosition::FromVector3(position), Quaternion(1.0f, 0.0f, 0.0f, 0.0f), Vector3(1.0f, 1.0f, 1.0f));
+        wt.Position = local.Position;
+        wt.Basis = local.Basis;
         m_World.AddComponentImmediate(e, wt);
 
         m_World.AddComponentImmediate(e, PhysicsCollider{});
@@ -1321,24 +1320,24 @@ protected:
     void MoveTo(EntityHandle e, const Vector3& position)
     {
         const Transform local =
-            Transform::FromTRS(position, Quaternion(1.0f, 0.0f, 0.0f, 0.0f), Vector3(1.0f, 1.0f, 1.0f));
+            Transform::FromTRS(WorldPosition::FromVector3(position), Quaternion(1.0f, 0.0f, 0.0f, 0.0f), Vector3(1.0f, 1.0f, 1.0f));
         m_World.AddComponentImmediate(e, local);
 
         WorldTransform wt{};
         if (const auto* existing = m_World.GetComponent<WorldTransform>(e))
             wt = *existing;
-        std::memcpy(wt.matrix, local.matrix, sizeof(wt.matrix));
+        wt.Position = local.Position;
+        wt.Basis = local.Basis;
         ++wt.Version;
         m_World.AddComponentImmediate(e, wt);
     }
 
-    // Column-major: translation is column 3.
     Vector3 WorldPositionOf(EntityHandle e) const
     {
         const auto* wt = m_World.GetComponent<WorldTransform>(e);
         if (!wt)
             return Vector3(0.0f, 0.0f, 0.0f);
-        return Vector3(wt->matrix[12], wt->matrix[13], wt->matrix[14]);
+        return wt->GetPosition() - WorldPosition{};
     }
 
     World m_World;
@@ -1687,7 +1686,7 @@ TEST_F(PhysicsEntityDuplicateTests, DuplicateIsNotBlendedFromTheOriginalsPreviou
         auto* body = m_World.GetComponentForWrite<PhysicsBody>(original);
         ASSERT_NE(body, nullptr);
         body->prevPhysicsTransform = pw->GetBodyTransform(body->body);
-        body->prevPhysicsTransform.position.x = -40.0f;
+        body->prevPhysicsTransform.position.X = -40.0;
         body->hasPrevPhysicsTransform = true;
     }
 
@@ -1699,14 +1698,15 @@ TEST_F(PhysicsEntityDuplicateTests, DuplicateIsNotBlendedFromTheOriginalsPreviou
 
     // Mid-step. Without this the interpolation branch is dead and the
     // assertion below cannot distinguish a cleared flag from a copied one.
-    PhysicsWorldService::SetRenderInterpolationAlpha(0.5f);
-    ASSERT_LT(PhysicsWorldService::GetRenderInterpolationAlpha(), 1.0f);
+    auto& clock = m_World.GetSimulationClock();
+    clock.Advance(clock.GetFixedDeltaSeconds() * 0.5);
+    ASSERT_LT(clock.GetAlpha(), 1.0f);
 
     // The clone's own body is at x=20, so the only route to any other x is the
     // interpolation branch reading a snapshot the clone did not take.
     const auto* cloneBody = m_World.GetComponent<PhysicsBody>(clone);
     ASSERT_NE(cloneBody, nullptr);
-    ASSERT_NEAR(pw->GetBodyTransform(cloneBody->body).position.x, 20.0f, 1.0e-3f);
+    ASSERT_NEAR(pw->GetBodyTransform(cloneBody->body).position.X, 20.0, 1.0e-3);
 
     RunWriteback();
 
@@ -2166,8 +2166,9 @@ protected:
 
         WorldTransform wt{};
         const Transform local =
-            Transform::FromTRS(position, Quaternion(1.0f, 0.0f, 0.0f, 0.0f), Vector3(1.0f, 1.0f, 1.0f));
-        std::memcpy(wt.matrix, local.matrix, sizeof(wt.matrix));
+            Transform::FromTRS(WorldPosition::FromVector3(position), Quaternion(1.0f, 0.0f, 0.0f, 0.0f), Vector3(1.0f, 1.0f, 1.0f));
+        wt.Position = local.Position;
+        wt.Basis = local.Basis;
         m_World.AddComponentImmediate(e, wt);
 
         CharacterController cc{};

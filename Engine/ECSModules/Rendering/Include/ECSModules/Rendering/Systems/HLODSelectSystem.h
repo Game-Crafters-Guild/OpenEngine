@@ -64,6 +64,8 @@ private:
     // edit anywhere re-runs the bounded O(total members) scan that frame.
     ECS::ChangeGate m_TransformEditGate;
     ECS::ChangeGate m_MeshRendererEditGate;
+    // A destroy that empties its chunk stamps no column, so the structural version also opens the scan.
+    std::size_t m_StructuralVersion = 0;
 };
 
 } // namespace Engine::Renderer

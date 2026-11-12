@@ -686,7 +686,7 @@ void ApplyInspectorEntityIcon(ECS::World* world,
     const auto* phPlaceholder = world->GetComponent<Components::PolyhavenPlaceholder>(handle);
     if (phPlaceholder && phPlaceholder->slug[0] != '\0')
     {
-        std::filesystem::path thumbPath = PolyhavenService::GetCacheDir() / (std::string(phPlaceholder->Slug()) + ".png");
+        std::filesystem::path thumbPath = PolyhavenService::GetThumbnailPath(std::string(phPlaceholder->Slug()));
         std::error_code ec;
         if (std::filesystem::exists(thumbPath, ec) && uiManager && ctx->Assets)
         {

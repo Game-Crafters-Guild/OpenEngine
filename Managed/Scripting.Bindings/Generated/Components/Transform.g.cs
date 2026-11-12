@@ -23,17 +23,17 @@ namespace GameEngine.Scripting
             this = global::GameEngine.ECS.ComponentType<Transform>.Default;
         }
 
-        [InlineArray(16)]
-        public struct MatrixArray
-        {
-            private float m_Element;
-        }
-
         [FieldOffset(0)]
-        public MatrixArray Matrix;
+        public WorldPosition Position;
+
+        [FieldOffset(24)]
+        public Matrix3x3 Basis;
+
+        [FieldOffset(60)]
+        private uint m_Padding;
     }
 
-    [StructLayout(LayoutKind.Explicit, Size = 68)]
+    [StructLayout(LayoutKind.Explicit, Size = 64)]
     [BuiltInComponent("GameEngine::Components::WorldTransform")]
     public readonly partial struct WorldTransform : IComponent
     {
@@ -45,16 +45,13 @@ namespace GameEngine.Scripting
             this = global::GameEngine.ECS.ComponentType<WorldTransform>.Default;
         }
 
-        [InlineArray(16)]
-        public struct MatrixArray
-        {
-            private float m_Element;
-        }
-
         [FieldOffset(0)]
-        public readonly MatrixArray Matrix;
+        public readonly WorldPosition Position;
 
-        [FieldOffset(64)]
+        [FieldOffset(24)]
+        public readonly Matrix3x3 Basis;
+
+        [FieldOffset(60)]
         public readonly uint Version;
     }
 }

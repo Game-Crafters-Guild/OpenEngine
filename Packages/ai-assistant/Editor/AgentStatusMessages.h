@@ -9,10 +9,27 @@ namespace GameEngine
 struct CliSessionSummary;
 struct ConversationMessage;
 
+/// The setup states the panel's status line and the settings page's Setup row share:
+/// before a local session's setup check has passed (CliSessionProvider::SetupChecked),
+/// while a check runs, and after it passed.
+inline constexpr const char* kNotCheckedStatus = "Not checked";
+inline constexpr const char* kCheckingSetupStatus = "Checking setup...";
+inline constexpr const char* kReadyStatus = "Ready";
+/// The settings page's Setup row after a check that passed with a warning: the assistant
+/// runs, as a conversation only.
+inline constexpr const char* kReadyLimitedStatus = "Ready, limited";
+/// What the panel's status line says after the setup check refused a turn
+/// (ConversationMessage::NotReady).
+inline constexpr const char* kNotReadyStatus = "Not ready";
+
 /// What the panel's status line says after a turn's session could not be continued
 /// (AgentConversationController::SessionWasLost).
 inline constexpr const char* kSessionLostStatus =
     "Reply failed: the session could not be continued, so Retry starts a new session";
+
+/// What the panel's status line says after the Failed reply `reply`: kNotReadyStatus when
+/// the setup check refused the turn, kSessionLostStatus when `sessionWasLost`, else "Reply failed".
+std::string FailedReplyStatus(const ConversationMessage& reply, bool sessionWasLost);
 
 /// What the panel's status line says after Copy: "Reply copied", or, for a reply
 /// truncated at Conversation::kMaxMessageBytes, that only its first 64 KB was copied.

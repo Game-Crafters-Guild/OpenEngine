@@ -109,6 +109,7 @@ std::string ShaderProgramIndex::CurrentCompileInputs()
     std::string inputs(ShaderCompileService::CacheKeyTarget());
     inputs += IsCompatShaderProfile() ? ";profile=compat" : ";profile=full";
     inputs += AreInterpolationFunctionsAvailable() ? ";interpolation=on" : ";interpolation=off";
+    inputs += AreClipDistancesAvailable() ? ";clipdistance=on" : ";clipdistance=off";
     return inputs;
 }
 

@@ -19,8 +19,8 @@
 #include "Components/Rendering/LocalBounds.h"
 #include "Components/Spline/SplineComponent.h"
 #include "Components/Transform.h"
-#include "Components/Rendering/WorldSectorCoord.h"
 #include "Editor/Entities/EditorComponentTraits.h"
+#include "Editor/Entities/EditorECSHelpers.h"
 #include "SceneView/LightGizmo.h"
 #include "SceneView/SceneViewProjection.h"
 #include "SplineECS/SplineService.h"
@@ -34,8 +34,8 @@
 #include "Mathematics/VectorOps.h"
 #include "Mathematics/Vector2.h"
 #include "Mathematics/Vector3.h"
+#include "Mathematics/WorldPosition.h"
 #include "PhysicsECS/Components/PhysicsBody.h"
-#include "PhysicsECS/PhysicsWorldService.h"
 #include "Picking/ScenePick.h"
 #include "Types/Color.h"
 #include "Types/ColorUtils.h"
@@ -193,7 +193,7 @@ inline TRS GetLocalTRS(Entity& e)
     TRS t = IdentityTRS();
     if (const Transform* xf = e.Get<Transform>())
     {
-        t.position = xf->GetPosition();
+        t.position = xf->GetPosition() - Mathematics::WorldPosition{};
         t.rotation = xf->GetRotation();
         t.scale = xf->GetScale();
     }
@@ -351,23 +351,17 @@ inline bool TryBuildWorldMatrixForEntity(World* world, EntityHandle entity, Math
     else if (world->GetComponent<Transform>(entity))
     {
         const TRS worldTrs = ComputeWorldTRSForEntity(world, entity);
-        const Transform localMatrix = Transform::FromTRS(worldTrs.position, worldTrs.rotation, worldTrs.scale);
-        std::memcpy(worldXf.matrix, localMatrix.matrix, sizeof(localMatrix.matrix));
+        const Transform pose = Transform::FromTRS(Mathematics::WorldPosition::FromVector3(worldTrs.position),
+                                                  worldTrs.rotation, worldTrs.scale);
+        worldXf.Position = pose.Position;
+        worldXf.Basis = pose.Basis;
     }
     else
     {
         return false;
     }
 
-    // Compose the sector so the gizmo, world-position queries, and measure
-    // endpoints land on the SAME absolute world position the mesh renders and
-    // picks at. ComposeEffectiveWorldTransform is the single source of truth
-    // (also used by SceneTlas + SceneRaycast); a null/zero sector returns
-    // the matrix unchanged (dark-ship for untagged entities).
-    const auto* sector = world->GetComponent<Components::WorldSectorCoord>(entity);
-    const WorldTransform composed =
-        Components::ComposeEffectiveWorldTransform(worldXf, sector, Components::kWorldSectorSize);
-    outMatrix = Mathematics::Matrix4x4::FromColumnMajor(composed.matrix);
+    outMatrix = worldXf.ToMatrix4x4(worldXf.GetPosition() - Mathematics::WorldPosition{});
     return true;
 }
 
@@ -486,18 +480,20 @@ inline void PreviewWorldTransform(ECS::World* world,
     if (!world || !entity.IsValid() || !world->IsValid(entity))
         return;
 
-    const Transform worldMatrix = Transform::FromTRS(worldPos, worldRot, worldScale);
+    const Transform worldPose =
+        Transform::FromTRS(Mathematics::WorldPosition::FromVector3(worldPos), worldRot, worldScale);
     WorldTransform preview{};
     if (const auto* existing = world->GetComponent<WorldTransform>(entity))
         preview = *existing;
 
-    if (std::memcmp(preview.matrix, worldMatrix.matrix, sizeof(preview.matrix)) == 0 &&
+    if (std::memcmp(&preview, &worldPose, Components::kTransformPoseBytes) == 0 &&
         world->GetComponent<WorldTransform>(entity))
     {
         return;
     }
 
-    std::memcpy(preview.matrix, worldMatrix.matrix, sizeof(preview.matrix));
+    preview.Position = worldPose.Position;
+    preview.Basis = worldPose.Basis;
     ++preview.Version;
     world->AddComponentImmediate(entity, preview);
 }
@@ -523,7 +519,7 @@ inline bool MoveEntityWorldPositionPreservingRotationScale(ECS::World* world,
                                                               parentPos,
                                                               parentRot,
                                                               parentScale);
-    const Transform updated = Transform::FromTRS(newLocalPos,
+    const Transform updated = Transform::FromTRS(Mathematics::WorldPosition::FromVector3(newLocalPos),
                                                  transform->GetRotation(),
                                                  transform->GetScale());
     {
@@ -534,42 +530,6 @@ inline bool MoveEntityWorldPositionPreservingRotationScale(ECS::World* world,
     return true;
 }
 
-inline bool TrySetPhysicsBodyWorldPose(ECS::World* world,
-                                       ECS::EntityHandle entity,
-                                       const Vector3& worldPos,
-                                      const Quaternion& worldRot)
-{
-    if (!world || !entity.IsValid() || !world->IsValid(entity))
-    {
-        return false;
-    }
-
-    auto* pw = PhysicsECS::PhysicsWorldService::TryGet();
-    if (!pw)
-    {
-        return false;
-    }
-
-    auto* body = world->GetComponentForWrite<PhysicsBody>(entity);
-    if (!body || !body->initialized || !pw->IsBodyValid(body->body))
-    {
-        return false;
-    }
-
-    Physics::Transform pt{};
-    pt.position = Physics::Vector3(worldPos.x, worldPos.y, worldPos.z);
-    const auto& wq = worldRot.GetGLM();
-    pt.rotation = Physics::Quaternion(wq.w, wq.x, wq.y, wq.z);
-    pw->SetBodyTransform(body->body, pt, Physics::ActivationMode::Activate);
-    pw->SetLinearVelocity(body->body, Physics::Vector3(0.0f, 0.0f, 0.0f));
-    pw->SetAngularVelocity(body->body, Physics::Vector3(0.0f, 0.0f, 0.0f));
-
-    // Avoid a one-frame interpolation smear after teleports/edits.
-    body->prevPhysicsTransform = pt;
-    body->hasPrevPhysicsTransform = true;
-
-    return true;
-}
 } // namespace
 
 void TransformTranslateGizmo::SetPivot(const Vector3& position)
@@ -3010,7 +2970,7 @@ void TransformTool::EnsureTransformDragBaselines(GameEngine::ECS::World* world)
 
         TransformDragBaseline base{};
         base.entity = entity;
-        base.localPos = t->GetPosition();
+        base.localPos = t->GetPosition() - Mathematics::WorldPosition{};
         base.localRot = t->GetRotation();
         base.localScale = t->GetScale();
 
@@ -3103,9 +3063,10 @@ void TransformTool::ApplyTranslationDelta(const Vector3& deltaWorld)
                                                                       base.parentRot,
                                                                       base.parentScale);
 
-            (void)TrySetPhysicsBodyWorldPose(world, base.entity, targetWorldPos, base.worldRot);
+            (void)Editor::TeleportPhysicsBody(world, base.entity, targetWorldPos, base.worldRot);
 
-            Transform updated = Transform::FromTRS(newLocalPos, base.localRot, base.localScale);
+            Transform updated = Transform::FromTRS(Mathematics::WorldPosition::FromVector3(newLocalPos),
+                                                   base.localRot, base.localScale);
             {
                 GE_CPU_PROFILE_SCOPE("ECS.AddComponentImmediate.Transform");
                 world->AddComponentImmediate(base.entity, updated);
@@ -3248,14 +3209,15 @@ void TransformTool::ApplyRotationDeltaWorldAxis(const Vector3& worldAxis, float 
                 Quaternion parentInvRot = parentRot.Conjugated();
                 Quaternion localRot = (parentInvRot * newWorldRot).Normalized();
 
-                Transform updated = Transform::FromTRS(newLocalPos, localRot, localScale);
+                Transform updated =
+                    Transform::FromTRS(Mathematics::WorldPosition::FromVector3(newLocalPos), localRot, localScale);
                 {
                     GE_CPU_PROFILE_SCOPE("ECS.AddComponentImmediate.Transform");
                     world->AddComponentImmediate(entity, updated);
                 }
             }
 
-            (void)TrySetPhysicsBodyWorldPose(world, entity, entityWorldPos, newWorldRot);
+            (void)Editor::TeleportPhysicsBody(world, entity, entityWorldPos, newWorldRot);
         }
 
         if (measurePivot)
@@ -3322,7 +3284,7 @@ void TransformTool::ApplyScaleDelta(const Vector3& deltaScale)
             if (!t)
                 continue;
 
-            Vector3 localPos = t->GetPosition();
+            const Mathematics::WorldPosition localPos = t->GetPosition();
             Quaternion localRot = t->GetRotation();
             Vector3 localScale = t->GetScale();
 
@@ -3645,7 +3607,8 @@ void TransformTool::CollectMarqueePicks(std::vector<GameEngine::ECS::EntityHandl
             return;
 
         const GameEngine::Mathematics::BoundingBox kDefault{};
-        const auto box = (bounds ? bounds->Box : kDefault).TransformToAABB(worldXf.matrix);
+        const auto box = (bounds ? bounds->Box : kDefault).TransformToAABB(
+            worldXf.ToMatrix4x4(worldXf.GetPosition() - Mathematics::WorldPosition{}).Data());
 
         Mathematics::Vector2 corners[8];
         int   cornerCount = 0;

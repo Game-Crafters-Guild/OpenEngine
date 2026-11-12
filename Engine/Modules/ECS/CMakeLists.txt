@@ -20,6 +20,7 @@ set(ECS_SOURCES
     Source/UnresolvedComponentStore.cpp
     Source/OrderedHandleSet.cpp
     Source/SystemWaveTrace.cpp
+    Source/SimulationClock.cpp
 )
 
 # Core ECS header files
@@ -53,6 +54,7 @@ set(ECS_HEADERS
     Include/ECS/ECSTemplates.h
     Include/ECS/Systems.h
     Include/ECS/SystemWaveTrace.h
+    Include/ECS/SimulationClock.h
     Include/ECS/WorldTemplateImplementations.inl
     Include/ECS/OrderedHandleSet.h
 )
@@ -73,6 +75,7 @@ target_include_directories(ECS PRIVATE Source)
 # Memory: the wave runner's ScratchScope (Include/ECS/Systems.h). An executable that links ECS
 # without Engine links Memory too: OBJECT objects do not reach it transitively.
 target_link_libraries(ECS PUBLIC Logger JobSystem Memory Types)
+target_link_libraries(ECS PRIVATE Mathematics)
 
 # Platform-specific definitions
 if(WIN32)
@@ -103,8 +106,7 @@ if(MSVC)
         target_compile_definitions(ECS PUBLIC ECS_SIMD_ENABLED=1 ECS_SIMD_ARM64=1)
         message(STATUS "ECS: Enabling ARM64 NEON SIMD support (MSVC, system processor ARM64)")
     else()
-        # x64 AVX2 support
-        target_compile_options(ECS PRIVATE /arch:AVX2)
+        # x64 AVX2 support (/arch:AVX2 is set for every target at the top level)
         target_compile_definitions(ECS PUBLIC ECS_SIMD_ENABLED=1 ECS_SIMD_X64=1)
         message(STATUS "ECS: Enabling x64 AVX2 SIMD support (MSVC, assuming x64 target)")
     endif()
@@ -124,7 +126,6 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         include(CheckCXXCompilerFlag)
         check_cxx_compiler_flag("-mavx2" COMPILER_SUPPORTS_AVX2)
         if(COMPILER_SUPPORTS_AVX2)
-            target_compile_options(ECS PRIVATE -mavx2)
             target_compile_definitions(ECS PUBLIC ECS_SIMD_ENABLED=1 ECS_SIMD_X64=1)
             message(STATUS "ECS: Enabling x64 AVX2 SIMD support (GCC/Clang)")
         endif()

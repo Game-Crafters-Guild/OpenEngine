@@ -42,8 +42,6 @@
 #include "CBTTerrain/CBTPlanetShading.h" // SphereCornerOccluded, kReliefEnvelope (CPU horizon mirror)
 #include "CBTTerrain/CBTSphereRoots.h"
 #include "CBTTerrain/FarFieldReseedDetector.h"
-#include "CBTTerrain/SphereSculptLayer.h"  // ResolveSculptPagePoolCount
-#include "CBTTerrain/SphereSculptPaging.h" // MakeSphereSculptGeometry
 #include "CBTTestHarness.h"
 #include "Mathematics/MatrixOps.h"
 #include "Mathematics/Vector3.h"
@@ -138,7 +136,7 @@ class CBTFarFieldReseedProbe : public ::testing::Test
     }
 
     void BuildHerParams(CBTFrameParams& p, float radius, float altM, float splitPx, float mergePx,
-                        const SphereSculptGeometry& geom, Vector3 lookDir = kDescentDir)
+                        Vector3 lookDir = kDescentDir)
     {
         using namespace GameEngine::Mathematics;
         p = CBTFrameParams{};
@@ -146,10 +144,6 @@ class CBTFarFieldReseedProbe : public ::testing::Test
         p.PlanetParams[1] = 1250.0f;
         p.PlanetParams[2] = 6.0f;
         p.PlanetParams[3] = 4.0f;
-        p.AtlasParams0[0] = static_cast<float>(geom.VirtualDim);
-        p.AtlasParams0[1] = static_cast<float>(geom.Cap);
-        p.AtlasParams0[2] = static_cast<float>(geom.PagesPerAxis);
-        p.AtlasParams0[3] = static_cast<float>(geom.PoolPageCount);
         p.Screen[0] = static_cast<float>(kScreenW);
         p.Screen[1] = static_cast<float>(kScreenH);
         p.Screen[2] = splitPx;
@@ -183,15 +177,14 @@ class CBTFarFieldReseedProbe : public ::testing::Test
     }
 
     uint32_t DescendToSaturation(CBTInstance& inst, CBTClassifyDesc& c, float radius, float restAltM,
-                                 float splitPx, const SphereSculptGeometry& geom,
-                                 Vector3 lookDir = kDescentDir)
+                                 float splitPx, Vector3 lookDir = kDescentDir)
     {
         const float descent[] = {160000.0f, 60000.0f, 24000.0f, 12000.0f, 7000.0f, restAltM};
         uint32_t frame = 0;
         for (int di = 0; di < 6; ++di)
         {
             CBTFrameParams p;
-            BuildHerParams(p, radius, descent[di], splitPx, splitPx * 0.5f, geom, lookDir);
+            BuildHerParams(p, radius, descent[di], splitPx, splitPx * 0.5f,lookDir);
             for (uint32_t f = 0; f < 40u; ++f)
             {
                 c.GateVertexEval = (frame == 0u) ? 0u : 1u;
@@ -209,8 +202,7 @@ class CBTFarFieldReseedProbe : public ::testing::Test
                        std::array<uint32_t, kSphereRootCount>& rootLive, uint32_t& visMask,
                        uint32_t& liveMask)
     {
-        const Vector3 eye = HerEye(radius, altM, lookDir);
-        const std::array<float, 3> C = {eye.x, eye.y, eye.z};
+        const Vector3 C = HerEye(radius, altM, lookDir);
         const float floorR = radius - kReliefEnvelope * std::abs(1250.0f);
         const auto heap = inst.DebugReadWords(CBTBinding::HeapID, kDefaultBisectorPoolSize * 2u);
         const auto vtx =
@@ -230,8 +222,8 @@ class CBTFarFieldReseedProbe : public ::testing::Test
             ++rootLive[root];
             liveMask |= (1u << root);
             auto corner = [&](uint32_t ci) {
-                std::array<float, 3> P;
-                std::memcpy(P.data(), &vtx[s * kVertexWordsPerSlot + ci * 4u], 3 * sizeof(float));
+                Vector3 P;
+                std::memcpy(P.v, &vtx[s * kVertexWordsPerSlot + ci * 4u], sizeof(P.v));
                 return P;
             };
             if (!(SphereCornerOccluded(corner(0), C, floorR) &&
@@ -256,7 +248,6 @@ class CBTFarFieldReseedProbe : public ::testing::Test
 TEST_F(CBTFarFieldReseedProbe, RegionFreeOfRefinedFaceIsConforming)
 {
     const float radius = 50000.0f;
-    const auto geom = MakeSphereSculptGeometry(radius, ResolveSculptPagePoolCount());
 
     CBTInstance inst;
     ASSERT_TRUE(inst.Initialize(*m_Device, m_KernelSet));
@@ -265,7 +256,7 @@ TEST_F(CBTFarFieldReseedProbe, RegionFreeOfRefinedFaceIsConforming)
     c.Mode = kClassifyScreenSpace;
     c.TargetDepth = inst.GetBaseDepth() + kMaxDecodeSubdiv;
     c.NearFieldGate = 1u;
-    uint32_t frame = DescendToSaturation(inst, c, radius, 4000.0f, 6.5f, geom);
+    uint32_t frame = DescendToSaturation(inst, c, radius, 4000.0f, 6.5f);
     ASSERT_EQ(ValidationErrors(inst), 0u) << "the saturated tree must start conforming";
 
     // The deeply-refined near face = the roots holding the bulk of the pool. Free exactly those.
@@ -292,7 +283,7 @@ TEST_F(CBTFarFieldReseedProbe, RegionFreeOfRefinedFaceIsConforming)
     // Validate the freed state by running one update at the AWAY pose (so the freed face is not
     // immediately re-refined) — the tree must be conforming through the free AND the next update.
     CBTFrameParams p;
-    BuildHerParams(p, radius, 4000.0f, 6.5f, 3.25f, geom, kAwayDir);
+    BuildHerParams(p, radius, 4000.0f, 6.5f, 3.25f,kAwayDir);
     c.GateVertexEval = 0u;
     RunFrame(inst, c, p, frame++);
     const uint32_t valErrors = ValidationErrors(inst);
@@ -320,7 +311,6 @@ TEST_F(CBTFarFieldReseedProbe, RegionFreeOfRefinedFaceIsConforming)
 TEST_F(CBTFarFieldReseedProbe, FreedRegionReentryRebuildsConforming)
 {
     const float radius = 50000.0f;
-    const auto geom = MakeSphereSculptGeometry(radius, ResolveSculptPagePoolCount());
 
     CBTInstance inst;
     ASSERT_TRUE(inst.Initialize(*m_Device, m_KernelSet));
@@ -329,7 +319,7 @@ TEST_F(CBTFarFieldReseedProbe, FreedRegionReentryRebuildsConforming)
     c.Mode = kClassifyScreenSpace;
     c.TargetDepth = inst.GetBaseDepth() + kMaxDecodeSubdiv;
     c.NearFieldGate = 1u;
-    uint32_t frame = DescendToSaturation(inst, c, radius, 4000.0f, 6.5f, geom);
+    uint32_t frame = DescendToSaturation(inst, c, radius, 4000.0f, 6.5f);
 
     std::array<uint32_t, kSphereRootCount> rootLive{};
     uint32_t visMask = 0u, liveMask = 0u;
@@ -341,7 +331,7 @@ TEST_F(CBTFarFieldReseedProbe, FreedRegionReentryRebuildsConforming)
     inst.RegionFreeToBase(refinedMask);
     // Settle one away-frame, then look back at the freed face and rebuild.
     CBTFrameParams pa;
-    BuildHerParams(pa, radius, 4000.0f, 6.5f, 3.25f, geom, kAwayDir);
+    BuildHerParams(pa, radius, 4000.0f, 6.5f, 3.25f,kAwayDir);
     c.GateVertexEval = 0u;
     RunFrame(inst, c, pa, frame++);
     const CBTTessellationStats sFreed = inst.ReadTessellationStats();
@@ -349,7 +339,7 @@ TEST_F(CBTFarFieldReseedProbe, FreedRegionReentryRebuildsConforming)
     for (uint32_t f = 0; f < 40u; ++f, ++frame)
     {
         CBTFrameParams p;
-        BuildHerParams(p, radius, 4000.0f, 6.5f, 3.25f, geom, kDescentDir); // look back
+        BuildHerParams(p, radius, 4000.0f, 6.5f, 3.25f,kDescentDir); // look back
         c.GateVertexEval = 1u;
         RunFrame(inst, c, p, frame);
     }
@@ -376,7 +366,6 @@ TEST_F(CBTFarFieldReseedProbe, FreedRegionReentryRebuildsConforming)
 TEST_F(CBTFarFieldReseedProbe, HorizonInvisibleFarFieldIsNotStranded)
 {
     const float radius = 50000.0f;
-    const auto geom = MakeSphereSculptGeometry(radius, ResolveSculptPagePoolCount());
 
     CBTInstance inst;
     ASSERT_TRUE(inst.Initialize(*m_Device, m_KernelSet));
@@ -385,7 +374,7 @@ TEST_F(CBTFarFieldReseedProbe, HorizonInvisibleFarFieldIsNotStranded)
     c.Mode = kClassifyScreenSpace;
     c.TargetDepth = inst.GetBaseDepth() + kMaxDecodeSubdiv;
     c.NearFieldGate = 1u;
-    uint32_t frame = DescendToSaturation(inst, c, radius, 4000.0f, 6.5f, geom);
+    uint32_t frame = DescendToSaturation(inst, c, radius, 4000.0f, 6.5f);
 
     // (a) At the static descent pose: where is the pool? Sum the live count of horizon-INVISIBLE roots
     // vs VISIBLE roots. The design predicts the invisible far field holds ~90%; measurement shows the
@@ -420,7 +409,7 @@ TEST_F(CBTFarFieldReseedProbe, HorizonInvisibleFarFieldIsNotStranded)
     for (uint32_t f = 0; f < 60u; ++f, ++frame)
     {
         CBTFrameParams p;
-        BuildHerParams(p, radius, 4000.0f, 6.5f, 3.25f, geom, kAwayDir);
+        BuildHerParams(p, radius, 4000.0f, 6.5f, 3.25f,kAwayDir);
         c.GateVertexEval = 1u;
         RunFrame(inst, c, p, frame);
     }

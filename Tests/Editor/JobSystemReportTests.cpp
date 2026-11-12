@@ -17,6 +17,7 @@ JobSystemStatistics SampleStatistics()
     stats.ComputeWorkers = 2;
     stats.BlockingThreads = 1;
     stats.Normal = {3, 1};
+    stats.Awaited = {4, 0};
     stats.Background = {7, 1};
     stats.Channels.push_back({"Script compiles", 2, 1, 1, 1'500'000, 9});
     stats.Threads.push_back({JobSystemStatistics::ThreadKind::Worker, 0, "Normal", 0});
@@ -24,6 +25,7 @@ JobSystemStatistics SampleStatistics()
     stats.Threads.push_back({JobSystemStatistics::ThreadKind::Blocking, 0, nullptr, 0});
     stats.TasksExecuted = 42;
     stats.GlobalPushes = 30;
+    stats.AwaitedPops = 6;
     stats.BackgroundPops = 11;
     stats.BackstopTimeouts = 5;
     return stats;
@@ -39,12 +41,14 @@ TEST(JobSystemReportTest, ReportsEveryStatisticUnderItsName)
     EXPECT_EQ(report["blockingThreads"], 1);
     EXPECT_EQ(report["lanes"]["normal"]["queued"], 3);
     EXPECT_EQ(report["lanes"]["normal"]["running"], 1);
+    EXPECT_EQ(report["lanes"]["awaited"]["queued"], 4);
     EXPECT_EQ(report["lanes"]["background"]["queued"], 7);
     EXPECT_EQ(report["tasksExecuted"], 42);
     EXPECT_EQ(report["census"]["globalPushes"], 30);
+    EXPECT_EQ(report["census"]["awaitedPops"], 6);
     EXPECT_EQ(report["census"]["backgroundPops"], 11);
     EXPECT_EQ(report["census"]["backstopTimeouts"], 5);
-    EXPECT_EQ(report["census"].size(), 10u);
+    EXPECT_EQ(report["census"].size(), 12u);
 
     ASSERT_EQ(report["channels"].size(), 1u);
     const nlohmann::json& channel = report["channels"][0];

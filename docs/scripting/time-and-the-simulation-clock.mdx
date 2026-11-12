@@ -1,0 +1,97 @@
+---
+title: Time and the simulation clock
+description: The frame clock and the fixed-step simulation clock of a world, which one a system runs on, and how pause, time scale and the render blend work.
+sidebar:
+  order: 10
+---
+
+The engine has two clocks. The frame clock gives the length of the last frame, which changes with the frame rate. The simulation clock of a world turns those frame lengths into fixed steps, so the game state comes out the same at any frame rate.
+
+## The two clocks
+
+| Clock | Where | Gives | Use it for |
+|---|---|---|---|
+| Frame clock | `Time::GetDeltaTime()` in `Engine/Include/Core/Time.h` | The seconds of the last frame. | What the player sees and touches once per frame: the camera and the UI. |
+| Simulation clock | `World::GetSimulationClock()` in `Engine/Modules/ECS/Include/ECS/SimulationClock.h` | Whole steps of a fixed length, 1/60 s by default, and the tick, the count of steps. | The game state: physics, AI, gameplay rules, and the replays, saves and network play that read them. |
+
+Each world has its own simulation clock. `SystemManager::Update` advances it once per frame with the frame delta.
+
+## The simulation clock
+
+A system runs on the frame clock unless its class declares the simulation cadence:
+
+:::::tabs
+::::tab[C++]
+
+```cpp title="A system that runs once per simulation step"
+#include "ECS/Systems.h"
+
+class GuardPatrolSystem : public ECS::ISystem
+{
+public:
+    static constexpr ECS::SystemCadence Cadence = ECS::SystemCadence::Simulation;
+
+    const char* GetName() const override { return "GuardPatrolSystem"; }
+    void Update(ECS::World& world, float deltaTime) override; // deltaTime is the fixed step
+};
+```
+
+::::
+::::tab[C#]
+
+:::caution[C# binding pending]
+No managed call yet for the clock or the cadence; use `World::GetSimulationClock()` and `ECS::SystemCadence` from C++. Tracked as https://github.com/Game-Crafters-Guild/OpenEngine/issues/86.
+:::
+
+::::
+:::::
+
+| Cadence | Runs | `deltaTime` | Pick it when |
+|---|---|---|---|
+| `Frame` (the default) | Once per frame. | The gameplay seconds of the frame (see the next table). | The system reads input once per frame or presents the state. |
+| `Simulation` | Once per step: 0, 1 or more times in a frame. | The fixed step. | The result must not change with the frame rate, or the system must run the same way in a replay. |
+
+The simulation systems run as one block, once per step. The block runs after every frame system that a simulation system depends on, and before every frame system that depends on a simulation system. Inside the block, the dependencies between the simulation systems give the order. When a simulation system depends on a frame system that depends on another simulation system, the systems after that frame system run in a second block. Each block runs once per step and sees the same ticks. `AddParallelSystem` takes frame systems only.
+
+The physics step is a simulation system: physics advances once per step. The physics writeback is a frame system after it.
+
+A frame system gets gameplay time unless its class declares real time:
+
+```cpp title="A frame system that runs while the game is paused"
+class FlyCameraSystem : public ECS::ISystem
+{
+public:
+    static constexpr ECS::SystemTime Time = ECS::SystemTime::Real;
+};
+```
+
+| Time | `deltaTime` of a frame system | Pick it when |
+|---|---|---|
+| `Gameplay` (the default) | The frame delta, at most 0.25 s, times the time scale. It is 0 while the game is paused. | The system moves gameplay things or gameplay time: animation, particles, agents, the time of day. |
+| `Real` | The frame delta. | The system must keep working while the game is paused: an editor tool, a fly camera, an authoring delay. |
+
+A simulation system always gets the fixed step.
+
+### How a frame turns into steps
+
+- The clock adds the frame delta. A longer frame than 0.25 s, such as a hitch or a debugger break, adds only 0.25 s.
+- A frame runs every whole step the clock holds, up to 4 steps. The clock drops the whole steps over that limit, so the frames after a hitch run at the normal rate and do not catch up.
+- A frame delta a little short of a whole number of steps, by less than 1e-5 of a step, counts as those whole steps. A float frame delta of `3.0f / 60.0f` runs 3 steps of the float step `1.0f / 60.0f`.
+- The part of a step that is left after the frame's steps is the alpha, from 0 to 1 (`GetAlpha`). The physics writeback blends each body from its pose before the last step to its pose after it by the alpha, so motion looks smooth when the frame rate and the step rate differ.
+
+The scene's physics settings set the clock when physics starts: Fixed Time Step is the step length and Max Sub Steps is the most steps in a frame. The clock refuses a Fixed Time Step of 0 or less with an error in the log and keeps its step; Max Sub Steps of 0 or less keeps the clock's step cap. When physics starts, the clock also starts again at tick 0, so every play session steps the same ticks for the same frame deltas.
+
+### Pause and time scale
+
+| Call | Effect |
+|---|---|
+| `SetTimeScale(scale)` | Multiplies the frame delta: 1 is real time, 0.5 is slow motion, 2 is twice as fast. A negative value is refused. |
+| `SetTimeScale(0.0)` | The pause: the clock runs no step, and every frame system with gameplay time gets a delta of 0, so animation, timelines, value curves, particles, navigation agents, the time of day and the ocean waves hold. The alpha stays, so bodies hold their blended poses. The frame systems still run, so the camera and the UI keep working. To resume, set the scale the game used before. The editor's Pause button sets 0; Resume and Stop set the scale back. |
+| `SetFixedDeltaSeconds(seconds)` | Sets the step length. A value of 0 or less is refused. |
+| `SetMaxStepsPerFrame(steps)` | Sets the most steps in a frame. 0 is refused. |
+
+The same frame deltas give the same steps and the same ticks, so a run fed the recorded frame deltas of another run steps the same way.
+
+### Saves
+
+A C++ game save keeps the tick. Set `SceneWriteOptions::writeSimulationTick` when you call `Scene::WriteSceneFile`. The `[scene]` header then holds `simulation_tick=<tick>`. A load through the scene loader clears the world and restores that tick through `SimulationClock::Restore`, and so does any other load that clears the world. Counts in ticks (AI schedules, cooldowns, timers) then continue from the saved values. An additive load keeps the tick of the world it loads into. A scene saved without the option keeps the world's tick on load, and an authored scene leaves the option off. When physics starts, it sets the tick to 0, so load a save after the first frame of the session, as a save menu does. C# has no call yet to save a scene with the tick or to read the clock; use the C++ calls above.

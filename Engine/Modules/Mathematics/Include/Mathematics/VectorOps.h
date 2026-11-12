@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Mathematics/MulAdd.h"
+
 #include <cmath>
 
 namespace GameEngine {
@@ -28,26 +30,26 @@ inline void Add3(const float a[3], const float b[3], float r[3])
 
 inline void MulAdd3(const float a[3], float s, const float b[3], float r[3])
 {
-    r[0] = a[0] + s * b[0];
-    r[1] = a[1] + s * b[1];
-    r[2] = a[2] + s * b[2];
+    r[0] = Math::MulAdd(s, b[0], a[0]);
+    r[1] = Math::MulAdd(s, b[1], a[1]);
+    r[2] = Math::MulAdd(s, b[2], a[2]);
 }
 
 inline float Dot3(const float a[3], const float b[3])
 {
-    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    return Math::MulAdd(a[2], b[2], Math::MulAdd(a[0], b[0], a[1] * b[1]));
 }
 
 inline void Cross3(const float a[3], const float b[3], float r[3])
 {
-    r[0] = a[1] * b[2] - a[2] * b[1];
-    r[1] = a[2] * b[0] - a[0] * b[2];
-    r[2] = a[0] * b[1] - a[1] * b[0];
+    r[0] = Math::MulAdd(a[1], b[2], -(a[2] * b[1]));
+    r[1] = Math::MulAdd(a[2], b[0], -(a[0] * b[2]));
+    r[2] = Math::MulAdd(a[0], b[1], -(a[1] * b[0]));
 }
 
 inline void Normalize3(float v[3])
 {
-    const float lenSq = v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
+    const float lenSq = Math::MulAdd(v[2], v[2], Math::MulAdd(v[0], v[0], v[1] * v[1]));
     if (lenSq <= 0.0f)
         return;
 

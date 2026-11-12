@@ -846,7 +846,7 @@ void PipelineVariantCache::SubmitPendingVariantCompiles()
                     if (m_LoadReport)
                         compile = m_LoadReport->Category.Track(job.Name, SceneLoadTracker::Need::Frame,
                                                                std::move(compile));
-                    m_Materials->SubmitTrackedPrewarm(std::move(compile), JobSystem::JobPriority::Background);
+                    m_Materials->SubmitTrackedPrewarm(std::move(compile));
                 }
                 catch (...)
                 {
@@ -1126,7 +1126,7 @@ void PipelineVariantCache::RunDepthVariantCompile(const VariantCompileRequest& r
     const auto pipelineId = InternDepthPipelineId(
         variant, req.Key.VertexFlags, req.Key.Topology, req.Key.CullMode,
         req.Key.DepthBiasEnable, req.Key.DepthClampEnable, req.Key.Winding, fragmentMode,
-        /*patchBindlessTextureSet=*/true, compatMeta.get());
+        /*patchBindlessTextureSet=*/true, req.Name + ".Depth", compatMeta.get());
     if (!pipelineId.IsValid())
         return;
 
@@ -1249,6 +1249,7 @@ Rendering::GraphicsPipelineId PipelineVariantCache::InternDepthPipelineId(
     Rendering::FrontFace frontFace,
     DepthFragmentMode fragmentMode,
     bool patchBindlessTextureSet,
+    std::string debugName,
     const Rendering::ShaderMeta* declaredMeta)
 {
     // Every fragment mode needs the composed fragment SPIR-V; the two colour
@@ -1292,6 +1293,7 @@ Rendering::GraphicsPipelineId PipelineVariantCache::InternDepthPipelineId(
     }
 
     gd.Topology = topology;
+    gd.DebugName = std::move(debugName);
 
     auto internDepthLayout = [this, patchBindlessTextureSet](
                                  uint32_t setIndex,
@@ -1521,7 +1523,8 @@ Rendering::GraphicsPipelineId PipelineVariantCache::GetSharedDepthPipelineId(
     // thread-safe device cache WITHOUT m_CacheMutex.
     const auto pipelineId = InternDepthPipelineId(
         entry.Variant, vertexFlags, topology, cullMode, depthBiasEnable, depthClampEnable,
-        frontFace, DepthFragmentMode::None, /*patchBindlessTextureSet=*/false);
+        frontFace, DepthFragmentMode::None, /*patchBindlessTextureSet=*/false,
+        isSkinned ? "SharedDepth.Skinned" : "SharedDepth");
 
     // Snapshot set-layout ids off the device cache before locking. Copy by value
     // (NOT the Lookup pointer): a concurrent InternGraphicsPipeline can reallocate

@@ -45,6 +45,7 @@ void TerrainUploadNode::DeclareForView(Engine::Renderer::Pipeline::ViewDeclare& 
     // (TerrainPageFeature::CommitLatch).
     auto& pages = rs.EnsureFeature<TerrainPageFeature>();
     pages.Latch(*device, rgFrame);
+    pages.DeclareTableReport(d.Frame);
 
     // Heightmap/splatmap/normalmap upload: ONCE per frame across views (feature-owned
     // frame stamp), on the GRAPHICS queue. The textures are bindless (never

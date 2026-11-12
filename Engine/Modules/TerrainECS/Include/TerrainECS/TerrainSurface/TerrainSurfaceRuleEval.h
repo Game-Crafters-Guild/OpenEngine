@@ -2,10 +2,15 @@
 
 #include "Components/Terrain/TerrainSurfaceRules.h"
 #include "Mathematics/Interpolation.h"
+#include "Mathematics/Transcendental.h"
+#include "Mathematics/Vector3.h"
+#include "Mathematics/WorldPosition.h"
 #include "Types/Types.h"
 
 #include <algorithm>
 #include <cmath>
+#include <numbers>
+#include <span>
 
 namespace GameEngine::TerrainECS
 {
@@ -24,6 +29,8 @@ namespace GameEngine::TerrainECS
 
 // A texel's measurements, computed once per texel by the bake and reused by
 // every rule row and condition that reads them.
+inline constexpr float32 kDegreesPerRadian = 180.0f / std::numbers::pi_v<float32>;
+
 struct TerrainRuleSample
 {
     // `1 - max(N.y, 0)` off the heightfield's own normal — 0 flat, 1 steep. NOT a
@@ -38,15 +45,15 @@ struct TerrainRuleSample
     // computed rather than derived from SlopeNormalized, because the conversion
     // between them is the terrain's HeightScale and a rule row does not carry it.
     float32 SlopeDegrees = 0.0f;
-    // Metres above the terrain's base — the normalized height sample times
+    // Meters above the terrain's base: the normalized height sample times
     // HeightScale. NOT world-space Y: the terrain entity's own Y translation is
     // not folded in, matching the other modifier effects.
-    float32 HeightMetres = 0.0f;
-    // `(h - minH) / heightRange` against the terrain's live global range.
-    float32 HeightNormalized = 0.0f;
+    float32 HeightMeters = 0.0f;
     // World XZ, for the noise field.
     float32 WorldX = 0.0f;
     float32 WorldZ = 0.0f;
+    // Absolute latitude in degrees over [0, 90]. A flat terrain has none and reads 0.
+    float32 LatitudeDegrees = 0.0f;
 };
 
 // Build a texel's measurements from what the bake already has in hand: the
@@ -58,12 +65,8 @@ struct TerrainRuleSample
 // mirror is far easier to hold against a function. It stays free of terrain and
 // modifier types for the same reason the rest of this header does — everything
 // it needs is a float.
-//
-// `heightRange` is the caller's already-guarded max(splatMaxH - splatMinH, eps);
-// passing it in rather than re-deriving it keeps the one guard at the one site.
 inline TerrainRuleSample MakeTerrainRuleSample(float32 normalX, float32 normalY, float32 normalZ,
                                                float32 sampleHeight, float32 heightScale,
-                                               float32 splatMinHeight, float32 heightRange,
                                                float32 worldX, float32 worldZ)
 {
     TerrainRuleSample sample{};
@@ -75,13 +78,78 @@ inline TerrainRuleSample MakeTerrainRuleSample(float32 normalX, float32 normalY,
     const float32 gradX = -normalX * invY * heightScale;
     const float32 gradZ = -normalZ * invY * heightScale;
     sample.SlopeDegrees =
-        std::atan(std::sqrt(gradX * gradX + gradZ * gradZ)) * (180.0f / 3.14159265f);
-    // Terrain-LOCAL metres: the normalized sample scaled back up, with no terrain
+        Math::Atan(std::sqrt(gradX * gradX + gradZ * gradZ)) * kDegreesPerRadian;
+    // Terrain-local meters: the normalized sample scaled back up, with no terrain
     // entity translation folded in.
-    sample.HeightMetres = sampleHeight * heightScale;
-    sample.HeightNormalized = (sampleHeight - splatMinHeight) / heightRange;
+    sample.HeightMeters = sampleHeight * heightScale;
     sample.WorldX = worldX;
     sample.WorldZ = worldZ;
+    return sample;
+}
+
+// The measurements that a set of rule rows reads. A sample need not compute the others.
+struct TerrainRuleMeasurements
+{
+    bool SlopeNormalized = true;
+    bool SlopeDegrees = true;
+    bool HeightMeters = true;
+    bool LatitudeDegrees = true;
+    // The rows sample the noise field at the texel's position.
+    bool Noise = true;
+};
+
+// The measurements that the conditions of `rules` read: each condition up to its rule's clamped count.
+inline TerrainRuleMeasurements TerrainRuleMeasurementsOf(std::span<const Components::TerrainSurfaceRule> rules)
+{
+    using Kind = Components::TerrainRuleConditionKind;
+    TerrainRuleMeasurements read{false, false, false, false, false};
+    for (const Components::TerrainSurfaceRule& rule : rules)
+    {
+        const uint32 conditionCount = std::min<uint32>(rule.ConditionCount, Components::kMaxTerrainRuleConditions);
+        for (uint32 i = 0; i < conditionCount; ++i)
+        {
+            const Kind kind = rule.Conditions[i].Kind;
+            read.SlopeNormalized = read.SlopeNormalized || kind == Kind::SlopeNormalized;
+            read.SlopeDegrees = read.SlopeDegrees || kind == Kind::SlopeDegrees;
+            read.HeightMeters = read.HeightMeters || kind == Kind::HeightMeters;
+            read.LatitudeDegrees = read.LatitudeDegrees || kind == Kind::LatitudeDegrees;
+            read.Noise = read.Noise || kind == Kind::Noise;
+        }
+    }
+    return read;
+}
+
+// A planet texel's measurements against the local up `dir = position / |position|`.
+// `position` is planet-local, in meters; `normal` is the unit surface normal. Height is
+// meters above the reference radius. Latitude is about the planet-local +Y axis.
+// A measurement that `measured` leaves out stays 0; each other one has the same bits as with all.
+inline TerrainRuleSample MakePlanetRuleSample(const Mathematics::WorldPosition& position,
+                                              const Mathematics::Vector3& normal, float64 referenceRadius,
+                                              const TerrainRuleMeasurements& measured)
+{
+    const float64 horizontal = std::sqrt(position.X * position.X + position.Z * position.Z);
+    const float64 radius = std::sqrt(horizontal * horizontal + position.Y * position.Y);
+    TerrainRuleSample sample{};
+    if (!(radius > 0.0))
+        return sample;
+
+    if (measured.SlopeNormalized || measured.SlopeDegrees)
+    {
+        const float32 upX = static_cast<float32>(position.X / radius);
+        const float32 upY = static_cast<float32>(position.Y / radius);
+        const float32 upZ = static_cast<float32>(position.Z / radius);
+        const float32 cosine = std::clamp(normal.x * upX + normal.y * upY + normal.z * upZ, -1.0f, 1.0f);
+        if (measured.SlopeNormalized)
+            sample.SlopeNormalized = Math::Clamp01(1.0f - cosine);
+        if (measured.SlopeDegrees)
+            sample.SlopeDegrees = std::acos(std::max(cosine, 0.0f)) * kDegreesPerRadian;
+    }
+    if (measured.HeightMeters)
+        sample.HeightMeters = static_cast<float32>(radius - referenceRadius);
+    // atan2 in float64 keeps full resolution near the poles, where asin of |up.y| does not.
+    if (measured.LatitudeDegrees)
+        sample.LatitudeDegrees =
+            static_cast<float32>(std::atan2(std::abs(position.Y), horizontal)) * kDegreesPerRadian;
     return sample;
 }
 
@@ -98,10 +166,10 @@ inline float32 TerrainRuleConditionValue(Components::TerrainRuleConditionKind ki
         return sample.SlopeNormalized;
     case Kind::SlopeDegrees:
         return sample.SlopeDegrees;
-    case Kind::HeightMetres:
-        return sample.HeightMetres;
-    case Kind::HeightNormalized:
-        return sample.HeightNormalized;
+    case Kind::HeightMeters:
+        return sample.HeightMeters;
+    case Kind::LatitudeDegrees:
+        return sample.LatitudeDegrees;
     case Kind::Noise:
         break;
     }

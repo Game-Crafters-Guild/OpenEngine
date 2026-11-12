@@ -194,16 +194,13 @@ void SceneReflectionProbeEnvironmentSource::ScheduleCulling(const FeatureCulling
         return;
 
     // Every face shares the eye and the projection, so one derived camera
-    // describes the group; only the frustum planes differ per face. The
-    // camera-relative origin is derived from the eye exactly as the spine
-    // does for its per-view dispatch (see ScheduleViewCullingDispatches).
-    const Rendering::CameraDerivedData shared = Rendering::DeriveCameraData(MakeFaceCamera(0));
-    Vector3 origin{};
-    {
-        const auto originSector =
-            ComputeRenderOriginSector(m_Desc.Position.x, m_Desc.Position.y, m_Desc.Position.z);
-        SectorToWorld(originSector, origin.x, origin.y, origin.z);
-    }
+    // describes the group; only the frustum planes differ per face. The planes
+    // come from each face's rebased view-projection, relative to the eye's
+    // origin sector, as the spine does for its per-view dispatch
+    // (ScheduleViewCullingDispatches).
+    const Rendering::CameraRanges faceRanges = MakeFaceRanges();
+    const Rendering::CameraDerivedData shared = Rendering::DeriveCameraData(MakeFaceCamera(0), faceRanges);
+    const Mathematics::Vector3Int originSector = CameraRenderOriginSector(MakeFaceCamera(0));
 
     // Armed faces pack into runs of consecutive faces, at most
     // kMaxCullingViewsPerDispatch per group: slice c of a run started at face
@@ -220,11 +217,10 @@ void SceneReflectionProbeEnvironmentSource::ScheduleCulling(const FeatureCulling
         group.viewId = m_ViewId;
         group.cascadeIndexBase = ProbeFaceCullingIndex(face);
         group.shadowCasterDispatch = false; // color capture: keep non-casters
-        group.cameraPosition = shared.Position;
         group.cameraForward = shared.Forward;
         group.nearPlane = shared.NearPlane;
         group.farPlane = shared.FarPlane;
-        group.cameraRelativeOrigin = origin;
+        group.originSector = originSector;
         group.firstInstance = 0;
         group.instanceCount = ctx.InstanceCount;
         group.renderLayerMask = view->ActiveRenderLayerMask();
@@ -235,10 +231,9 @@ void SceneReflectionProbeEnvironmentSource::ScheduleCulling(const FeatureCulling
                count < Rendering::kMaxCullingViewsPerDispatch &&
                (m_ArmedFaceMask & (1u << face)) != 0u)
         {
-            const Rendering::CameraDerivedData faceCamera =
-                Rendering::DeriveCameraData(MakeFaceCamera(face));
-            group.lightVP[count] = faceCamera.ViewProjMatrix;
-            Rendering::ExtractFrustumPlanes(faceCamera.ViewProjMatrix, group.frustumPlanes[count]);
+            const Rendering::CameraData faceCamera = MakeFaceCamera(face);
+            group.lightVP[count] = faceCamera.viewProjRel;
+            Rendering::ExtractFrustumPlanes(faceCamera.viewProjRel, group.frustumPlanes[count]);
             ++count;
             ++face;
         }
@@ -372,8 +367,8 @@ EnvironmentLocalReflectionData SceneReflectionProbeEnvironmentSource::LocalRefle
         return data;
 
     data.BoxProjection = true;
-    data.ProbePositionWS = m_Desc.Position;
-    data.BoxCenterWS = m_Desc.BoxCenter;
+    data.ProbePositionWS = m_Desc.Position - Mathematics::WorldPosition{};
+    data.BoxCenterWS = m_Desc.BoxCenter - Mathematics::WorldPosition{};
     data.BoxHalfExtentsWS = m_Desc.BoxHalfExtents;
     data.BoxAxisXWS = m_Desc.BoxAxisX;
     data.BoxAxisYWS = m_Desc.BoxAxisY;
@@ -442,17 +437,10 @@ bool SceneReflectionProbeEnvironmentSource::EnsurePipelines(IDevice& device,
     return m_PipelinesReady;
 }
 
-CameraData SceneReflectionProbeEnvironmentSource::MakeFaceCamera(uint32_t face) const
+CameraRanges SceneReflectionProbeEnvironmentSource::MakeFaceRanges() const
 {
-    using GameEngine::Mathematics::MakeLookAtLH;
-    using GameEngine::Mathematics::MakePerspectiveLH_ZO_ReverseZ;
-    using GameEngine::Mathematics::Matrix4x4;
     using GameEngine::Mathematics::Vector3;
 
-    const ProbeCubeFaceBasis& basis = kProbeCaptureFaces[face % ImageBasedLightingFeature::kNumCaptureFaces];
-    const Vector3& eye = m_Desc.Position;
-    const Vector3 target = eye + basis.forward;
-    const Matrix4x4 view = MakeLookAtLH(eye, target, basis.up);
     float fallbackFar = m_Desc.InfluenceRadius;
     if (m_Desc.BoxProjection)
     {
@@ -464,18 +452,29 @@ CameraData SceneReflectionProbeEnvironmentSource::MakeFaceCamera(uint32_t face) 
         fallbackFar = std::max(fallbackFar, std::sqrt(reach.LengthSquared()));
     }
     const float requestedFar = m_Desc.MaxDistance > 0.0f ? m_Desc.MaxDistance : fallbackFar;
-    const float farZ = std::max(requestedFar, 1.0f);
-    const Matrix4x4 proj = MakePerspectiveLH_ZO_ReverseZ(kHalfPi, 1.0f, kCaptureNearPlane, farZ);
+    return {kCaptureNearPlane, std::max(requestedFar, 1.0f)};
+}
+
+CameraData SceneReflectionProbeEnvironmentSource::MakeFaceCamera(uint32_t face) const
+{
+    using GameEngine::Mathematics::MakeLookAtLH;
+    using GameEngine::Mathematics::MakePerspectiveLH_ZO_ReverseZ;
+    using GameEngine::Mathematics::Matrix4x4;
+    using GameEngine::Mathematics::Vector3;
+
+    const ProbeCubeFaceBasis& basis = kProbeCaptureFaces[face % ImageBasedLightingFeature::kNumCaptureFaces];
+    const Vector3 eye = m_Desc.Position - Mathematics::WorldPosition{};
+    const Vector3 target = eye + basis.forward;
+    const Matrix4x4 view = MakeLookAtLH(eye, target, basis.up);
+    const CameraRanges ranges = MakeFaceRanges();
+    const Matrix4x4 proj = MakePerspectiveLH_ZO_ReverseZ(kHalfPi, 1.0f, ranges.Near, ranges.CullingRange);
     const Matrix4x4 viewProj = proj * view;
 
     CameraData out{};
     out.view = view;
     out.proj = proj;
     out.viewProj = viewProj;
-    out.cameraPos.x = eye.x;
-    out.cameraPos.y = eye.y;
-    out.cameraPos.z = eye.z;
-    out.cameraPos.w = 0.0f;
+    SetCameraEye(out, m_Desc.Position);
     return out;
 }
 
@@ -595,7 +594,7 @@ bool SceneReflectionProbeEnvironmentSource::DeclareCaptureFrame(const Environmen
         return false;
 
     const uint32_t firstFace = static_cast<uint32_t>(sliceIndices[0] - kProbeFaceCullingIndexBase);
-    m_Services->Views().SetCameraData(m_CameraId, MakeFaceCamera(firstFace));
+    m_Services->Views().SetCameraData(m_CameraId, MakeFaceCamera(firstFace), MakeFaceRanges());
     m_Services->Views().SetViewRenderLayerMask(m_ViewId, m_Desc.CapturedLayers);
     m_Services->Views().SetViewWorldId(m_ViewId, m_Desc.WorldId);
 
@@ -617,7 +616,7 @@ bool SceneReflectionProbeEnvironmentSource::DeclareFaceCapture(
     // Per-face registry state, consumed at declaration by this face's forward
     // emit and world pass (camera upload, clear ops), so re-pointing the one
     // view per face is exact.
-    m_Services->Views().SetCameraData(m_CameraId, MakeFaceCamera(face));
+    m_Services->Views().SetCameraData(m_CameraId, MakeFaceCamera(face), MakeFaceRanges());
 
     Rendering::ViewClearConfig clear{};
     clear.clearColor = !hasSkyFace;
@@ -720,6 +719,11 @@ void SceneReflectionProbeEnvironmentSource::DeclareFinalizePasses(
         [self, feature = &feature, bakedDigest](RenderGraph::RGContext& c) {
             self->RecordSpecularPrefilter(c, *feature, bakedDigest);
         });
+
+    // The convolves leave both cubes GENERAL, and every later import claims ShaderResource, also in a
+    // frame with no world pass to sample them (a paused camera). The export puts them back at frame end.
+    frame.MarkOutput(irrCube, RenderGraph::RGImageLayout::ShaderReadOnly);
+    frame.MarkOutput(prefCube, RenderGraph::RGImageLayout::ShaderReadOnly);
 }
 
 void SceneReflectionProbeEnvironmentSource::ScheduleBake(const EnvironmentBakeContext& ctx)

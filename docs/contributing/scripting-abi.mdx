@@ -135,7 +135,7 @@ binding.Log?.Invoke((int)GE_LogLevel.Info, (nint)pUtf8, (uint)len);
 The native library exposes a bootstrap entry that returns a typed table of function pointers:
 
 - `GE_GetInterface(uint32_t abiVersion, const void** outTable, uint32_t* outSizeBytes)`; an incompatible version returns `GE_Result_Fail` and a null table.
-- The ABI version is `(major << 16) | minor` (`GE_ABI_VERSION_ENCODE`). `GE_ScriptingGetAbiVersion` reports it, and the current version is 3.2 (`GE_ABI_VERSION_CURRENT`).
+- The ABI version is `(major << 16) | minor` (`GE_ABI_VERSION_ENCODE`). `GE_ScriptingGetAbiVersion` reports it, and the current version is 4.1 (`GE_ABI_VERSION_CURRENT`).
 - The current table is `GE_Interface_v1`: `sizeBytes`, `abiVersion`, then `Log`, `RegisterManagedCallback`, `NotifyCompilationEvent`, `NotifyReloadEvent`, `GetManagedCallback`, `SubscribeDiagnostics`, `UnsubscribeDiagnostics`, `GetAssetCount`, `ScriptsDomainSwap`, `ScriptsDomainUnload`, `ECS_GetWorldHandle`, and `ECS_GetEntityCount`.
 
 Managed code loads the native library once by absolute path (`NativeLibrary.Load`), gets the bootstrap export (`NativeLibrary.GetExport`), requests the table for its ABI version, validates `sizeBytes`, and routes calls through the table. The table carries the ABI handshake that a direct `[DllImport]` call skips.
@@ -160,7 +160,7 @@ Some hot reload endpoints, such as `GE_ClearCompilerCache()` and `GE_GetCompiler
 - 0 is success and a negative value is a failure. Do not introduce positive results.
 - Do not modify out parameters on failure: set them only on success, after the values are fully computed. This holds for tokens and results in native code and in the managed wrappers.
 - Managed code catches exceptions and returns a negative code. Native code never sees a managed exception across the ABI.
-- The managed wrappers and unmanaged entry points return 0 for success, -2 for an invalid argument (`GE_Result_InvalidArg`), -3 for not found, incompatible, or a missing capability (`GE_Result_NotFound`), -4 for not initialized (`GE_Result_NotInitialized`), and any other negative value for `GE_Result_Fail`. Native code maps them in one place, `MapManagedRcToGeResult` in `ScriptingABI.cpp`, so `GE_QueryExport`, `GE_InvokeByToken`, and the hot reload helpers report consistent results.
+- The managed wrappers and unmanaged entry points return 0 for success, -2 for an invalid argument (`GE_Result_InvalidArg`), -3 for not found, incompatible, or a missing capability (`GE_Result_NotFound`), -4 for not initialized (`GE_Result_NotInitialized`), -9 for a preloaded-context swap that is already running (`GE_Result_Busy`: retry later), and any other negative value for `GE_Result_Fail`. Native code maps them in one place, `MapManagedRcToGeResult` in `ScriptingABI.cpp`, so `GE_QueryExport`, `GE_InvokeByToken`, and the hot reload helpers report consistent results.
 - A swap without a prior preload (`GE_SwapPreloadedContext()`) returns `InvalidArg` (-2) or `NotInitialized` (-4) depending on the internal path. Both are the expected guard failure, and callers do not proceed to swap cleanup.
 - A preload of an invalid path (`GE_PreloadAssemblyContext`) returns `InvalidArg` (-2). With a diagnostics sink subscribed, a `GE_Reload_Failed` event carries a short reason for the UI.
 

@@ -44,6 +44,7 @@ class ProbeSystem
     Mathematics::Vector3 LastForce{};
     float Speed = 0.0f;
     ECS::EntityHandle Nearest{};
+    Mathematics::WorldPosition LastPoint{};
     std::string LastText;
     Rendering::RenderLayerMask Layers{};
     ColorLinear Tint{};

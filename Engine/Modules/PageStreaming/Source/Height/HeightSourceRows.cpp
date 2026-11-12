@@ -31,7 +31,7 @@ std::string HeightSourceRows::Open(const HeightCookSource& source, AssetIOServic
         return m_Reader->IsOpen() ? std::string{} : "the heightmap " + source.File.string() + " could not be opened";
     }
 
-    Vector<uint8> fileBytes;
+    ByteBuffer fileBytes;
     if (!ReadFileBytesShared(source.File, fileBytes))
         return "the PNG " + source.File.string() + " could not be read";
     Image::Image16 decoded = Image::Decode16(fileBytes, source.File.string(), Image::DecodeChannels::Gray);
@@ -66,17 +66,17 @@ bool HeightSourceRows::TakeRows(float32* out)
         return true;
     }
 
-    if (!m_Reader->Take(m_Band) || m_Band.size() != count * BytesPerSample(m_Source.Format))
+    if (!m_Reader->Take(m_Band) || m_Band.Size() != count * BytesPerSample(m_Source.Format))
         return false;
     if (m_Source.Format == HeightSourceFormat::R32)
     {
-        std::memcpy(out, m_Band.data(), m_Band.size());
+        std::memcpy(out, m_Band.Data(), m_Band.Size());
         return true;
     }
     uint16 word = 0;
     for (std::size_t i = 0; i < count; ++i)
     {
-        std::memcpy(&word, m_Band.data() + i * sizeof(uint16), sizeof(uint16));
+        std::memcpy(&word, m_Band.Data() + i * sizeof(uint16), sizeof(uint16));
         out[i] = static_cast<float32>(word) * kInv65535;
     }
     return true;

@@ -193,9 +193,8 @@ TEST(IsolatedUIFixture, NoTestStartsWithAnEarlierTestsReleasesPending)
 }
 
 // A test that builds one fixture per case holds one fixture's buffers at a time:
-// each fixture retires its own releases when it is destroyed. Every fixture's
-// SDF rings are about 113 MB, so a loop that kept them all would grow wired GPU
-// memory by that much per case.
+// each fixture retires its own releases when it is destroyed. A loop that kept
+// every fixture would grow wired GPU memory by one fixture's SDF rings per case.
 TEST(IsolatedUIFixture, FixturesBuiltInOneTestHoldOneFixturesBuffersAtATime)
 {
     GameEngine::Rendering::IDevice* device = SharedHeadlessDevice();

@@ -8,6 +8,7 @@ namespace GameEngine
 
 class Label;
 class PolyhavenDownloadManager;
+class ProgressBar;
 class UIElement;
 namespace ECS { class World; }
 
@@ -55,7 +56,7 @@ private:
         UIElement* Pill = nullptr; // non-owning; the host owns the element
         UIElement* Image = nullptr;
         Label* Text = nullptr;
-        UIElement* Fill = nullptr;
+        ProgressBar* Progress = nullptr;
         std::string ImageSlug;   // slug whose thumbnail is currently applied
         int LastPercent = -1000; // last percent written, to skip no-op updates
         int LastRow = -1;        // stack row last applied, so a re-flow repositions

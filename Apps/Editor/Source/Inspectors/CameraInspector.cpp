@@ -188,6 +188,52 @@ void RegisterCameraInspector()
             ev.kind = Editor::EditorChangeNotifications::ChangeKind::InspectorRebuild;
             n->NotifyComponentChanged(ev);
         };
+        // Commit a single bool field with undo, mirroring the Perspective toggle.
+        const auto commitBool = [w, e, n, undo, extras](const char* undoLabel,
+                                                        bool value,
+                                                        void (*setter)(Components::Camera&, bool))
+        {
+            if (undo)
+            {
+                auto target = extras.empty()
+                    ? MakeComponentSnapshotTarget<Components::Camera>(w, e, n, undoLabel)
+                    : MakeMultiComponentSnapshotTarget<Components::Camera>(w, e, extras, n, undoLabel);
+                auto edit = undo->BeginInteractiveEdit(undoLabel, std::move(target));
+                if (auto* comp = w->GetComponent<Components::Camera>(e))
+                {
+                    Components::Camera updated = *comp;
+                    setter(updated, value);
+                    w->AddComponentImmediate(e, updated);
+                }
+                for (auto& ex : extras)
+                {
+                    if (auto* c = w->GetComponent<Components::Camera>(ex))
+                    {
+                        Components::Camera u = *c;
+                        setter(u, value);
+                        w->AddComponentImmediate(ex, u);
+                    }
+                }
+                edit.Commit();
+                return;
+            }
+
+            if (auto* comp = w->GetComponent<Components::Camera>(e))
+            {
+                Components::Camera updated = *comp;
+                setter(updated, value);
+                Editor::CommitComponentUpdate(w, e, n, updated);
+            }
+            for (auto& ex : extras)
+            {
+                if (auto* c = w->GetComponent<Components::Camera>(ex))
+                {
+                    Components::Camera u = *c;
+                    setter(u, value);
+                    Editor::CommitComponentUpdate(w, ex, n, u);
+                }
+            }
+        };
 
         AddToggleRow(ctx.Parent, "Perspective", cam->Perspective,
             [w, e, n, undo, extras, notifyInspectorRebuild](bool v) {
@@ -290,53 +336,6 @@ void RegisterCameraInspector()
         }
         else
         {
-            // Commit a single bool field with undo, mirroring the Perspective toggle.
-            const auto commitBool = [w, e, n, undo, extras](const char* undoLabel,
-                                                            bool value,
-                                                            void (*setter)(Components::Camera&, bool))
-            {
-                if (undo)
-                {
-                    auto target = extras.empty()
-                        ? MakeComponentSnapshotTarget<Components::Camera>(w, e, n, undoLabel)
-                        : MakeMultiComponentSnapshotTarget<Components::Camera>(w, e, extras, n, undoLabel);
-                    auto edit = undo->BeginInteractiveEdit(undoLabel, std::move(target));
-                    if (auto* comp = w->GetComponent<Components::Camera>(e))
-                    {
-                        Components::Camera updated = *comp;
-                        setter(updated, value);
-                        w->AddComponentImmediate(e, updated);
-                    }
-                    for (auto& ex : extras)
-                    {
-                        if (auto* c = w->GetComponent<Components::Camera>(ex))
-                        {
-                            Components::Camera u = *c;
-                            setter(u, value);
-                            w->AddComponentImmediate(ex, u);
-                        }
-                    }
-                    edit.Commit();
-                    return;
-                }
-
-                if (auto* comp = w->GetComponent<Components::Camera>(e))
-                {
-                    Components::Camera updated = *comp;
-                    setter(updated, value);
-                    Editor::CommitComponentUpdate(w, e, n, updated);
-                }
-                for (auto& ex : extras)
-                {
-                    if (auto* c = w->GetComponent<Components::Camera>(ex))
-                    {
-                        Components::Camera u = *c;
-                        setter(u, value);
-                        Editor::CommitComponentUpdate(w, ex, n, u);
-                    }
-                }
-            };
-
             // Pixel-perfect toggle sits above the orthographic-size row: enabling it
             // computes the ortho size from the reference resolution and hides the
             // authored OrthographicSize (which is then ignored).
@@ -471,6 +470,13 @@ void RegisterCameraInspector()
             "Change Camera Visible Layers",
             "The render layers this camera draws. A layer it does not draw casts no shadow in this camera's view.",
             Editor::kVisibleLayersNothingTooltip, extras);
+        AddToggleRow(ctx.Parent, "World Drawing Paused", cam->WorldDrawingPaused,
+            [commitBool](bool v) {
+                commitBool("Change Camera World Drawing Paused", v,
+                    [](Components::Camera& u, bool value) { u.WorldDrawingPaused = value; });
+            },
+            "On: this camera's view draws no world and shows its clear color, with the UI over it. "
+            "Culling, shadows and extraction skip the view. The Game View pauses too. The Scene View does not.");
         AddComponentIntRowWithDrag<Components::Camera>(ctx.Parent, "PostProcessProfileId", static_cast<int>(cam->PostProcessProfileId), w, e, n, undo,
             "Change Camera PostProcess Profile",
             [](Components::Camera& u, int v) { u.PostProcessProfileId = static_cast<uint32>(std::max(0, v)); },
@@ -506,7 +512,7 @@ void RegisterCameraInspector()
                 "classic single-frame filter; FXAA (Two-Frame) runs it under an edge jitter and "
                 "blends two frames (no accumulated history, no ghosting trail); SMAA "
                 "reconstructs edge shapes in post without jitter. Supersampling (SSAA) is the "
-                "Render Scale below, above 1.0 — it composes with every mode except MSAA.");
+                "Render Scale below, above 1.0 — it composes with every mode.");
             aaModeDropdown->SetOnValueChanged([w, e, n, undo, extras](const std::string& value)
             {
                 uint32_t mode = 0u;
@@ -647,7 +653,8 @@ void RegisterCameraInspector()
             cam->RenderScale,
             "Per-camera render scale override. 0 = inherit the engine default (including Dynamic "
             "resolution). An explicit 0.25-2.0 pins this camera to a fixed scale; above 1.0 "
-            "supersamples (SSAA). Not with MSAA — a multisampled view cannot be scaled.", extras);
+            "supersamples (SSAA). Works with every anti-aliasing mode. With MSAA, a scale above "
+            "1.0 uses much more GPU memory.", extras);
         AddComponentRenderLayersRow<Components::Camera>(
             ctx.Parent, "Volume Layers", &Components::Camera::VolumeLayers, w, e, n, undo,
             "Change Camera Volume Layers",

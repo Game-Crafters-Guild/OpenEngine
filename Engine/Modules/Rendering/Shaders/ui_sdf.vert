@@ -58,28 +58,7 @@ const uint UI_DRAW_ORDER_SLOT_MASK = 0x00FFFFFFu;
 const uint UI_DRAW_ORDER_TEX_SLOT_SHIFT = 24u;
 #endif
 
-// UI geometry is authored in top-left-origin pixels; clip +Y is the TOP row of
-// the viewport on every backend the engine targets (Vulkan reaches it with the
-// negative viewport height its command list always applies; Metal, D3D12 and
-// WebGPU are native there). So the pixel-to-clip mapping negates Y once, for
-// all backends, and the pass keeps a plain positive-height viewport rect --
-// the only kind WebGPU can express.
-vec4 clipFromPixel(vec2 pixel)
-{
-    vec2 ndc = (pixel / pc.targetSize) * 2.0 - 1.0;
-    return vec4(ndc.x, -ndc.y, 0.0, 1.0);
-}
-
-vec2 quadPos01(uint vid)
-{
-    // Two triangles: (0,0)-(1,0)-(1,1) and (0,0)-(1,1)-(0,1)
-    if (vid == 0u) return vec2(0.0, 0.0);
-    if (vid == 1u) return vec2(1.0, 0.0);
-    if (vid == 2u) return vec2(1.0, 1.0);
-    if (vid == 3u) return vec2(0.0, 0.0);
-    if (vid == 4u) return vec2(1.0, 1.0);
-    return vec2(0.0, 1.0);
-}
+#include "UI/ui_quad.glsl"
 
 // Quad dilation for Slug text AA: glyph quads must extend far enough beyond
 // the ink bounds that every pixel the widened coverage ramp can touch gets
@@ -296,4 +275,5 @@ void main()
     vLocal = local;
     writeClipVaryings(prim.packed.x, primTransform, local, toScreen);
     gl_Position = clipFromPixel(toScreen.m * local + toScreen.t);
+    gl_Position.z = uiDrawOrderDepth(instIndex);
 }

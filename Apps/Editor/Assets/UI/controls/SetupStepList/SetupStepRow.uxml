@@ -1,0 +1,10 @@
+<!-- One row of a SetupStepList: the state mark, the step's name, and the detail column with the
+     finding (SetupStepList adds the fix notice under it). The classes are the contract with
+     SetupStepList.cpp; SetupStepList.css styles every part. -->
+<UIElement class="setup-step-row">
+  <UIElement class="setup-step-mark" />
+  <Label class="setup-step-name" />
+  <UIElement class="setup-step-detail">
+    <Label class="setup-step-found" />
+  </UIElement>
+</UIElement>

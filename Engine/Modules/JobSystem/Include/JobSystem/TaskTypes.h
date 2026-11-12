@@ -19,17 +19,26 @@ enum class TaskStatus : uint8 {
 /**
  * @brief Pool scheduling class for Submit(F&&) / EnqueueWork / EnqueueWorkBatch.
  *
- * Orders dequeue between the pool's two lanes: a worker takes Background work
- * only when it finds no Normal work. Normal is the default and the hot path.
+ * Orders dequeue between the pool's three lanes: Awaited, then Normal, then
+ * Background. Normal is the default and the hot path.
+ * Awaited is for a job that a thread is blocked waiting for (a frame thread
+ * that waits for one pipeline build). Every consumer polls its lane first, so
+ * a Normal or Background flood delays it only by the remainder of the bodies
+ * already running. Keep it for short jobs with a waiter: an Awaited flood
+ * postpones Normal work.
  * Background rides a dedicated global lane that every consumer polls last; it
  * runs on idle capacity, and a saturating Normal flood postpones it
  * indefinitely (there is no aging). The class orders dequeue only: shutdown,
- * cancellation and the never-drop contracts are identical for both classes
+ * cancellation and the never-drop contracts are identical for every class
  * (see WorkStealingThreadPool's class comment).
  */
 enum class JobPriority : uint8 {
     Normal = 0,
-    Background = 1
+    Background = 1,
+    Awaited = 2
 };
+
+// The number of JobPriority values: one pool lane each.
+inline constexpr size_t kJobPriorityCount = 3;
 
 } // namespace JobSystem

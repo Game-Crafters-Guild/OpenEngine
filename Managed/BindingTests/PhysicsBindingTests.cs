@@ -49,7 +49,7 @@ namespace GameEngine.ManagedBindingTests
         [OneTimeSetUp]
         public void StartEngine()
         {
-            Assert.That(Physics.RayCast(Vector3.Zero, Vector3.UnitZ, out RayHit outside), Is.False);
+            Assert.That(Physics.RayCast(new WorldPosition(), Vector3.UnitZ, out RayHit outside), Is.False);
             Assert.That(outside.Entity, Is.EqualTo(Entity.None), "outside play the hit holds its defaults");
         }
 
@@ -94,21 +94,32 @@ namespace GameEngine.ManagedBindingTests
 
         private void OnEnter(in TriggerEvent e) => m_Enters.Add(e);
 
+        /// <summary>At 300 km, the offset between two world positions and the move by that offset are exact.</summary>
+        [Test]
+        public void WorldPositionDifferenceAndMoveAreExactAt300Km()
+        {
+            var hit = new WorldPosition { X = 300000.25, Y = 12.5, Z = -300000.75 };
+            var eye = new WorldPosition { X = 299990.0, Y = 14.0, Z = -299980.5 };
+
+            Assert.That(hit - eye, Is.EqualTo(new Vector3(10.25f, -1.5f, -20.25f)));
+            Assert.That(eye + (hit - eye), Is.EqualTo(hit));
+        }
+
         /// <summary>A ray along +Z hits the box in front of it, and a ray along -Z hits nothing.</summary>
         [Test]
         public void RayCastHitsTheBoxInFrontAndMissesBehind()
         {
             Entity box = AddBox(new Vector3(0f, 0f, 10f), Vector3.One, BoxKind.Static);
 
-            Assert.That(Physics.RayCast(Vector3.Zero, new Vector3(0f, 0f, 2f), out RayHit hit), Is.True);
+            Assert.That(Physics.RayCast(new WorldPosition(), new Vector3(0f, 0f, 2f), out RayHit hit), Is.True);
             Assert.That(hit.Entity, Is.EqualTo(box));
             Assert.That(hit.Distance, Is.EqualTo(9f).Within(1e-3f));
-            Assert.That(hit.Point.Z, Is.EqualTo(9f).Within(1e-3f));
+            Assert.That(hit.Point.Z, Is.EqualTo(9.0).Within(1e-3));
             Assert.That(hit.Normal.Z, Is.EqualTo(-1f).Within(1e-3f));
 
-            Assert.That(Physics.RayCast(Vector3.Zero, -Vector3.UnitZ, out RayHit miss), Is.False);
+            Assert.That(Physics.RayCast(new WorldPosition(), -Vector3.UnitZ, out RayHit miss), Is.False);
             Assert.That(miss.Entity, Is.EqualTo(Entity.None));
-            Assert.That(Physics.RayCast(Vector3.Zero, Vector3.UnitZ, out _, maxDistance: 5f), Is.False, "beyond maxDistance");
+            Assert.That(Physics.RayCast(new WorldPosition(), Vector3.UnitZ, out _, maxDistance: 5f), Is.False, "beyond maxDistance");
         }
 
         /// <summary>
@@ -123,7 +134,7 @@ namespace GameEngine.ManagedBindingTests
             Entity far = AddBox(new Vector3(0f, 0f, 15f), new Vector3(1f, 1f, 0.5f), BoxKind.Static);
 
             Span<RayHit> hits = stackalloc RayHit[4];
-            Assert.That(Physics.RayCastAll(Vector3.Zero, Vector3.UnitZ, hits), Is.EqualTo(3));
+            Assert.That(Physics.RayCastAll(new WorldPosition(), Vector3.UnitZ, hits), Is.EqualTo(3));
             Assert.That(hits[0].Entity, Is.EqualTo(near));
             Assert.That(hits[1].Entity, Is.EqualTo(middle));
             Assert.That(hits[2].Entity, Is.EqualTo(far));
@@ -131,11 +142,11 @@ namespace GameEngine.ManagedBindingTests
             Assert.That(hits[2].Distance, Is.EqualTo(14.5f).Within(1e-3f));
 
             Span<RayHit> two = stackalloc RayHit[2];
-            Assert.That(Physics.RayCastAll(Vector3.Zero, Vector3.UnitZ, two), Is.EqualTo(3), "the full count, never a silent truncation");
+            Assert.That(Physics.RayCastAll(new WorldPosition(), Vector3.UnitZ, two), Is.EqualTo(3), "the full count, never a silent truncation");
             Assert.That(two[0].Entity, Is.EqualTo(near));
             Assert.That(two[1].Entity, Is.EqualTo(middle));
-            Assert.That(Physics.RayCastAll(Vector3.Zero, Vector3.UnitZ, Span<RayHit>.Empty), Is.EqualTo(3), "an empty span asks the count");
-            Assert.That(Physics.RayCastAll(Vector3.Zero, Vector3.UnitZ, hits, maxDistance: 12f), Is.EqualTo(2), "within maxDistance");
+            Assert.That(Physics.RayCastAll(new WorldPosition(), Vector3.UnitZ, Span<RayHit>.Empty), Is.EqualTo(3), "an empty span asks the count");
+            Assert.That(Physics.RayCastAll(new WorldPosition(), Vector3.UnitZ, hits, maxDistance: 12f), Is.EqualTo(2), "within maxDistance");
         }
 
         /// <summary>
@@ -151,11 +162,11 @@ namespace GameEngine.ManagedBindingTests
 
             Assert.That(Unsafe.SizeOf<Entity>(), Is.EqualTo(4), "a Span<Entity> crosses as packed 32-bit entity ids");
             Span<Entity> bodies = stackalloc Entity[4];
-            Assert.That(Physics.BoxOverlap(Vector3.Zero, new Vector3(3f, 1f, 1f), Quaternion.Identity, bodies), Is.EqualTo(2));
+            Assert.That(Physics.BoxOverlap(new WorldPosition(), new Vector3(3f, 1f, 1f), Quaternion.Identity, bodies), Is.EqualTo(2));
             Assert.That(new[] { bodies[0], bodies[1] }, Is.EquivalentTo(new[] { left, right }));
 
             Span<Entity> one = stackalloc Entity[1];
-            Assert.That(Physics.BoxOverlap(Vector3.Zero, new Vector3(3f, 1f, 1f), Quaternion.Identity, one), Is.EqualTo(2),
+            Assert.That(Physics.BoxOverlap(new WorldPosition(), new Vector3(3f, 1f, 1f), Quaternion.Identity, one), Is.EqualTo(2),
                         "the full count, never a silent truncation");
             Assert.That(one[0] == left || one[0] == right, Is.True);
         }
@@ -271,7 +282,7 @@ namespace GameEngine.ManagedBindingTests
             Vector3 forward = Vector3.UnitZ;
             var watch = System.Diagnostics.Stopwatch.StartNew();
             for (int i = 0; i < kRayCastCalls; i++)
-                hits += Physics.RayCast(Vector3.Zero, forward, out RayHit _) ? 1 : 0;
+                hits += Physics.RayCast(new WorldPosition(), forward, out RayHit _) ? 1 : 0;
             watch.Stop();
             Assert.That(hits, Is.EqualTo(kRayCastCalls));
             return watch.Elapsed.TotalMilliseconds * 1e6 / kRayCastCalls;
@@ -307,7 +318,7 @@ namespace GameEngine.ManagedBindingTests
             Vector3 forward = Vector3.UnitZ;
             var watch = System.Diagnostics.Stopwatch.StartNew();
             for (int i = 0; i < kRayCastAllCalls; i++)
-                hits += Physics.RayCastAll(Vector3.Zero, forward, buffer, maxDistance: 50f);
+                hits += Physics.RayCastAll(new WorldPosition(), forward, buffer, maxDistance: 50f);
             watch.Stop();
             Assert.That(hits, Is.EqualTo(3 * kRayCastAllCalls));
             return watch.Elapsed.TotalMilliseconds * 1e6 / kRayCastAllCalls;
@@ -324,7 +335,7 @@ namespace GameEngine.ManagedBindingTests
                 Vector3 origin = Vector3.Zero;
                 float remaining = 50f;
                 int count = 0;
-                while (count < buffer.Length && Physics.RayCast(origin, forward, out RayHit hit, remaining))
+                while (count < buffer.Length && Physics.RayCast(WorldPosition.FromVector3(origin), forward, out RayHit hit, remaining))
                 {
                     buffer[count++] = hit;
                     float step = hit.Distance + kBoxDepth + 0.01f;

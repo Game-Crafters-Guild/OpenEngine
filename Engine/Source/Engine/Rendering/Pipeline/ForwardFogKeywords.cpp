@@ -8,13 +8,17 @@
 namespace GameEngine::Engine::Renderer::Pipeline
 {
 
-Rendering::MaterialKeyword HeightFogPassKeyword(ViewDeclare& d)
+Rendering::MaterialKeyword HeightFogKeyword(const PostProcessSettings& settings, bool heightFogParamsPublished)
 {
-    if (!d.Services.GetEffectivePostProcessSettings(d.View.id, d.View.worldId).IsHeightFogActive())
-        return Rendering::MaterialKeyword::None;
-    if (!d.ResolveBuffer(Names::Res::HeightFogParams).IsValid())
+    if (!heightFogParamsPublished || !settings.IsHeightFogActive())
         return Rendering::MaterialKeyword::None;
     return Rendering::MaterialKeyword::HeightFog;
+}
+
+Rendering::MaterialKeyword HeightFogPassKeyword(ViewDeclare& d)
+{
+    return HeightFogKeyword(d.Services.GetEffectivePostProcessSettings(d.View.id, d.View.worldId),
+                            d.ResolveBuffer(Names::Res::HeightFogParams).IsValid());
 }
 
 Rendering::MaterialKeyword VolumetricFogPassKeyword(ViewDeclare& d)

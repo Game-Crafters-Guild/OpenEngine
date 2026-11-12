@@ -857,6 +857,9 @@ void RecordDepthOnlyPass(Rendering::RenderGraph::RGContext& c,
         return drawnStreamRanges.insert(drawKey).second;
     };
 
+    const DrawProducerRegistry::ScopeNameTable& producerNames = DrawProducerRegistry::ScopeNames();
+    if (runEntityDraws)
+        c.SetProfilerScope(producerNames[DrawProducerRegistry::kInstances].data());
     if (runEntityDraws && !collapseEligibleCasters)
     {
         for (const auto& key : entityKeys)
@@ -909,9 +912,16 @@ void RecordDepthOnlyPass(Rendering::RenderGraph::RGContext& c,
         }
     }
     for (const auto& dc : depthCommands)
+    {
+        c.SetProfilerScope(producerNames[dc.Producer].data());
         recordContributorDraw(dc);
+    }
     for (const auto& dc : fallbackHeads)
+    {
+        c.SetProfilerScope(producerNames[dc.Producer].data());
         recordContributorDraw(dc);
+    }
+    c.SetProfilerScope(nullptr);
 
     if (DrawAttributionEnabled())
     {

@@ -159,7 +159,7 @@ class PrefabHierarchyTests : public ::testing::Test
             ASSERT_TRUE(engine.Initialize(config));
         }
         static GameEngine::Editor::EditorChangeNotifications s_Notifications;
-        GameEngine::Editor::RegisterPrefabEditor(s_Notifications, nullptr, {}, {});
+        GameEngine::Editor::RegisterPrefabEditor(s_Notifications, nullptr, nullptr, {}, {});
     }
 
     // An entity that renders `model`, under `parent` when it is valid.

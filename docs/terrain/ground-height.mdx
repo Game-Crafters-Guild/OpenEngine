@@ -1,0 +1,43 @@
+---
+title: Ground height
+description: Read the terrain's height at a world point from native C++, with the level that answered, the finest flag, and how to get the finest height before you place something.
+---
+
+`TerrainECS::ResolveSurfaceHeightQuery` in `TerrainECS/SurfaceHeightQuery.h` gives the height query of the terrain under a world point. `SampleHeight` reads the height there in world meters. Use it on the main thread, and resolve the query again after the next height-page update: the query is a view of the terrain's pages. +Y is up.
+
+```cpp title="Put a spawn point on the ground at (x, z)"
+using namespace GameEngine::TerrainECS;
+const Mathematics::Vector3 point(x, 0.0f, z);
+SurfaceHeightSample ground;
+bool onGround = ResolveSurfaceHeightQuery(world, point).SampleHeight(point, SurfaceHeightPolicy::RequireFinest, ground);
+if (!onGround && FetchFinestSurfaceHeightPage(world, point))
+    onGround = ResolveSurfaceHeightQuery(world, point).SampleHeight(point, SurfaceHeightPolicy::RequireFinest, ground);
+// Place on ground.Height only when onGround is true; otherwise ask again on a later frame.
+```
+
+## The answer
+
+A streamed terrain keeps its finest height pages on the CPU only near the cameras and the physics bodies. Farther away, a coarser level answers. Each answer, a `SurfaceHeightSample`, tells you where it came from:
+
+| Field | Meaning |
+|---|---|
+| `Height` | The ground height in world meters. |
+| `Level` | The page level that answered. 0 is the finest. |
+| `Detail` | `Finest` when the answer comes from the finest level the terrain has there, `Coarse` when the finest page is not on the CPU yet. |
+
+A coarse height can be tens of meters away from the finest one: a coarse level averages the relief that is shorter than its sample spacing. Do not put a camera, an entity or a collider on a `Coarse` answer.
+
+## The policy
+
+Each call names what it does with a coarse answer:
+
+- `AcceptCoarse` returns the coarse answer with `Detail` set to `Coarse`. Use it for a pick, a ring drawn on the ground or a skyline, which follow what is drawn.
+- `RequireFinest` returns false for a coarse answer, as for a point with no height yet. Use it for a precision check or a bake that waits for the finest page.
+
+`SampleHeight` returns false outside the terrain, and inside it while the terrain has no height yet (its height store is still cooking). `ContainsXZ` tells the two apart: inside the footprint, a false answer means wait.
+
+## The finest height for a placement
+
+`FetchFinestSurfaceHeightPage` loads the finest page under a point now, on the main thread, and returns whether the page is then on the CPU. Resolve the query again after it: the answer there is then `Finest`. Each call reads one finest page (130 x 130 height samples) from the cooked height store on disk and decodes it (a generated terrain evaluates the page instead), and the frame waits for it. Call it for the points you place on, not for a whole region. It returns false on a planet and on a terrain that does not stream its height.
+
+`Scene::RaycastScene` does the same for a terrain hit: a hit on a coarse page loads the finest page under it and casts again (see [Scene raycast](../scripting/scene-raycast.mdx)). The debug port's `sample_ground_height` loads the finest page under each point it samples, up to 64 pages a call, and reports `level` and `finest` for each point. Its `note` counts the coarse answers past the 64 loads (ask again) apart from those where the height store has no finest page (asking again gives the same answer).

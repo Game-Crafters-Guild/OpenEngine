@@ -3,13 +3,13 @@ import type { ToolDef } from "../registry.js";
 import { proxyTool } from "./proxy.js";
 
 /**
- * A world-XZ list, e.g. `[[12.5, -40.0], [13.0, -40.0]]`.
+ * A world point list: `[[x, z], ...]` on a planar terrain, `[[x, y, z], ...]` on a planet.
  *
  * A factory rather than a shared const, for the reason vec3Tuple() documents:
  * one zod instance reused across two properties emits a `$ref` for the second
  * instead of inlining it.
  */
-function xzPointList() {
+function groundPointList() {
   return z.preprocess(
     (val) => {
       if (typeof val === "string") {
@@ -17,7 +17,7 @@ function xzPointList() {
       }
       return val;
     },
-    z.array(z.array(z.coerce.number()).length(2)),
+    z.array(z.array(z.coerce.number()).min(2).max(3)),
   );
 }
 
@@ -26,9 +26,9 @@ export const tools: ToolDef[] = [
     name: "sample_ground_height",
     category: "scene",
     description:
-      "Sample the COMPOSED ground height at world XZ points — the CPU heightfield after the modifier stack (flattens, corridors, stamps, noise), which is what the renderer draws and what conforming placement lands on. This is not the base heightmap: a scene-authored corridor exists only in the composed result, so an offline model that reads the shipped heightmap cannot see it. Terrain only — never reports a mesh, prop or bridge deck as ground. Each sample reports `inside` (within the terrain footprint at all) separately from `sampled` (a height came back); inside-but-unsampled means the terrain has no height there yet (its height store is still cooking: surface.kind `pagedNoSourceYet`, or its height pages have not had their first update), and is NOT ground level. A sampled point also reports `level` (0 the finest) and `finest`: false means a coarser level answered because the finest page is not loaded there.",
+      "Sample the COMPOSED ground height at world XZ points — the CPU heightfield after the modifier stack (flattens, corridors, stamps, noise), which is what the renderer draws and what conforming placement lands on. This is not the base heightmap: a scene-authored corridor exists only in the composed result, so an offline model that reads the shipped heightmap cannot see it. Terrain only — never reports a mesh, prop or bridge deck as ground. Each sample reports `inside` (within the terrain footprint at all) separately from `sampled` (a height came back); inside-but-unsampled means the terrain has no height there yet (its height store is still cooking: surface.kind `pagedNoSourceYet`, or its height pages have not had their first update), and is NOT ground level. A sampled point also reports `level` (0 the finest) and `finest`. On a planar terrain the call loads the finest page under a point before it answers (at most 64 pages a call), so a height to place a camera or an entity on is the finest one; `finest` false means the call used its 64 loads (ask again for those points) or the store has no finest page there (asking again gives the same answer until the store holds the page), and the reply's `note` gives each count. Do not place on a sample with `finest` false. On a planet (surface.kind `planet`) the call loads no page: `finest` false means the finest page is not loaded there yet. On a planet give [x, y, z] points: each sample reports `height` (meters above surface.referenceRadius on the line from surface.center through the point) and `surface` (that ground point in world space).",
     schema: {
-      points: xzPointList().describe("World XZ points as [[x, z], ...] (max 8192)"),
+      points: groundPointList().describe("World points as [[x, z], ...], or [[x, y, z], ...] on a planet (max 8192)"),
     },
   }),
 

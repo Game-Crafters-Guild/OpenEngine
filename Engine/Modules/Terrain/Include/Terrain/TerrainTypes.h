@@ -2,6 +2,7 @@
 
 #include "Terrain/TerrainMaterialRecord.h"
 #include "Types/Types.h"
+#include "Mathematics/Interpolation.h"
 #include "Mathematics/Vector3.h"
 
 #include <algorithm>
@@ -31,9 +32,9 @@ enum class HeightfieldFormat : uint32
 static constexpr uint32 kMaxHeightmapDimension = 8193;
 static constexpr float32 kDefaultSamplesPerMeter = 1.0f;
 
-// The per-tile sample cap. A terrain whose derived resolution exceeds this is split into a tile
-// grid; the tile's world size follows from this cap and the sample density. Every consumer of
-// "does this terrain tile" must resolve it through TerrainNeedsTiling below.
+// The per-tile sample cap. A terrain whose derived resolution exceeds this spans more than one
+// tile; the tile's world size follows from this cap and the sample density. Every consumer of
+// "does this terrain exceed one tile" must resolve it through TerrainNeedsTiling below.
 static constexpr uint32 kMaxTileResolution = 1025;
 
 // Configuration for creating a terrain instance.
@@ -88,13 +89,9 @@ struct TerrainConfig
     }
 };
 
-// Does this terrain split into a tile grid? Editor provisioning, the extraction system and the
-// tile-geometry derivation must give the SAME answer: provisioning withholds the eager single
-// heightfield AND its heightfield collider for a terrain it expects to tile, while extraction
-// owns tiled provisioning — so a terrain the two classify differently renders with no collision.
-// Resolved through the renderer's own FromSamplesPerMeter rounding, never from raw
-// size * density, because the derived resolution rounds the product down before adding the
-// shared edge sample.
+// Does this terrain exceed the per-tile cap? A planet below the cap keeps one heightfield. Uses the
+// FromSamplesPerMeter rounding, never raw size * density: the derived resolution rounds the product
+// down before it adds the shared edge sample.
 inline bool TerrainNeedsTiling(float32 worldSizeX, float32 worldSizeZ, float32 samplesPerMeter)
 {
     const TerrainConfig derived = TerrainConfig::FromSamplesPerMeter(
@@ -269,9 +266,13 @@ struct TerrainGPUParams
     uint32 ColorMapBindless = 0;             // optional RGBA8 sRGB colour map; absent means identity
     // height fraction where the ground's share of an automatic root's gradient ends (GroundTintHeight)
     float32 GrassGroundTintHeight = 0.5f;
+    // Meters the lattice reaches past the terrain's authored edge on each axis: a tiled terrain's
+    // WorldSizeX/Z covers whole tiles. Its ground ends at WorldSize - LatticeOverhang.
+    float32 LatticeOverhangX = 0.0f;
+    float32 LatticeOverhangZ = 0.0f;
 };
 
-static_assert(sizeof(TerrainGPUParams) == 288, "TerrainGPUParams must be 288 bytes");
+static_assert(sizeof(TerrainGPUParams) == 296, "TerrainGPUParams must be 296 bytes");
 
 // Blades per square metre at the camera for this row, in the units the row's mode actually places:
 // cards for a texture-card terrain, blades otherwise. The placement kernels select the same way, so
@@ -296,6 +297,42 @@ inline bool TerrainGrassRowPlaces(const TerrainGPUParams& params)
         && TerrainGrassNearDensity(params) > 0.0f
         && params.GrassBladeHeight > 0.0f
         && params.GrassBladeWidth > 0.0f;
+}
+
+// The place kernel's largest per-blade jitter factors. Mirror of grass_placement.glsl
+// (kGrassBladeHeightJitterMax and the two after it); GrassCellBoxTests holds the two equal.
+inline constexpr float32 kTerrainGrassBladeHeightJitterMax = 1.35f;
+inline constexpr float32 kTerrainGrassBladeWidthJitterMax = 1.25f;
+inline constexpr float32 kTerrainGrassCardSizeJitterMax = 1.15f;
+// The vertex stage's leaf width cap as a share of the blade height, its pixel floor's widest
+// expansion of the half-width, and how deep it sinks the root along the ground normal, in meters.
+// Mirror of kGrassMaxBladeAspect, kGrassMaxWidthExpansion and kGrassRootEmbed.
+inline constexpr float32 kTerrainGrassMaxBladeAspect = 0.2f;
+inline constexpr float32 kTerrainGrassMaxWidthExpansion = 6.0f;
+inline constexpr float32 kTerrainGrassRootEmbedDepth = 0.01f;
+
+/// The farthest, in meters, that any vertex of this row's blades or cards lies from its root: the chord
+/// (at most the height, at any lean, bend or wind), the floored half-width and the root embed. Every
+/// factor takes its authored value; the growth ramp and the control map's height factor are at most 1.
+inline float32 TerrainGrassBladeReach(const TerrainGPUParams& params)
+{
+    const float32 scale = 1.0f + std::max(params.GrassRandomScale, 0.0f);
+    float32 height = 0.0f;
+    float32 halfWidth = 0.0f;
+    if ((params.GrassEnabled & kTerrainGrassBitTextureCard) != 0u)
+    {
+        // A card is a square of its width, centered on its root.
+        height = std::max(params.GrassTextureSize, 0.0f) * scale * kTerrainGrassCardSizeJitterMax;
+        halfWidth = 0.5f * height;
+    }
+    else
+    {
+        height = std::max(params.GrassBladeHeight, 0.0f) * scale * kTerrainGrassBladeHeightJitterMax
+            * (1.0f + Math::Clamp01(params.GrassClumpHeightVariance));
+        const float32 width = std::max(params.GrassBladeWidth, 0.0f) * scale * kTerrainGrassBladeWidthJitterMax;
+        halfWidth = 0.5f * std::min(width, height * kTerrainGrassMaxBladeAspect);
+    }
+    return height + halfWidth * kTerrainGrassMaxWidthExpansion + kTerrainGrassRootEmbedDepth;
 }
 
 // The canopy shade a row's field casts on its blade bases and on the ground under it, sun and sky

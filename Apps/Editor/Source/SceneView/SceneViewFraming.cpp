@@ -40,7 +40,8 @@ void AccumulateWorldBounds(ECS::World& world, ECS::EntityHandle entity, SubtreeW
     if (!worldXf)
         return;
 
-    const Mathematics::AABB aabb = bounds->Box.TransformToAABB(worldXf->matrix);
+    const Mathematics::AABB aabb = bounds->Box.TransformToAABB(
+        worldXf->ToMatrix4x4(worldXf->GetPosition() - Mathematics::WorldPosition{}).Data());
     if (!out.HasBounds)
     {
         out.Box = aabb;
@@ -69,11 +70,11 @@ bool ComputeSubtreeWorldBounds(ECS::World& world, ECS::EntityHandle root, Subtre
     // system has not visited yet.
     if (const auto* worldXf = world.GetComponent<Components::WorldTransform>(root))
     {
-        out.FallbackPosition = {worldXf->matrix[12], worldXf->matrix[13], worldXf->matrix[14]};
+        out.FallbackPosition = worldXf->GetPosition() - Mathematics::WorldPosition{};
     }
     else if (const auto* xf = world.GetComponent<Components::Transform>(root))
     {
-        out.FallbackPosition = xf->GetPosition();
+        out.FallbackPosition = xf->GetPosition() - Mathematics::WorldPosition{};
     }
 
     AccumulateWorldBounds(world, root, out);

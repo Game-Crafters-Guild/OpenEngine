@@ -80,6 +80,7 @@ TimelinePlaybackSystem::TimelinePlaybackSystem(Audio::AudioSystem* audioSystem)
 void TimelinePlaybackSystem::Update(ECS::World& world, float32 deltaTime)
 {
     ProcessClipAnimatorCommands(world);
+    ApplyClipAnimatorSpeeds(world);
 
     AssetManager& assetManager = EngineCore::GetInstance().GetAssetManager();
     Audio::AudioSystem* audio = m_AudioSystem;

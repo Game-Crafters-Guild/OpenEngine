@@ -48,7 +48,7 @@ class SkeletonProfile : public ::GameEngine::Asset
         : ::GameEngine::Asset(guid, ::GameEngine::AssetType::SkeletonProfile, path) {}
 
     bool Load() override;
-    bool LoadFromData(const Vector<uint8>& data) override;
+    bool LoadFromData(std::span<const uint8> data) override;
     void Unload() override;
 
     bool SaveToData(Vector<uint8>& outData) const;

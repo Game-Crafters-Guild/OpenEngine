@@ -44,6 +44,10 @@
       "platform": "linux"
     },
     {
+      "name": "gameinput",
+      "platform": "windows & (x64 | arm64) & !uwp"
+    },
+    {
       "name": "vulkan-memory-allocator",
       "platform": "!wasm32"
     },

@@ -38,7 +38,7 @@ Components::Transform YawedTransform(float yawDegrees)
 {
     const Mathematics::Quaternion yaw =
         Mathematics::Quaternion::FromAxisAngle(Mathematics::Vector3(0.0f, 1.0f, 0.0f), yawDegrees * kDegreesToRadians);
-    return Components::Transform::FromTRS(Mathematics::Vector3{}, yaw, Mathematics::Vector3{1.0f, 1.0f, 1.0f});
+    return Components::Transform::FromTRS(Mathematics::WorldPosition{}, yaw, Mathematics::Vector3{1.0f, 1.0f, 1.0f});
 }
 
 struct SkySunPathHarness
@@ -137,10 +137,11 @@ TEST(SkySunPath, AFollowedLightReadsItsHourOnTheSkysPath)
     const Mathematics::Vector3 axis = Mathematics::Vector3::Cross(forward, shine).Normalize();
     const float angle = std::acos(std::clamp(Mathematics::Vector3::Dot(forward, shine), -1.0f, 1.0f));
     const Components::Transform lightTransform = Components::Transform::FromTRS(
-        Mathematics::Vector3{}, Mathematics::Quaternion::FromAxisAngle(axis, angle), Mathematics::Vector3{1.0f, 1.0f, 1.0f});
+        Mathematics::WorldPosition{}, Mathematics::Quaternion::FromAxisAngle(axis, angle), Mathematics::Vector3{1.0f, 1.0f, 1.0f});
     harness.World.AddComponentImmediate(lightEntity, lightTransform);
     Components::WorldTransform lightWorld{};
-    std::copy(std::begin(lightTransform.matrix), std::end(lightTransform.matrix), std::begin(lightWorld.matrix));
+    lightWorld.Position = lightTransform.Position;
+    lightWorld.Basis = lightTransform.Basis;
     lightWorld.Version = 1u; // resolved, as TransformHierarchySystem leaves it
     harness.World.AddComponentImmediate(lightEntity, lightWorld);
 

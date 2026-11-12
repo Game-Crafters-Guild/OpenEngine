@@ -153,6 +153,15 @@ enum class PipelineBuildState : uint8_t
     Failed,
 };
 
+// How soon a dispatched pipeline build must run. Load: it was asked for ahead
+// of use and waits behind other load work. Blocking: a thread waits for it, so
+// it runs on the next free worker.
+enum class PipelineBuildPriority : uint8_t
+{
+    Load,
+    Blocking,
+};
+
 } // namespace GameEngine::Rendering
 
 // Hash specializations for use in std/abseil maps.

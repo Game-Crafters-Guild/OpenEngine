@@ -5,20 +5,20 @@ namespace Demo
 {
     // C# counterpart of the C++ HpBarSystem (Tests/EditorHarness/game-ui-hud). Demonstrates
     // a MANAGED user script reacting to a game-UI click end-to-end, through the Ui binding:
-    //   1. resolve "damage-btn", "hp-fill" and "hp-label" once they have mounted (Ui.FindElement),
+    //   1. resolve "damage-btn", "hp" and "hp-label" once they have mounted (Ui.FindElement),
     //   2. subscribe to the button's Clicked event, and
-    //   3. on click, decrement HP and re-drive the bar (SetWidthPercent) + label (SetText).
+    //   3. on click, decrement HP and re-drive the bar (Value) + label (SetText).
     // Resolution happens ONCE per element and the script keeps the wrappers. FindElement types
     // them from the element's own tag, so "damage-btn" comes back as a Ui.Button with a Clicked
-    // event and "hp-label" as a Ui.Label with SetText — a wrong id shows up as a failed cast here
-    // rather than as a call that silently does nothing.
+    // event, "hp" as a Ui.ProgressBar and "hp-label" as a Ui.Label with SetText — a wrong id
+    // shows up as a failed cast here rather than as a call that silently does nothing.
     //
     // Nothing here holds a native pointer: a wrapper is one integer (an instance id that is never
     // reused), every call re-resolves it inside the engine, and the wrapper owns nothing — there
     // is no Dispose on it, only on what a subscription costs.
     //
     // Elements can die under a script (a .uxml hot reload that replaced them, a document unmount),
-    // and they do not have to die together — a reload can replace the button while the fill and
+    // and they do not have to die together — a reload can replace the button while the bar and
     // label survive. The recovery is the one the API's contract implies: ask IsAlive, and drop the
     // wrappers so the next tick re-resolves as soon as ANY of them stops answering yes. That is why
     // the wiring below is written as "unwired until every element resolves" rather than "wired once
@@ -39,7 +39,7 @@ namespace Demo
         private const int kLowHealthPercent = 50;
 
         private int m_Hp = 100;
-        private Ui.Element? m_Fill;
+        private Ui.ProgressBar? m_Bar;
         private Ui.Label? m_Label;
         private Ui.Button? m_Button;
 
@@ -52,10 +52,10 @@ namespace Demo
 
         // Wired means all three wrappers exist AND all three still resolve. Checking only that
         // the button reference is non-null would hold a destroyed button forever; checking only
-        // the fill would do the same while the bar kept animating, so nothing would look wrong.
+        // the bar would do the same while the bar kept animating, so nothing would look wrong.
         private bool IsWired =>
             m_Button != null && m_Button.IsAlive &&
-            m_Fill != null && m_Fill.IsAlive &&
+            m_Bar != null && m_Bar.IsAlive &&
             m_Label != null && m_Label.IsAlive;
 
         public override void OnUpdate(float deltaTime)
@@ -70,12 +70,12 @@ namespace Demo
             // Poll until the subtree has mounted (async .uxml/.css load); FindElement returns null
             // until then. Resolving all three together keeps the wired state all-or-nothing.
             var button = Ui.FindElement("damage-btn") as Ui.Button;
-            Ui.Element? fill = Ui.FindElement("hp-fill");
+            var bar = Ui.FindElement("hp") as Ui.ProgressBar;
             var label = Ui.FindElement("hp-label") as Ui.Label;
-            if (button == null || fill == null || label == null)
+            if (button == null || bar == null || label == null)
                 return;
 
-            m_Fill = fill;
+            m_Bar = bar;
             m_Label = label;
             m_Button = button;
             // Additive: subscribing here never displaces the control's own click handling or
@@ -105,7 +105,7 @@ namespace Demo
             if (m_Button != null)
                 m_Button.Clicked -= OnTakeDamage;
             m_Button = null;
-            m_Fill = null;
+            m_Bar = null;
             m_Label = null;
         }
 
@@ -114,16 +114,17 @@ namespace Demo
         // every element rather than inferring the answer from one write's return value.
         private void ApplyHp()
         {
-            if (m_Fill == null || m_Label == null)
+            if (m_Bar == null || m_Label == null)
                 return;
-            m_Fill.SetWidthPercent(m_Hp);
+            // The layout sets max="100"; the bar clamps the value to its range.
+            m_Bar.Value = m_Hp;
             m_Label.SetText($"{m_Hp} / 100");
-            // State goes across as a CSS class, never as a colour: the stylesheet decides what
+            // State goes across as a CSS class, never as a color: the stylesheet decides what
             // "low health" looks like, so an artist can restyle it without touching this script.
             if (m_Hp <= kLowHealthPercent)
-                m_Fill.AddClass("low-health");
+                m_Bar.AddClass("low-health");
             else
-                m_Fill.RemoveClass("low-health");
+                m_Bar.RemoveClass("low-health");
         }
     }
 }

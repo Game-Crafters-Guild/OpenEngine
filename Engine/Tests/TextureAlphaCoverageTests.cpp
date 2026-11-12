@@ -2,7 +2,9 @@
 
 #include "Assets/AssetManager.h"
 #include "Assets/TextureCook.h"
+#include "EngineLogCapture.h"
 #include "JobSystem/WorkStealingThreadPool.h"
+#include "Memory/Testing/ScopedAllocationFault.h"
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -10,6 +12,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <limits>
 #include <vector>
 
@@ -332,6 +335,7 @@ class TextureCoverageCache : public testing::Test
     std::unique_ptr<JobSystem::WorkStealingThreadPool> m_Pool;
     std::unique_ptr<AssetManager> m_Assets;
     GUID m_Guid;
+    size_t m_Workers = 2;
 
     void Write(const std::vector<uint8>& bytes)
     {
@@ -345,7 +349,7 @@ class TextureCoverageCache : public testing::Test
         std::filesystem::create_directories(m_Root / "Assets");
         m_SourcePath = m_Root / "Assets" / "leaf.tga";
         Write(CoverageTga(CoveragePattern(19, 13)));
-        m_Pool = std::make_unique<JobSystem::WorkStealingThreadPool>(2);
+        m_Pool = std::make_unique<JobSystem::WorkStealingThreadPool>(m_Workers);
         m_Assets = std::make_unique<AssetManager>();
         ASSERT_TRUE(m_Assets->Initialize(m_Pool.get()));
         AssetSourceDesc source;
@@ -389,7 +393,53 @@ class TextureCoverageCache : public testing::Test
         std::ifstream stream(path, std::ios::binary);
         return std::vector<uint8>(std::istreambuf_iterator<char>(stream), {});
     }
+    // Loads the texture for a device whose transcode target is `target`, adds the load's log lines
+    // to `lines`, and returns the format the texture loaded in.
+    TextureFormat LoadFor(TextureGpuTranscodeTarget target, std::vector<std::string>& lines)
+    {
+        TextureAsset::SetGpuTranscodeTarget(target);
+        TextureAsset texture(m_Guid, m_SourcePath);
+        TestLog::ScopedEngineLogCapture capture(&lines);
+        EXPECT_TRUE(texture.Load());
+        Logger::Log::Flush();
+        return texture.GetFormat();
+    }
 };
+
+// The same project on an inline pool: an async load runs its reader and its decode on this thread.
+// CookTheSource cooks a source whose size no other buffer of a hit has, and keeps the cooked load.
+class TextureCoverageCacheInline : public TextureCoverageCache
+{
+  protected:
+    TextureCoverageCacheInline() { m_Workers = 0; }
+
+    size_t m_SourceSize = 0;
+    std::unique_ptr<TextureAsset> m_Cooked;
+
+    void CookTheSource()
+    {
+        Write(CoverageTga(CoveragePattern(61, 37)));
+        m_SourceSize = static_cast<size_t>(std::filesystem::file_size(m_SourcePath));
+        AssetManager::ScopedThreadAssetManager context(m_Assets.get());
+        m_Cooked = std::make_unique<TextureAsset>(m_Guid, m_SourcePath);
+        ASSERT_TRUE(m_Cooked->Load());
+        ASSERT_GT(m_Cooked->GetMipChain().size(), 1u);
+        ASSERT_EQ(Artifacts().size(), 1u);
+    }
+};
+
+void ExpectSamePayload(const TextureAsset& got, const TextureAsset& want)
+{
+    ASSERT_EQ(got.GetDataSize(), want.GetDataSize());
+    ASSERT_EQ(got.GetMipChain().size(), want.GetMipChain().size());
+    EXPECT_EQ(0, std::memcmp(got.GetPixelData(), want.GetPixelData(), static_cast<size_t>(want.GetDataSize())));
+}
+
+// The cooks to `output` that `lines` log.
+size_t CooksTo(const std::vector<std::string>& lines, TextureCookOutput output)
+{
+    return TestLog::CountLinesContaining(lines, std::string("-> ") + TextureCookOutputName(output) + " started");
+}
 } // namespace
 
 TEST_F(TextureCoverageCache, WorkerRecookRekeysCoverageCutoffAndSourceAndRetiresOldArtifact)
@@ -434,6 +484,89 @@ TEST_F(TextureCoverageCache, WorkerRecookRekeysCoverageCutoffAndSourceAndRetires
     ASSERT_EQ(changedSource.size(), 1u);
     EXPECT_NE(changedSource[0], changedCutoff[0]);
     EXPECT_FALSE(std::filesystem::exists(changedCutoff[0]));
+}
+
+// One source cooks to two outputs. Each output keeps its own artifact, so later loads cook
+// nothing; a cook removes only its own output's older artifact.
+TEST_F(TextureCoverageCache, ASourceCookedToTwoOutputsKeepsBothArtifactsAndCooksNeitherAgain)
+{
+    if (!IsTextureCookEncoderAvailable())
+        GTEST_SKIP() << "BC encoder unavailable";
+    struct RestoreTranscodeTarget
+    {
+        TextureGpuTranscodeTarget Target = TextureAsset::GetGpuTranscodeTarget();
+        ~RestoreTranscodeTarget() { TextureAsset::SetGpuTranscodeTarget(Target); }
+    } restoreTarget;
+    AssetManager::ScopedThreadAssetManager context(m_Assets.get());
+    Set(kTextureCompressionMetaKey, "bc7");
+    std::vector<std::string> lines;
+    EXPECT_NE(LoadFor(TextureGpuTranscodeTarget::RGBA32, lines), TextureFormat::BC7);
+    const auto uncompressed = Artifacts();
+    ASSERT_EQ(uncompressed.size(), 1u);
+    EXPECT_EQ(LoadFor(TextureGpuTranscodeTarget::BC7, lines), TextureFormat::BC7);
+    ASSERT_EQ(CooksTo(lines, TextureCookOutput::Uncompressed), 1u);
+    ASSERT_EQ(CooksTo(lines, TextureCookOutput::BC7), 1u);
+    const auto both = Artifacts();
+    EXPECT_EQ(both.size(), 2u) << "the BC7 cook removed the uncompressed artifact";
+
+    lines.clear();
+    EXPECT_NE(LoadFor(TextureGpuTranscodeTarget::RGBA32, lines), TextureFormat::BC7);
+    EXPECT_EQ(LoadFor(TextureGpuTranscodeTarget::BC7, lines), TextureFormat::BC7);
+    EXPECT_EQ(CooksTo(lines, TextureCookOutput::Uncompressed), 0u);
+    EXPECT_EQ(CooksTo(lines, TextureCookOutput::BC7), 0u);
+    EXPECT_EQ(Artifacts(), both);
+
+    // An edited source: each output's cook removes that output's older artifact only.
+    auto edited = CoveragePattern(19, 13);
+    edited.Bytes[3] = 255;
+    Write(CoverageTga(edited));
+    lines.clear();
+    EXPECT_EQ(LoadFor(TextureGpuTranscodeTarget::BC7, lines), TextureFormat::BC7);
+    ASSERT_EQ(CooksTo(lines, TextureCookOutput::BC7), 1u);
+    EXPECT_TRUE(std::filesystem::exists(uncompressed[0])) << "the BC7 cook removed the uncompressed artifact";
+    EXPECT_EQ(Artifacts().size(), 2u) << "the BC7 cook of the edited source kept the older BC7 artifact";
+    EXPECT_NE(LoadFor(TextureGpuTranscodeTarget::RGBA32, lines), TextureFormat::BC7);
+    ASSERT_EQ(CooksTo(lines, TextureCookOutput::Uncompressed), 1u);
+    EXPECT_EQ(Artifacts().size(), 2u);
+    for (const auto& old : both)
+        EXPECT_FALSE(std::filesystem::exists(old)) << old;
+}
+
+// A cook hit keeps the artifact's bytes as its payload: the load makes no buffer of the payload's
+// size, and its levels equal those of a load that copies the file. An engine image without the
+// allocation hook (a Windows Release Engine.dll) never fires the fault.
+TEST_F(TextureCoverageCache, ACookHitKeepsTheArtifactBytesAsItsPayload)
+{
+    AssetManager::ScopedThreadAssetManager context(m_Assets.get());
+    TextureAsset miss(m_Guid, m_SourcePath);
+    ASSERT_TRUE(miss.Load());
+    const auto artifacts = Artifacts();
+    ASSERT_EQ(artifacts.size(), 1u);
+    TextureAsset copied(GUID::Generate(), artifacts[0]);
+    ASSERT_TRUE(copied.Load());
+    ASSERT_GT(copied.GetMipChain().size(), 1u);
+
+    TextureAsset hit(m_Guid, m_SourcePath);
+    bool loaded = false;
+    {
+        Memory::Testing::ScopedAllocationFault fault{static_cast<size_t>(copied.GetDataSize()), 1,
+                                                     Memory::Testing::FaultRepeat::Every};
+        EXPECT_NO_THROW(loaded = hit.Load());
+        EXPECT_FALSE(fault.Fired());
+    }
+    ASSERT_TRUE(loaded);
+    ASSERT_EQ(hit.GetMipChain().size(), copied.GetMipChain().size());
+    EXPECT_EQ(hit.GetMipChain()[0].Offset, 0u);
+    for (size_t level = 0; level < copied.GetMipChain().size(); ++level)
+    {
+        const TextureMipDesc& want = copied.GetMipChain()[level];
+        const TextureMipDesc& got = hit.GetMipChain()[level];
+        ASSERT_EQ(got.Size, want.Size) << level;
+        EXPECT_EQ(got.Width, want.Width) << level;
+        EXPECT_EQ(got.Height, want.Height) << level;
+        EXPECT_EQ(0, std::memcmp(hit.GetPixelData() + got.Offset, copied.GetPixelData() + want.Offset, want.Size))
+            << level;
+    }
 }
 
 TEST_F(TextureCoverageCache, InvalidEnabledMetadataRefusesWorkerLoadBeforeAnyArtifactOrRawSuccess)
@@ -485,3 +618,49 @@ TEST_F(TextureCoverageCache, EnabledCoverageRefusesPlaceholderPixelsAfterDecodeF
     EXPECT_TRUE(Artifacts().empty());
 }
 #endif
+
+// A synchronous cook hit reads no buffer of its source's size: it hashes the source through a small
+// buffer and adopts the artifact. An engine image without the allocation hook (a Windows Release
+// Engine.dll) never fires the fault.
+TEST_F(TextureCoverageCacheInline, ASynchronousCookHitReadsNoBufferOfTheSourceSize)
+{
+    CookTheSource();
+    AssetManager::ScopedThreadAssetManager context(m_Assets.get());
+    TextureAsset hit(m_Guid, m_SourcePath);
+    bool loaded = false;
+    {
+        Memory::Testing::ScopedAllocationFault fault{m_SourceSize, 1, Memory::Testing::FaultRepeat::Every};
+        EXPECT_NO_THROW(loaded = hit.Load());
+        EXPECT_FALSE(fault.Fired());
+    }
+    ASSERT_TRUE(loaded);
+    ExpectSamePayload(hit, *m_Cooked);
+}
+
+// The reader of an async cook hit reads no buffer of the source's size, and the decode adopts the artifact.
+TEST_F(TextureCoverageCacheInline, AnAsyncCookHitsReaderReadsNoBufferOfTheSourceSize)
+{
+    CookTheSource();
+    auto result = std::make_shared<std::promise<SharedPtr<Asset>>>();
+    std::future<SharedPtr<Asset>> done = result->get_future();
+    AssetLoadHandle handle;
+    {
+        Memory::Testing::ScopedAllocationFault fault{m_SourceSize, 1, Memory::Testing::FaultRepeat::Every};
+        EXPECT_NO_THROW(handle = m_Assets->LoadAsset(m_Guid, [result](Result<SharedPtr<Asset>, AssetError> loadResult) {
+            result->set_value(loadResult.IsOk() ? loadResult.Value() : SharedPtr<Asset>{});
+        }));
+        if (fault.Fired())
+        {
+            // The denied read escaped the inline reader, so the load never ends; teardown would wait on it.
+            (void)m_Assets.release();
+            (void)m_Pool.release();
+            FAIL() << "the reader read the source whole";
+        }
+    }
+    ASSERT_EQ(done.wait_for(std::chrono::seconds(20)), std::future_status::ready);
+    const SharedPtr<Asset> asset = done.get();
+    const auto* texture = dynamic_cast<const TextureAsset*>(asset.get());
+    ASSERT_NE(texture, nullptr);
+    ExpectSamePayload(*texture, *m_Cooked);
+    EXPECT_EQ(Artifacts().size(), 1u);
+}

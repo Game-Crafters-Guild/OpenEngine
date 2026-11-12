@@ -127,95 +127,11 @@
     z-index: 2;
 }
 
-.scene-viewport-active-outline {
-    position: absolute;
-    left: 0;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    width: 100%;
-    height: 100%;
-    pointer-events: none;
-    z-index: 75;
-    border-style: solid;
-    border-width: 0;
-    border-color: transparent;
-    box-shadow: none;
-}
-
+/* The pane's own children are styled in controls/SceneViewport/SceneViewport.css. */
 .scene-viewport-host.quad-layout .scene-viewport-slot.active-viewport .scene-viewport-active-outline {
     border-width: 2px;
     border-color: #62b7ff;
     box-shadow: inset 0 0 0 1px rgba(98, 183, 255, 0.55);
-}
-
-.scene-viewport-label {
-    position: absolute;
-    right: 14px;
-    bottom: 14px;
-    min-width: 48px;
-    padding: 3px 7px;
-    color: #ffffff;
-    background-color: rgba(0, 0, 0, 0.28);
-    font-size: 11px;
-    font-family: var(--ui_font_family);
-    line-height: normal;
-    border-radius: 4px;
-    text-align: center;
-    white-space: nowrap;
-    pointer-events: none;
-    z-index: 40;
-}
-
-.scene-view-hdr-test-pattern-overlay {
-    position: absolute;
-    left: 0;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    width: 100%;
-    height: 100%;
-    display: none;
-    pointer-events: none;
-    z-index: 10000;
-    background-size: cover;
-    background-position: center;
-    background-repeat: no-repeat;
-}
-
-.scene-view-measure-overlay {
-    position: absolute;
-    left: 0;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    width: 100%;
-    height: 100%;
-    pointer-events: none;
-    z-index: 70;
-}
-
-.scene-view-measure-overlay.hidden {
-    display: none;
-}
-
-/* Hover outline label: centered pill when an entity is hovered in the scene view. */
-.scene-view-hover-pill {
-    position: absolute;
-    max-width: min(320px, 70vw);
-    padding: 5px 14px;
-    background-color: rgba(0, 0, 0, 0.59);
-    color: #f0f0f0;
-    font-size: 14px;
-    font-family: var(--ui_font_family);
-    font-weight: 500;
-    line-height: normal;
-    border-radius: 999px;
-    text-align: center;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    pointer-events: none;
 }
 
 /* ======================================
@@ -279,8 +195,7 @@
     border: 2px solid #FFFFFF;
 }
 
-.camera-bookmarks-row .camera-bookmarks-slot.active,
-.camera-bookmarks-row button.camera-bookmarks-slot.active {
+.camera-bookmarks-row .camera-bookmarks-slot.active {
     background-color: #242424;
     border-color: var(--camera-bookmark-active);
     color: var(--camera-bookmark-active);
@@ -290,8 +205,7 @@
 /* Hover rules come after .active so hover feedback wins on both states. */
 .camera-bookmarks-row .camera-bookmarks-slot:hover,
 .camera-bookmarks-row button.camera-bookmarks-slot:hover,
-.camera-bookmarks-row .camera-bookmarks-slot.active:hover,
-.camera-bookmarks-row button.camera-bookmarks-slot.active:hover {
+.camera-bookmarks-row .camera-bookmarks-slot.active:hover {
     background-color: #3a3a3a;
     border-color: #F2F2F2;
     color: #F2F2F2;
@@ -316,8 +230,7 @@
     opacity: var(--camera-bookmark-idle-opacity);
 }
 
-.camera-bookmarks-row .camera-bookmarks-slot.cambookmark-icon.active,
-.camera-bookmarks-row button.camera-bookmarks-slot.cambookmark-icon.active {
+.camera-bookmarks-row .camera-bookmarks-slot.cambookmark-icon.active {
     background-color: transparent;
     border: none;
     opacity: 0.40;
@@ -326,8 +239,7 @@
 /* Hover rules come after .active so hover feedback wins on both states. */
 .camera-bookmarks-row .camera-bookmarks-slot.cambookmark-icon:hover,
 .camera-bookmarks-row button.camera-bookmarks-slot.cambookmark-icon:hover,
-.camera-bookmarks-row .camera-bookmarks-slot.cambookmark-icon.active:hover,
-.camera-bookmarks-row button.camera-bookmarks-slot.cambookmark-icon.active:hover {
+.camera-bookmarks-row .camera-bookmarks-slot.cambookmark-icon.active:hover {
     background-color: transparent;
     border: none;
     opacity: 1.0;

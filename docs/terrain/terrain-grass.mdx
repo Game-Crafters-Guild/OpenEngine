@@ -43,8 +43,11 @@ The preset values and the default palette are provisional. The settings, the sto
 | **blades / m² (at camera)** | `BladesPerSquareMeter` | 21 | 0 to 256 |
 | **Range (m)** | `Range` | 500 | 0 or more (the slider goes to 2000) |
 | **Density Falloff** (Advanced) | `DensityFalloff` | 2 | 0 or more |
+| **Far Thinning** (Advanced) | `FarThinning` | 1 | 0 to 1 |
 
 The maximum density is 256 blades per square meter. Placement divides the ground into cells of 8 m by 8 m, and one cell holds at most 16384 blades. A stored value above 256 is clamped to 256 when the scene loads, so the value you see is the value that renders.
+
+**Far Thinning** controls the far blades that are thinner than a pixel. Placement drops a share of them and makes the kept blades wider, so the ground does not show through. At 1, the default, it drops the most blades and saves the most frame time. At 0, it draws every blade. Lower it if the far grass looks thin or washed out. When the scene has more than one grass terrain, the lowest value applies to all of them.
 
 ### The instance budget pays with range
 

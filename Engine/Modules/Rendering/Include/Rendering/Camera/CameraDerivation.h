@@ -19,8 +19,9 @@ struct CameraDerivedData
     Matrix4x4 ViewProjMatrix;
     Vector3 Position;
     Vector3 Forward;
-    float NearPlane = 0.1f;
-    float FarPlane = 1000.0f;
+    float NearPlane = 0.0f;
+    // The camera's culling range in meters.
+    float FarPlane = 0.0f;
     // Vertical screen-space slope of the projection. Unifies perspective
     // and orthographic LOD math:
     //   perspective: ScreenScale = tan(fovY/2)       (size shrinks with distance)
@@ -34,10 +35,9 @@ struct CameraDerivedData
 // Single source of truth for the camera-math any per-view system needs.
 // CPU-side derivations only — does not extract frustum planes (that's
 // `Rendering::ExtractFrustumPlanes(viewProj, out)` and lives in
-// Common/Frustum.h). Reverse-Z near/far recovery is conservative: if the
-// matrix doesn't look like an `MakePerspectiveLH_ZO_ReverseZ` output (e.g.
-// orthographic) the function leaves the default near/far in place.
-CameraDerivedData DeriveCameraData(const CameraData& source);
+// Common/Frustum.h). Near and the culling range come from `ranges`, never
+// from the matrix; the ranges must be positive with the range past near.
+CameraDerivedData DeriveCameraData(const CameraData& source, const CameraRanges& ranges);
 
 } // namespace Rendering
 } // namespace GameEngine

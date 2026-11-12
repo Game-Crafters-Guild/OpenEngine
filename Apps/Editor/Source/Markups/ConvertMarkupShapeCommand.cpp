@@ -23,15 +23,12 @@ namespace
 {
 
 // The matrix that places the entity's parent in the world; the identity for a root.
-Components::WorldTransform ParentPlacement(const ECS::World& world, ECS::EntityHandle entity)
+Mathematics::Matrix4x4 ParentPlacement(const ECS::World& world, ECS::EntityHandle entity)
 {
     const auto* parent = world.GetComponent<Components::Parent>(entity);
-    Components::WorldTransform placed{};
     if (!parent || !world.IsValid(parent->Entity))
-        return placed;
-    const Mathematics::Matrix4x4 matrix = MarkupPlacement(world, parent->Entity);
-    std::copy_n(matrix.Data(), 16, placed.matrix);
-    return placed;
+        return Mathematics::Matrix4x4::Identity();
+    return MarkupPlacement(world, parent->Entity);
 }
 
 } // namespace
@@ -49,8 +46,10 @@ ConvertMarkupShapeCommand::ConvertMarkupShapeCommand(std::string label, ECS::Wor
     if (const auto* placed = world.GetComponent<Components::WorldTransform>(entity))
         m_WorldBefore = *placed;
     else
-        std::copy(std::begin(m_TransformBefore.matrix), std::end(m_TransformBefore.matrix),
-                  std::begin(m_WorldBefore.matrix));
+    {
+        m_WorldBefore.Position = m_TransformBefore.Position;
+        m_WorldBefore.Basis = m_TransformBefore.Basis;
+    }
     if (const auto* volume = world.GetComponent<Components::MarkupVolume>(entity))
         m_VolumeBefore = *volume;
 }
@@ -65,18 +64,20 @@ ConvertMarkupShapeCommand::~ConvertMarkupShapeCommand()
 
 void ConvertMarkupShapeCommand::MakeShape()
 {
-    const Components::WorldTransform parent = ParentPlacement(m_World, m_Entity);
+    const Mathematics::Matrix4x4 parent = ParentPlacement(m_World, m_Entity);
     if (const auto* region = std::get_if<ConvertedRegion>(&m_Shape))
     {
         // The region stands where the volume's base stood.
+        const Mathematics::Vector3 worldBefore = m_WorldBefore.GetPosition() - Mathematics::WorldPosition{};
         const std::optional<MarkupWorldVolume> volume =
-            MarkupWorldVolumeFromMatrix(m_VolumeBefore.Shape, m_WorldBefore.matrix);
-        const float32 baseY = volume ? 2.0f * volume->Center.y - volume->TopY : m_WorldBefore.matrix[13];
-        const RegionPlacement placement = NewRegionPlacement(region->Knots, parent.matrix, baseY);
+            MarkupWorldVolumeFromMatrix(m_VolumeBefore.Shape, m_WorldBefore.ToMatrix4x4(worldBefore));
+        const float32 baseY = volume ? 2.0f * volume->Center.y - volume->TopY : worldBefore.y;
+        const RegionPlacement placement = NewRegionPlacement(region->Knots, parent, baseY);
         m_TransformAfter = placement.Local;
         m_WorldAfter = placement.World;
         m_World.AddComponentImmediate(m_Entity, m_TransformAfter);
-        AddRegionParts(m_World, m_Entity, m_WorldAfter.matrix, region->Knots, region->Type, region->ExtrudeHeight);
+        AddRegionParts(m_World, m_Entity, m_WorldAfter.ToMatrix4x4(m_WorldAfter.GetPosition() - Mathematics::WorldPosition{}),
+                       region->Knots, region->Type, region->ExtrudeHeight);
         m_Region = *m_World.GetComponent<Components::MarkupRegion>(m_Entity);
         m_IsRegion = true;
     }
@@ -84,12 +85,12 @@ void ConvertMarkupShapeCommand::MakeShape()
     {
         const ConvertedPath& path = std::get<ConvertedPath>(m_Shape);
         const Components::Transform placed = NewPathPlacement(path.Points);
-        const Mathematics::Matrix4x4 local = Mathematics::Inverse(Mathematics::Matrix4x4::FromColumnMajor(parent.matrix)) *
-                                             Mathematics::Matrix4x4::FromColumnMajor(placed.matrix);
-        std::copy_n(local.Data(), 16, m_TransformAfter.matrix);
-        std::copy(std::begin(placed.matrix), std::end(placed.matrix), std::begin(m_WorldAfter.matrix));
+        const Mathematics::Matrix4x4 placedMatrix = placed.ToMatrix4x4(placed.GetPosition() - Mathematics::WorldPosition{});
+        m_TransformAfter = Components::Transform::FromMatrix4x4(Mathematics::Inverse(parent) * placedMatrix);
+        m_WorldAfter.Position = placed.Position;
+        m_WorldAfter.Basis = placed.Basis;
         m_World.AddComponentImmediate(m_Entity, m_TransformAfter);
-        AddPathParts(m_World, m_Entity, m_WorldAfter.matrix, path.Points, path.Type);
+        AddPathParts(m_World, m_Entity, placedMatrix, path.Points, path.Type);
     }
     m_Spline = *m_World.GetComponent<Components::SplineComponent>(m_Entity);
     m_Made = true;

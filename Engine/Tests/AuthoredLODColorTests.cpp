@@ -88,6 +88,16 @@ Vector<Mesh> Family() {
 
 Mesh ColouredChain() { return Assemble(0, Family())[0]; }
 
+// A model's only image: one opaque BGRA texel encoded as an uncompressed 32-bit TGA.
+Vector<EmbeddedImage> OneOpaqueTexel()
+{
+    static constexpr uint8 kTga[] = {0,0,2,0,0,0,0,0,0,0,0,0,1,0,1,0,32,8,255,255,255,255};
+    Vector<EmbeddedImage> images(1);
+    images[0].MimeType = "image/x-tga";
+    images[0].Data = ByteBuffer::CopyOf(kTga);
+    return images;
+}
+
 class AuthoredColourCache : public ::testing::Test {
 protected:
     void SetUp() override {
@@ -272,11 +282,7 @@ TEST(AuthoredLODColours, HlodBakesChosenOwnLevelRgbAndAlphaAndSharedLevelBase) {
 
 TEST(AuthoredLODColours, InferredMaskDemotionIncludesEveryAuthoredAlphaStream) {
     auto mesh = ColouredChain(); mesh.MaterialIndex = 0;
-    // One opaque BGRA texel encoded as an uncompressed 32-bit TGA. Texture
-    // coverage alone is opaque; only the selected vertex alpha can discard.
-    EmbeddedImage image;
-    image.MimeType = "image/x-tga";
-    image.Data = {0,0,2,0,0,0,0,0,0,0,0,0,1,0,1,0,32,8,255,255,255,255};
+    // Texture coverage alone is opaque; only the selected vertex alpha can discard.
     ImportedMaterialData material{};
     material.AlphaMode = AlphaMode::Mask; material.AlphaModeInferred = true;
     material.DiffuseTexture = "__embedded:0";
@@ -285,13 +291,13 @@ TEST(AuthoredLODColours, InferredMaskDemotionIncludesEveryAuthoredAlphaStream) {
     for (auto& colours : mesh.ExtraLODColor0)
         for (size_t i = 3; i < colours.size(); i += 4) colours[i] = 1.0f;
     ModelAsset asset(GUID::Generate(), "synthetic://alpha.fbx");
-    ModelAssetFbxTestAccess::DemoteMasks(asset, {mesh}, {material}, {image});
+    ModelAssetFbxTestAccess::DemoteMasks(asset, {mesh}, {material}, OneOpaqueTexel());
     ASSERT_EQ(asset.GetMaterial(0).AlphaMode, AlphaMode::Opaque) << "opaque control must actually demote";
     mesh.ExtraLODColor0[1][3] = 0.1f;
-    ModelAssetFbxTestAccess::DemoteMasks(asset, {mesh}, {material}, {image});
+    ModelAssetFbxTestAccess::DemoteMasks(asset, {mesh}, {material}, OneOpaqueTexel());
     EXPECT_EQ(asset.GetMaterial(0).AlphaMode, AlphaMode::Mask);
     mesh.ExtraLODColor0[1].pop_back();
-    ModelAssetFbxTestAccess::DemoteMasks(asset, {mesh}, {material}, {image});
+    ModelAssetFbxTestAccess::DemoteMasks(asset, {mesh}, {material}, OneOpaqueTexel());
     EXPECT_EQ(asset.GetMaterial(0).AlphaMode, AlphaMode::Mask) << "malformed data is not evidence of opacity";
 }
 
@@ -299,9 +305,6 @@ TEST(AuthoredLODColours, InferredMaskDemotionSkipsVertexAlphaTheMaterialIgnores)
     // Synty-style FBX: a zero-alpha colour layer on every level over an opaque
     // texture. The material ignores vertex colour, so only the texture decides.
     auto mesh = ColouredChain(); mesh.MaterialIndex = 0;
-    EmbeddedImage image;
-    image.MimeType = "image/x-tga";
-    image.Data = {0,0,2,0,0,0,0,0,0,0,0,0,1,0,1,0,32,8,255,255,255,255};
     ImportedMaterialData material{};
     material.AlphaMode = AlphaMode::Mask; material.AlphaModeInferred = true;
     material.IgnoresVertexColor = true;
@@ -311,7 +314,7 @@ TEST(AuthoredLODColours, InferredMaskDemotionSkipsVertexAlphaTheMaterialIgnores)
     for (auto& colours : mesh.ExtraLODColor0)
         for (size_t i = 3; i < colours.size(); i += 4) colours[i] = 0.0f;
     ModelAsset asset(GUID::Generate(), "synthetic://synty.fbx");
-    ModelAssetFbxTestAccess::DemoteMasks(asset, {mesh}, {material}, {image});
+    ModelAssetFbxTestAccess::DemoteMasks(asset, {mesh}, {material}, OneOpaqueTexel());
     EXPECT_EQ(asset.GetMaterial(0).AlphaMode, AlphaMode::Opaque);
 }
 

@@ -83,12 +83,10 @@ class ProbeWarningCapture
 Components::WorldTransform MakeTransform(const Vector3& position, const Vector3& scale)
 {
     Components::WorldTransform xf{};
-    xf.matrix[0] = scale.x;
-    xf.matrix[5] = scale.y;
-    xf.matrix[10] = scale.z;
-    xf.matrix[12] = position.x;
-    xf.matrix[13] = position.y;
-    xf.matrix[14] = position.z;
+    xf.Basis[0].x = scale.x;
+    xf.Basis[1].y = scale.y;
+    xf.Basis[2].z = scale.z;
+    xf.Position = Mathematics::WorldPosition::FromVector3(position);
     return xf;
 }
 
@@ -116,7 +114,7 @@ void MoveCamera(ECS::World& world, ECS::EntityHandle camera, float x)
 {
     auto* xf = world.GetComponentForWrite<Components::WorldTransform>(camera);
     ASSERT_NE(xf, nullptr);
-    xf->matrix[12] = x;
+    xf->Position.X = x;
 }
 
 void Drive(ReflectionProbeSystem& system, ECS::World& world, int frames)

@@ -1,7 +1,6 @@
 #include "Terrain/TerrainModifier/TerrainModifierGizmo.h"
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <vector>
 
@@ -20,6 +19,7 @@
 #include "ECS/ECS.h"
 #include "ECS/Query.h"
 #include "Engine/Rendering/RenderServices.h"
+#include "Scene/TerrainPicking.h"
 #include "TerrainECS/TerrainModifierComponents.h"
 #include "TerrainECS/TerrainService.h"
 
@@ -106,7 +106,7 @@ struct Footprint
 
 float ExtractYaw(const WorldTransform& xf)
 {
-    return std::atan2(xf.matrix[8], xf.matrix[10]);
+    return std::atan2(xf.Basis[2].x, xf.Basis[2].z);
 }
 
 // Draw a planar footprint: the authored outline at the entity Y (teal, inner +
@@ -141,7 +141,7 @@ void DrawPlanar(GizmoRenderContext& ctx, const TerrainContext& terrain, const Fo
     // strength at the inner one, and an effect whose only authored quantity is a
     // target inside that ramp (a grass region) is tuned by the outer edge. Half alpha
     // on the outer ring, matching the spherical path.
-    std::vector<std::array<float, 3>> ring, draped;
+    std::vector<Mathematics::Vector3> ring, draped;
     bool anyDraped = false;
     const auto drapeRing = [&](float radius, float halfX, float halfZ)
     {
@@ -151,15 +151,15 @@ void DrawPlanar(GizmoRenderContext& ctx, const TerrainContext& terrain, const Fo
                                      halfX, halfZ, fp.Yaw, kRingSegments);
         draped.reserve(ring.size());
         anyDraped = false;
-        for (const auto& p : ring)
+        for (const Mathematics::Vector3& p : ring)
         {
             // A drawn ring takes a coarse answer (AcceptCoarse): far from the camera the GPU draws a
             // coarse level there too, so the ring lies on the ground the user sees.
             TerrainECS::SurfaceHeightSample sample;
-            if (terrain.Planar.SampleHeight(Mathematics::Vector3(p[0], 0.0f, p[2]),
+            if (terrain.Planar.SampleHeight(Mathematics::Vector3(p.x, 0.0f, p.z),
                                             TerrainECS::SurfaceHeightPolicy::AcceptCoarse, sample))
             {
-                draped.push_back({p[0], sample.Height, p[2]});
+                draped.emplace_back(p.x, sample.Height, p.z);
                 anyDraped = true;
             }
             else
@@ -198,8 +198,8 @@ void DrawPlanar(GizmoRenderContext& ctx, const TerrainContext& terrain, const Fo
         const std::size_t step = std::max<std::size_t>(1u, n / 4u);
         for (std::size_t i = 0; i < n; i += step)
         {
-            spokes.emplace_back(ring[i][0], ring[i][1], ring[i][2]);
-            spokes.emplace_back(draped[i][0], draped[i][1], draped[i][2]);
+            spokes.push_back(ring[i]);
+            spokes.push_back(draped[i]);
         }
         if (!spokes.empty())
             ctx.DrawColoredLines(spokes.data(), spokes.size() / 2u, spokeColor, thickness);
@@ -213,10 +213,10 @@ void DrawPlanar(GizmoRenderContext& ctx, const TerrainContext& terrain, const Fo
 void DrawSpherical(GizmoRenderContext& ctx, const TerrainContext& terrain, const Footprint& fp,
                    bool selected)
 {
-    if (terrain.PlanetRadius <= 0.0f)
+    if (terrain.PlanetRadius <= 0.0f || !terrain.Feature)
         return;
-    const std::array<float, 3> planetCenter = {0.0f, 0.0f, 0.0f};
-    const std::array<float, 3> modPos = {fp.WorldX, fp.WorldY, fp.WorldZ};
+    const Mathematics::Vector3 planetCenter = {0.0f, 0.0f, 0.0f};
+    const Mathematics::Vector3 modPos = {fp.WorldX, fp.WorldY, fp.WorldZ};
     const Geo::SphereFrame frame = Geo::MakeSphereFrame(planetCenter, modPos);
     if (!frame.Valid)
         return; // modifier at the planet centre has no radial direction
@@ -226,12 +226,8 @@ void DrawSpherical(GizmoRenderContext& ctx, const TerrainContext& terrain, const
     const float* rgb = fp.SphereSupported ? kFootprintRGB : kInertRGB;
     const Color color(rgb[0], rgb[1], rgb[2], alpha);
 
-    // Lift the ring onto the visible relief/sculpt surface so it hugs the planet.
-    CBTTerrainECS::CBTRenderFeature* feature = terrain.Feature;
-    auto heightAbove = [feature](float dx, float dy, float dz) -> float
-    {
-        return feature ? feature->SampleSphereSurfaceHeight(dx, dy, dz) : 0.0f;
-    };
+    // Lift the ring onto the drawn surface; no ring while a page under it is not on the CPU.
+    Scene::DrawnPlanetHeight heightAbove{*terrain.Feature};
 
     const float outerRadius = fp.Radius + std::max(fp.Falloff, 0.0f);
     const float outerHX = fp.RectHalfX + std::max(fp.Falloff, 0.0f);
@@ -241,6 +237,8 @@ void DrawSpherical(GizmoRenderContext& ctx, const TerrainContext& terrain, const
     Geo::AppendSphereFootprint(lines, planetCenter, frame, terrain.PlanetRadius, fp.Shape,
                                fp.Radius, fp.RectHalfX, fp.RectHalfZ, fp.Yaw, kRingSegments,
                                heightAbove);
+    if (heightAbove.Missed)
+        return;
     if (fp.Falloff > 0.0f)
     {
         const Color outerColor(rgb[0], rgb[1], rgb[2], alpha * 0.5f);
@@ -248,7 +246,7 @@ void DrawSpherical(GizmoRenderContext& ctx, const TerrainContext& terrain, const
         Geo::AppendSphereFootprint(outer, planetCenter, frame, terrain.PlanetRadius, fp.Shape,
                                    outerRadius, outerHX, outerHZ, fp.Yaw, kRingSegments,
                                    heightAbove);
-        if (!outer.empty())
+        if (!outer.empty() && !heightAbove.Missed)
             ctx.DrawColoredLines(outer.data(), outer.size() / 2u, outerColor, thickness);
     }
     if (!lines.empty())
@@ -286,15 +284,14 @@ void DrawZoneModifiers(GizmoRenderContext& ctx, ECS::World& world, const Terrain
             bool sel = false;
             if (!IsEmphasized(e, selected, hovered, sel))
                 return;
-            const float scaleX = std::sqrt(xf.matrix[0] * xf.matrix[0] + xf.matrix[1] * xf.matrix[1]
-                                           + xf.matrix[2] * xf.matrix[2]);
-            const float scaleZ = std::sqrt(xf.matrix[8] * xf.matrix[8] + xf.matrix[9] * xf.matrix[9]
-                                           + xf.matrix[10] * xf.matrix[10]);
+            const float scaleX = Mathematics::Vector3(xf.Basis[0]).Length();
+            const float scaleZ = Mathematics::Vector3(xf.Basis[2]).Length();
+            const Mathematics::Vector3 position = xf.GetPosition() - Mathematics::WorldPosition{};
             Footprint fp{};
             fp.Shape = Geo::FootprintShape::Rect;
-            fp.WorldX = xf.matrix[12];
-            fp.WorldY = xf.matrix[13];
-            fp.WorldZ = xf.matrix[14];
+            fp.WorldX = position.x;
+            fp.WorldY = position.y;
+            fp.WorldZ = position.z;
             fp.RectHalfX = zone.ExtentX * scaleX;
             fp.RectHalfZ = zone.ExtentZ * scaleZ;
             fp.Falloff = zone.Falloff;
@@ -336,9 +333,10 @@ void DrawModifierVolumes(GizmoRenderContext& ctx, ECS::World& world, const Terra
             Footprint fp{};
             fp.Shape = vol.Shape == TerrainVolumeShape::Rectangle ? Geo::FootprintShape::Rect
                                                                  : Geo::FootprintShape::Disc;
-            fp.WorldX = xf.matrix[12];
-            fp.WorldY = xf.matrix[13];
-            fp.WorldZ = xf.matrix[14];
+            const Mathematics::Vector3 position = xf.GetPosition() - Mathematics::WorldPosition{};
+            fp.WorldX = position.x;
+            fp.WorldY = position.y;
+            fp.WorldZ = position.z;
             fp.Radius = vol.Radius;
             fp.RectHalfX = vol.RectHalfX;
             fp.RectHalfZ = vol.RectHalfZ;
@@ -373,7 +371,8 @@ void TerrainModifierGizmo::Render(GizmoRenderContext& context)
     const ECS::EntityHandle focus = m_HoveredEntity.IsValid() ? m_HoveredEntity : m_SelectedEntities.front();
     const auto* focusTransform = world->GetComponent<WorldTransform>(focus);
     const TerrainContext terrain =
-        ResolveTerrainContext(*world, focusTransform ? focusTransform->GetPosition() : Mathematics::Vector3{});
+        ResolveTerrainContext(*world, focusTransform ? focusTransform->GetPosition() - Mathematics::WorldPosition{}
+                                                    : Mathematics::Vector3{});
     if (!terrain.Valid)
         return;
 

@@ -12,6 +12,7 @@
 #include "Rendering/Core/CommandList.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/RenderGraph/RGFrame.h"
+#include "TestCameraEye.h"
 #include "TestDeviceHelper.h"
 
 #include <cmath>
@@ -167,7 +168,7 @@ TEST(OceanShadowSimTest, DeclaresEveryFrameAcrossDeviceSlotWraps)
         camera.proj[3][2] = 0.1f;
         camera.view = Mathematics::Matrix4x4::Identity();
         camera.viewProj = Mathematics::Matrix4x4::Identity();
-        rs.Views().SetCameraData(cameraId, camera);
+        rs.Views().SetCameraData(cameraId, ::GameEngine::Tests::TestCameraWithEye(camera), {0.1f, 1000.0f});
         const ViewId viewId = rs.Views().AllocateView("OceanShadowView", cameraId);
         rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
         ViewClearConfig clear{};

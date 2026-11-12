@@ -76,13 +76,14 @@ SceneViewDropPoint ResolveSceneViewDropPoint(const Mathematics::Ray3D& cameraRay
     if (auto* phys = PhysicsECS::PhysicsWorldService::TryGet())
     {
         Physics::RayCastQuery q{};
-        q.ray.origin = ray.origin;
-        q.ray.direction = ray.direction;
+        q.origin = WorldPosition::FromVector3(ray.origin);
+        q.direction = ray.direction;
         q.maxDistance = 1.0e6f;
         Physics::RayCastResult hit{};
         if (phys->RayCast(q, hit) && hit.HasHit())
         {
-            point.Position = Vector3(hit.hitPoint.x, hit.hitPoint.y, hit.hitPoint.z);
+            // The drop point is a 32-bit position: the subtraction rounds the exact hit point once.
+            point.Position = hit.hitPoint - WorldPosition{};
             return point;
         }
     }
@@ -99,7 +100,7 @@ SceneViewDropPoint ResolveSceneViewDropPoint(const Mathematics::Ray3D& cameraRay
     const auto pick = Picking::PickScene(ray, world, pickOpts);
     if (pick.Hit)
     {
-        point.Position = pick.Best.WorldPosition;
+        point.Position = pick.Best.Point;
         point.OnPendingMesh = pick.Best.MeshBvhPending;
         return point;
     }

@@ -184,6 +184,8 @@ private:
     /// first one and after the conversation ends.
     uint64_t m_GateSession = 0;
     std::string m_ActingRefusal;
+    /// AiAssistantSettings::SetupGeneration() that m_ActingRefusal answers; Update() checks again when it moves.
+    uint64_t m_ActingGeneration = 0;
     /// The current connection's tools check, run on a detached thread; the future comes
     /// from a promise, so dropping it never waits for the check.
     std::future<std::string> m_ActingCheck;

@@ -57,17 +57,26 @@ std::shared_ptr<const ShaderPropertyTable> ShaderPropertyTableCache::Resolve(
     const ShaderPropertyTableInputs& inputs)
 {
     const std::string key = CacheKey(inputs);
-    // Read before the build: an edit announced during the build leaves this
-    // entry one generation old, so the next Resolve rebuilds it.
     const uint64_t generation = ShaderSourceCache::Get().Generation();
+    {
+        std::lock_guard<std::mutex> lock(m_Mutex);
+        const auto it = m_Entries.find(key);
+        if (it != m_Entries.end() && it->second.SourceGeneration == generation)
+            return it->second.Table;
+    }
 
-    std::lock_guard<std::mutex> lock(m_Mutex);
-    auto it = m_Entries.find(key);
-    if (it != m_Entries.end() && it->second.SourceGeneration == generation)
-        return it->second.Table;
-
+    // Build outside the lock, as ShaderSourceCache::TextureSlots parses: a lookup never waits for a build.
     bool readFailed = false;
     std::shared_ptr<const ShaderPropertyTable> table = Build(inputs, readFailed);
+    // Built from bytes read before an announcement: it serves this caller only.
+    if (generation != ShaderSourceCache::Get().Generation())
+        return table;
+
+    std::lock_guard<std::mutex> lock(m_Mutex);
+    // A build of a newer generation stored its table while this build ran: keep that table.
+    const auto held = m_Entries.find(key);
+    if (held != m_Entries.end() && held->second.SourceGeneration > generation)
+        return table;
     // A table with a read error is not stored, as in the source cache: an adapter or
     // a surface that appears later is read on the next Resolve without an announcement.
     if (readFailed)
@@ -75,6 +84,15 @@ std::shared_ptr<const ShaderPropertyTable> ShaderPropertyTableCache::Resolve(
     else
         m_Entries[key] = Entry{generation, table};
     return table;
+}
+
+bool ShaderPropertyTableCache::Holds(const ShaderPropertyTableInputs& inputs)
+{
+    const std::string key = CacheKey(inputs);
+    const uint64_t generation = ShaderSourceCache::Get().Generation();
+    std::lock_guard<std::mutex> lock(m_Mutex);
+    const auto it = m_Entries.find(key);
+    return it != m_Entries.end() && it->second.SourceGeneration == generation;
 }
 
 } // namespace GameEngine::Rendering

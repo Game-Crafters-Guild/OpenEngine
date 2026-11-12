@@ -3,8 +3,14 @@
 #include "Components/Terrain/TerrainSurfaceRules.h"
 #include "Types/Types.h"
 
+#include <span>
 #include <string>
 #include <string_view>
+
+namespace GameEngine::Components
+{
+enum class TerrainDomain : uint32;
+} // namespace GameEngine::Components
 
 namespace GameEngine::Editor::TerrainRuleVocabulary
 {
@@ -17,7 +23,7 @@ namespace GameEngine::Editor::TerrainRuleVocabulary
 // would put that copy out of reach — EditorTests runs no layout pass.
 //
 // The one word this file exists to keep out of the Inspector is "world Y".
-// HeightMetres is measured from the TERRAIN'S BASE: the terrain entity's own Y
+// HeightMeters is measured from the TERRAIN'S BASE: the terrain entity's own Y
 // translation is not part of it, so a band does not move when the terrain does.
 // Calling it world Y would be wrong in exactly the way an author only discovers
 // after moving a terrain and watching the snow line stay put.
@@ -33,21 +39,23 @@ struct ConditionDomain
     float32 Max = 1.0f;
 };
 
-// Dropdown label. Both slope kinds and both height kinds name their UNIT,
-// because the pair differ only by it and picking the wrong one is silent.
+// Dropdown label. Both slope kinds and the height kind name their UNIT,
+// because the slope pair differ only by it and picking the wrong one is silent.
 std::string_view ConditionKindLabel(Kind kind);
 
 // Unit shown after a value: "°", " m", or nothing for the [0, 1] kinds.
 std::string_view ConditionUnitSuffix(Kind kind);
 
-// Tooltip copy: what the kind measures, and for the two migration-exact units,
-// why they are here at all rather than the one the author wants.
-std::string_view ConditionKindHelp(Kind kind);
+// The kinds the Measures list offers on a terrain of `domain`, in list order. Latitude
+// is a planet measure: a flat terrain reads 0, so its list leaves it out.
+std::span<const Kind> ConditionKinds(Components::TerrainDomain domain);
+// Help copy: what the kind measures on a terrain of `domain`.
+std::string_view ConditionKindHelp(Kind kind, Components::TerrainDomain domain);
 
-// `terrainHeightMetres` is the terrain's HeightScale — the top of the metres
-// domain. Zero or negative falls back to a usable range rather than a
+// `heightRangeMeters` is the terrain's height range (TerrainService::GetHeightRangeMeters),
+// the meters domain. An empty range falls back to a usable one rather than a
 // zero-width slider no handle can move on.
-ConditionDomain ConditionAuthoringDomain(Kind kind, float32 terrainHeightMetres);
+ConditionDomain ConditionAuthoringDomain(Kind kind, ConditionDomain heightRangeMeters);
 
 // Digits this kind shows, in a caption AND in a numeric field. ONE source, so a
 // caption reading "34" can never sit beside a field reading "34.4": that is the
@@ -57,9 +65,27 @@ int ConditionDecimals(Kind kind);
 // A value with its unit, at that precision.
 std::string FormatConditionValue(Kind kind, float32 value);
 
+// The text a height band's high field shows when the band has no upper edge.
+inline constexpr std::string_view kNoUpperLimitText = "No limit";
+
 // Just the band's endpoints, for a control that has room for the numbers but not
-// the sentence: "0 - 35".
+// the sentence: "0 - 35", or "900 m - No limit" for a height band with no upper edge.
+// A refused condition's endpoints carry no unit.
 std::string ConditionBandRangeText(const Components::TerrainRuleCondition& condition);
+
+// The Measures entry of a condition whose saved kind a scene load refused: "Refused (kind 3)".
+std::string RefusedKindLabel(uint8 refusedKind);
+
+// A terrain's height range, the one text form for every place that shows it: "0 m to 1200 m".
+std::string FormatHeightRange(ConditionDomain heightRangeMeters);
+
+// Where the height conditions of a terrain with this range read, for the rules
+// section: "Height conditions are meters above this terrain's base: 0 m to 1200 m."
+// On a planet, above its radius. Empty for an empty range.
+std::string HeightRangeNote(ConditionDomain heightRangeMeters, Components::TerrainDomain domain);
+// The word a rule's heading puts before its material: "Polar " when a Latitude band runs
+// from 60 degrees or more to a pole, so two rows of one material read apart. Empty otherwise.
+std::string_view RuleHeadingQualifier(const Components::TerrainSurfaceRule& rule);
 
 // A freshly added condition of this kind, spanning its kind's WHOLE domain.
 //
@@ -68,7 +94,7 @@ std::string ConditionBandRangeText(const Components::TerrainRuleCondition& condi
 // almost-inert state with no notice attached, because the row is neither
 // rule-less nor condition-less. Adding a condition should be a no-op until the
 // author narrows it, so the band starts wide open.
-Components::TerrainRuleCondition MakeDefaultCondition(Kind kind, float32 terrainHeightMetres);
+Components::TerrainRuleCondition MakeDefaultCondition(Kind kind, ConditionDomain heightRangeMeters);
 
 // One sentence describing the band the way the evaluator reads it: where the
 // weight is 1, and how far past each edge it takes to reach 0, followed by one

@@ -67,14 +67,14 @@ void RegisterJobSystemDebugHandlers(EditorDebugServer& server)
     // No parameters. Reply:
     //   computeWorkers, blockingThreads: thread counts (blocking threads are created on a channel's
     //     first dispatch and never retired).
-    //   lanes.normal / lanes.background: {queued, running} — jobs waiting in the lane and compute
+    //   lanes.normal / lanes.awaited / lanes.background: {queued, running} — jobs waiting in the lane and compute
     //     workers running a job of that class.
     //   channels[]: {name, queued, running, cap, jobs, queueWaitMs} per registered JobChannel —
     //     jobs past the cap, jobs holding a slot, the cap, cumulative jobs that took a slot and the
     //     cumulative time jobs waited in the channel for one.
     //   threads[]: {thread, kind, index, running, runningForMs?} per pool thread: running is
-    //     "Normal", "Background" or the channel's name, null when idle; runningForMs is set for
-    //     Background and channel jobs only (the pool reads no clock for Normal jobs).
+    //     "Normal", "Awaited", "Background" or the channel's name, null when idle; runningForMs is set for
+    //     Background and channel jobs only (the pool reads no clock for Normal and Awaited jobs).
     //   tasksExecuted: jobs dequeued from the compute lanes plus channel jobs the blocking threads
     //     ran; census: the cumulative queue-topology counters it is derived from.
     // Read twice and subtract for a rate.

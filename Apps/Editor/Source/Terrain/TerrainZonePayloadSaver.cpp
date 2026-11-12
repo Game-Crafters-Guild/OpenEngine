@@ -3,6 +3,7 @@
 #include "Scene/SceneBackupRecovery.h"
 
 #include "Assets/AssetRegistry.h"
+#include "Components/Terrain/Terrain.h"
 #include "Components/Terrain/TerrainModifiers.h"
 #include "ECS/ECSTemplates.h"
 #include "ECS/World.h"
@@ -193,6 +194,20 @@ uint32_t FlushDirtyZonePayloads(ECS::World& world, const std::filesystem::path& 
                           staging ? "staged" : "wrote", written,
                           staging ? "backup(s)" : "file(s)", scenePath.filename().string());
     return written;
+}
+
+void AssignSavedSceneToTerrains(ECS::World& world, const std::optional<std::filesystem::path>& previousScenePath,
+                                const std::filesystem::path& scenePath, AssetRegistry& registry)
+{
+    const GUID previousScene = previousScenePath ? registry.GetOrCreateAssetGUID(*previousScenePath) : GUID{};
+    const GUID savedScene = registry.GetOrCreateAssetGUID(scenePath);
+    // A null identity is a terrain added since the last save: it belongs to the document.
+    world.Query<ECS::Write<Components::Terrain>>().Each(
+        [&previousScene, &savedScene](Components::Terrain& terrain)
+        {
+            if (terrain.BakeOriginScene.IsNull() || terrain.BakeOriginScene == previousScene)
+                terrain.BakeOriginScene = savedScene;
+        });
 }
 
 } // namespace GameEngine::Editor

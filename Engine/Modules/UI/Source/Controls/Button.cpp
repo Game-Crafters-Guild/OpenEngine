@@ -26,7 +26,7 @@ float Button::WidthForText(std::string_view text) const
 
 Button::Button()
 {
-    // Control styling is an Editor-shipped UIStyle asset.
+    // Control styling is a UI module UIStyle asset.
     AddClass("button");
     RequestSubtreeStyleAssetPath("UI/controls/Button.css", "editor");
 

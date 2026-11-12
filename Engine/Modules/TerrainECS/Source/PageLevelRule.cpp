@@ -1,13 +1,15 @@
 #include "TerrainECS/PageLevelRule.h"
 
 #include "Mathematics/Interpolation.h"
+#include "PageWedge.h"
+#include "TerrainECS/PagedHeightSampler.h"
 
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <numbers>
-#include <utility>
 
 namespace GameEngine::TerrainECS
 {
@@ -26,9 +28,6 @@ bool SameCamera(const PageRequestCamera& a, const PageRequestCamera& b)
 
 constexpr float32 kReferenceRows = static_cast<float32>(kPageLevelReferenceRows);
 constexpr float32 kBlendStart = 0.75f;
-// A forward shorter than this in the horizontal plane has no bearing: the wedge is the disc.
-constexpr float32 kWedgeMinForward = 1e-3f;
-
 // Positive when the bearing of (bx, bz) is greater than the bearing of (ax, az), the two less than
 // pi apart. The bearing is atan2(x, z): 0 along +Z, pi / 2 along +X.
 float32 BearingTurn(float32 ax, float32 az, float32 bx, float32 bz)
@@ -90,6 +89,52 @@ uint32 FirstPinnedPageLevel(std::span<const PageStreaming::PageStoreLevel> level
     return first;
 }
 
+uint32 WedgePageCacheSlots(const PageLevelView& view, float32 horizontalHalfFov, float32 level0Texel,
+                           float32 horizonMeters, uint32 levels)
+{
+    // A level's reach is 2 x scale x FocalPixels / TargetPixels. A wedge of `wedge` radians that reaches
+    // `sides` page sides holds wedge/2 sides^2 + (2 + wedge)(2/pi) sides + 1 pages, plus the foot outside it.
+    const float64 wedge = 2.0 * (static_cast<float64>(horizontalHalfFov) + kPageWedgeMarginRadians);
+    const float64 foot = std::numbers::pi * kPageWedgeFootPages * kPageWedgeFootPages *
+                         std::max(0.0, 1.0 - wedge / (2.0 * std::numbers::pi));
+    float64 streamed = 0.0;
+    for (uint32 level = 0; level < levels; ++level)
+    {
+        const float64 scale = std::ldexp(static_cast<float64>(level0Texel), static_cast<int>(level));
+        const float64 reach = std::min(2.0 * scale * view.FocalPixels / view.TargetPixels,
+                                       static_cast<float64>(horizonMeters));
+        const float64 sides = reach / (scale * PageStreaming::kPageOwnedSamples);
+        streamed += 0.5 * wedge * sides * sides + (2.0 + wedge) * (2.0 / std::numbers::pi) * sides + 1.0 + foot;
+    }
+    const float64 slots = streamed * kPinWholePyramidCacheFraction / (kPinWholePyramidCacheFraction - 1u);
+    const uint32 rows = MakePageCacheGeometry(static_cast<uint32>(std::ceil(slots))).SlotsPerRow;
+    return rows * rows;
+}
+
+bool FootprintMeetsWedge(std::span<const Mathematics::Vector2> corners, const Mathematics::Vector2& forward,
+                         float32 cosReach)
+{
+    // The foot is outside the footprint, so its corners span less than pi of bearing: the turn
+    // orders them, and the lowest and highest corners bound the footprint's bearings.
+    Mathematics::Vector2 low = corners.front();
+    Mathematics::Vector2 high = low;
+    for (const Mathematics::Vector2& corner : corners.subspan(1))
+    {
+        if (BearingTurn(low.x, low.y, corner.x, corner.y) < 0.0f)
+            low = corner;
+        if (BearingTurn(high.x, high.y, corner.x, corner.y) > 0.0f)
+            high = corner;
+    }
+    const float32 lowDot = forward.x * low.x + forward.y * low.y;
+    const float32 highDot = forward.x * high.x + forward.y * high.y;
+    if (BearingTurn(low.x, low.y, forward.x, forward.y) >= 0.0f &&
+        BearingTurn(forward.x, forward.y, high.x, high.y) >= 0.0f && (lowDot > 0.0f || highDot > 0.0f))
+        return true; // forward lies between the bounding corners
+    // Else the gap to forward is the angle to the nearer bounding corner.
+    return lowDot >= cosReach * std::sqrt(low.x * low.x + low.y * low.y) ||
+           highDot >= cosReach * std::sqrt(high.x * high.x + high.y * high.y);
+}
+
 void PageRequester::Configure(const PageRequestTerrain& terrain, PageRequestArea area)
 {
     m_Terrain = terrain;
@@ -130,36 +175,12 @@ bool PageRequester::InWedge(const Footprint& box, const WedgeView& view)
     const float32 pageWidth = std::max(box.MaxX - box.MinX, box.MaxZ - box.MinZ);
     if (std::sqrt(dx * dx + dz * dz) <= kPageWedgeFootPages * pageWidth)
         return true;
-    // The camera is outside the rectangle, so its corners span less than pi of bearing: the turn
-    // orders them, and the lowest and highest corners bound the rectangle's bearings.
-    float32 lowX = box.MinX - view.Position.x;
-    float32 lowZ = box.MinZ - view.Position.z;
-    float32 highX = lowX;
-    float32 highZ = lowZ;
-    for (const auto& [x, z] :
-         {std::pair{box.MaxX, box.MinZ}, std::pair{box.MinX, box.MaxZ}, std::pair{box.MaxX, box.MaxZ}})
-    {
-        const float32 cornerX = x - view.Position.x;
-        const float32 cornerZ = z - view.Position.z;
-        if (BearingTurn(lowX, lowZ, cornerX, cornerZ) < 0.0f)
-        {
-            lowX = cornerX;
-            lowZ = cornerZ;
-        }
-        if (BearingTurn(highX, highZ, cornerX, cornerZ) > 0.0f)
-        {
-            highX = cornerX;
-            highZ = cornerZ;
-        }
-    }
-    const float32 lowDot = view.ForwardX * lowX + view.ForwardZ * lowZ;
-    const float32 highDot = view.ForwardX * highX + view.ForwardZ * highZ;
-    if (BearingTurn(lowX, lowZ, view.ForwardX, view.ForwardZ) >= 0.0f &&
-        BearingTurn(view.ForwardX, view.ForwardZ, highX, highZ) >= 0.0f && (lowDot > 0.0f || highDot > 0.0f))
-        return true; // forward lies between the bounding corners
-    // Else the gap to forward is the angle to the nearer bounding corner.
-    return lowDot >= view.CosReach * std::sqrt(lowX * lowX + lowZ * lowZ) ||
-           highDot >= view.CosReach * std::sqrt(highX * highX + highZ * highZ);
+    const std::array<Mathematics::Vector2, 4> corners = {
+        Mathematics::Vector2(box.MinX - view.Position.x, box.MinZ - view.Position.z),
+        Mathematics::Vector2(box.MaxX - view.Position.x, box.MinZ - view.Position.z),
+        Mathematics::Vector2(box.MinX - view.Position.x, box.MaxZ - view.Position.z),
+        Mathematics::Vector2(box.MaxX - view.Position.x, box.MaxZ - view.Position.z)};
+    return FootprintMeetsWedge(corners, Mathematics::Vector2(view.ForwardX, view.ForwardZ), view.CosReach);
 }
 
 float32 PageRequester::NearestDistance(const PageStreaming::PageAddress& address, PageRequestArea area) const
@@ -183,7 +204,7 @@ void PageRequester::PrepareViews(std::span<const PageRequestCamera> cameras)
             std::sqrt(camera.Forward.x * camera.Forward.x + camera.Forward.z * camera.Forward.z);
         const float32 reach = camera.HorizontalHalfFov + kPageWedgeMarginRadians;
         // No direction, a view straight up or down, or a reach of pi or more: every bearing.
-        view.EveryBearing = !camera.HasDirection || forwardLength < kWedgeMinForward ||
+        view.EveryBearing = !camera.HasDirection || forwardLength < kPageWedgeMinForward ||
                             reach >= std::numbers::pi_v<float32>;
         if (!view.EveryBearing)
         {

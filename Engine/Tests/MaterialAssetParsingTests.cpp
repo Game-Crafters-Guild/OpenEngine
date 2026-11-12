@@ -991,6 +991,39 @@ TEST(MaterialAssetParsingTest, IgnoreVertexColor_AbsentFromJsonWhenFalse)
     EXPECT_FALSE(j.contains("ignoreVertexColor"));
 }
 
+// ---- patternSymmetry (the paving seam's symmetry tag) ----
+
+TEST(MaterialAssetParsingTest, PatternSymmetry_ParsesEachValueAndDefaultsToNone)
+{
+    const auto parse = [](const std::string& field)
+    {
+        const std::string json = R"JSON({"schemaVersion": 3, "materialName": "Paving", "lightingModel": "StandardPBR",
+            "surfaceShader": "Surfaces/standard_pbr.glsl")JSON" + field + "}";
+        MaterialAsset asset(GUID::Generate(), "test.material");
+        EXPECT_TRUE(ParseMaterialJson(json, asset));
+        return asset.GetDocument().patternSymmetry;
+    };
+
+    EXPECT_EQ(parse(R"(, "patternSymmetry": "Square")"), MaterialPatternSymmetry::Square);
+    EXPECT_EQ(parse(R"(, "patternSymmetry": "Rectangular")"), MaterialPatternSymmetry::Rectangular);
+    EXPECT_EQ(parse(R"(, "patternSymmetry": "None")"), MaterialPatternSymmetry::None);
+    EXPECT_EQ(parse(""), MaterialPatternSymmetry::None);
+}
+
+TEST(MaterialAssetParsingTest, PatternSymmetry_SerializeRoundTripAndOmittedWhenNone)
+{
+    MaterialDocument doc = MaterialDocument::CreateDefaultPBR("Setts");
+    doc.patternSymmetry = MaterialPatternSymmetry::Square;
+
+    const std::string text = SerializeMaterialDocument(doc).dump();
+    MaterialAsset asset(GUID::Generate(), "test.material");
+    ASSERT_TRUE(ParseMaterialJson(text, asset));
+    EXPECT_EQ(asset.GetDocument().patternSymmetry, MaterialPatternSymmetry::Square);
+
+    doc.patternSymmetry = MaterialPatternSymmetry::None;
+    EXPECT_FALSE(SerializeMaterialDocument(doc).contains("patternSymmetry"));
+}
+
 // ---- User keywords (slice N): parse / sanitize / cap / serialize ----
 
 TEST(MaterialAssetParsingTest, Keywords_SanitizeAndDedup)

@@ -1120,7 +1120,7 @@ const char* DescribeBlendParseFailure(int status, bool isUncompressed, const fbt
 
 } // unnamed namespace
 
-bool ModelAsset::LoadFromBlendData(const Vector<uint8>& data,
+bool ModelAsset::LoadFromBlendData(std::span<const uint8> data,
                                    const std::filesystem::path& modelPathForExternalTextures,
                                    const FbxLoaderOptions& loaderOptions)
 {
@@ -1894,7 +1894,7 @@ bool ModelAsset::LoadFromBlendData(const Vector<uint8>& data,
 
 #else  // !GE_HAVE_FBTBLEND
 
-bool ModelAsset::LoadFromBlendData(const Vector<uint8>&, const std::filesystem::path&, const FbxLoaderOptions&)
+bool ModelAsset::LoadFromBlendData(std::span<const uint8>, const std::filesystem::path&, const FbxLoaderOptions&)
 {
     Logger::Log::Error("ModelAsset::LoadFromBlendData '{}': built without GE_HAVE_FBTBLEND, .blend support disabled",
                        GetName());

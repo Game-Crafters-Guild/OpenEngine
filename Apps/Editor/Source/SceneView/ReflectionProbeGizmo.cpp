@@ -39,12 +39,11 @@ struct ProbeVolume
 ProbeVolume ExtractProbeVolume(const WorldTransform& xf)
 {
     ProbeVolume volume{};
-    const float* m = xf.matrix;
-    volume.Center = Vector3(m[12], m[13], m[14]);
+    volume.Center = xf.GetPosition() - Mathematics::WorldPosition{};
 
-    const Vector3 ax(m[0], m[1], m[2]);
-    const Vector3 ay(m[4], m[5], m[6]);
-    const Vector3 az(m[8], m[9], m[10]);
+    const Vector3 ax(xf.Basis[0]);
+    const Vector3 ay(xf.Basis[1]);
+    const Vector3 az(xf.Basis[2]);
     const float sx = ax.Length();
     const float sy = ay.Length();
     const float sz = az.Length();

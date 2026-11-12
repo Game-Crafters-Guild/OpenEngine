@@ -34,6 +34,7 @@
 
 #include "Engine/Rendering/ShadowMapRenderFeature.h"
 #include "Mathematics/MatrixOps.h"
+#include "TestCameraEye.h"
 
 #include <array>
 #include <random>
@@ -272,7 +273,7 @@ TEST(RenderServicesWorldMaterialTests, ECSWorldMeshExtraction_UsesWorldTransform
 	// Minimal camera + view so that RenderExtractionSystem sees at least one view.
 	CameraId cameraId = rs.Views().AllocateCamera("TestCamera");
 	CameraData cam = MakeIdentityCameraData();
-	rs.Views().SetCameraData(cameraId, cam);
+	rs.Views().SetCameraData(cameraId, ::GameEngine::Tests::TestCameraWithEye(cam), {0.1f, 1000.0f});
 
 	ViewId viewId = rs.Views().AllocateView("TestView", cameraId);
 	rs.Views().SetViewWorldId(viewId, worldId);
@@ -291,11 +292,11 @@ TEST(RenderServicesWorldMaterialTests, ECSWorldMeshExtraction_UsesWorldTransform
 	Entity child  = world.Create();
 
 	Transform parentLocal = Transform::FromTRS(
-	    Mathematics::Vector3{1.0f, 2.0f, 3.0f},
+	    Mathematics::WorldPosition{1.0, 2.0, 3.0},
 	    Mathematics::Quaternion{},
 	    Mathematics::Vector3{1.0f, 1.0f, 1.0f});
 	Transform childLocal = Transform::FromTRS(
-	    Mathematics::Vector3{0.0f, 0.0f, 5.0f},
+	    Mathematics::WorldPosition{0.0, 0.0, 5.0},
 	    Mathematics::Quaternion{},
 	    Mathematics::Vector3{1.0f, 1.0f, 1.0f});
 
@@ -318,9 +319,9 @@ TEST(RenderServicesWorldMaterialTests, ECSWorldMeshExtraction_UsesWorldTransform
 	// World transform should equal parent (1,2,3) plus child local (0,0,5).
 	auto* childWorld = world.GetComponent<WorldTransform>(child.GetHandle());
 	ASSERT_NE(childWorld, nullptr);
-	EXPECT_NEAR(childWorld->matrix[12], 1.0f, 1e-4f);
-	EXPECT_NEAR(childWorld->matrix[13], 2.0f, 1e-4f);
-	EXPECT_NEAR(childWorld->matrix[14], 8.0f, 1e-4f);
+	EXPECT_NEAR(childWorld->Position.X, 1.0, 1e-4);
+	EXPECT_NEAR(childWorld->Position.Y, 2.0, 1e-4);
+	EXPECT_NEAR(childWorld->Position.Z, 8.0, 1e-4);
 
 		RenderExtractionSystem extraction(&rs);
 	extraction.Update(world, 0.0f);
@@ -388,7 +389,7 @@ TEST(RenderServicesWorldMaterialTests, DisabledRendererClearsCachedGPUSceneInsta
 	const uint64 worldId = world.GetWorldId();
 
 	CameraId cameraId = rs.Views().AllocateCamera("DisableTestCamera");
-	rs.Views().SetCameraData(cameraId, MakeIdentityCameraData());
+	rs.Views().SetCameraData(cameraId, ::GameEngine::Tests::TestCameraWithEye(MakeIdentityCameraData()), {0.1f, 1000.0f});
 
 	ViewId viewId = rs.Views().AllocateView("DisableTestView", cameraId);
 	rs.Views().SetViewWorldId(viewId, worldId);
@@ -396,7 +397,7 @@ TEST(RenderServicesWorldMaterialTests, DisabledRendererClearsCachedGPUSceneInsta
 
 	Entity entity = world.Create();
 	entity.Set(Transform::FromTRS(
-	    Mathematics::Vector3{0.0f, 0.0f, 0.0f},
+	    Mathematics::WorldPosition{},
 	    Mathematics::Quaternion{},
 	    Mathematics::Vector3{1.0f, 1.0f, 1.0f}));
 	entity.Set(MakeTestMeshRenderer(setup));
@@ -496,7 +497,7 @@ TEST(RenderServicesWorldMaterialTests, LateExtractionRedirtiesGPUSceneForBuckete
 	// accepts each world's renderable.
 	CameraId cameraId = rs.Views().AllocateCamera("TestCamera");
 	CameraData camData = MakeIdentityCameraData();
-	rs.Views().SetCameraData(cameraId, camData);
+	rs.Views().SetCameraData(cameraId, ::GameEngine::Tests::TestCameraWithEye(camData), {0.1f, 1000.0f});
 
 	// --- Main world: allocate matching view, one entity, extract. ---
 	auto mainWorldPtr = std::make_unique<World>(nullptr);
@@ -508,7 +509,7 @@ TEST(RenderServicesWorldMaterialTests, LateExtractionRedirtiesGPUSceneForBuckete
 
 		Entity e = mainWorld.Create();
 		e.Set(Transform::FromTRS(
-		    Mathematics::Vector3{1.0f, 0.0f, 0.0f},
+		    Mathematics::WorldPosition{1.0, 0.0, 0.0},
 		    Mathematics::Quaternion{},
 		    Mathematics::Vector3{1.0f, 1.0f, 1.0f}));
 		e.Set(MakeTestMeshRenderer(setup));
@@ -543,7 +544,7 @@ TEST(RenderServicesWorldMaterialTests, LateExtractionRedirtiesGPUSceneForBuckete
 
 		Entity e = thumbnailWorld.Create();
 		e.Set(Transform::FromTRS(
-		    Mathematics::Vector3{2.0f, 0.0f, 0.0f},
+		    Mathematics::WorldPosition{2.0, 0.0, 0.0},
 		    Mathematics::Quaternion{},
 		    Mathematics::Vector3{1.0f, 1.0f, 1.0f}));
 		e.Set(MakeTestMeshRenderer(setup));
@@ -952,17 +953,17 @@ TEST(RenderServicesWorldMaterialTests, ECSWorldMeshExtraction_LODGroupBiasReache
 	World& world = *worldPtr;
 
 	CameraId cameraId = rs.Views().AllocateCamera("TestCamera");
-	rs.Views().SetCameraData(cameraId, MakeIdentityCameraData());
+	rs.Views().SetCameraData(cameraId, ::GameEngine::Tests::TestCameraWithEye(MakeIdentityCameraData()), {0.1f, 1000.0f});
 	ViewId viewId = rs.Views().AllocateView("TestView", cameraId);
 	rs.Views().SetViewWorldId(viewId, world.GetWorldId());
 	rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
 
 	Entity plain = world.Create();
-	plain.Set(Transform::FromTRS({0.0f, 0.0f, 0.0f}, Mathematics::Quaternion{}, {1.0f, 1.0f, 1.0f}));
+	plain.Set(Transform::FromTRS({0.0, 0.0, 0.0}, Mathematics::Quaternion{}, {1.0f, 1.0f, 1.0f}));
 	plain.Set(MakeTestMeshRenderer(setup));
 
 	Entity biased = world.Create();
-	biased.Set(Transform::FromTRS({5.0f, 0.0f, 0.0f}, Mathematics::Quaternion{}, {1.0f, 1.0f, 1.0f}));
+	biased.Set(Transform::FromTRS({5.0, 0.0, 0.0}, Mathematics::Quaternion{}, {1.0f, 1.0f, 1.0f}));
 	biased.Set(MakeTestMeshRenderer(setup));
 	LODGroup lg{};
 	lg.Bias = 1.5f;
@@ -1030,14 +1031,14 @@ Transform MakeVariedLocalTransform(uint32 i)
 	    1.0f + static_cast<float>(i % 4) * 0.1f,
 	    1.0f + static_cast<float>(i % 3) * 0.2f,
 	    1.0f + static_cast<float>(i % 5) * 0.05f};
-	return Transform::FromTRS(pos, rot, scale);
+	return Transform::FromTRS(Mathematics::WorldPosition::FromVector3(pos), rot, scale);
 }
 
 // Byte-exact comparison of a resolved WorldTransform against expectations.
 void ExpectWorldTransformBitwiseEqual(const WorldTransform& a, const WorldTransform& b, uint32 index)
 {
-	EXPECT_EQ(0, std::memcmp(a.matrix, b.matrix, sizeof(a.matrix)))
-	    << "WorldTransform.matrix diverged at entity index " << index;
+	EXPECT_EQ(0, std::memcmp(&a, &b, kTransformPoseBytes))
+	    << "WorldTransform pose diverged at entity index " << index;
 	EXPECT_EQ(a.Version, b.Version)
 	    << "WorldTransform.Version diverged at entity index " << index;
 }
@@ -1135,9 +1136,9 @@ TEST(TransformHierarchyParallelTests, ReparentTopologyRebuild_ChildFollowsNewPar
 	JobSystem::WorkStealingThreadPool pool(4);
 	World world(&pool);
 
-	Entity a = world.Create(Transform::FromTRS({10.0f, 0.0f, 0.0f}, Mathematics::Quaternion{}, {1, 1, 1}));
-	Entity b = world.Create(Transform::FromTRS({0.0f, 5.0f, 0.0f}, Mathematics::Quaternion{}, {1, 1, 1}));
-	Entity c = world.Create(Transform::FromTRS({0.0f, 0.0f, 3.0f}, Mathematics::Quaternion{}, {1, 1, 1}));
+	Entity a = world.Create(Transform::FromTRS({10.0, 0.0, 0.0}, Mathematics::Quaternion{}, {1, 1, 1}));
+	Entity b = world.Create(Transform::FromTRS({0.0, 5.0, 0.0}, Mathematics::Quaternion{}, {1, 1, 1}));
+	Entity c = world.Create(Transform::FromTRS({0.0, 0.0, 3.0}, Mathematics::Quaternion{}, {1, 1, 1}));
 
 	Parent bToA{};
 	bToA.Entity = a.GetHandle();
@@ -1153,9 +1154,9 @@ TEST(TransformHierarchyParallelTests, ReparentTopologyRebuild_ChildFollowsNewPar
 	// b = a(10,0,0) + local(0,5,0); c = b + local(0,0,3).
 	const WorldTransform* wc = world.GetComponent<WorldTransform>(c.GetHandle());
 	ASSERT_NE(wc, nullptr);
-	EXPECT_FLOAT_EQ(wc->matrix[12], 10.0f);
-	EXPECT_FLOAT_EQ(wc->matrix[13], 5.0f);
-	EXPECT_FLOAT_EQ(wc->matrix[14], 3.0f);
+	EXPECT_DOUBLE_EQ(wc->Position.X, 10.0);
+	EXPECT_DOUBLE_EQ(wc->Position.Y, 5.0);
+	EXPECT_DOUBLE_EQ(wc->Position.Z, 3.0);
 
 	// Reparent c directly under a: c world = a(10,0,0) + local(0,0,3).
 	Parent cToA{};
@@ -1166,9 +1167,9 @@ TEST(TransformHierarchyParallelTests, ReparentTopologyRebuild_ChildFollowsNewPar
 
 	wc = world.GetComponent<WorldTransform>(c.GetHandle());
 	ASSERT_NE(wc, nullptr);
-	EXPECT_FLOAT_EQ(wc->matrix[12], 10.0f);
-	EXPECT_FLOAT_EQ(wc->matrix[13], 0.0f);
-	EXPECT_FLOAT_EQ(wc->matrix[14], 3.0f);
+	EXPECT_DOUBLE_EQ(wc->Position.X, 10.0);
+	EXPECT_DOUBLE_EQ(wc->Position.Y, 0.0);
+	EXPECT_DOUBLE_EQ(wc->Position.Z, 3.0);
 }
 
 // A mixed world (roots + a parented chain) must resolve bitwise-identically

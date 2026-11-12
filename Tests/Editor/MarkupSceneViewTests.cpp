@@ -110,12 +110,10 @@ class MarkupSceneViewTest : public ::testing::Test
     {
         const ECS::EntityHandle entity = m_World.CreateEntity();
         Components::WorldTransform transform;
-        transform.matrix[0] = size.x;
-        transform.matrix[5] = size.y;
-        transform.matrix[10] = size.z;
-        transform.matrix[12] = center.x;
-        transform.matrix[13] = center.y;
-        transform.matrix[14] = center.z;
+        transform.Basis[0].x = size.x;
+        transform.Basis[1].y = size.y;
+        transform.Basis[2].z = size.z;
+        transform.Position = Mathematics::WorldPosition::FromVector3(center);
         m_World.AddComponentImmediate(entity, transform);
         m_World.AddComponentImmediate(entity, Markup{});
         m_World.AddComponentImmediate(entity, MarkupVolume{shape});

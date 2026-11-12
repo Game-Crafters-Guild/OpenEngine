@@ -15,6 +15,9 @@ constexpr float32 kMaxBorderMeters = 10.0f;
 constexpr float32 kMinBorderHeightMeters = 0.01f;
 constexpr float32 kMinMouthRadiusMeters = 0.1f;
 constexpr float32 kMaxMouthRadiusMeters = 10.0f;
+constexpr float32 kMinSeamBandTiles = 0.5f;
+constexpr float32 kMaxSeamBandTiles = 8.0f;
+constexpr float32 kMaxSeamCourseMeters = 2.0f;
 
 [[nodiscard]] float32 Sanitized(float32 value, float32 fallback, float32 low, float32 high)
 {
@@ -60,6 +63,12 @@ SplinePaving SanitizePavingRecipe(const SplinePaving& authored)
         authored.GroundAuthority != Components::SplineGroundAuthority::Grades &&
         authored.GroundAuthority != Components::SplineGroundAuthority::Owns)
         clean.GroundAuthority = defaults.GroundAuthority;
+    if (authored.Seam != Components::SplinePavingSeam::HardCut && authored.Seam != Components::SplinePavingSeam::Blend &&
+        authored.Seam != Components::SplinePavingSeam::JointLine &&
+        authored.Seam != Components::SplinePavingSeam::StoneCourse)
+        clean.Seam = defaults.Seam;
+    clean.SeamBandTiles = Sanitized(authored.SeamBandTiles, defaults.SeamBandTiles, kMinSeamBandTiles, kMaxSeamBandTiles);
+    clean.SeamCourseWidth = Sanitized(authored.SeamCourseWidth, defaults.SeamCourseWidth, 0.0f, kMaxSeamCourseMeters);
     return clean;
 }
 

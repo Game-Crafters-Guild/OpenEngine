@@ -78,6 +78,9 @@ GameUIHost::GameUIHost(Rendering::IDevice* device, AssetManager* assetManager,
     // scopes them to the editor's own chrome, so a developer who turns them on
     // does not take the game's function keys with them.
     m_UI->SetDebugKeysEnabled(false);
+    // The game UI draws in painter's order: the opaque pre-pass is proven
+    // pixel-identical on the editor overlay only.
+    m_UI->SetOpaquePrePassEnabled(false);
     // Keys follow focus on a game surface, never the cursor. The chrome fallback
     // — a key with nothing focused goes to the hovered element — would hand the
     // game's Space to whatever HUD button the pointer was left resting on.

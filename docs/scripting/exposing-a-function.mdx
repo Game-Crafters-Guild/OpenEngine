@@ -54,6 +54,7 @@ The function table carries the module's hash. A C# binding built from another de
 | `StringId` | `StringId` (`StringId.Of(name)`, made once) | the 64-bit hash; 0 is refused |
 | a marked `enum class` | the enum, with the same underlying type | the value |
 | `Mathematics::Vector2`, `Vector3`, `Vector4`, `Quaternion`, `Matrix4x4` | `System.Numerics` `Vector2`, `Vector3`, `Vector4`, `Quaternion`, `Matrix4x4` | a pointer to the bytes, unchanged |
+| `Mathematics::WorldPosition` | `GameEngine.Scripting.WorldPosition` (three doubles; a record field of it has no initializer) | a pointer to the bytes, unchanged |
 | `ECS::EntityHandle` | `GameEngine.Entity` | the packed 32-bit entity id |
 | `Rendering::RenderLayerMask` | `GameEngine.Scripting.RenderLayerMask` | the 32-bit word of layers; a call that does not run answers `RenderLayerMask.None` |
 | `std::string_view` in, `std::string` returned | `string` | UTF-8 bytes and their length; see [Text](#text) |
@@ -95,9 +96,9 @@ In C#, the parameter is a `Span<T>` that the caller sizes, and the method return
 /// Casts a ray and writes every body it hits within maxDistance into hits, nearest first. Returns the number of
 /// bodies the ray hits.
 // @ge-script @ge-context
-std::int32_t RayCastAll(Physics::PhysicsWorld& physics, Mathematics::Vector3 origin, Mathematics::Vector3 direction,
-                        std::span<RayHit> hits, float maxDistance = 1000.0f, std::uint32_t layerMask = kAllLayers,
-                        bool ignoreTriggers = false);
+std::int32_t RayCastAll(Physics::PhysicsWorld& physics, Mathematics::WorldPosition origin,
+                        Mathematics::Vector3 direction, std::span<RayHit> hits, float maxDistance = 1000.0f,
+                        std::uint32_t layerMask = kAllLayers, bool ignoreTriggers = false);
 ```
 
 ```csharp title="Call it from a script"
@@ -118,15 +119,16 @@ A marked `struct` crosses by value. Give every field its default in the declarat
 struct RayHit
 {
     ECS::EntityHandle entity{};
-    Mathematics::Vector3 point{0.0f, 0.0f, 0.0f};
+    Mathematics::WorldPosition point;
     Mathematics::Vector3 normal{0.0f, 1.0f, 0.0f};
     float distance = 0.0f;
 };
 
 /// Casts a ray and finds the nearest body it hits within maxDistance.
 // @ge-script @ge-script-try @ge-context
-bool RayCast(Physics::PhysicsWorld& physics, Mathematics::Vector3 origin, Mathematics::Vector3 direction, RayHit& hit,
-             float maxDistance = 1000.0f, std::uint32_t layerMask = kAllLayers, bool ignoreTriggers = false);
+bool RayCast(Physics::PhysicsWorld& physics, Mathematics::WorldPosition origin, Mathematics::Vector3 direction,
+             RayHit& hit, float maxDistance = 1000.0f, std::uint32_t layerMask = kAllLayers,
+             bool ignoreTriggers = false);
 ```
 
 ```csharp title="Call it from a script"

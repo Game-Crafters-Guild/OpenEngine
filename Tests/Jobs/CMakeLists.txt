@@ -16,6 +16,7 @@ find_package(GTest REQUIRED)
 # TaskIds into that pool's registry, corrupting F12 cancel arbitration.
 set(JOB_SYSTEM_TEST_SOURCES
     JobSystemTestsMain.cpp
+    AvailableProcessorsTests.cpp
     WorkStealingThreadPoolTests.cpp
     WakeProtocolAndSpinTests.cpp
     TaskDependencyGraphTests.cpp
@@ -369,87 +370,6 @@ set_target_properties(HotReloadBenchmark PROPERTIES
     CXX_STANDARD_REQUIRED ON
 )
 
-# FileChangeTracker Tests
-add_executable(FileChangeTrackerTests
-    ../FileChangeTrackerTest.cpp
-    ${CMAKE_SOURCE_DIR}/Engine/Source/HotReloadNativeStubs.cpp
-)
-set_source_files_properties(${CMAKE_SOURCE_DIR}/Engine/Source/HotReloadNativeStubs.cpp
-    TARGET_DIRECTORY FileChangeTrackerTests
-    PROPERTIES COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:MSVC>:/wd4273>")
-
-target_link_libraries(FileChangeTrackerTests
-    Engine
-    GTest::GTest
-    GTest::Main
-)
-
-set_target_properties(FileChangeTrackerTests PROPERTIES
-    CXX_STANDARD 20
-    CXX_STANDARD_REQUIRED ON
-)
-
-add_test(NAME FileChangeTrackerTest COMMAND $<TARGET_FILE:FileChangeTrackerTests>)
-
-set_tests_properties(FileChangeTrackerTest PROPERTIES
-    TIMEOUT 300  # 5 minutes timeout
-    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
-)
-
-# DependencyGraphAnalyzer Tests
-add_executable(DependencyGraphAnalyzerTests
-    ../DependencyGraphAnalyzerTest.cpp
-    ${CMAKE_SOURCE_DIR}/Engine/Source/HotReloadNativeStubs.cpp
-)
-set_source_files_properties(${CMAKE_SOURCE_DIR}/Engine/Source/HotReloadNativeStubs.cpp
-    TARGET_DIRECTORY DependencyGraphAnalyzerTests
-    PROPERTIES COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:MSVC>:/wd4273>")
-
-target_link_libraries(DependencyGraphAnalyzerTests
-    Engine
-    GTest::GTest
-    GTest::Main
-)
-
-set_target_properties(DependencyGraphAnalyzerTests PROPERTIES
-    CXX_STANDARD 20
-    CXX_STANDARD_REQUIRED ON
-)
-
-add_test(NAME DependencyGraphAnalyzerTest COMMAND $<TARGET_FILE:DependencyGraphAnalyzerTests>)
-
-set_tests_properties(DependencyGraphAnalyzerTest PROPERTIES
-    TIMEOUT 300  # 5 minutes timeout
-    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
-)
-
-# IncrementalCompilation Tests
-add_executable(IncrementalCompilationTests
-    IncrementalCompilationTest.cpp
-    ${CMAKE_SOURCE_DIR}/Engine/Source/HotReloadNativeStubs.cpp
-)
-set_source_files_properties(${CMAKE_SOURCE_DIR}/Engine/Source/HotReloadNativeStubs.cpp
-    TARGET_DIRECTORY IncrementalCompilationTests
-    PROPERTIES COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:MSVC>:/wd4273>")
-
-target_link_libraries(IncrementalCompilationTests
-    Engine
-    GTest::GTest
-    GTest::Main
-)
-
-set_target_properties(IncrementalCompilationTests PROPERTIES
-    CXX_STANDARD 20
-    CXX_STANDARD_REQUIRED ON
-)
-
-add_test(NAME IncrementalCompilationTest COMMAND $<TARGET_FILE:IncrementalCompilationTests>)
-
-set_tests_properties(IncrementalCompilationTest PROPERTIES
-    TIMEOUT 300  # 5 minutes timeout
-    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
-)
-
 # Add benchmark as a test (but don't fail build if it's slow)
 add_test(NAME HotReloadPerformanceBenchmark COMMAND $<TARGET_FILE:HotReloadBenchmark>)
 
@@ -458,71 +378,17 @@ set_tests_properties(HotReloadPerformanceBenchmark PROPERTIES
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
 )
 
-# HybridCompilationIntegration Tests
-add_executable(HybridCompilationIntegrationTests
-    HybridCompilationIntegrationTest.cpp
-    ${CMAKE_SOURCE_DIR}/Engine/Source/HotReloadNativeStubs.cpp
-)
-set_source_files_properties(${CMAKE_SOURCE_DIR}/Engine/Source/HotReloadNativeStubs.cpp
-    TARGET_DIRECTORY HybridCompilationIntegrationTests
-    PROPERTIES COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:MSVC>:/wd4273>")
-
-target_link_libraries(HybridCompilationIntegrationTests
-    Engine
-    GTest::GTest
-    GTest::Main
-)
-
-set_target_properties(HybridCompilationIntegrationTests PROPERTIES
-    CXX_STANDARD 20
-    CXX_STANDARD_REQUIRED ON
-)
-
-add_test(NAME HybridCompilationIntegrationTest COMMAND $<TARGET_FILE:HybridCompilationIntegrationTests>)
-
-set_tests_properties(HybridCompilationIntegrationTest PROPERTIES
-    TIMEOUT 600  # 10 minutes timeout for integration tests
-    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
-)
-
-# HybridCompilationBenchmark Tests
-add_executable(HybridCompilationBenchmarkTests
-    HybridCompilationBenchmark.cpp
-    ${CMAKE_SOURCE_DIR}/Engine/Source/HotReloadNativeStubs.cpp
-)
-set_source_files_properties(${CMAKE_SOURCE_DIR}/Engine/Source/HotReloadNativeStubs.cpp
-    TARGET_DIRECTORY HybridCompilationBenchmarkTests
-    PROPERTIES COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:MSVC>:/wd4273>")
-
-target_link_libraries(HybridCompilationBenchmarkTests
-    Engine
-    GTest::GTest
-    GTest::Main
-)
-
-set_target_properties(HybridCompilationBenchmarkTests PROPERTIES
-    CXX_STANDARD 20
-    CXX_STANDARD_REQUIRED ON
-)
-
-add_test(NAME HybridCompilationBenchmarkTest COMMAND $<TARGET_FILE:HybridCompilationBenchmarkTests>)
-
-set_tests_properties(HybridCompilationBenchmarkTest PROPERTIES
-    TIMEOUT 900  # 15 minutes timeout for benchmark tests
-    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
-)
-
 # Custom target to run all async hot-reload tests
 add_custom_target(run_async_hotreload_tests
-    COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -R "JobSystem|HotReloadPipeline|AsyncHotReload|HotReloadPerformance|FileChangeTracker|DependencyGraphAnalyzer|IncrementalCompilation|HybridCompilationIntegration|HybridCompilationBenchmark"
-    DEPENDS JobSystemTests HotReloadPipelineTests AsyncHotReloadTests HotReloadBenchmark FileChangeTrackerTests DependencyGraphAnalyzerTests IncrementalCompilationTests HybridCompilationIntegrationTests HybridCompilationBenchmarkTests
+    COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -R "JobSystem|HotReloadPipeline|AsyncHotReload|HotReloadPerformance"
+    DEPENDS JobSystemTests HotReloadPipelineTests AsyncHotReloadTests HotReloadBenchmark
     COMMENT "Running all async hot-reload tests"
 )
 
 # Custom target to run only compilation performance benchmarks
 add_custom_target(run_compilation_benchmarks
-    COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -R "HotReloadPerformance|HybridCompilationBenchmark"
-    DEPENDS HotReloadBenchmark HybridCompilationBenchmarkTests
+    COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -R "HotReloadPerformance"
+    DEPENDS HotReloadBenchmark
     COMMENT "Running compilation performance benchmarks"
 )
 
@@ -608,11 +474,6 @@ set(_GE_JOBS_TEST_TARGETS
     HotReloadPipelineTests
     AsyncHotReloadTests
     HotReloadBenchmark
-    FileChangeTrackerTests
-    DependencyGraphAnalyzerTests
-    IncrementalCompilationTests
-    HybridCompilationIntegrationTests
-    HybridCompilationBenchmarkTests
 )
 
 foreach(_ge_t IN LISTS _GE_JOBS_TEST_TARGETS)

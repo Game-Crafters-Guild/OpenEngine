@@ -9,6 +9,7 @@
 #include "ECS/ECS.h"
 #include "Mathematics/Quaternion.h"
 #include "Mathematics/Vector3.h"
+#include "Mathematics/WorldPosition.h"
 #include "Types/ScriptCallback.h"
 
 #include <cstdint>
@@ -36,7 +37,7 @@ inline constexpr std::uint32_t kAllLayers = 0xFFFFFFFFu;
 struct RayHit
 {
     ECS::EntityHandle entity{};
-    Mathematics::Vector3 point{0.0f, 0.0f, 0.0f};
+    Mathematics::WorldPosition point;
     Mathematics::Vector3 normal{0.0f, 1.0f, 0.0f};
     float distance = 0.0f;
 };
@@ -49,7 +50,7 @@ struct ContactEvent
 {
     ECS::EntityHandle self{};
     ECS::EntityHandle other{};
-    Mathematics::Vector3 point{0.0f, 0.0f, 0.0f};
+    Mathematics::WorldPosition point;
     Mathematics::Vector3 normal{0.0f, 1.0f, 0.0f};
 };
 
@@ -67,8 +68,9 @@ struct TriggerEvent
 /// outside play mode. The direction need not be of length 1. Only bodies on a layer of layerMask are
 /// hit; triggers are hit unless ignoreTriggers is true.
 // @ge-script @ge-script-try @ge-context
-bool RayCast(Physics::PhysicsWorld& physics, Mathematics::Vector3 origin, Mathematics::Vector3 direction, RayHit& hit,
-             float maxDistance = 1000.0f, std::uint32_t layerMask = kAllLayers, bool ignoreTriggers = false);
+bool RayCast(Physics::PhysicsWorld& physics, Mathematics::WorldPosition origin, Mathematics::Vector3 direction,
+             RayHit& hit, float maxDistance = 1000.0f, std::uint32_t layerMask = kAllLayers,
+             bool ignoreTriggers = false);
 
 /// Casts a ray and writes every body it hits within maxDistance into hits, nearest first, each body once at
 /// its nearest hit. Returns the number of bodies the ray hits. When that is more than hits holds, the nearest
@@ -76,8 +78,8 @@ bool RayCast(Physics::PhysicsWorld& physics, Mathematics::Vector3 origin, Mathem
 /// the number only. 0 outside play mode. The direction need not be of length 1. Only bodies on a layer of
 /// layerMask are hit; triggers are hit unless ignoreTriggers is true.
 // @ge-script @ge-context
-std::int32_t RayCastAll(Physics::PhysicsWorld& physics, Mathematics::Vector3 origin, Mathematics::Vector3 direction,
-                        std::span<RayHit> hits, float maxDistance = 1000.0f, std::uint32_t layerMask = kAllLayers,
+std::int32_t RayCastAll(Physics::PhysicsWorld& physics, Mathematics::WorldPosition origin,
+                        Mathematics::Vector3 direction, std::span<RayHit> hits, float maxDistance = 1000.0f, std::uint32_t layerMask = kAllLayers,
                         bool ignoreTriggers = false);
 
 /// Writes the entity of every body that overlaps a box into bodies, in no fixed order. The box is centered
@@ -87,8 +89,8 @@ std::int32_t RayCastAll(Physics::PhysicsWorld& physics, Mathematics::Vector3 ori
 /// only. 0 outside play mode. Only bodies on a layer of layerMask are found; triggers are found unless
 /// ignoreTriggers is true.
 // @ge-script @ge-context
-std::int32_t BoxOverlap(Physics::PhysicsWorld& physics, Mathematics::Vector3 center, Mathematics::Vector3 halfExtents,
-                        Mathematics::Quaternion rotation, std::span<ECS::EntityHandle> bodies,
+std::int32_t BoxOverlap(Physics::PhysicsWorld& physics, Mathematics::WorldPosition center,
+                        Mathematics::Vector3 halfExtents, Mathematics::Quaternion rotation, std::span<ECS::EntityHandle> bodies,
                         std::uint32_t layerMask = kAllLayers, bool ignoreTriggers = false);
 
 /// The velocity of the entity's body. Zero for an entity with no PhysicsBody, and outside play mode.
@@ -118,7 +120,7 @@ void AddImpulse(ECS::World& world, ECS::EntityHandle entity, Mathematics::Vector
 /// Applies an impulse at a point in world space, which also spins the body.
 // @ge-script @ge-context
 void AddImpulseAtPosition(ECS::World& world, ECS::EntityHandle entity, Mathematics::Vector3 impulse,
-                          Mathematics::Vector3 position);
+                          Mathematics::WorldPosition position);
 
 /// The velocity the entity's CharacterController moves at: X and Z replace the motion every physics
 /// step, and a Y above 0 is a jump at that speed. Zero for an entity with no CharacterController.

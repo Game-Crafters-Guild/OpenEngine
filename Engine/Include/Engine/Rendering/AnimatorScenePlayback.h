@@ -74,4 +74,13 @@ void BootstrapSceneAnimators(ECS::World& world, AssetManager& assetManager);
 void ProcessClipAnimatorCommands(ECS::World& world);
 void ProcessClipAnimatorCommands(ECS::World& world, AssetManager& assetManager);
 
+// Called each animation tick. When the speedScale of an active Clip-source Animator changes, writes
+// it to AnimatorRef.Speed in its subtree. Between changes, other writers of AnimatorRef.Speed (the
+// editor preview, tools) keep their value. ClipPlaybackState holds the last applied speedScale.
+void ApplyClipAnimatorSpeeds(ECS::World& world);
+
+// Writes the speedScale of each Animator root in `roots` to its ClipPlaybackState. The start of
+// playback and the Play commands call it after their query, for their Clip-source roots.
+void RecordAppliedClipSpeeds(ECS::World& world, const std::vector<ECS::EntityHandle>& roots);
+
 } // namespace GameEngine::Engine::Renderer

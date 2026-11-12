@@ -33,6 +33,7 @@
 //     excludes every mutator, its own included. Developer builds assert when a
 //     lock-free lookup runs against a scope another thread holds.
 
+#include "Types/FlatMap.h"
 #include "Types/ScopedSubscription.h"
 #include "AssetCore/GUID.h"
 #include "Engine/Rendering/MeshGPUResidency.h"
@@ -57,6 +58,11 @@ namespace GameEngine
 {
 class ModelAsset;
 struct Mesh;
+
+namespace Engine::Renderer
+{
+struct ConvertedModelMaterial;
+}
 
 namespace Rendering
 {
@@ -499,6 +505,13 @@ class MeshGPURegistry
     std::vector<MeshGPUHandle> RegisterModelMeshes(const GUID& assetGuid,
                                                     const ModelAsset& asset);
 
+    // The model's embedded materials as its first spawn converted and registered
+    // them, or null before that spawn. Kept with the model's mesh handles and
+    // dropped with them, so the next spawn of a reloaded model registers again.
+    using ModelMaterialList = std::vector<Engine::Renderer::ConvertedModelMaterial>;
+    std::shared_ptr<const ModelMaterialList> FindModelMaterials(const GUID& assetGuid) const;
+    void KeepModelMaterials(const GUID& assetGuid, std::shared_ptr<const ModelMaterialList> materials);
+
     // Register a single submesh by key. Used internally and for manual registration.
     // `mesh` is the CPU-side mesh data to upload. Set retainCpuMesh for
     // generated/runtime meshes that have no asset-backed CPU source, so
@@ -616,6 +629,14 @@ class MeshGPURegistry
     // lookup regenerates them from their deterministic GUIDs.
     MeshGPUReprovisionReport ReprovisionAfterDeviceRebuild(
         const std::function<MeshGPUCpuSource(const MeshGPUKey&)>& sourceLookup);
+
+    // How many mesh content hashes RegisterSubmesh computed. A model's registration uses the hashes its load
+    // computed, so it adds none.
+    uint64_t GetComputedContentHashCountForTest() const
+    {
+        TableScope scope(*this);
+        return m_ComputedContentHashCount;
+    }
 
     // Query: how many distinct model assets are registered?
     size_t GetRegisteredModelCount() const
@@ -787,6 +808,14 @@ class MeshGPURegistry
     // wait-free obligation that puts on them.
     void NotifyUnregister(const GUID& assetGuid);
 
+    // Registers a submesh of `asset` with the content hash its load computed. Hashes the mesh only when the
+    // asset holds no hashes for its current meshes.
+    MeshGPUHandle RegisterModelSubmesh(const MeshGPUKey& key, const ModelAsset& asset);
+
+    // RegisterSubmesh with `contentHash`, the ComputeMeshContentHash of `mesh`, already known.
+    MeshGPUHandle RegisterHashedSubmesh(const MeshGPUKey& key, const Mesh& mesh, uint64_t contentHash,
+                                        bool retainCpuMesh);
+
     // Upload a CPU-side Mesh to GPU buffers, creating a MeshGPUEntry.
     MeshGPUEntry UploadMesh(const Mesh& mesh);
 
@@ -827,9 +856,9 @@ class MeshGPURegistry
     void ReleaseEntryToBucket(MeshGPUEntry& entry);
 
     // THE mutual-exclusion point for m_Entries, m_KeyToHandle, m_ModelHandles,
-    // m_Buckets, the GPUScene mesh rows and m_Residency's writer half. Taken
-    // through TableScope and never directly, so scope entry and exit are the
-    // one place the developer-build counter below is maintained.
+    // m_ModelMaterials, m_Buckets, the GPUScene mesh rows and m_Residency's
+    // writer half. Taken through TableScope and never directly, so scope entry
+    // and exit are the one place the developer-build counter below is maintained.
     mutable std::recursive_mutex m_TableMutex;
 
 #if GE_DEBUG_INSTRUMENTATION
@@ -879,12 +908,17 @@ class MeshGPURegistry
     // Generational storage for entries (handle -> entry).
     GenerationalVector<MeshGPUEntry> m_Entries;
     uint64_t m_ContentRevision = 1;
+    uint64_t m_ComputedContentHashCount = 0;
 
     // Dedup map: composite key -> handle.
     std::unordered_map<MeshGPUKey, MeshGPUHandle> m_KeyToHandle;
 
     // Per-asset index: GUID -> list of submesh handles (in submesh order).
     std::unordered_map<GUID, std::vector<MeshGPUHandle>> m_ModelHandles;
+
+    // Per-asset materials: GUID -> the converted materials its first spawn registered.
+    // Invariant: an entry exists only beside an m_ModelHandles entry and is erased with it.
+    FlatMap<GUID, std::shared_ptr<const ModelMaterialList>> m_ModelMaterials;
 
     // Bucket storage. Keyed by the vertex-attribute flag set; one bucket
     // per layout. Buckets are created lazily by UploadMesh and live until

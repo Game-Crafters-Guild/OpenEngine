@@ -15,9 +15,11 @@
 //   - the dispatched job claims the row only while it is still Queued under that
 //     ticket (Running), so a job whose request was cancelled or taken over does
 //     nothing;
-//   - a synchronous caller takes a Queued row over and builds it at once, and
-//     waits on a Running one, which is always progressing because a running
-//     build waits on nothing the table owns.
+//   - a synchronous caller that may wait queues the row if needed, dispatches a
+//     Blocking job for a Queued ticket and waits for the build of that ticket;
+//   - any other synchronous caller takes a Queued row over and builds it at
+//     once, and waits on a Running one, which is always progressing because a
+//     running build waits on nothing the table owns.
 // A dispatched job that is destroyed without running (the dispatcher dropped it
 // at shutdown) releases its Queued row, so the key reads as never requested
 // rather than pending forever.
@@ -48,6 +50,20 @@ class PipelineBuildTable
         uint64_t Ticket = 0;
     };
     RequestResult Request(uint64_t key, uint64_t invalidationEpoch);
+
+    // For a caller that waits for a worker build of Ticket. MustDispatch: the row is
+    // Queued, so the caller dispatches a Blocking job; the first job to claim it builds.
+    struct BlockingRequestResult
+    {
+        PipelineBuildState State = PipelineBuildState::Pending;
+        uint64_t Ticket = 0;
+        bool MustDispatch = false;
+    };
+    BlockingRequestResult RequestBlocking(uint64_t key, uint64_t invalidationEpoch);
+
+    // Waits until the build of `ticket` ends: the row of `key` is gone, Failed,
+    // or has another ticket. Returns true when the build of `ticket` failed.
+    bool WaitForBuildEnd(uint64_t key, uint64_t ticket);
 
     // Dispatched job: true when the row is still Queued under `ticket`, which is
     // now Running and the job must build it and call Finish.
@@ -89,6 +105,9 @@ class PipelineBuildTable
         uint64_t Ticket = 0;
         uint64_t FailedAtEpoch = 0;
     };
+
+    // Request with m_Mutex held.
+    RequestResult RequestLocked(uint64_t key, uint64_t invalidationEpoch);
 
     mutable std::mutex m_Mutex;
     std::condition_variable m_BuildEnded;

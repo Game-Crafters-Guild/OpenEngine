@@ -11,6 +11,8 @@
 #include "ECS/ECSTemplates.h"
 #include "ECS/UnresolvedComponentStore.h"
 #include "ECSModules/Rendering/ClipStore.h"
+#include "ECSModules/Rendering/SkeletonStore.h"
+#include "Engine/Rendering/AnimationSampling.h"
 #include "Engine/Rendering/AnimatorScenePlayback.h"
 #include "Scene/SceneIO.h"
 #include "Scene/SceneSchemaRegistry.h"
@@ -20,10 +22,16 @@
 #include "EngineLogCapture.h"
 #include "JobSystem/WorkStealingThreadPool.h"
 #if defined(EMBEDDED_ANIMATION_EDITOR_TESTS)
+#include "Core/Application.h"
+#include "Core/Engine.h"
+#include "ECSModules/Rendering/Systems/TimelinePlaybackSystem.h"
+#include "Inspectors/AnimationPreviewManager.h"
 #include "PlayMode/ModelAnimationPlayMode.h"
+#include "Scripting/ScriptsConfig.h"
 #endif
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <memory>
 #include <string>
 
@@ -147,10 +155,11 @@ class EmbeddedAnimationPersistence : public testing::Test, public Scene::ISceneA
     void Load(ECS::World& world)
     {
         Scene::SceneReadOptions options;
-        options.assetRootOverride = Root;
-        options.assetResolver = this;
-        options.outDegradation = &Degradation;
-        EXPECT_TRUE(Scene::ReadSceneInto(world, ScenePath, options));
+        options.AssetRootOverride = Root;
+        options.AssetResolver = this;
+        Scene::SceneInstantiateResult readResult = Scene::ReadSceneInto(world, ScenePath, options);
+        EXPECT_TRUE(readResult);
+        Degradation = std::move(readResult.Degradation);
     }
     void Write(std::string_view text)
     {
@@ -588,14 +597,14 @@ TEST_F(EmbeddedAnimationPersistence, PendingSourceRetriesThroughExistingCommandO
     EXPECT_NE(world.GetComponent<AnimatorRef>(h)->ClipIndex, 0u);
     EXPECT_FLOAT_EQ(world.GetComponent<AnimatorRef>(h)->Time, authored.seekTimeSeconds);
 
-    // Ordinary same-clip Play remains idempotent; selecting another clip
-    // starts at zero rather than applying an old authored seek.
+    // An ordinary Play of the same clip or of another clip starts at zero,
+    // not at the old authored seek.
     world.GetComponentForWrite<AnimatorRef>(h)->Time = 0.6f;
     auto replay = *world.GetComponent<Animator>(h);
     replay.PlayState(ClipGuid);
     world.AddComponentImmediate(h, replay);
     ProcessClipAnimatorCommands(world, assets);
-    EXPECT_FLOAT_EQ(world.GetComponent<AnimatorRef>(h)->Time, 0.6f);
+    EXPECT_FLOAT_EQ(world.GetComponent<AnimatorRef>(h)->Time, 0.0f);
     const auto otherGuid = GUID::Generate();
     auto other = MakeShared<AnimationClip>(otherGuid, Root / "other.anim");
     other->SetChannelsAndDurationForTest({}, 1.0f);
@@ -872,6 +881,77 @@ TEST_F(EmbeddedAnimationPersistence, RuntimeLibraryClipOfAFailedContainerWarnsOn
     assets.Shutdown();
 }
 
+// A pose clip has length 0 and one key. It plays, and a sample at any later time holds the key.
+TEST_F(EmbeddedAnimationPersistence, PoseClipOfLengthZeroPlaysAndHoldsItsKey)
+{
+    AnimKeyframe key{};
+    key.translation[1] = 0.5f;
+    key.rotation[3] = 1.0f;
+    key.scale[0] = key.scale[1] = key.scale[2] = 1.0f;
+    AnimChannel channel{};
+    channel.boneIndex = 0;
+    channel.path = AnimPath::Translation;
+    channel.keys = {key};
+    auto clip = MakeShared<AnimationClip>(ClipGuid, ModelPath);
+    clip->SetChannelsAndDurationForTest({channel}, 0.0f);
+    const uint32 clipIndex = ClipStore::Instance().RegisterRuntimeClip(ClipGuid, clip);
+    AssetManager assets;
+    const auto library = LibraryOf(ClipGuid);
+    assets.RegisterLoadedAsset(library->GetGUID(), library);
+    ECS::World world;
+    const auto h = PlaybackEntity(world, LibraryAnimator(library->GetGUID()), GUID::Generate());
+
+    BootstrapSceneAnimators(world, assets);
+    AnimatorRef animatorRef = *world.GetComponent<AnimatorRef>(h);
+    ASSERT_EQ(animatorRef.ClipIndex, clipIndex) << "the pose clip did not start";
+    for (int frame = 0; frame < 3; ++frame)
+        TickAnimatorRef(animatorRef, ClipStore::Instance(), 0.5f, nullptr);
+    ASSERT_TRUE(std::isfinite(animatorRef.Time));
+
+    auto& skeletons = SkeletonStore::Instance();
+    auto* skeleton = skeletons.Get(skeletons.CreateSkeleton(1));
+    ASSERT_NE(skeleton, nullptr);
+    skeleton->Parent = {-1};
+    skeleton->InverseBind = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+    skeleton->BindPose = skeleton->InverseBind;
+    skeleton->RestTranslation = {0, 0, 0};
+    skeleton->RestRotation = {0, 0, 0, 1};
+    skeleton->RestScale = {1, 1, 1};
+    skeleton->SkinJointCount = 1;
+    skeleton->JointNodes = {0};
+    std::vector<float> skinMatrices;
+    PoseSampleWorkspace workspace;
+    SampleAnimationPose(*skeleton, clip.get(), animatorRef.Time, nullptr, &skinMatrices, workspace);
+    ASSERT_GE(skinMatrices.size(), 16u);
+    EXPECT_FLOAT_EQ(skinMatrices[13], 0.5f) << "the sample at time " << animatorRef.Time << " lost the key";
+}
+
+// A clip with no length and no key cannot play. The start says which clip, why, and what to do.
+TEST_F(EmbeddedAnimationPersistence, EmptyClipWarnsWithItsCauseAndStaysAtRest)
+{
+    auto clip = MakeShared<AnimationClip>(ClipGuid, ModelPath);
+    clip->SetChannelsAndDurationForTest({}, 0.0f);
+    ClipStore::Instance().RegisterRuntimeClip(ClipGuid, clip);
+    AssetManager assets;
+    const auto library = LibraryOf(ClipGuid);
+    assets.RegisterLoadedAsset(library->GetGUID(), library);
+    ECS::World world;
+    const auto h = PlaybackEntity(world, LibraryAnimator(library->GetGUID()), GUID::Generate());
+
+    std::vector<std::string> lines;
+    {
+        TestLog::ScopedEngineLogCapture capture(&lines, Logger::LogLevel::Warning);
+        Logger::Log::Warning("capture live");
+        BootstrapSceneAnimators(world, assets);
+        Logger::Log::Flush();
+    }
+    ASSERT_EQ(TestLog::CountLinesContaining(lines, "capture live"), 1u) << "the log capture saw nothing";
+    EXPECT_EQ(world.GetComponent<AnimatorRef>(h)->ClipIndex, 0u);
+    const std::string warning = TestLog::FirstLineContaining(lines, ClipGuid.ToString());
+    EXPECT_NE(warning.find("has no length and no key, so it cannot play"), std::string::npos) << warning;
+    EXPECT_NE(warning.find("Add a key to the animation in its source file"), std::string::npos) << warning;
+}
+
 #if defined(EMBEDDED_ANIMATION_EDITOR_TESTS)
 TEST_F(EmbeddedAnimationPersistence, EditorDefaultNamedAndModelHintWaitForLoadingTarget)
 {
@@ -953,5 +1033,58 @@ TEST_F(EmbeddedAnimationPersistence, EditorPendingSourceUsesRuntimeRetryWithoutN
     EXPECT_EQ(world.GetComponent<AnimatorRef>(h)->ClipIndex, ClipStore::Instance().GetIndexIfPresent(ClipGuid));
     EXPECT_FLOAT_EQ(world.GetComponent<AnimatorRef>(h)->Time, authored.sectionStartSeconds);
     EXPECT_NE(world.GetComponent<AnimatorRef>(h)->Flags & AnimatorRef::kFlag_Section, 0u);
+}
+
+TEST_F(EmbeddedAnimationPersistence, EditorPreviewSpeedHoldsThroughTheAnimationTick)
+{
+    using GameEngine::Editor::AnimationPreviewManager;
+    ModelPath = WriteModel("source");
+    // The preview and the animation tick use the engine's AssetManager.
+    ApplicationConfig config{};
+    config.AssetDirectory = Root.string();
+    ScriptsConfig scriptsConfig{};
+    scriptsConfig.disableClr = true;
+    EngineCore::GetInstance().SetScriptsConfig(scriptsConfig);
+    ASSERT_TRUE(EngineCore::GetInstance().Initialize(config));
+    AssetManager& assets = EngineCore::GetInstance().GetAssetManager();
+    auto model = MakeShared<PendingModel>(ModelGuid, ModelPath);
+    model->MarkPending();
+    assets.RegisterLoadedAsset(ModelGuid, model);
+    ASSERT_TRUE(model->Load());
+    ECS::World world;
+    const auto h = PlaybackEntity(world, SourceAnimator(), ModelGuid);
+    GameEngine::Editor::ApplyAnimatorOnEnterPlayMode(world, assets);
+    ProcessClipAnimatorCommands(world, assets);
+    ASSERT_EQ(world.GetComponent<Animator>(h)->pendingCommand, AnimatorPlaybackCommand::None);
+    ASSERT_TRUE(AnimationPreviewManager::EnablePreview(world, h, ClipGuid));
+
+    AnimationPreviewManager::SetSpeed(world, h, 0.5f);
+    TimelinePlaybackSystem system(nullptr);
+    system.Update(world, 0.0f);
+    EXPECT_FLOAT_EQ(world.GetComponent<AnimatorRef>(h)->Speed, 0.5f) << "the first tick keeps the preview speed";
+    system.Update(world, 0.0f);
+    EXPECT_FLOAT_EQ(world.GetComponent<AnimatorRef>(h)->Speed, 0.5f) << "the second tick keeps the preview speed";
+
+    AnimationPreviewManager::DisablePreview(world, h);
+    EngineCore::GetInstance().Shutdown();
+}
+
+TEST_F(EmbeddedAnimationPersistence, EditorSpeedScaleSetAfterEnterPlayAppliesOnTheFirstTick)
+{
+    ModelPath = WriteModel("source");
+    AssetManager assets;
+    auto model = MakeShared<PendingModel>(ModelGuid, ModelPath);
+    model->MarkPending();
+    assets.RegisterLoadedAsset(ModelGuid, model);
+    ASSERT_TRUE(model->Load());
+    ECS::World world;
+    const auto h = PlaybackEntity(world, SourceAnimator(), ModelGuid);
+    GameEngine::Editor::ApplyAnimatorOnEnterPlayMode(world, assets);
+    ASSERT_EQ(world.GetComponent<Animator>(h)->pendingCommand, AnimatorPlaybackCommand::None);
+    ASSERT_NE(world.GetComponent<AnimatorRef>(h)->ClipIndex, 0u);
+
+    world.GetComponentForWrite<Animator>(h)->speedScale = 2.0f;
+    ApplyClipAnimatorSpeeds(world);
+    EXPECT_FLOAT_EQ(world.GetComponent<AnimatorRef>(h)->Speed, 2.0f);
 }
 #endif

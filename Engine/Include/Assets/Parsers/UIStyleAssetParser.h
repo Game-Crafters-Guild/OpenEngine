@@ -14,22 +14,17 @@ class UIStyleAssetParser final : public AssetParser
 
     std::vector<std::string> GetSupportedExtensions() const override { return {".css", ".uss"}; }
 
-    AssetParseResult Parse(const AssetMetadata& metadata [[maybe_unused]],
-                           [[maybe_unused]] AssetManager& assetManager) override
-    {
-        auto asset = std::make_shared<UIStyleAsset>(metadata.Guid, metadata.Path);
-        return AssetParseResult(asset);
-    }
+    // A sheet the UI module ships (UI::kControlAssetPaths) gets StyleOrigin::Control; every
+    // other sheet gets StyleOrigin::Author.
+    AssetParseResult Parse(const AssetMetadata& metadata, AssetManager& assetManager) override;
 
     std::string GetName() const override { return "UIStyleAssetParser"; }
 
     int GetPriority() const override { return 100; }
 
-    // Walk the CSS / USS text and emit UIElementImage edges for every
-    // `url(...)` reference (background-image, etc.). Mount-prefix forms
-    // ("editor:Icons/foo.png", "@editor/Icons/foo.png") have the prefix
-    // stripped so the path-form edge resolves through the registry's
-    // multi-source ResolvePathTarget.
+    // Emits a UIElementImage edge per `url(...)` outside an @import, mount prefix ("editor:", "@editor/") stripped
+    // so the edge resolves through ResolvePathTarget, and a UIStyleImport edge per top-level @import,
+    // to the file UI::ResolveCssImportPath resolves, as the runtime does.
     bool ExtractDependencies(const GUID& referrer,
                              const AssetMetadata& metadata,
                              DepEdgeSink& sink) const override;

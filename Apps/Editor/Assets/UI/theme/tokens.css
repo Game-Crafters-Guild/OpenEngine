@@ -86,6 +86,8 @@
   --ui_color_view_banner_background_hover: rgba(80, 80, 80, 0.55);
   /* The view banner pill's 1 px rim, so the plate keeps its shape on a black sky. */
   --ui_color_view_banner_border: rgba(255, 255, 255, 0.2);
+  /* The Scene View pane's view-name label ("Persp", "Top Y"): a dark, see-through plate behind the label. */
+  --ui_color_viewport_label_background: rgba(0, 0, 0, 0.28);
   /* The settings of a switched-off component (its section body), which stay
      editable: labels and values a step down from --ui_color_text_dim and the
      panel's white, still 4.9:1 and 6.8:1 against the panel and the field plates. */

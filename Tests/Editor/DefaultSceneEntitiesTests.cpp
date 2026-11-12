@@ -4,6 +4,7 @@
 
 #include "Assets/AssetRegistry.h"
 #include "Assets/MaterialAsset.h"
+#include "Rendering/Materials/MaterialDocument.h"
 #include "Components/Name.h"
 #include "Components/Rendering/Camera.h"
 #include "Components/Rendering/LocalBounds.h"
@@ -13,6 +14,7 @@
 #include "Components/Rendering/ReflectionProbe.h"
 #include "Components/Rendering/SkyEnvironment.h"
 #include "Components/Rendering/SkySunPath.h"
+#include "Components/TemplateGroundPlaceholder.h"
 #include "Components/Transform.h"
 #include "Editor/Hierarchy/HierarchyEntity/HierarchyEntityIcon.h"
 #include "Engine/Rendering/PrimitiveGenerator.h"
@@ -171,6 +173,17 @@ TEST(DefaultSceneEntities, TheGroundIsTheEnginesGridGround)
     EXPECT_EQ(planes, 1);
 }
 
+// The grid's square cells look the same after a quarter turn, so a paving that uses the grid ground bends
+// it around a seam instead of crossfading it.
+TEST(DefaultSceneEntities, TheGridGroundTagsItsPatternSquare)
+{
+    const GUID gridGround =
+        AssetRegistry::DeriveGuidForSourcePath(kAssetSourceAliasEditor, "Materials/GroundGrid.material");
+    MaterialAsset material(gridGround, TestPaths::StagedEngineAssetsDir() / "Materials/GroundGrid.material");
+    ASSERT_TRUE(material.Load()) << material.GetPath();
+    EXPECT_EQ(material.GetDocument().patternSymmetry, MaterialPatternSymmetry::Square);
+}
+
 // A new scene's ground is the Ground primitive, cut into cells of at most 50 m at its scale: a
 // texture coordinate interpolated across a larger triangle makes the grid lines jump as the camera
 // moves.
@@ -233,6 +246,19 @@ TEST(DefaultSceneEntities, TheGroundShowsThePlaneIcon)
     EXPECT_EQ(grounds, 1);
 }
 
+// The ground carries the template ground marker, so creating a terrain switches it off.
+TEST(DefaultSceneEntities, TheGroundIsTheTemplateGroundPlaceholder)
+{
+    Engine::Renderer::RenderServices renderServices;
+    ECS::World world;
+    Editor::SeedDefaultSceneEntities(world, &renderServices);
+
+    int placeholders = 0;
+    world.Query<ECS::Read<Components::TemplateGroundPlaceholder>, ECS::Read<Components::PlaneColliderShape>>().Each(
+        [&](const Components::TemplateGroundPlaceholder&, const Components::PlaneColliderShape&) { ++placeholders; });
+    EXPECT_EQ(placeholders, 1);
+}
+
 TEST(DefaultSceneEntities, SeededPrimitiveBottomsRestOnThePlane)
 {
     Engine::Renderer::RenderServices renderServices;
@@ -245,7 +271,7 @@ TEST(DefaultSceneEntities, SeededPrimitiveBottomsRestOnThePlane)
         [&](ECS::EntityHandle, const Components::PlaneColliderShape&, const Components::Transform& transform)
         {
             ++planes;
-            planeHeight = transform.GetPosition().y;
+            planeHeight = (transform.GetPosition() - Mathematics::WorldPosition{}).y;
         });
     ASSERT_EQ(planes, 1);
 
@@ -256,7 +282,7 @@ TEST(DefaultSceneEntities, SeededPrimitiveBottomsRestOnThePlane)
             const Components::Transform& transform, const Components::Name& name)
         {
             ++primitives;
-            const float bottom = transform.GetPosition().y +
+            const float bottom = (transform.GetPosition() - Mathematics::WorldPosition{}).y +
                 (bounds.Box.center.y - bounds.Box.halfExtents.y) * transform.GetScale().y;
             EXPECT_FLOAT_EQ(bottom, planeHeight) << name.value;
         });

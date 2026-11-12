@@ -16,10 +16,12 @@ could not run.
 | `mcp-editor-endpoint-check.mjs` | `McpEditorEndpointReport` | An answer that does not name which editor produced it. Several editors run at once, so a call that lands on the wrong one returns plausible data; every answer, including a refusal, must report the endpoint taken from the live socket. |
 | `instrument-summaries-check.mjs` | `McpInstrumentSummaries` | A capture tool that sends its image inline by default or drops the record line, `get_log` adding client-side defaults, dropping its cursor or losing the `next` call its reply ends with, a gtest or build summary that loses the counts or the first lines, a run with no test reported as passed, `run_tests` losing a suite's registered arguments, working directory or environment, or passing gtest flags to a registration that is not a gtest suite, the registered environment not reaching the process, and a tool description or CLI overview without the guidance on summaries and `get_log`. |
 | `rgp-capture-check.mjs` | `McpRgpCaptureGate` | The Radeon GPU Profiler flow attempting a capture on non-AMD hardware, refusing without naming what it found, or reporting a stale `.rgp` file as a fresh capture. |
+| `send-key-digits-check.mjs` | `McpSendKeyDigits` | `ge send_key --key 8` sending the raw key code 8 instead of the digit key, a raw key code from 32 to 348 no longer sent as given, or `--key 12` or `--key 349` sent to the editor instead of refused with the fix. |
+| `batch-stdin-check.mjs` | `McpBatchStdin` | `ge batch < requests.ndjson` not ending with its own exit code (0 when the editor answers every request, 3 when no editor listens), or `ge batch --help` connecting to an editor instead of printing the batch help. |
 
 `ipc-method-drift.mjs` also runs in CI before anything is built, and takes
 `--list` to print every debug-server method with how it is reached.
 
-The two harness gates spawn the CLI through `mcp/ge.mjs`, which rebuilds
+The harness gates spawn the CLI through `mcp/ge.mjs`, which rebuilds
 `mcp/dist` when it is stale — that first build is why their ctest timeout is
 generous.

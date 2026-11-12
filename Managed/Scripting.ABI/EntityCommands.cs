@@ -44,10 +44,9 @@ namespace GameEngine.Scripting
                 throw new ArgumentException("The PrefabRef names no prefab. Assign a prefab to the field in the Inspector.",
                     nameof(prefab));
             AssetGuid guid = prefab.Guid;
-            fixed (Transform* transform = &at)
-            {
-                return ChunkQueryNative.SpawnPrefab(WorldHandle, (byte*)&guid, (float*)transform, parent);
-            }
+            // The ABI takes the column-major 4x4 of the pose, not the Transform's own layout.
+            var matrix = at.ToMatrix4x4();
+            return ChunkQueryNative.SpawnPrefab(WorldHandle, (byte*)&guid, (float*)&matrix, parent);
         }
 
         /// <summary>

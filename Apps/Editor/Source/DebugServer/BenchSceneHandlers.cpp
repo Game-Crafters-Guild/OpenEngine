@@ -69,8 +69,8 @@ class BenchSpinSystem : public ECS::ISystem
             [t](ECS::EntityHandle, Components::Transform& xf, const BenchSpin& spin)
             {
                 const float a = spin.Phase + t * spin.Speed;
-                const Mathematics::Vector3 pos{spin.BaseX + std::cos(a) * spin.Radius, spin.BaseY,
-                                               spin.BaseZ + std::sin(a) * spin.Radius};
+                const Mathematics::WorldPosition pos{spin.BaseX + std::cos(a) * spin.Radius, spin.BaseY,
+                                                     spin.BaseZ + std::sin(a) * spin.Radius};
                 xf = Components::Transform::FromTRS(pos, Mathematics::Quaternion{},
                                                     Mathematics::Vector3{1.0f, 1.0f, 1.0f});
             });

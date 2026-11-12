@@ -201,13 +201,41 @@ void HZBBuildNode::DeclareForView(ViewDeclare& d)
         return;
     d.PublishTexture(m_OutputKey, hzb);
 
-    // Two-dispatch SPD build unless killed, over-large, or unloadable — the
-    // chain fallback keeps the pyramid on screen in all of those cases.
-    const bool spdCapable = (w >> 7u) <= kSpdMaxMip7Extent && (h >> 7u) <= kSpdMaxMip7Extent;
-    if (SpdEnabled() && spdCapable && m_SpdPipelineId.IsValid() && m_SpdFinalizePipelineId.IsValid())
+    if (BuildsWithSpd(w, h))
         DeclareSpdBuild(d, depth, hzb, w, h, levels);
     else
         DeclareChainBuild(d, depth, hzb, w, h, levels, m_Nearest ? kReduceMax : kReduceMin);
+}
+
+void HZBBuildNode::RequestPausedViewPipelines(const PausedViewPrewarm& prewarm)
+{
+    // The gates of DeclareForView, with the occlusion slice that the view reserves once unpaused. The
+    // depth source has the view's render extent.
+    IDevice* device = prewarm.Services.GetDevice();
+    if (!device)
+        return;
+    LoadShaders(device);
+    if (!m_PipelineId.IsValid() || prewarm.RenderWidth == 0u || prewarm.RenderHeight == 0u)
+        return;
+    const bool consumed =
+        m_Nearest ? prewarm.Services.GetEffectivePostProcessSettings(prewarm.View.id, prewarm.View.worldId).IsSSSRActive()
+                  : prewarm.ReservesOcclusionSliceOnceUnpaused();
+    if (!consumed)
+        return;
+    if (!BuildsWithSpd(prewarm.RenderWidth, prewarm.RenderHeight))
+    {
+        device->RequestComputePipeline(m_PipelineId);
+        return;
+    }
+    device->RequestComputePipeline(m_SpdPipelineId);
+    device->RequestComputePipeline(m_SpdFinalizePipelineId);
+}
+
+bool HZBBuildNode::BuildsWithSpd(uint32_t w, uint32_t h) const
+{
+    // The chain builds the pyramid when SPD is killed, over-large or unloadable.
+    const bool spdCapable = (w >> 7u) <= kSpdMaxMip7Extent && (h >> 7u) <= kSpdMaxMip7Extent;
+    return SpdEnabled() && spdCapable && m_SpdPipelineId.IsValid() && m_SpdFinalizePipelineId.IsValid();
 }
 
 void HZBBuildNode::DeclareChainBuild(ViewDeclare& d, RenderGraph::RGTexture depth,

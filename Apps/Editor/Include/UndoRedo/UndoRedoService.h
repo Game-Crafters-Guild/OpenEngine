@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -81,7 +82,12 @@ class UndoRedoService
     // An interactive edit (a drag or a scrub) is open: BeginInteractiveEdit returned it
     // and it has not committed, cancelled or been destroyed. Its "before" snapshot
     // predates anything committed meanwhile.
-    bool HasOpenInteractiveEdit() const { return *m_OpenInteractiveEdits > 0; }
+    bool HasOpenInteractiveEdit() const { return m_InteractiveEdits->OpenCount > 0; }
+
+    // The undo entry of the interactive edit that announces its Commit or Cancel now; 0 when no entry
+    // holds the edit (no change, cancelled, in a compound) and while Execute, Undo or Redo runs a command.
+    // Empty at every other time: a change announced then is not in the undo history.
+    std::optional<std::uint64_t> GetAnnouncedEditEntryId() const { return m_InteractiveEdits->AnnouncedEntryId; }
 
     // Read-only name/timestamp accessors for history panel display.
     // Undo: index 0 = oldest, index (count-1) = most recent (next to be undone).
@@ -180,13 +186,29 @@ class UndoRedoService
             return;
 
         FireBeforeMutation();
-        cmd->Do();
+        // What is committed while the command runs (the records its announcements write) collects in a compound
+        // of the service's own and joins the command's step.
+        m_CompoundStack.push_back(std::make_unique<CompoundCommand>(cmd->GetName()));
+        AnnounceWithEntry(*m_InteractiveEdits, 0, [&cmd]() { cmd->Do(); });
+        std::unique_ptr<CompoundCommand> joined = std::move(m_CompoundStack.back());
+        m_CompoundStack.pop_back();
+        if (!joined->Empty())
+        {
+            // The command first: an undo reverts what it caused before the command itself.
+            auto step = std::make_unique<CompoundCommand>(cmd->GetName());
+            step->Add(std::move(cmd));
+            step->Add(std::move(joined));
+            cmd = std::move(step);
+        }
         CommitInternal(std::move(cmd));
     }
 
     // True when a command can join the newest undo entry: an entry exists, no redo entry waits and
     // no compound is open.
     bool CanJoinTop() const { return !m_Undo.empty() && m_Undo.back() && m_Redo.empty() && m_CompoundStack.empty(); }
+
+    // True between BeginCompound and its EndCompound: a command committed now joins the compound.
+    bool HasOpenCompound() const { return !m_CompoundStack.empty(); }
 
     // Adds `cmd`, already applied to the world, to the newest undo entry, which keeps its name and
     // id: one undo reverts both. For the consequence of an edit that lands a frame after it. Does
@@ -227,7 +249,7 @@ class UndoRedoService
         m_UndoIds.pop_back();
 
         if (cmd)
-            cmd->Undo();
+            AnnounceWithEntry(*m_InteractiveEdits, 0, [&cmd]() { cmd->Undo(); });
 
         m_Redo.push_back(std::move(cmd));
         m_RedoIds.push_back(id);
@@ -246,7 +268,7 @@ class UndoRedoService
         m_RedoIds.pop_back();
 
         if (cmd)
-            cmd->Redo();
+            AnnounceWithEntry(*m_InteractiveEdits, 0, [&cmd]() { cmd->Redo(); });
 
         m_Undo.push_back(std::move(cmd));
         m_UndoTimestamps.push_back(std::chrono::system_clock::now());
@@ -292,6 +314,27 @@ class UndoRedoService
 
     // --- Interactive snapshot edits ---------------------------------------
 
+  private:
+    // What the service shares with its interactive edits, so that an edit outliving its service
+    // (a panel destroyed after the editor's history) still closes and announces safely.
+    struct InteractiveEditState
+    {
+        std::size_t OpenCount = 0;
+        std::optional<std::uint64_t> AnnouncedEntryId;
+    };
+
+    // Runs `announce` with `entryId` as GetAnnouncedEditEntryId, then gives back the value from before. An
+    // announcement made inside `announce` sets its own entry the same way.
+    template <typename Announce>
+    static void AnnounceWithEntry(InteractiveEditState& state, std::uint64_t entryId, const Announce& announce)
+    {
+        const std::optional<std::uint64_t> outer = state.AnnouncedEntryId;
+        state.AnnouncedEntryId = entryId;
+        announce();
+        state.AnnouncedEntryId = outer;
+    }
+
+  public:
     struct SnapshotTarget
     {
         using Snapshot = std::vector<std::uint8_t>;
@@ -333,7 +376,7 @@ class UndoRedoService
             }
 
             m_Service = other.m_Service;
-            m_OpenCount = std::move(other.m_OpenCount);
+            m_State = std::move(other.m_State);
             m_Name = std::move(other.m_Name);
             m_Target = std::move(other.m_Target);
             m_Before = std::move(other.m_Before);
@@ -393,6 +436,8 @@ class UndoRedoService
                 return;
             }
 
+            // The entry that holds the edit: the one it pushed or merged into; 0 for none.
+            std::uint64_t entryId = 0;
             if (after != m_Before)
             {
                 // Command will be replayed for redo, so it must contain the apply/notify hooks.
@@ -404,11 +449,13 @@ class UndoRedoService
                     std::move(after));
 
                 m_Service->CommitAlreadyApplied(std::move(cmd));
+                if (!m_Service->HasOpenCompound() && !m_Service->m_UndoIds.empty())
+                    entryId = m_Service->m_UndoIds.back();
             }
 
             if (m_Target.Notify)
             {
-                m_Target.Notify(EditorChangeNotifications::ChangeKind::Commit);
+                AnnounceCommit(entryId);
             }
 
             Close();
@@ -429,7 +476,7 @@ class UndoRedoService
                 // Use Commit (not UndoRedo) so observers that already show
                 // the reverted value via their own updateUI callback don't
                 // trigger a redundant full rebuild.
-                m_Target.Notify(EditorChangeNotifications::ChangeKind::Commit);
+                AnnounceCommit(0);
             }
 
             Close();
@@ -439,26 +486,32 @@ class UndoRedoService
         friend class UndoRedoService;
 
         InteractiveEdit(UndoRedoService* svc, std::string name, SnapshotTarget target, SnapshotTarget::Snapshot before)
-            : m_Service(svc), m_OpenCount(svc->m_OpenInteractiveEdits), m_Name(std::move(name)),
+            : m_Service(svc), m_State(svc->m_InteractiveEdits), m_Name(std::move(name)),
               m_Target(std::move(target)), m_Before(std::move(before))
         {
             m_Active = true;
-            ++*m_OpenCount;
+            ++m_State->OpenCount;
+        }
+
+        // Announces a Commit with `entryId` as GetAnnouncedEditEntryId.
+        void AnnounceCommit(std::uint64_t entryId)
+        {
+            const std::shared_ptr<InteractiveEditState> state = m_State;
+            AnnounceWithEntry(*state, entryId,
+                              [this]() { m_Target.Notify(EditorChangeNotifications::ChangeKind::Commit); });
         }
 
         // Ends the edit: it no longer counts toward HasOpenInteractiveEdit.
         void Close()
         {
             m_Committed = true;
-            if (m_OpenCount)
-                --*m_OpenCount;
-            m_OpenCount.reset();
+            if (m_State)
+                --m_State->OpenCount;
+            m_State.reset();
         }
 
         UndoRedoService* m_Service = nullptr;
-        // The service's count of open edits, shared so that an edit outliving its service
-        // (a panel destroyed after the editor's history) still closes safely.
-        std::shared_ptr<std::size_t> m_OpenCount;
+        std::shared_ptr<InteractiveEditState> m_State;
         std::string m_Name;
         SnapshotTarget m_Target{};
         SnapshotTarget::Snapshot m_Before;
@@ -657,7 +710,7 @@ class UndoRedoService
     std::vector<std::unique_ptr<IEditorCommand>> m_Redo;
     std::vector<std::uint64_t> m_RedoIds; // lockstep with m_Redo
     std::uint64_t m_NextEntryId = 1;
-    std::shared_ptr<std::size_t> m_OpenInteractiveEdits = std::make_shared<std::size_t>(0);
+    std::shared_ptr<InteractiveEditState> m_InteractiveEdits = std::make_shared<InteractiveEditState>();
     std::vector<std::unique_ptr<CompoundCommand>> m_CompoundStack;
     std::function<void()> m_OnHistoryChanged;
     std::function<void()> m_BeforeMutation;

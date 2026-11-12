@@ -53,7 +53,6 @@ inline Rendering::ViewCullingContext MakeShadowSliceCullingContext(const Renderi
     ctx.ProjMatrix = slice.ProjMatrix;
     ctx.ViewProjMatrix = slice.ViewProjMatrix;
     Rendering::ExtractFrustumPlanes(slice.ViewProjMatrix, ctx.FrustumPlanes);
-    ctx.CameraPosition = slice.Position;
     ctx.CameraForward = slice.Forward;
     ctx.NearPlane = slice.NearPlane;
     ctx.FarPlane = slice.FarPlane;
@@ -157,7 +156,7 @@ SpotShadowFrameInfo BuildSpotShadowFrameInfo(std::span<const ExtractedLight> lig
 // (the atlas planner owns those). When `cull` is non-null the light is rejected
 // if its range sphere is off-screen; null keeps every face. Called per candidate
 // by RenderServices::EnsurePointShadowAssignment.
-void PopulatePointShadowGeometry(PointShadowFrameInfo& out, const Mathematics::Vector3& positionWS,
+void PopulatePointShadowGeometry(PointShadowFrameInfo& out, const Mathematics::WorldPosition& positionWS,
                                  float range, uint32_t tier, uint32_t packedLightIndex,
                                  const PointShadowCameraCull* cull);
 
@@ -172,7 +171,7 @@ float PointShadowScreenCoverageRadiusPx(const ::GameEngine::Rendering::CameraDat
 // scheduler feed PopulatePointShadowGeometry identical data (design A10, no drift).
 // Returns nullopt for a degenerate camera (thumbnail before its first update).
 std::optional<PointShadowCameraCull> MakePointShadowCullInputs(
-    const ::GameEngine::Rendering::CameraData& camData);
+    const ::GameEngine::Rendering::CameraData& camData, const ::GameEngine::Rendering::CameraRanges& ranges);
 
 // Mesh-draw skip/issue diagnostics: append to the shared recent-diagnostics ring
 // (surfaced by RenderServices::GetRecentMeshDrawDiagnostics and DebugMetrics).

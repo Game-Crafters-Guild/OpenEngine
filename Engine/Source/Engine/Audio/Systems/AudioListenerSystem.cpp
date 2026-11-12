@@ -14,21 +14,20 @@ using GameEngine::Components::WorldTransform;
 
 void FillListenerStateFromWorldTransform(const WorldTransform& wt, Audio::ListenerState& out)
 {
-    const float32* m = wt.matrix; // column-major
+    const Mathematics::Vector3 position = wt.GetPosition() - Mathematics::WorldPosition{};
+    out.position[0] = position.x;
+    out.position[1] = position.y;
+    out.position[2] = position.z;
 
-    out.position[0] = m[12];
-    out.position[1] = m[13];
-    out.position[2] = m[14];
-
-    out.up[0] = m[4];
-    out.up[1] = m[5];
-    out.up[2] = m[6];
+    out.up[0] = wt.Basis[1].x;
+    out.up[1] = wt.Basis[1].y;
+    out.up[2] = wt.Basis[1].z;
 
     // Local +Z is forward (LH). Same world-space vector miniaudio uses for
     // emitter positions, so stereo front matches the camera look.
-    out.forward[0] = m[8];
-    out.forward[1] = m[9];
-    out.forward[2] = m[10];
+    out.forward[0] = wt.Basis[2].x;
+    out.forward[1] = wt.Basis[2].y;
+    out.forward[2] = wt.Basis[2].z;
 }
 
 void AudioListenerSystem::Update(ECS::World& world, float32 /*deltaTime*/)

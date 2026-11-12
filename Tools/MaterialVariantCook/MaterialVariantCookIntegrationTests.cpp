@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include "AssetCore/PathNormalization.h"
 #include "Assets/AssetManager.h"
 #include "Assets/MaterialAsset.h"
 #include "Assets/Packages/PackageMounts.h"
@@ -15,11 +16,14 @@
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/RendererProfile.h"
 #include "Rendering/Materials/Shader/ShaderCompileService.h"
+#include "Rendering/Materials/Shader/ShaderComposer.h"
 #include "Rendering/Materials/Shader/ShaderProfileDefines.h"
 #include "Rendering/ShaderCache/ShaderPackageIO.h"
+#include "Rendering/ShaderCache/ShaderProgramIndex.h"
 #include "StagedTestPaths.h"
 #include "TerrainGrass/GrassComputePrograms.h"
 #include "TestTempDir.h"
+#include "Types/PathUtils.h"
 #include "MeshVariantTable.h"
 
 #include <algorithm>
@@ -30,6 +34,9 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <optional>
+#include <memory>
+#include <regex>
 #include <set>
 #include <string>
 #include <vector>
@@ -156,6 +163,23 @@ void WriteReliefMaterial(const fs::path& project)
 })";
 }
 
+// A material under `assets` whose surface is a file of its own: Materials/<name>.material on
+// Materials/Surfaces/<name>.glsl, the engine's unlit surface under another name.
+void WriteProjectSurfaceMaterial(const fs::path& assets, const std::string& name)
+{
+    fs::create_directories(assets / "Materials/Surfaces");
+    std::ofstream(assets / "Materials" / (name + ".material")) << R"({
+  "schemaVersion": 3,
+  "materialName": ")" << name << R"(",
+  "lightingModel": "Unlit",
+  "alphaMode": "Opaque",
+  "surfaceShader": "Materials/Surfaces/)" << name << R"(.glsl"
+})";
+    std::ifstream unlit(GameEngine::TestPaths::StagedRoot() / "Engine/Modules/Rendering/Shaders/Surfaces/unlit_solid.glsl");
+    ASSERT_TRUE(unlit.is_open());
+    std::ofstream(assets / "Materials/Surfaces" / (name + ".glsl")) << "// " << name << '\n' << unlit.rdbuf();
+}
+
 // Each cooked variant of `material` with its package, from the cook's "  ok   <material> [<variant>]
 // -> <package>" lines.
 std::vector<std::pair<std::string, fs::path>> CookedPackages(const std::string& output, const std::string& material)
@@ -259,13 +283,17 @@ std::vector<GameEngine::Rendering::MaterialKeyword> ColourWorldPasses()
 // the base program, the colour, asset preview and depth programs with their LOD-crossfade tails, and
 // the transmissive pass's grab variants. The transmissive pass draws with its graph node's keywords
 // (TransmissivePassNode), a shipped graph's world pass, so only those ask for a grab variant. The
-// registration key is the document's keywords on the layout registration infers from its asset.
+// registration key is the document's keywords on the layout registration infers from its asset and
+// from the surface that `context` resolves for it.
 std::vector<GameEngine::Rendering::ShaderVariantKey> RuntimePrewarmKeys(const GameEngine::MaterialDocument& document,
-                                                                        const fs::path& materialPath)
+                                                                        const fs::path& materialPath,
+                                                                        const GameEngine::Rendering::MaterialBuildContext& context)
 {
     using GameEngine::Rendering::MaterialKeyword;
     GameEngine::Rendering::ShaderVariantKey base = GameEngine::Engine::Renderer::DeriveBaseVariantKey(document);
-    base.vertexFlags = GameEngine::Engine::Renderer::InferVertexAttributeFlagsFromDocument(document, materialPath);
+    base.vertexFlags = GameEngine::Engine::Renderer::InferVertexAttributeFlagsFromDocument(
+        document, materialPath,
+        GameEngine::Rendering::ShaderComposer::ResolveSurfaceShaderPath(document.surfaceShader, materialPath.parent_path(), context));
     std::vector<GameEngine::Rendering::ShaderVariantKey> keys;
     for (const MaterialKeyword worldPass : ColourWorldPasses())
     {
@@ -292,6 +320,28 @@ struct ScopedDesktopCompileInputs
     }
     ~ScopedDesktopCompileInputs() { GameEngine::Rendering::ShaderCompileService::SetMaxSupportedSpirv(Previous); }
     Target Previous;
+};
+
+// Restores the compile inputs a device and its profile set (the SPIR-V target, the compat profile,
+// the interpolation functions) on every exit, including a failed assertion.
+struct ScopedRestoredCompileInputs
+{
+    using Target = GameEngine::Rendering::ShaderCompileService::SpirvTarget;
+    ScopedRestoredCompileInputs()
+        : PreviousTarget(GameEngine::Rendering::ShaderCompileService::MaxSupportedSpirv()),
+          PreviousCompat(GameEngine::Rendering::IsCompatShaderProfile()),
+          PreviousInterpolationFunctions(GameEngine::Rendering::AreInterpolationFunctionsAvailable())
+    {
+    }
+    ~ScopedRestoredCompileInputs()
+    {
+        GameEngine::Rendering::ShaderCompileService::SetMaxSupportedSpirv(PreviousTarget);
+        GameEngine::Rendering::SetCompatShaderProfile(PreviousCompat);
+        GameEngine::Rendering::SetInterpolationFunctionsAvailable(PreviousInterpolationFunctions);
+    }
+    Target PreviousTarget;
+    bool PreviousCompat;
+    bool PreviousInterpolationFunctions;
 };
 
 // Restores the compiler on every exit, including a failed assertion.
@@ -332,23 +382,28 @@ void ExpectServedFromBundle(const GameEngine::MaterialDocument& document, const 
     }
 }
 
-// The cook's per-variant report lines, "  ok   ..." and "  FAIL ..." without their detail lines, in
-// output order.
-std::vector<std::string> ReportLines(const std::string& output)
+// The rows of the record of the cook into `cache`, each package relative to `cache`, in record order.
+// Empty when the cook wrote no record.
+std::vector<std::string> RecordRows(const fs::path& cache)
 {
-    std::vector<std::string> lines;
-    std::size_t start = 0;
-    while (start < output.size())
-    {
-        std::size_t end = output.find_first_of("\r\n", start);
-        if (end == std::string::npos)
-            end = output.size();
-        const std::string line = output.substr(start, end - start);
-        if (line.starts_with("  ok   ") || line.starts_with("  FAIL "))
-            lines.push_back(line);
-        start = end + 1;
-    }
-    return lines;
+    const std::optional<GameEngine::MaterialCookRecord> record = GameEngine::ReadMaterialCookRecord(cache);
+    if (!record)
+        return {};
+    std::vector<std::string> rows;
+    for (const fs::path& package : record->Packages)
+        rows.push_back("package " + GameEngine::PathToUtf8(package.lexically_relative(cache)));
+    for (const GameEngine::MaterialCookFailure& failure : record->Failures)
+        rows.push_back("failed " + failure.Material + " [" + failure.Variant + "]");
+    return rows;
+}
+
+// The count in the cook's summary line "MaterialVariantCook: <count> variant(s) <verb> ...", or -1.
+long long SummaryCount(const std::string& output, const std::string& verb)
+{
+    std::smatch match;
+    if (!std::regex_search(output, match, std::regex("MaterialVariantCook: ([0-9]+) variant\\(s\\) " + verb + " ")))
+        return -1;
+    return std::stoll(match[1].str());
 }
 
 std::map<std::string, fs::file_time_type> PackageWriteTimes(const fs::path& cache)
@@ -390,8 +445,8 @@ TEST(MaterialVariantCookIntegration, CommittedGraphSamplesCookAndVerifyWithoutAC
     EXPECT_EQ(materializedSamples, 2u);
 }
 
-// The export reads the cook's report line by line, so compiling variants concurrently must report
-// them, and name their packages, exactly as compiling them one at a time does.
+// Compiling variants concurrently records their packages and failures exactly as compiling them one
+// at a time does: the record holds the rows in the serial order whatever order the builds finish in.
 TEST(MaterialVariantCookIntegration, ConcurrentCookReportsEveryVariantInTheSerialOrder)
 {
     GameEngine::TestUtils::ScopedTempDir serial{
@@ -407,15 +462,10 @@ TEST(MaterialVariantCookIntegration, ConcurrentCookReportsEveryVariantInTheSeria
     const auto concurrentCook = Cook(concurrent.Path(), false, {"--particle-row", "base", "--jobs", "8"});
     ASSERT_NO_FATAL_FAILURE(CheckCook(concurrentCook));
 
-    // Each cook names packages under its own cache; the key directories must match.
-    std::vector<std::string> expected = ReportLines(serialCook.output);
+    // Each cook records packages under its own cache; the key directories must match.
+    const std::vector<std::string> expected = RecordRows(serial.Path() / ".Cache" / "Shaders");
     ASSERT_GT(expected.size(), 1u) << serialCook.output;
-    const std::string serialCache = (serial.Path() / ".Cache" / "Shaders").make_preferred().string();
-    const std::string concurrentCache = (concurrent.Path() / ".Cache" / "Shaders").make_preferred().string();
-    for (std::string& line : expected)
-        if (const std::size_t at = line.find(serialCache); at != std::string::npos)
-            line.replace(at, serialCache.size(), concurrentCache);
-    EXPECT_EQ(ReportLines(concurrentCook.output), expected);
+    EXPECT_EQ(RecordRows(concurrent.Path() / ".Cache" / "Shaders"), expected);
 }
 
 // A program the editor already compiled is the same program under the same key: a cook given the
@@ -438,15 +488,16 @@ TEST(MaterialVariantCookIntegration, ACookReusesWhatTheEditorCacheHolds)
                               "--reuse-cache", editorCache.string()});
     ASSERT_FALSE(result.cancelled) << result.output;
     ASSERT_EQ(result.exitCode, 0) << result.output;
-    const std::vector<fs::path> packages = GameEngine::CookedShaderPackages(result.output);
-    ASSERT_FALSE(packages.empty()) << result.output;
-    for (const fs::path& package : packages)
+    const std::optional<GameEngine::MaterialCookRecord> record = GameEngine::ReadMaterialCookRecord(exportCache);
+    ASSERT_TRUE(record) << result.output;
+    ASSERT_FALSE(record->Packages.empty()) << result.output;
+    for (const fs::path& package : record->Packages)
         EXPECT_TRUE(fs::is_regular_file(package) && !package.lexically_relative(exportCache).empty() &&
                     *package.lexically_relative(exportCache).begin() != "..")
             << package << " is not a program in the export's cache";
-    const std::size_t variants = ReportLines(result.output).size();
-    EXPECT_NE(result.output.find("MaterialVariantCook: " + std::to_string(variants) + " variant(s) reused from"),
-              std::string::npos)
+    // The record holds each package once, and variants can share one, so the counts come from the summary.
+    EXPECT_GT(SummaryCount(result.output, "cooked from"), 0) << result.output;
+    EXPECT_EQ(SummaryCount(result.output, "reused from"), SummaryCount(result.output, "cooked from"))
         << "every variant was in the editor's cache, so none may compile\n" << result.output;
     EXPECT_EQ(PackageWriteTimes(editorCache), before) << "the cook wrote to the editor's cache";
 }
@@ -472,6 +523,69 @@ TEST(MaterialVariantCookIntegration, NoLogLineFollowsTheCookSummary)
     EXPECT_TRUE(lastLine.starts_with("MaterialVariantCook: ") &&
                 lastLine.find(" variant(s) cooked from ") != std::string::npos)
         << "the last line is not the summary:\n" << tail;
+}
+
+// A material that does not load is a failure of the record, so the export's warning names it.
+TEST(MaterialVariantCookIntegration, AMaterialThatDoesNotLoadIsAFailureOfTheRecord)
+{
+    GameEngine::TestUtils::ScopedTempDir project{
+        GameEngine::TestUtils::MakeUniqueTempDirectory("material_cook_unloaded")};
+    const fs::path broken = project.Path() / "Assets/Materials/Broken.material";
+    fs::create_directories(broken.parent_path());
+    std::ofstream(broken, std::ios::binary) << "{ not a material";
+    const auto result = Cook(project.Path(), false, {"--particle-row", "base"});
+    ASSERT_FALSE(result.cancelled) << result.output;
+    EXPECT_EQ(result.exitCode, 1) << result.output;
+
+    const fs::path cache = project.Path() / ".Cache/Shaders";
+    const std::optional<GameEngine::MaterialCookRecord> record = GameEngine::ReadMaterialCookRecord(cache);
+    ASSERT_TRUE(record) << result.output;
+    EXPECT_FALSE(record->Packages.empty()) << "the other materials cook";
+    ASSERT_EQ(record->Failures.size(), 1u) << result.output;
+    const GameEngine::MaterialCookFailure& failure = record->Failures.front();
+    EXPECT_EQ(GameEngine::PathFromUtf8(failure.Material).filename(), "Broken.material") << failure.Material;
+    EXPECT_TRUE(failure.Variant.empty()) << failure.Variant;
+    EXPECT_FALSE(failure.Reason.empty());
+
+    const GameEngine::MaterialCookOutcome outcome =
+        GameEngine::ReadMaterialCookOutcome(cache, result.exitCode, result.output);
+    EXPECT_NE(outcome.Warning.find("load or prepare these materials. Fix each material, then export again:\n  " +
+                                   failure.Material + ": " + failure.Reason),
+              std::string::npos)
+        << outcome.Warning;
+}
+
+// A failed variant of a material with a non-ASCII file name is a UTF-8 row, so the record keeps the
+// packages of the other materials.
+TEST(MaterialVariantCookIntegration, AFailedVariantOfANonAsciiMaterialKeepsTheRecordReadable)
+{
+    GameEngine::TestUtils::ScopedTempDir project{
+        GameEngine::TestUtils::MakeUniqueTempDirectory("material_cook_non_ascii")};
+    const std::string name = "Gr\xC3\xA4ser";
+    const fs::path assets = project.Path() / "Assets";
+    fs::create_directories(assets / "Materials/Surfaces");
+    std::ofstream(assets / "Materials" / GameEngine::PathFromUtf8(name + ".material")) << R"({
+  "schemaVersion": 3,
+  "materialName": "Grass",
+  "lightingModel": "Unlit",
+  "alphaMode": "Opaque",
+  "surfaceShader": "Materials/Surfaces/broken.glsl"
+})";
+    std::ofstream(assets / "Materials/Surfaces/broken.glsl") << "this is not GLSL\n";
+    const auto result = Cook(project.Path(), false, {"--particle-row", "base"});
+    ASSERT_FALSE(result.cancelled) << result.output;
+    EXPECT_EQ(result.exitCode, 1) << result.output;
+
+    const std::optional<GameEngine::MaterialCookRecord> record =
+        GameEngine::ReadMaterialCookRecord(project.Path() / ".Cache/Shaders");
+    ASSERT_TRUE(record) << result.output;
+    EXPECT_FALSE(record->Packages.empty()) << "the other materials cook";
+    ASSERT_FALSE(record->Failures.empty()) << result.output;
+    for (const GameEngine::MaterialCookFailure& failure : record->Failures)
+    {
+        EXPECT_EQ(failure.Material, name) << failure.Reason;
+        EXPECT_FALSE(failure.Variant.empty()) << failure.Reason;
+    }
 }
 
 TEST(MaterialVariantCookIntegration, RelocatedGraphSamplesReuseEveryCookedPackage)
@@ -622,6 +736,154 @@ TEST(MaterialVariantCookIntegration, TheDesktopCookComposesTheReliefForADeviceWi
     }
 }
 
+// A desktop export ships the cook's program index. The Player creates the device DeviceFactory picks
+// on this platform and resolves its compile inputs as RenderServices does; it uses the index only
+// when the cook keyed it at those inputs. An index cooked for other inputs is still refused.
+TEST(MaterialVariantCookIntegration, ThePlayerDeviceUsesTheProgramIndexTheDesktopCookWrites)
+{
+    using namespace GameEngine;
+    TestUtils::ScopedTempDir project{TestUtils::MakeUniqueTempDirectory("material_index_inputs")};
+    ASSERT_NO_FATAL_FAILURE(WriteReliefMaterial(project.Path()));
+    const ShellProcessResult result = Cook(project.Path());
+    ASSERT_FALSE(result.cancelled) << result.output;
+    ASSERT_EQ(result.exitCode, 0) << result.output;
+
+    const ScopedRestoredCompileInputs restoredInputs;
+    Rendering::DeviceDesc desc{};
+    desc.enableSwapchain = false;
+    std::unique_ptr<Rendering::IDevice> device = Rendering::DeviceFactory::CreateDevice(desc);
+    if (!device || !device->Initialize(desc))
+        GTEST_SKIP() << "No GPU device available";
+    Rendering::ApplyShaderCompileProfile(Rendering::RendererProfile::FromCapabilities(device->GetCapabilities()));
+
+    const fs::path fixtures = TestPaths::StagedRoot();
+    Rendering::MaterialBuildContext context;
+    context.AdapterShaderDir = fixtures / "Engine/Modules/Rendering/Shaders";
+    context.PackageShaderDirs = {fixtures / "Engine/Modules/GPUFogParticles/Shaders",
+                                 TestPaths::ExecutableDirectory() / "Fixtures/MaterialVariantCook/PackageShaders"};
+    context.ProjectRoots = {project.Path() / "Assets"};
+    context.AssetSourceRoots.push_back({"project", project.Path() / "Assets"});
+    context.CacheRoot = project.Path() / ".Cache/Shaders";
+    const fs::path index = context.CacheRoot / Rendering::kShaderProgramIndexFileName;
+    std::string reason;
+    EXPECT_NE(Rendering::ShaderProgramIndex::Load(index, context, &reason), nullptr) << reason;
+
+    // The other interpolation input composes other parallax programs, so the index is not used.
+    Rendering::SetInterpolationFunctionsAvailable(!Rendering::AreInterpolationFunctionsAvailable());
+    EXPECT_EQ(Rendering::ShaderProgramIndex::Load(index, context, &reason), nullptr);
+    EXPECT_NE(reason.find("cooked for"), std::string::npos) << reason;
+    device->Shutdown();
+}
+
+// A desktop export cooks the project it staged (ExportMaterialCookInputs). The Player finds every source
+// the program index names in that staged tree, so it uses the index. A project material that the export
+// does not ship adds no source to the index.
+TEST(MaterialVariantCookIntegration, AnExportedProgramIndexNamesOnlyTheSourcesTheExportShips)
+{
+    using namespace GameEngine;
+    TestUtils::ScopedTempDir project{TestUtils::MakeUniqueTempDirectory("material_index_staged")};
+    ASSERT_NO_FATAL_FAILURE(WriteProjectSurfaceMaterial(project.Path() / "Assets", "Shipped"));
+    ASSERT_NO_FATAL_FAILURE(WriteProjectSurfaceMaterial(project.Path() / "Assets", "Unshipped"));
+    const fs::path fixtures = TestPaths::StagedRoot();
+    const fs::path stagedAssets = project.Path() / "Game.app/Contents/Resources/Assets";
+    ASSERT_NO_FATAL_FAILURE(WriteProjectSurfaceMaterial(stagedAssets, "Shipped"));
+    fs::copy(fixtures / "Engine/Modules/Rendering/Shaders", stagedAssets / "Shaders", fs::copy_options::recursive);
+
+    DesktopMaterialCookInputs inputs = ExportMaterialCookInputs(stagedAssets.parent_path(), project.Path(), {});
+    inputs.PackageShaderDirs.push_back(fixtures / "Engine/Modules/GPUFogParticles/Shaders");
+    inputs.PackageShaderDirs.push_back(TestPaths::ExecutableDirectory() / "Fixtures/MaterialVariantCook/PackageShaders");
+    const fs::path tool = TestPaths::ExecutableDirectory().parent_path() / "Tools" / GE_MATERIAL_VARIANT_COOK_FILENAME;
+    const ShellProcessResult result =
+        RunProcessCaptured(tool.string(), DesktopMaterialCookArguments(inputs), std::chrono::minutes(45));
+    ASSERT_FALSE(result.cancelled) << result.output;
+    ASSERT_EQ(result.exitCode, 0) << result.output;
+    ASSERT_GT(CookedVariantCount(result.output, "Shipped"), 0u) << result.output;
+    EXPECT_EQ(CookedVariantCount(result.output, "Unshipped"), 0u) << result.output;
+    const fs::path bundle = stagedAssets.parent_path() / ".Cache/Shaders";
+    std::string stageError;
+    const std::optional<MaterialCookRecord> record = ReadMaterialCookRecord(inputs.Cache);
+    ASSERT_TRUE(record) << result.output;
+    ASSERT_TRUE(StageCookedShaderPackages(record->Packages, inputs.Cache, bundle, stageError)) << stageError;
+
+    // The Player's inputs on a desktop device, which the desktop cook serves.
+    const ScopedRestoredCompileInputs restoredInputs;
+    Rendering::ShaderCompileService::SetMaxSupportedSpirv(Rendering::ShaderCompileService::SpirvTarget::Spirv_1_6);
+    Rendering::RenderingDeviceCapabilities desktop{};
+    desktop.supportsBindlessResources = true;
+    desktop.supportsInterpolationFunctions = true;
+    desktop.supportsShaderClipDistance = true;
+    Rendering::ApplyShaderCompileProfile(Rendering::RendererProfile::FromCapabilities(desktop));
+    Rendering::MaterialBuildContext context;
+    context.AdapterShaderDir = stagedAssets / "Shaders";
+    context.ProjectRoots = {stagedAssets};
+    context.AssetSourceRoots.push_back({"project", stagedAssets});
+    std::string reason;
+    EXPECT_NE(Rendering::ShaderProgramIndex::Load(bundle / Rendering::kShaderProgramIndexFileName, context, &reason),
+              nullptr)
+        << reason;
+}
+
+// The Player takes a material's path from the asset registry, which case-folds it on a case-insensitive file
+// system; the export cook takes it from the staged tree. The program index serves every key the runtime
+// prewarms for a cooked material under the registry's spelling. A key the cook did not cook still misses.
+TEST(MaterialVariantCookIntegration, TheProgramIndexServesACookedMaterialUnderTheRegistrysSpellingOfItsPath)
+{
+    using namespace GameEngine;
+    TestUtils::ScopedTempDir project{TestUtils::MakeUniqueTempDirectory("material_index_spelling")};
+    const fs::path fixtures = TestPaths::StagedRoot();
+    const fs::path stagedAssets = project.Path() / "Game.app/Contents/Resources/Assets";
+    ASSERT_NO_FATAL_FAILURE(WriteProjectSurfaceMaterial(stagedAssets, "Shipped"));
+    fs::copy(fixtures / "Engine/Modules/Rendering/Shaders", stagedAssets / "Shaders", fs::copy_options::recursive);
+    DesktopMaterialCookInputs inputs = ExportMaterialCookInputs(stagedAssets.parent_path(), project.Path(), {});
+    inputs.PackageShaderDirs.push_back(fixtures / "Engine/Modules/GPUFogParticles/Shaders");
+    inputs.PackageShaderDirs.push_back(TestPaths::ExecutableDirectory() / "Fixtures/MaterialVariantCook/PackageShaders");
+    const fs::path tool = TestPaths::ExecutableDirectory().parent_path() / "Tools" / GE_MATERIAL_VARIANT_COOK_FILENAME;
+    const ShellProcessResult result =
+        RunProcessCaptured(tool.string(), DesktopMaterialCookArguments(inputs), std::chrono::minutes(45));
+    ASSERT_FALSE(result.cancelled) << result.output;
+    ASSERT_EQ(result.exitCode, 0) << result.output;
+    const fs::path bundle = stagedAssets.parent_path() / ".Cache/Shaders";
+    std::string stageError;
+    const std::optional<MaterialCookRecord> record = ReadMaterialCookRecord(inputs.Cache);
+    ASSERT_TRUE(record) << result.output;
+    ASSERT_TRUE(StageCookedShaderPackages(record->Packages, inputs.Cache, bundle, stageError)) << stageError;
+
+    const ScopedRestoredCompileInputs restoredInputs;
+    const ScopedDesktopCompileInputs desktopInputs;
+    Rendering::MaterialBuildContext context;
+    context.AdapterShaderDir = stagedAssets / "Shaders";
+    context.PackageShaderDirs = inputs.PackageShaderDirs;
+    context.ProjectRoots = {stagedAssets};
+    context.AssetSourceRoots.push_back({"project", stagedAssets});
+    context.ReadOnlyCacheRoots = {bundle};
+    context.CacheRoot = project.Path() / "UserData/.Cache/Shaders";
+    std::string reason;
+    const auto index =
+        Rendering::ShaderProgramIndex::Load(bundle / Rendering::kShaderProgramIndexFileName, context, &reason);
+    ASSERT_NE(index, nullptr) << reason;
+    context.ProgramIndex = index;
+
+    const fs::path materialPath = stagedAssets / "Materials/Shipped.material";
+    MaterialAsset asset(GUID::Generate(), materialPath);
+    ASSERT_TRUE(asset.Load()) << materialPath;
+    const fs::path registryPath = PathFromUtf8(AssetPaths::NormalizeForRegistryKey(materialPath));
+    ASSERT_NE(registryPath, materialPath);
+    const auto keys = RuntimePrewarmKeys(asset.GetDocument(), registryPath, context);
+    ASSERT_FALSE(keys.empty());
+    {
+        ScopedCookOnlyRuntime cookOnly;
+        ExpectServedFromBundle(asset.GetDocument(), registryPath, "Shipped", keys, context, bundle);
+    }
+    EXPECT_EQ(index->GetCounts().Hits, keys.size());
+    EXPECT_EQ(index->GetCounts().Misses, 0u);
+
+    // The cook gives a project material no vertex-colour layout, so this key is not in the index.
+    const Engine::Renderer::MaterialShaderPackageBuilder builder(asset.GetDocument(), registryPath, "Shipped", context);
+    builder.Build(Rendering::ShaderSourceKind::SpirV, keys.front().materialKeywords,
+                  keys.front().vertexFlags | Rendering::VertexAttributeFlags::HasColor);
+    EXPECT_EQ(index->GetCounts().Misses, 1u);
+}
+
 // A desktop export cooks with DesktopMaterialCookArguments into its own cache and ships the packages
 // the cook names in the bundle's read-only shader cache (StageCookedShaderPackages). A packaged game then
 // serves every program it asks for from that bundle, without a compiler and without writing to its own
@@ -650,7 +912,9 @@ TEST(MaterialVariantCookIntegration, AnExportedBundleServesEveryKeyTheRuntimePre
     ASSERT_FALSE(result.cancelled) << result.output;
     ASSERT_EQ(result.exitCode, 0) << result.output;
 
-    const std::vector<fs::path> packages = CookedShaderPackages(result.output);
+    const std::optional<MaterialCookRecord> record = ReadMaterialCookRecord(inputs.Cache);
+    ASSERT_TRUE(record) << result.output;
+    const std::vector<fs::path>& packages = record->Packages;
     ASSERT_FALSE(packages.empty()) << result.output;
     const fs::path bundle = project.Path() / "Game.app/Contents/Resources/.Cache/Shaders";
     std::string stageError;
@@ -677,7 +941,7 @@ TEST(MaterialVariantCookIntegration, AnExportedBundleServesEveryKeyTheRuntimePre
             const fs::path materialPath = project.Path() / "Assets/Materials" / (std::string(name) + ".material");
             MaterialAsset asset(GUID::Generate(), materialPath);
             ASSERT_TRUE(asset.Load()) << materialPath;
-            const auto keys = RuntimePrewarmKeys(asset.GetDocument(), materialPath);
+            const auto keys = RuntimePrewarmKeys(asset.GetDocument(), materialPath, context);
             ASSERT_FALSE(keys.empty()) << name;
             for (const auto& key : keys)
                 grabKeys += Rendering::HasKeyword(key.materialKeywords, Rendering::MaterialKeyword::SceneColorGrab);
@@ -693,7 +957,7 @@ TEST(MaterialVariantCookIntegration, AnExportedBundleServesEveryKeyTheRuntimePre
             MaterialDocument document = MaterialDocument::CreateDefaultPBR(imported.DocumentName);
             document.alphaMode = imported.AlphaMode;
             const fs::path materialPath = project.Path() / "Assets/Models" / imported.File;
-            auto keys = RuntimePrewarmKeys(document, materialPath);
+            auto keys = RuntimePrewarmKeys(document, materialPath, context);
             for (std::size_t i = 0, count = keys.size(); i < count; ++i)
             {
                 if (!Rendering::HasKeyword(keys[i].materialKeywords, Rendering::MaterialKeyword::ForwardPlus))
@@ -751,8 +1015,9 @@ TEST(MaterialVariantCookIntegration, AnExportedBundleServesTheTerrainGrassProgra
 
     const fs::path bundle = project.Path() / "Game.app/Contents/Resources/.Cache/Shaders";
     std::string stageError;
-    ASSERT_TRUE(StageCookedShaderPackages(CookedShaderPackages(result.output), inputs.Cache, bundle, stageError))
-        << stageError;
+    const std::optional<MaterialCookRecord> record = ReadMaterialCookRecord(inputs.Cache);
+    ASSERT_TRUE(record) << result.output;
+    ASSERT_TRUE(StageCookedShaderPackages(record->Packages, inputs.Cache, bundle, stageError)) << stageError;
 
     ScopedDesktopCompileInputs desktopInputs;
     ScopedCookOnlyRuntime cookOnly;

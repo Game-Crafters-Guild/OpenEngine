@@ -200,7 +200,7 @@ class HeldImportTest : public Testing::HeldAssetImportFixture
         {
             EngineCore::GetInstance().GetAssetManager().Update();
             const auto start = std::chrono::steady_clock::now();
-            pump.StepBudgeted(world, m_Services, std::chrono::milliseconds(5));
+            pump.StepBudgeted(world, *m_Services, std::chrono::milliseconds(5));
             EXPECT_LT(std::chrono::steady_clock::now() - start, Testing::kAFrameThatWaited) << "a step waited";
         }
     }
@@ -220,9 +220,9 @@ TEST_F(HeldImportTest, AStepDoesNotWaitForAModelStillImporting)
     const auto entity = world.Create<Components::MeshRenderer>(mr);
 
     SceneBuildPump pump;
-    pump.Begin(world, m_Services);
+    pump.Begin(world, *m_Services);
     const auto start = std::chrono::steady_clock::now();
-    pump.StepBudgeted(world, m_Services, std::chrono::milliseconds(0));
+    pump.StepBudgeted(world, *m_Services, std::chrono::milliseconds(0));
     EXPECT_LT(std::chrono::steady_clock::now() - start, std::chrono::seconds(1)) << "the step waited for the import";
     EXPECT_EQ(pump.ProcessedItems(), 0u);
     EXPECT_TRUE(pump.IsActive());
@@ -251,8 +251,8 @@ TEST_F(HeldImportTest, AnEditorBuildHoldsTheReadyQueryUntilItsModelLands)
     SceneLoadTracker tracker;
     SceneBuildPump pump;
     pump.ReportLoadingWork(tracker);
-    pump.Begin(world, m_Services);
-    pump.StepBudgeted(world, m_Services, std::chrono::milliseconds(0));
+    pump.Begin(world, *m_Services);
+    pump.StepBudgeted(world, *m_Services, std::chrono::milliseconds(0));
     ASSERT_TRUE(m_Gate.WaitForEntered(1)) << "the import never reached the held model";
     SceneLoadTrackerTestAccess::Tick(tracker,std::chrono::steady_clock::now());
     EXPECT_FALSE(tracker.IsReadyToShow()) << "the build's held entity does not hold the query";
@@ -280,8 +280,8 @@ TEST_F(HeldImportTest, AFailedImportIsRecordedOnceAndNeverWaitedFor)
     const auto entity = world.Create<Components::MeshRenderer>(mr);
 
     SceneBuildPump pump;
-    pump.Begin(world, m_Services);
-    pump.StepBudgeted(world, m_Services, std::chrono::milliseconds(0));
+    pump.Begin(world, *m_Services);
+    pump.StepBudgeted(world, *m_Services, std::chrono::milliseconds(0));
     ASSERT_TRUE(m_Gate.WaitForEntered(1)) << "the import never reached the held model";
     m_Gate.Release();
     StepUntilComplete(pump, world);

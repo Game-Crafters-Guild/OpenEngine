@@ -47,6 +47,7 @@
 #include "Assets/AssetRegistry.h"
 #include "Assets/MeshLODGenerator.h"
 #include "Assets/ModelAsset.h"
+#include "Assets/RenderPipelineAsset.h"
 #include "AssetCore/AssetEvents.h"
 #include "AssetCore/AssetTypes.h"
 #include "Editor/Assets/EditorAssetActionsInstall.h"
@@ -77,12 +78,14 @@
 #include "Editor/EditorPaths.h"
 #include "Editor/EditorTreeTitleIconVars.h"
 #include "Editor/Settings/ScriptEditorSettings.h"
-#include "Editor/Assets/AssetOpenRouting.h"
+#include "Editor/Assets/BuiltInAssetOpeners.h"
+#include "Editor/Registries/AssetOpenerRegistry.h"
 #include "Editor/Assets/ShaderGlslOpen.h"
 #include "Editor/Settings/PhysicsProjectSettings.h"
 #include "Editor/Settings/Render/RenderPipelineSettings.h"
 #include "Editor/Settings/Render/RenderProjectSettings.h"
 #include "Editor/Settings/SettingsStore.h"
+#include "Editor/Settings/StartupSettingsPage.h"
 #include "Editor/Settings/SvgRasterSettings.h"
 #include "Editor/Settings/SceneViewSettings.h"
 #include "Editor/Settings/TooltipSettings.h"
@@ -145,7 +148,8 @@
 #include "DebugServer/Capture/RenderDocCapture.h"
 #include "Logger/RingBufferSink.h"
 #include "EditorInputActions.h"
-#include "GameViewController.h"
+#include "GameView/GameViewController.h"
+#include "GameView/GameViewRenderCoordinator.h"
 #include "MovieRecorderController.h"
 #include "MovieRecorderToolbarMenu.h"
 #include "Panels/AssetsPanel.h"
@@ -207,6 +211,7 @@
 
 #include "Assets/Polyhaven/PolyhavenDownloadManager.h"
 #include "Panels/DownloadInProgressModal.h"
+#include "Panels/Scribe/ScribePanel.h"
 #include "EditorChangeNotifications.h"
 #include "DayCycle/DayCycleWindow/DayCycleWindowRegistration.h"
 #include "Markups/MarkupEditorBridge.h"
@@ -353,9 +358,9 @@ static bool IsUiCorrectnessModeForcedForAllWindows()
 } // namespace
 
 /// The project an ordinary launch opens by itself: the last project from
-/// preferences, when the host policy and the user's auto-load preference both
-/// allow it and the path still exists. Nullopt means the launch will show the
-/// picker instead.
+/// preferences, when the host policy allows it, the user turned auto-load on and
+/// the path still exists. Nullopt means the launch shows the picker. Auto-load is
+/// off until the user turns it on.
 static std::optional<std::filesystem::path> ResolveAutoLoadProjectRoot(const GameEngine::ApplicationConfig& config)
 {
     if (!config.AutoOpenLastProjectOnBoot)
@@ -365,9 +370,7 @@ static std::optional<std::filesystem::path> ResolveAutoLoadProjectRoot(const Gam
     std::string err;
     (void)prefs.Load(&err);
 
-    bool autoLoad = true; // default on
-    prefs.TryGetBool("startup.autoLoadLastProject", autoLoad);
-    if (!autoLoad)
+    if (!Editor::IsAutoLoadLastProjectOn(prefs))
         return std::nullopt;
 
     std::string lastPath;
@@ -385,9 +388,9 @@ static std::optional<std::filesystem::path> ResolveAutoLoadProjectRoot(const Gam
 /// HDR mode, dynamic resolution, TAA scale.
 ///
 /// A fallback WorkspaceDirectory is not the project that will open: with no
-/// --project, EditorStartup points it at DefaultProject and flags it, and the
-/// auto-load a few phases later replaces it with the last project. Resolving the
-/// same root here is what lets the swapchain be created in that project's HDR
+/// --project, EditorStartup points it at DefaultProject and flags it. When auto-load
+/// is on, the auto-load a few phases later replaces it with the last project.
+/// Resolving the same root here is what lets the swapchain be created in that project's HDR
 /// mode instead of being recreated into it once the project lands.
 static std::filesystem::path ResolveStartupProjectSettingsRoot(const GameEngine::ApplicationConfig& config)
 {
@@ -942,27 +945,31 @@ static void BindGameViewRG(EditorApplication::EditorWindowContext* ctx,
     // Every arm below assigns the space its producer stamped; the initializer
     // is unread (the invalid-physical arm unbinds without stating a space).
     UI::UITextureSpace space = UI::UITextureSpace::DisplayLinearSdr();
-    if (ctx->gameView->IsWaitingForExtraction())
+    if (ctx->gameView->MissedActivationRequest())
     {
-        // Invalid across a device rebuild: this arm never reaches the snapshot's
-        // Update, so the accessor's generation compare is the only thing between
-        // a freed id and ImportExternalTexture.
-        physical = ctx->gameView->GetLastPresentedTexture(*device);
-        texW = ctx->gameView->GetLastPresentedWidth();
-        texH = ctx->gameView->GetLastPresentedHeight();
-        // The cached copy keeps the space of the frame that rendered it —
-        // never the current mode.
-        space = ctx->gameView->GetLastPresentedSpace();
+        // The safety net: an activation that no request covered. The leaf shows its previous
+        // image, the Scene View's, for this one frame. A DebugFast build stops here.
+        assert(false && "Game View activated after extraction: request it at the end of App Update");
+        SceneViewPanel* scenePanel = ctx->mountedViewPanels.SceneView(ctx->ui.get());
+        UIElement* sceneViewport = scenePanel ? scenePanel->GetViewportElement() : nullptr;
+        const SceneViewController* scene =
+            sceneViewport ? scenePanel->GetSceneControllerForViewport(*sceneViewport) : nullptr;
+        // Invalid across a device rebuild, so a freed id never reaches the import.
+        physical = scene ? scene->GetLastPresentedTexture(*device) : Rendering::TextureHandle{};
         if (physical.IsValid())
         {
+            texW = scene->GetLastPresentedWidth();
+            texH = scene->GetLastPresentedHeight();
+            space = scene->GetLastPresentedSpace();
             rg2Tex = frame.ImportExternalTexture(
-                "Editor.GameView.LastPresented", physical,
+                "Editor.GameView.LeafPrevious", physical,
                 Rendering::ResourceState::ShaderResource,
                 device->GetTextureFormat(physical));
         }
     }
-    else if (!ctx->gameView->HadCameraThisFrame())
+    else if (!ctx->gameView->HadCameraThisFrame() || ctx->gameView->IsWaitingForExtraction())
     {
+        // No camera, or a covered extraction wait: the Game View's own clear.
         physical = ctx->gameView->GetNoCameraPhysicalRG();
         rg2Tex = ctx->gameView->GetNoCameraColorRG(frame);
         texW = ctx->gameView->GetNoCameraWidthRG();
@@ -1043,9 +1050,6 @@ static void BindGameViewRG(EditorApplication::EditorWindowContext* ctx,
         return;
     }
 
-    if (!ctx->gameView->IsWaitingForExtraction() && rg2Tex.IsValid())
-        ctx->gameView->UpdatePresentedSnapshotRG(frame, rg2Tex, space);
-
     if (pureRGFrame && rg2Tex.IsValid())
     {
         // Pure frame: the UI pass declares the read in the same graph. The
@@ -1073,9 +1077,7 @@ struct WindowFrameRouting
     bool rg2Scene = false;
     bool rg2Game = false;
     GameViewPanel* gvPanel = nullptr;
-    bool forceGameViewRecord = false;
-    // D5 (8e-8): mounted game tab whose viewport is degenerate (collapsed /
-    // zero-px) — the RenderGraph arm quiesces the view instead of recording it.
+    // The Game View is present but not recorded: hidden, or mounted with no renderable size.
     bool gameDegenerate = false;
     uint32_t gvW = 1;
     uint32_t gvH = 1;
@@ -1158,7 +1160,8 @@ static bool RecordWindowWorldViews(EditorApplication::EditorWindowContext* ctx,
                 {
                     Editor::SceneViewRenderCoordinator::DeclareOverlaysRG(ctx, *rg2Frame,
                                                                            params.ViewTargets);
-                    Editor::SceneViewRenderCoordinator::BindRG(ctx, *rg2Frame, routing.pure);
+                    sceneViewportReady =
+                        Editor::SceneViewRenderCoordinator::BindRG(ctx, *rg2Frame, routing.pure);
                     // Scene-save thumbnail (8c-4): ticket readback of the scene
                     // view's pipeline output — overlays included, the view's own
                     // finalize not, so the PNG writer applies the curve and its
@@ -1173,7 +1176,6 @@ static bool RecordWindowWorldViews(EditorApplication::EditorWindowContext* ctx,
                         ctx->scene && targets[0].View == ctx->scene->GetViewId())
                         thumbnailCapture->BeginReadbackRG(
                             *rg2Frame, static_cast<uint32_t>(targets[0].View), rs);
-                    sceneViewportReady = true;
                 }
                 if (gameDeclared)
                 {
@@ -1223,6 +1225,18 @@ static void EnsureWorldHasPhysicsSettingsFromProject(GameEngine::ECS::World& wor
     const Physics::PhysicsWorldSettings s = Editor::PhysicsProjectSettings::Load(workspaceRoot);
     (void)PhysicsECS::UpsertPhysicsWorldSettingsComponent(world, s, /*createIfMissing=*/true);
 }
+
+// Waits for the pipeline asset and reads the shader packages its passes name into the spine's preload store.
+void PreLoadPipelineShaderPackages(Engine::Renderer::RenderServices& rs, const GUID& pipelineGuid,
+                                   ShaderSourceKind sourceKind)
+{
+    const auto pipeline = std::dynamic_pointer_cast<RenderPipelineAsset>(
+        EngineCore::GetInstance().GetAssetManager().LoadAssetAsync(pipelineGuid, AssetLoadPriority::High).get());
+    if (!pipeline || !pipeline->IsLoaded())
+        return;
+    rs.Spine().PreLoadRenderPipelineShaderPackages(*pipeline, sourceKind);
+    Logger::Log::Info("[Startup] Shader packages pre-loaded on a startup job");
+}
 } // namespace
 
 std::unique_ptr<DockNode> EditorApplication::CloneCurrentDockLayout() const
@@ -1234,6 +1248,16 @@ void EditorApplication::SetDockLayoutFromClone(const DockNode* src)
 {
     if (m_Docking && src)
         m_Docking->SetRoot(CloneDockNode(src));
+}
+
+// The C++-aware launcher reuses the running IDE instance and focuses the file (VS Code also opens the
+// project folder).
+static bool OpenNativeSourceInIde(const std::filesystem::path& path)
+{
+    std::filesystem::path projectDir;
+    if (auto* nativeScripts = EngineCore::GetInstance().GetNativeScriptManager())
+        projectDir = nativeScripts->WatchDirectory();
+    return Platform::OpenSourceWithProject(path, projectDir);
 }
 
 static AnimationWindowPanel* FindAnimationPanelOfKind(const std::vector<std::unique_ptr<UIElement>>& panels,
@@ -1341,7 +1365,7 @@ static void BootstrapEditorWorld(ECS::World& world, Engine::Renderer::RenderServ
     ECS::Entity rootEntity = world.Create();
     ECS::EntityHandle rootHandle = rootEntity.GetHandle();
 
-    Mathematics::Vector3 rootPos(0.0f, 0.0f, 0.0f);
+    Mathematics::WorldPosition rootPos{0.0, 0.0, 0.0};
     Mathematics::Quaternion rootRot{};
     Mathematics::Vector3 rootScale(1.0f, 1.0f, 1.0f);
     Transform rootTransform = Transform::FromTRS(rootPos, rootRot, rootScale);
@@ -1364,7 +1388,7 @@ static void BootstrapEditorWorld(ECS::World& world, Engine::Renderer::RenderServ
 
     // Child entity 1
     ECS::Entity child1 = world.Create();
-    Mathematics::Vector3 child1Pos(2.0f, 0.0f, 0.0f);
+    Mathematics::WorldPosition child1Pos{2.0, 0.0, 0.0};
     Transform child1Transform = Transform::FromTRS(child1Pos, rootRot, rootScale);
     child1.Set(child1Transform);
     {
@@ -1386,7 +1410,7 @@ static void BootstrapEditorWorld(ECS::World& world, Engine::Renderer::RenderServ
 
     // Child entity 2
     ECS::Entity child2 = world.Create();
-    Mathematics::Vector3 child2Pos(0.0f, 2.0f, 0.0f);
+    Mathematics::WorldPosition child2Pos{0.0, 2.0, 0.0};
     Transform child2Transform = Transform::FromTRS(child2Pos, rootRot, rootScale);
     child2.Set(child2Transform);
     {
@@ -1477,6 +1501,7 @@ EditorApplication::EditorApplication(const ApplicationConfig& config)
             return view ? view->GetSelectedEntities() : std::vector<ECS::EntityHandle>{};
         },
         [this]() { return m_PlayMode && m_PlayMode->IsPlayingOrPaused(); });
+    Editor::ScribePanel::Register(m_UndoRedo.get());
     m_SceneEditor = std::make_unique<GameEngine::Editor::SceneEditorController>();
     // Manual save reads the same write inhibit the autosave tick does
     // (IsPlayModeBlockingSceneWrites), because both protect the authored .scene file from the
@@ -1833,7 +1858,7 @@ void EditorApplication::BeginMainWindowAndDevice(JobSystem::JobChannel& startupC
 #if !defined(_WIN32) && !defined(__APPLE__)
     {
         const auto iconPath = ApplicationPaths::GetExecutableDirectory() / "AppIcon.png";
-        Vector<uint8> iconBytes;
+        ByteBuffer iconBytes;
         if (ReadFileBytesShared(iconPath, iconBytes))
         {
             const Image::Image8 icon = Image::Decode8(iconBytes, iconPath.string(), Image::DecodeChannels::Rgba);
@@ -2351,6 +2376,15 @@ bool EditorApplication::Initialize()
     mainCtxRaw->inputConfig = mainInput;
     WindowInputRouter::BindBasicHandlers(mainCtxRaw->inputConfig);
     mainCtx->window->SetRefreshHandler([this] { Tick(); });
+    // The close arrives in the event pump between frames, so the loop stops before the next frame.
+    mainCtx->window->SetCloseRequestedHandler(
+        [this]
+        {
+            if (TryInterceptQuitForDirtyScene())
+                return true;
+            RequestExit();
+            return false;
+        });
     mainCtx->window->SetPositionHandler([this, mainCtxRaw](int x, int y)
                                         { this->OnWindowMoved(mainCtxRaw, x, y); });
     mainCtx->window->SetFramebufferSizeHandler([this, mainCtxRaw](int width, int height)
@@ -2476,6 +2510,7 @@ bool EditorApplication::Initialize()
     renderInit.windowHandle = mainCtx->window->GetNativeHandle();
     renderInit.width = static_cast<uint32>(mainCtx->width);
     renderInit.height = static_cast<uint32>(mainCtx->height);
+    renderInit.windowTargetChannel = &EngineCore::GetInstance().GetStartupChannel();
     renderInit.createRenderServices = true;
 
     if (!mainCtx->renderCtx->Initialize(renderInit))
@@ -2549,13 +2584,13 @@ bool EditorApplication::Initialize()
             }
         }
 
-        // Pre-load the render pipeline asset so EnsureActiveRenderPipelineBuilt()
-        // finds it on Frame 0 instead of falling back to builtin (which causes a 370ms
-        // rebuild on Frame 1 when the real asset becomes available).
-        // Kick off async load — it will complete during Vulkan-driven Frame 0 rendering.
+        // Loads the render pipeline asset at high priority so Frame 0 compiles it, and reads the shader
+        // packages its passes name on an "Engine startup" job: the compile and the nodes take them from
+        // the spine's store, so the disk reads overlap Frame 0's UI work.
         {
             auto& am = EngineCore::GetInstance().GetAssetManager();
             const auto pipelineAssetPath = rs->Spine().GetActiveRenderPipelinePath();
+            GUID pipelineGuid;
             if (!pipelineAssetPath.empty())
             {
                 const auto absPath = am.ResolveAssetPath(pipelineAssetPath);
@@ -2564,44 +2599,24 @@ bool EditorApplication::Initialize()
                     std::filesystem::exists(absPath, ec) &&
                     !std::filesystem::is_directory(absPath, ec))
                 {
-                    GUID pipelineGuid = am.ResolveAssetGuid(pipelineAssetPath);
+                    pipelineGuid = am.ResolveAssetGuid(pipelineAssetPath);
                     if (pipelineGuid.IsNull())
                         pipelineGuid = am.GetRegistry().GetAssetGUID(absPath);
                     if (!pipelineGuid.IsNull())
                         am.LoadAsset(pipelineGuid, AssetLoadResultCallback{}, AssetLoadPriority::High);
                 }
             }
-        }
-
-        // Pre-load shader packages used by the ForwardPlus pipeline as a job of the engine's
-        // "Engine startup" channel (it waits on the disk, so it holds no compute worker).
-        // These .shaderpkg files are loaded from disk during EnsureCachedResources() on the
-        // first pipeline build (Frame 1). By pre-loading them here, the disk I/O overlaps
-        // with Frame 0's UI work and the shader data is available from cache instantly.
-        {
-            static constexpr const char* kPipelineShaderPkgs[] = {
-                "Shaders/clustered_light_cull.shaderpkg",
-                "Shaders/bloom_threshold.shaderpkg",
-                "Shaders/bloom_downsample.shaderpkg",
-                "Shaders/bloom_octave_gather.shaderpkg",
-                "Shaders/halation_prefilter.shaderpkg",
-                "Shaders/halation_blur_h.shaderpkg",
-                "Shaders/halation_composite.shaderpkg",
-                "Shaders/bloom_combine.shaderpkg",
-                "Shaders/tonemap.shaderpkg",
-            };
-            auto* rsCapture = rs;
-            const GameEngine::Rendering::ShaderSourceKind sourceKind =
-                rs->GetDevice()->PreferredShaderSource();
-            const auto shaderPreload = [rsCapture, sourceKind]() {
-                for (const char* pkg : kPipelineShaderPkgs)
-                    rsCapture->Spine().PreLoadShaderPackage(pkg, sourceKind);
-                Logger::Log::Info("[Startup] Shader packages pre-loaded on a startup job");
-            };
-            if (Platform::SupportsTransientThreads())
-                m_ShaderPreload = EngineCore::GetInstance().GetStartupChannel().Submit(shaderPreload);
-            else
-                shaderPreload();
+            // Without transient threads the job would wait for the asset on the main thread, which
+            // also runs the load: the compile and the nodes then read the packages themselves.
+            if (!pipelineGuid.IsNull() && Platform::SupportsTransientThreads())
+            {
+                auto* rsCapture = rs;
+                const ShaderSourceKind sourceKind = rs->GetDevice()->PreferredShaderSource();
+                m_ShaderPreload = EngineCore::GetInstance().GetStartupChannel().Submit(
+                    [rsCapture, pipelineGuid, sourceKind]() {
+                        PreLoadPipelineShaderPackages(*rsCapture, pipelineGuid, sourceKind);
+                    });
+            }
         }
 
         // Default Editor mode: runtime simulation systems OFF until entering Play Mode.
@@ -3236,9 +3251,6 @@ bool EditorApplication::Initialize()
         auto* undoHistoryPanel = FindFirstPanelOfType<UndoHistoryPanel>(m_PanelStorage);
         auto* hierarchyPanel = FindFirstPanelOfType<HierarchyPanel>(m_PanelStorage);
         auto* inspectorPanel = FindFirstPanelOfType<InspectorPanel>(m_PanelStorage);
-        auto* animationPanel = FindAnimationPanelOfKind(m_PanelStorage, AnimationWindowPanel::PanelKind::Animation);
-        auto* timelinePanel = FindAnimationPanelOfKind(m_PanelStorage, AnimationWindowPanel::PanelKind::Timeline);
-        auto* clipEditorPanel = FindAnimationPanelOfKind(m_PanelStorage, AnimationWindowPanel::PanelKind::ClipEditor);
         auto* sceneViewPanel = FindFirstPanelOfType<SceneViewPanel>(m_PanelStorage);
         auto* gameViewPanel = m_Docking
             ? dynamic_cast<GameViewPanel*>(m_Docking->GetPanel(EditorPanelIds::GameView))
@@ -3300,24 +3312,6 @@ bool EditorApplication::Initialize()
                     if (button == Input::kMouseButton_Left && pressed)
                         m_GameViewPointerLock->OnGameViewPressed();
                     destination->gameView->HandleGameUiPointerButton(button, pressed, mods);
-                });
-
-            gameViewPanel->SetActivationArmedCallback(
-                [this, gameViewPanel](float contentWidth, float contentHeight)
-                {
-                    EditorWindowContext* host = FindWindowHostingGameView(gameViewPanel);
-                    if (!host)
-                        return;
-
-                    // 1:1 with the panel rect. Render scale is per-view
-                    // pipeline state, applied inside the pipeline.
-                    const float contentScale = host->ui ? host->ui->GetContentScale() : 1.0f;
-                    const uint32_t width =
-                        static_cast<uint32_t>(std::max(1.0f, contentWidth * contentScale));
-                    const uint32_t height =
-                        static_cast<uint32_t>(std::max(1.0f, contentHeight * contentScale));
-                    host->gameView->PrepareForActivation(
-                        EngineCore::GetInstance().EnsurePrimaryWorld(), width, height);
                 });
         }
 
@@ -3722,115 +3716,34 @@ bool EditorApplication::Initialize()
             (void)OpenGraphAsset(path);
         };
 
-        // One open-asset policy for every entry point — Assets browser double-click and
-        // context-menu Open, inspector "Open ..." buttons. ResolveAssetOpenTarget decides;
-        // this lambda only executes the decision.
-        const std::function<void(const std::filesystem::path&)> openAsset =
-            [this, assetsPanel, sourceOpener, main, assetViewPanel,
-             animationPanel, timelinePanel, clipEditorPanel](const std::filesystem::path& path)
+        // One open-asset policy for every entry point: Assets browser double-click and context-menu Open,
+        // inspector "Open ..." buttons. The opener registry decides; the operating system is the last resort.
+        Editor::BuiltInAssetOpenActions openActions;
+        openActions.ReadPreferences = [](const std::filesystem::path& path)
         {
-            if (path.empty())
-                return;
-
-            const std::string ext = LowerCaseExtension(path);
-
-            Editor::AssetOpenRoutingInputs inputs;
-            inputs.OpenCSharpInScriptEditor = Editor::ScriptEditorSettings::Get().GetOpenInScriptInspector();
-            inputs.OpenNativeSourceInScriptEditor =
+            Editor::AssetOpenPreferences preferences;
+            preferences.OpenCSharpInScriptEditor = Editor::ScriptEditorSettings::Get().GetOpenInScriptInspector();
+            preferences.OpenNativeSourceInScriptEditor =
                 Editor::ScriptEditorSettings::Get().GetOpenNativeSourceInScriptInspector();
-            inputs.GlslOpensInMaterialGraph = ext == ".glsl" && Editor::ShouldOpenGlslInMaterialGraph(path);
-
-            const Editor::AssetOpenTarget target = Editor::ResolveAssetOpenTarget(ext, inputs);
-            switch (target)
-            {
-            case Editor::AssetOpenTarget::Scene:
-                if (m_SceneEditor && m_SceneEditor->HandleAssetOpen(path))
-                    return;
-                break;
-            case Editor::AssetOpenTarget::ScriptEditor:
-                if (sourceOpener.OpenInScriptEditor({path}))
-                    return;
-                if (ext == ".cs" && ExternalScriptEditorLauncher::OpenScript(path))
-                    return;
-                break;
-            case Editor::AssetOpenTarget::ExternalScriptEditor:
-                if (ExternalScriptEditorLauncher::OpenScript(path))
-                    return;
-                break;
-            case Editor::AssetOpenTarget::ExternalIde:
-            {
-                // The C++-aware launcher reuses the running IDE instance and focuses the
-                // file (VS Code also opens the project folder).
-                std::filesystem::path projectDir;
-                if (auto* nativeScripts = EngineCore::GetInstance().GetNativeScriptManager())
-                    projectDir = nativeScripts->WatchDirectory();
-                if (Platform::OpenSourceWithProject(path, projectDir))
-                    return;
-                break;
-            }
-            case Editor::AssetOpenTarget::NodeGraph:
-                if (OpenGraphAsset(path))
-                    return;
-                break;
-            case Editor::AssetOpenTarget::Inspector:
-                // A material is edited in the Inspector, so opening it means selecting
-                // it and bringing that panel forward.
-                if (assetsPanel)
-                {
-                    const std::vector<std::filesystem::path>& selected = assetsPanel->GetSelectedAssetPaths();
-                    if (selected.size() != 1 || selected.front() != path)
-                        assetsPanel->NavigateToAndSelectAsset(path);
-                }
-                if (m_PanelManager)
-                    m_PanelManager->ShowOrActivatePanel(main, EditorPanelIds::Inspector);
-                return;
-            case Editor::AssetOpenTarget::Animation:
-            case Editor::AssetOpenTarget::Timeline:
-            case Editor::AssetOpenTarget::ClipEditor:
-            {
-                AnimationWindowPanel* targetPanel = animationPanel;
-                const char* targetPanelId = EditorPanelIds::Animation;
-                if (target == Editor::AssetOpenTarget::Timeline)
-                {
-                    targetPanel = timelinePanel;
-                    targetPanelId = EditorPanelIds::Timeline;
-                }
-                else if (target == Editor::AssetOpenTarget::ClipEditor)
-                {
-                    targetPanel = clipEditorPanel;
-                    targetPanelId = EditorPanelIds::ClipEditor;
-                }
-                if (!targetPanel)
-                    targetPanel = animationPanel ? animationPanel
-                                                 : FindFirstPanelOfType<AnimationWindowPanel>(m_PanelStorage);
-                if (!targetPanel)
-                    break;
-                if (m_PanelManager)
-                    m_PanelManager->ShowOrActivatePanel(main, targetPanelId, EditorPanelIds::SceneView);
-                if (!targetPanel->OpenAnimationAssetPath(path))
-                    break;
-                const std::filesystem::path& previewPath = targetPanel->GetPreviewModelPath();
-                if (!previewPath.empty())
-                {
-                    if (assetViewPanel)
-                        assetViewPanel->SetAssetPreview(previewPath, true);
-                    m_CurrentAssetPreviewPath = previewPath;
-                    m_CurrentAssetPreviewEnabled = true;
-                    if (AssetViewPanel* sceneAssetViewPanel = EditorApplication::FindAssetViewPanelById(
-                            m_Docking.get(), EditorPanelIds::AssetViewSceneCopy))
-                    {
-                        sceneAssetViewPanel->SetAssetPreview(previewPath, true);
-                    }
-                }
-                return;
-            }
-            case Editor::AssetOpenTarget::OperatingSystem:
-                break;
-            }
-
-            // Nothing in the editor took the asset (or its launcher failed): the OS
-            // default application is the last resort.
-            Platform::OpenPath(path);
+            preferences.GlslOpensInMaterialGraph =
+                LowerCaseExtension(path) == ".glsl" && Editor::ShouldOpenGlslInMaterialGraph(path);
+            return preferences;
+        };
+        openActions.OpenScene = [this](const std::filesystem::path& path)
+        { return m_SceneEditor && m_SceneEditor->HandleAssetOpen(path); };
+        openActions.OpenInScriptEditor = [sourceOpener](const std::filesystem::path& path)
+        { return sourceOpener.OpenInScriptEditor({path}); };
+        openActions.OpenInExternalScriptEditor = [](const std::filesystem::path& path)
+        { return ExternalScriptEditorLauncher::OpenScript(path); };
+        openActions.OpenInIde = OpenNativeSourceInIde;
+        openActions.OpenInNodeGraph = std::bind_front(&EditorApplication::OpenGraphAsset, this);
+        openActions.ShowInInspector = std::bind_front(&EditorApplication::ShowAssetInInspector, this);
+        openActions.OpenInAnimationWindow = std::bind_front(&EditorApplication::OpenAnimationAsset, this);
+        Editor::RegisterBuiltInAssetOpeners(Editor::AssetOpenerRegistry::Get(), std::move(openActions));
+        const std::function<void(const std::filesystem::path&)> openAsset = [](const std::filesystem::path& path)
+        {
+            if (!path.empty() && !Editor::AssetOpenerRegistry::Get().Open(path))
+                Platform::OpenPath(path);
         };
         if (assetsPanel)
             assetsPanel->SetOnOpenAsset(openAsset);
@@ -4103,17 +4016,11 @@ bool EditorApplication::Initialize()
                     // modal overlay + Tools-menu item, and the editor's
                     // overlay consumer (ConsumePackageOverlay) attaches it to
                     // this root when the package loads at project open.
-                    if (main && main->window && m_SceneEditor)
-                    {
-                        main->window->SetCloseRequestedHandler([this]() {
-                            return TryInterceptQuitForDirtyScene();
-                        });
-                    }
         if (hierarchyPanel && m_SceneEditor)
         {
             if (m_VcsUi)
                 m_VcsUi->BindHierarchyPanel(*hierarchyPanel);
-            hierarchyPanel->SetPendingHierarchyUiProvider([this]() -> std::optional<Scene::SceneHierarchyUiFromFile> {
+            hierarchyPanel->SetPendingHierarchyUiProvider([this]() -> std::optional<Editor::SceneHierarchyUiFromFile> {
                             if (!m_SceneEditor)
                                 return std::nullopt;
                             return m_SceneEditor->ConsumeHierarchyUiFromLastDocumentLoad();
@@ -4267,9 +4174,7 @@ bool EditorApplication::Initialize()
                     if (sceneViewPanel && hierarchyPanel)
                     {
                         Editor::WireSceneViewAssetDropUndo(sceneViewPanel,
-                                                           hierarchyPanel,
-                                                           m_UndoRedo.get(),
-                                                           m_ChangeNotifications.get());
+                                                           hierarchyPanel);
                     }
                     if (editorCtx)
                     {
@@ -4484,9 +4389,14 @@ bool EditorApplication::Initialize()
                             if (main && m_PanelManager) OpenPanel(EditorPanelIds::CpuProfiler);
                         };
                         if (auto* buildPanel = m_PanelManager->FindFirstPanelOfType<BuildPanel>())
+                        {
                             buildPanel->SetOnOpenBuildSettings([this, main]() {
                                 if (main && m_PanelManager) m_PanelManager->ShowOrActivateSettingsPanelToRegistryCategory(main, "build");
                             });
+                            buildPanel->SetOnOpenDocsPage([this](std::string_view page) {
+                                if (m_PanelManager) m_PanelManager->ShowOrActivateHelpPanel(page);
+                            });
+                        }
                         m_MovieRecorder = std::make_unique<Editor::MovieRecorderController>();
                         m_MovieRecorder->SetPlayMode(m_PlayMode.get());
                         m_MovieRecorder->SetOnPlayModeRecordingStarted([this]() {
@@ -4809,9 +4719,7 @@ bool EditorApplication::Initialize()
             if (sceneViewPanel && hierarchyPanel)
             {
                 Editor::WireSceneViewAssetDropUndo(sceneViewPanel,
-                                                   hierarchyPanel,
-                                                   m_UndoRedo.get(),
-                                                   m_ChangeNotifications.get());
+                                                   hierarchyPanel);
             }
             {
                 auto configureAssetViewPanel = [&](AssetViewPanel* panel)
@@ -6093,6 +6001,59 @@ bool EditorApplication::OpenGraphAsset(const std::filesystem::path& path)
     return panel->OpenGraph(path);
 }
 
+// A material is edited in the Inspector, so opening it selects it and brings that panel forward.
+bool EditorApplication::ShowAssetInInspector(const std::filesystem::path& path)
+{
+    if (auto* assetsPanel = FindFirstPanelOfType<AssetsPanel>(m_PanelStorage))
+    {
+        const std::vector<std::filesystem::path>& selected = assetsPanel->GetSelectedAssetPaths();
+        if (selected.size() != 1 || selected.front() != path)
+            assetsPanel->NavigateToAndSelectAsset(path);
+    }
+    if (m_PanelManager && !m_Windows.empty())
+        m_PanelManager->ShowOrActivatePanel(m_Windows[0].get(), EditorPanelIds::Inspector);
+    return true;
+}
+
+bool EditorApplication::OpenAnimationAsset(const std::filesystem::path& path, Editor::AnimationAssetWindow window)
+{
+    if (m_Windows.empty())
+        return false;
+    AnimationWindowPanel* animationPanel =
+        FindAnimationPanelOfKind(m_PanelStorage, AnimationWindowPanel::PanelKind::Animation);
+    AnimationWindowPanel* targetPanel = animationPanel;
+    const char* targetPanelId = EditorPanelIds::Animation;
+    if (window == Editor::AnimationAssetWindow::Timeline)
+    {
+        targetPanel = FindAnimationPanelOfKind(m_PanelStorage, AnimationWindowPanel::PanelKind::Timeline);
+        targetPanelId = EditorPanelIds::Timeline;
+    }
+    else if (window == Editor::AnimationAssetWindow::ClipEditor)
+    {
+        targetPanel = FindAnimationPanelOfKind(m_PanelStorage, AnimationWindowPanel::PanelKind::ClipEditor);
+        targetPanelId = EditorPanelIds::ClipEditor;
+    }
+    if (!targetPanel)
+        targetPanel = animationPanel ? animationPanel : FindFirstPanelOfType<AnimationWindowPanel>(m_PanelStorage);
+    if (!targetPanel)
+        return false;
+    if (m_PanelManager)
+        m_PanelManager->ShowOrActivatePanel(m_Windows[0].get(), targetPanelId, EditorPanelIds::SceneView);
+    if (!targetPanel->OpenAnimationAssetPath(path))
+        return false;
+    const std::filesystem::path& previewPath = targetPanel->GetPreviewModelPath();
+    if (previewPath.empty())
+        return true;
+    if (auto* assetViewPanel = FindFirstPanelOfType<AssetViewPanel>(m_PanelStorage))
+        assetViewPanel->SetAssetPreview(previewPath, true);
+    m_CurrentAssetPreviewPath = previewPath;
+    m_CurrentAssetPreviewEnabled = true;
+    if (AssetViewPanel* sceneAssetViewPanel =
+            EditorApplication::FindAssetViewPanelById(m_Docking.get(), EditorPanelIds::AssetViewSceneCopy))
+        sceneAssetViewPanel->SetAssetPreview(previewPath, true);
+    return true;
+}
+
 void EditorApplication::OpenDeferredInternalFile()
 {
     if (!m_DeferredOpenInternalFile.has_value())
@@ -6452,16 +6413,17 @@ void EditorApplication::Update(float64 deltaTime)
         {
             if (auto stored = m_SceneEditor->ConsumeEditorCameraFromLastDocumentLoad())
             {
-                if (stored->hadSection)
+                if (stored->Camera)
                 {
+                    const Scene::SceneEditorCamera& camera = *stored->Camera;
                     SceneViewCameraPose pose{};
-                    pose.Pos[0] = stored->camera.PosX;
-                    pose.Pos[1] = stored->camera.PosY;
-                    pose.Pos[2] = stored->camera.PosZ;
-                    pose.YawDeg = stored->camera.YawDeg;
-                    pose.PitchDeg = stored->camera.PitchDeg;
-                    pose.Distance = stored->camera.Distance;
-                    pose.Is2D = stored->camera.Is2D;
+                    pose.Pos[0] = camera.PosX;
+                    pose.Pos[1] = camera.PosY;
+                    pose.Pos[2] = camera.PosZ;
+                    pose.YawDeg = camera.YawDeg;
+                    pose.PitchDeg = camera.PitchDeg;
+                    pose.Distance = camera.Distance;
+                    pose.Is2D = camera.Is2D;
                     targetWindow->scene->SetCameraPose(pose);
 
                     // Keep the panel's temporary yaw/pitch in sync so the next
@@ -6774,6 +6736,15 @@ void EditorApplication::Update(float64 deltaTime)
 
     TickPlayFullscreenFocus();
 
+    // The views a window renders this frame are requested before Engine Update's extraction.
+    for (auto& win : m_Windows)
+    {
+        if (!win)
+            continue;
+        Editor::GameViewRenderCoordinator::RequestFrameBeforeExtraction(*win);
+        Editor::SceneViewRenderCoordinator::RequestFramesBeforeExtraction(win.get());
+    }
+
     // Session-wide runtime-input state: playing and the Game View is the active
     // tab of some window. Which window's events reach the game is decided
     // per-event by GetPlaySurface.
@@ -6872,12 +6843,12 @@ void EditorApplication::Update(float64 deltaTime)
     if (ECS::World* world = EngineCore::GetInstance().EnsurePrimaryWorld())
         Editor::AnimationPreviewManager::TickPending(*world);
 
-    // Drive Scene View camera updates from each window's mounted SceneView panel.
+    // Drive the Scene View cameras: every live viewport of a window ticks its camera; a window without a
+    // mounted Scene View panel updates its scene controller without input.
     {
         Input::InputSystem* inputSystem = GetInputSystem();
         SceneViewController* firstSceneController = nullptr;
-        SceneViewController* activeInputSceneController = nullptr;
-        bool consumedSceneInput = false;
+        Editor::SceneViewRenderCoordinator::InputFrame sceneInput{inputSystem, static_cast<float>(deltaTime)};
 
         for (auto& win : m_Windows)
         {
@@ -6897,145 +6868,20 @@ void EditorApplication::Update(float64 deltaTime)
                     firstSceneController = win->scene.get();
             }
 
-            bool looking = false;
-            bool orbiting = false;
-            bool panning = false;
-            bool dollying = false;
-
-            bool moveF = false;
-            bool moveB = false;
-            bool moveL = false;
-            bool moveR = false;
-            bool moveU = false;
-            bool moveD = false;
-            bool moveFaster = false;
-
-            float lookYawDelta = 0.0f;
-            float lookPitchDelta = 0.0f;
-            float dollyDeltaY = 0.0f;
-
-            if (svPanel)
+            Editor::SceneViewRenderCoordinator::TickLiveViewports(win.get(), sceneInput);
+            if (!svPanel)
             {
-                GE_CPU_PROFILE_SCOPE("EditorApplication.Update.SceneView");
-
-                SceneViewController* panelSceneController =
-                    svPanel->GetSceneControllerForSlot(svPanel->GetActiveViewportSlot());
-                if (!panelSceneController)
-                    panelSceneController = win->scene.get();
-
-                looking = svPanel->IsLooking();
-                orbiting = svPanel->IsOrbiting();
-                panning = svPanel->IsPanning();
-                dollying = svPanel->IsDollying();
-                const bool interacting = looking || orbiting || panning || dollying;
-
-                if (!activeInputSceneController && interacting)
-                {
-                    activeInputSceneController = panelSceneController;
-                }
-
-                // Only one mounted SceneView panel should consume frame input deltas.
-                if (interacting && inputSystem && !consumedSceneInput)
-                {
-                    auto yawState = inputSystem->GetActionState(EditorInput::kSceneViewLookYaw);
-                    auto pitchState = inputSystem->GetActionState(EditorInput::kSceneViewLookPitch);
-
-                    const float kSens = Editor::SceneViewSettings::Get().GetLookSensitivity();
-                    const bool kInvertY = Editor::SceneViewSettings::Get().GetInvertY();
-
-                    if (looking || orbiting)
-                    {
-                        lookYawDelta = yawState.value * -kSens;
-                        lookPitchDelta = pitchState.value * (kInvertY ? -kSens : kSens);
-                    }
-
-                    if (dollying)
-                    {
-                        // Dolly: horizontal mouse delta for zoom.
-                        dollyDeltaY = -yawState.value;
-                    }
-
-                    if (looking)
-                    {
-                        moveF = inputSystem->IsActionActive(EditorInput::kSceneViewMoveForward);
-                        moveB = inputSystem->IsActionActive(EditorInput::kSceneViewMoveBackward);
-                        moveL = inputSystem->IsActionActive(EditorInput::kSceneViewMoveLeft);
-                        moveR = inputSystem->IsActionActive(EditorInput::kSceneViewMoveRight);
-                        moveU = inputSystem->IsActionActive(EditorInput::kSceneViewMoveUp);
-                        moveD = inputSystem->IsActionActive(EditorInput::kSceneViewMoveDown);
-                        moveFaster = inputSystem->IsActionActive(EditorInput::kSceneViewMoveFaster);
-                    }
-
-                    consumedSceneInput = true;
-                }
-
-                // Skip look delta on the first orbit frame to avoid orbit pivot drift.
-                const bool firstOrbitFrame = svPanel->IsFirstOrbitFrame();
-                if ((looking || orbiting) && (lookYawDelta != 0.0f || lookPitchDelta != 0.0f) && !firstOrbitFrame)
-                {
-                    svPanel->ApplyLookDelta(lookYawDelta, lookPitchDelta);
-                }
-            }
-
-            float speedMultiplier = 1.0f;
-            {
-                using GameEngine::Editor::SceneViewSettings;
-                const float fastMult = SceneViewSettings::Get().GetFastMoveMultiplier();
-                speedMultiplier = moveFaster ? fastMult : 1.0f;
-            }
-            // Update cached viewport dimensions BEFORE UpdateCamera so the
-            // frustum culling projection uses the current layout size, not
-            // the previous frame's. Without this, resizing the scene view
-            // panel causes entities to be culled against a stale frustum for
-            // one frame, producing a visible clipping line.
-            if (svPanel)
-            {
-                uint32_t curW = 1, curH = 1;
-                SceneViewController* panelSceneController =
-                    svPanel->GetSceneControllerForSlot(svPanel->GetActiveViewportSlot());
-                if (!panelSceneController)
-                    panelSceneController = win->scene.get();
-                UIElement* panelViewport =
-                    svPanel->GetViewportElementForSlot(svPanel->GetActiveViewportSlot());
-                if (!panelViewport)
-                    panelViewport = svPanel->GetViewportElement();
-
-                Editor::SceneViewRenderCoordinator::TryResolveRenderableViewportSize(
-                    win.get(), panelViewport, curW, curH);
-                panelSceneController->SetLastViewportSize(curW, curH);
-
-                // Push panel yaw/pitch and apply orbit/pan/dolly BEFORE UpdateCamera
-                // so that m_CamPos and angles are fully settled before any viewProj is
-                // built. This ensures the world pass VP and the grid's invVP (recomputed
-                // in Record) see the exact same camera state — preventing jitter.
-                panelSceneController->SetCameraAnglesDeg(svPanel->GetYawDeg(), svPanel->GetPitchDeg());
-                panelSceneController->UpdateOrbit(svPanel->IsOrbiting());
-
-                if (dollying && dollyDeltaY != 0.0f)
-                {
-                    panelSceneController->UpdateDolly(dollyDeltaY);
-                }
-                panelSceneController->Update(static_cast<float>(deltaTime), moveF, moveB, moveL, moveR, moveU, moveD,
-                                             speedMultiplier);
-                panelSceneController->UpdateCamera(static_cast<float>(deltaTime), moveF, moveB, moveL, moveR, moveU,
-                                                   moveD, speedMultiplier);
-                if (auto* rs = panelSceneController->GetRenderServices())
-                    rs->Views().SetViewpointCamera(panelSceneController->GetCameraId());
-
-                // Keep panel yaw/pitch in sync with controller (tweens update angles internally).
-                const auto pose = panelSceneController->GetCameraPose();
-                svPanel->SetYawPitch(pose.YawDeg, pose.PitchDeg);
-            }
-            else
-            {
-                win->scene->Update(static_cast<float>(deltaTime), moveF, moveB, moveL, moveR, moveU, moveD,
-                                   speedMultiplier);
-                win->scene->UpdateCamera(static_cast<float>(deltaTime), moveF, moveB, moveL, moveR, moveU, moveD,
-                                         speedMultiplier);
+                constexpr bool kNoMove = false;
+                constexpr float kNormalSpeed = 1.0f;
+                win->scene->Update(static_cast<float>(deltaTime), kNoMove, kNoMove, kNoMove, kNoMove, kNoMove,
+                                   kNoMove, kNormalSpeed);
+                win->scene->UpdateCamera(static_cast<float>(deltaTime), kNoMove, kNoMove, kNoMove, kNoMove, kNoMove,
+                                         kNoMove, kNormalSpeed);
                 if (auto* rs = win->scene->GetRenderServices())
                     rs->Views().SetViewpointCamera(win->scene->GetCameraId());
             }
         }
+        SceneViewController* activeInputSceneController = sceneInput.ActiveInputController;
 
         if (inputSystem)
         {
@@ -7812,6 +7658,15 @@ void EditorApplication::Render()
             m_DeviceLossSurfacer.Poll(dev->GetDeviceHealth(), ctx->window.get(),
                                       m_DeviceLossActions);
 
+        // The main window's swapchain is created on a start-up job; its failure fails the start.
+        if (i == 0 && dev->HasWindowTargetCreationFailed(ctx->renderCtx->GetWindowTarget()))
+        {
+            Logger::Log::Error("Editor: Failed to initialize RenderDeviceContext (main window)");
+            SetExitCode(kInitializeFailedExitCode);
+            RequestExit();
+            return;
+        }
+
         // Commit dock-on-drop on mouse release (global)
         m_DockDnd->TickDropCommitOnRelease();
 
@@ -7894,23 +7749,11 @@ void EditorApplication::Render()
 
         auto frameResult = RenderWindowFrame(ctx, dev, /*passiveUi=*/false);
 
-        // Show the main window after the startup Scene View has survived a small
-        // warm-up. The first presented frame can still contain a dark placeholder
-        // while render targets and image-backed UI finish settling, so keep the
-        // hidden window hidden until two Scene View-ready presents have completed.
+        // The hidden main window shows after the first present whose Scene View shows an
+        // image, so the user never sees the empty placeholder viewport.
         if (m_PendingWindowShow && ctx == m_Windows[0].get())
         {
-            ++ctx->startupPresentedFrames;
-            if (frameResult.sceneViewportReady)
-                ++ctx->startupSceneReadyPresentedFrames;
-            else
-                ctx->startupSceneReadyPresentedFrames = 0;
-
-            constexpr uint32_t kStartupVisibleSceneReadyPresents = 2;
-            constexpr uint32_t kStartupVisibleFallbackPresents = 5;
-            const bool sceneWarm = ctx->startupSceneReadyPresentedFrames >= kStartupVisibleSceneReadyPresents;
-            const bool fallbackWarm = ctx->startupPresentedFrames >= kStartupVisibleFallbackPresents;
-            if ((sceneWarm || fallbackWarm) && ctx->window)
+            if (m_StartupShowGate.OnPresent(frameResult.sceneViewportReady) && ctx->window)
             {
                 m_PendingWindowShow = false;
                 int clientX = 0;
@@ -7933,8 +7776,6 @@ void EditorApplication::Render()
             scenePerf.terminalPassesMs = frameResult.terminalPassesMs;
             scenePerf.rgCompileMs     = frameResult.rgCompileMs;
             scenePerf.rgExecuteMs     = frameResult.rgExecuteMs;
-            scenePerf.variantCompileMs = frameResult.variantCompileMs;
-            scenePerf.prewarmMs       = frameResult.prewarmMs;
             scenePerf.presentMs       = frameResult.presentMs;
             scenePerf.frameIndex      = GetFrameCount();
             // Include Application-level phase timings so the MCP debug handler
@@ -8509,12 +8350,9 @@ EditorApplication::RenderWindowFrameResult EditorApplication::RenderWindowFrame(
     routing.rg2Scene = useRGFrame && ctx->RenderGraphStream.Frame && ctx->scene != nullptr && !idleWorldForPicker;
     routing.gvPanel =
         ctx->gameView ? ctx->mountedViewPanels.GameView(ctx->ui.get()) : nullptr;
-    // An inactive dock tab's panel is unmounted, but its viewport element keeps
-    // the layout box from its last visible frame — the mounted resolve, not the
-    // size probe, is what says the tab is actually on screen. The unmounted
-    // fallback below exists only for pre-mount warmup; letting it feed the
-    // size-driven declare kept a hidden Game View rendering the full pipeline
-    // behind the Scene View every frame.
+    // An inactive dock tab's panel is unmounted, but its viewport element keeps the layout box
+    // of its last visible frame: the mounted resolve says the tab is on screen. The unmounted
+    // fallback below serves PrepareForFirstMount and the Quiet route of a hidden panel.
     const bool gvPanelMounted = routing.gvPanel != nullptr;
     if (!routing.gvPanel && ctx->gameView && ctx->docking)
     {
@@ -8523,10 +8361,15 @@ EditorApplication::RenderWindowFrameResult EditorApplication::RenderWindowFrame(
     }
     if (routing.gvPanel && ctx->ui)
         routing.gvPanel->PrepareForFirstMount(ctx->ui.get());
-    routing.forceGameViewRecord = ctx->gameView && ctx->gameView->GetMovieCapture().IsSessionOpen();
     if (routing.rg2Scene && ctx->gameView)
     {
-        if (routing.forceGameViewRecord)
+        GameViewController::RecordWindowState windowState{};
+        windowState.PanelPresent = routing.gvPanel != nullptr;
+        windowState.PanelVisible =
+            gvPanelMounted && Editor::SceneViewRenderCoordinator::TryResolveRenderableViewportSize(
+                                  ctx->ui.get(), routing.gvPanel->GetViewportElement(), routing.gvW, routing.gvH);
+        const GameViewController::RecordRoute route = ctx->gameView->ChooseRecordRoute(windowState);
+        if (route == GameViewController::RecordRoute::Movie)
         {
             // Movie overrides the RENDER resolution and runs panel-less —
             // tickets are RenderGraph-native since 8e-6.
@@ -8534,38 +8377,14 @@ EditorApplication::RenderWindowFrameResult EditorApplication::RenderWindowFrame(
             routing.gvH = std::max(1u, ctx->gameView->GetMovieCapture().GetHeight());
             routing.rg2Game = true;
         }
-        else if (gvPanelMounted &&
-                 Editor::SceneViewRenderCoordinator::TryResolveRenderableViewportSize(
-                     ctx, routing.gvPanel->GetViewportElement(), routing.gvW, routing.gvH))
+        else if (route == GameViewController::RecordRoute::Visible)
         {
             routing.rg2Game = true;
         }
-        else if (routing.gvPanel && ctx->gameView->NeedsPresentationWarmup())
+        else if (route == GameViewController::RecordRoute::Quiet)
         {
-            // Cold-start the hidden Game View once so its first tab activation
-            // already has a complete frame to present if input arrives after
-            // extraction. The inactive Game panel has no measured viewport yet;
-            // the visible Scene viewport is the closest matching content extent.
-            if (auto* scenePanel = ctx->mountedViewPanels.SceneView(ctx->ui.get()))
-            {
-                (void)Editor::SceneViewRenderCoordinator::TryResolveRenderableViewportSize(
-                    ctx, scenePanel->GetViewportElement(), routing.gvW, routing.gvH);
-            }
-            if (routing.gvW <= 1u || routing.gvH <= 1u)
-            {
-                uint32_t swapW = 1280u;
-                uint32_t swapH = 720u;
-                (void)dev->GetSwapchainSize(swapW, swapH);
-                routing.gvW = std::max(2u, swapW);
-                routing.gvH = std::max(2u, swapH);
-            }
-            routing.rg2Game = true;
-        }
-        else if (routing.gvPanel)
-        {
-            // D5 (8e-8): mounted-but-degenerate game viewport — nothing can
-            // render it, so it counts as ABSENT. RecordWindowWorldViews
-            // quiesces the view.
+            // A hidden panel, or a mounted one with no renderable size: it counts
+            // as ABSENT and RecordWindowWorldViews quiesces the view.
             routing.gameDegenerate = true;
         }
     }

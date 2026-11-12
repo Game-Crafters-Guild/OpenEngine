@@ -95,7 +95,7 @@ Triangles TileInput(const NavMeshSettings& settings, const NavMeshChart& chart, 
 NavMeshChart ChartAt(float32 offset)
 {
     NavMeshChart chart;
-    chart.Origin = ChartOrigin::AtWorld(offset, 0.0, offset);
+    chart.Origin = Mathematics::WorldPosition{offset, 0.0, offset};
     chart.Span = static_cast<float32>(kNavChartTilesPerSide) * DetourNavMap::GetTileSize(PatchSettings());
     return chart;
 }

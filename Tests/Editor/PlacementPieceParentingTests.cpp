@@ -22,6 +22,7 @@ using GameEngine::ECS::World;
 using GameEngine::Engine::Renderer::TransformHierarchySystem;
 using GameEngine::Mathematics::Matrix4x4;
 using GameEngine::Mathematics::Vector3;
+using GameEngine::Mathematics::WorldPosition;
 
 using GameEngine::Editor::InvertPlacerWorld;
 using GameEngine::Editor::MakePieceLabel;
@@ -39,10 +40,22 @@ namespace
 void WriteWorldPoseAsRoot(Transform& t, const TilePose& pose, float forwardScale)
 {
     const Vector3 forward = pose.Forward * forwardScale;
-    t.matrix[0] = pose.Right.x;     t.matrix[1] = pose.Right.y;     t.matrix[2] = pose.Right.z;     t.matrix[3] = 0.0f;
-    t.matrix[4] = pose.Up.x;        t.matrix[5] = pose.Up.y;        t.matrix[6] = pose.Up.z;        t.matrix[7] = 0.0f;
-    t.matrix[8] = forward.x;        t.matrix[9] = forward.y;        t.matrix[10] = forward.z;       t.matrix[11] = 0.0f;
-    t.matrix[12] = pose.Position.x; t.matrix[13] = pose.Position.y; t.matrix[14] = pose.Position.z; t.matrix[15] = 1.0f;
+    t.Basis[0] = glm::vec3(pose.Right.x, pose.Right.y, pose.Right.z);
+    t.Basis[1] = glm::vec3(pose.Up.x, pose.Up.y, pose.Up.z);
+    t.Basis[2] = glm::vec3(forward.x, forward.y, forward.z);
+    t.Position = WorldPosition::FromVector3(pose.Position);
+}
+
+// The 4x4 matrix of a local pose. The fixture positions are small, so float holds them.
+Matrix4x4 LocalMatrix(const Transform& t)
+{
+    return t.ToMatrix4x4(t.GetPosition() - WorldPosition{});
+}
+
+// The 4x4 matrix of a world pose. The fixture positions are small, so float holds them.
+Matrix4x4 WorldMatrix(const WorldTransform& t)
+{
+    return t.ToMatrix4x4(t.GetPosition() - WorldPosition{});
 }
 
 // A pose with a genuinely oblique basis and an off-axis position, so a dropped
@@ -96,7 +109,7 @@ TEST(PlacementPieceParenting, IdentityPlacerWritesTheSameBytesAsTheRootPose)
     Transform asChild{};
     WriteParentLocalPose(asChild, InvertPlacerWorld(identity), pose, PieceAxis::Z, 1.0f);
 
-    EXPECT_EQ(std::memcmp(asChild.matrix, asRoot.matrix, sizeof(asRoot.matrix)), 0);
+    EXPECT_EQ(std::memcmp(&asChild, &asRoot, GameEngine::Components::kTransformPoseBytes), 0);
 }
 
 // The general case: composing the placer's world matrix back onto the stored
@@ -112,12 +125,12 @@ TEST(PlacementPieceParenting, PlacerWorldTimesLocalRecoversTheWorldPose)
     Transform local{};
     WriteParentLocalPose(local, InvertPlacerWorld(placerWorld.Data()), pose, PieceAxis::Z, 1.0f);
 
-    const Matrix4x4 recovered = placerWorld * Matrix4x4::FromColumnMajor(local.matrix);
-    ExpectMatrixNear(recovered.Data(), expected.matrix, 1e-3f, "recovered world pose");
+    const Matrix4x4 recovered = placerWorld * LocalMatrix(local);
+    ExpectMatrixNear(recovered.Data(), LocalMatrix(expected).Data(), 1e-3f, "recovered world pose");
 
     // The local pose is genuinely different from the world one, so the test
     // above is not passing because the composition was skipped.
-    EXPECT_NE(std::memcmp(local.matrix, expected.matrix, sizeof(expected.matrix)), 0);
+    EXPECT_NE(std::memcmp(&local, &expected, GameEngine::Components::kTransformPoseBytes), 0);
 }
 
 // Fence spans stretch along the path; the stretch belongs in the pose, not in
@@ -135,8 +148,8 @@ TEST(PlacementPieceParenting, LengthScaleSurvivesTheParentComposition)
     WriteParentLocalPose(local, InvertPlacerWorld(placerWorld.Data()), pose, PieceAxis::Z,
                          kLengthScale);
 
-    const Matrix4x4 recovered = placerWorld * Matrix4x4::FromColumnMajor(local.matrix);
-    ExpectMatrixNear(recovered.Data(), expected.matrix, 1e-3f, "recovered stretched pose");
+    const Matrix4x4 recovered = placerWorld * LocalMatrix(local);
+    ExpectMatrixNear(recovered.Data(), LocalMatrix(expected).Data(), 1e-3f, "recovered stretched pose");
 }
 
 // A piece whose long axis is local X is yawed onto the path, and the placer's
@@ -154,7 +167,7 @@ TEST(PlacementPieceParenting, PieceAxisSurvivesTheParentComposition)
     WriteParentLocalPose(local, InvertPlacerWorld(placerWorld.Data()), pose, PieceAxis::X,
                          kLengthScale);
 
-    const Matrix4x4 recovered = placerWorld * Matrix4x4::FromColumnMajor(local.matrix);
+    const Matrix4x4 recovered = placerWorld * LocalMatrix(local);
     const float* r = recovered.Data();
 
     const Vector3 alongTravel = pose.Forward * kLengthScale;
@@ -187,8 +200,9 @@ TEST(PlacementPieceParenting, DegeneratePlacerYieldsFiniteIdentityInverse)
 
     Transform local{};
     WriteParentLocalPose(local, inverse, FixturePose(), PieceAxis::Z, 1.0f);
+    const Matrix4x4 localMatrix = LocalMatrix(local);
     for (int i = 0; i < 16; ++i)
-        EXPECT_TRUE(std::isfinite(local.matrix[i])) << "local element " << i;
+        EXPECT_TRUE(std::isfinite(localMatrix.Data()[i])) << "local element " << i;
 }
 
 TEST(PlacementPieceParenting, PieceLabelIsRoleThenOrdinal)
@@ -209,9 +223,7 @@ TEST(PlacementPieceParenting, ChildFollowsPlacerThroughTheHierarchySystem)
 
     const Matrix4x4 placerWorld = FixturePlacerWorld();
     Entity placer = world.Create();
-    Transform placerLocal{};
-    std::memcpy(placerLocal.matrix, placerWorld.Data(), sizeof(placerLocal.matrix));
-    placer.Set(placerLocal);
+    placer.Set(Transform::FromMatrix4x4(placerWorld));
 
     const TilePose pose = FixturePose();
     Transform expectedWorld{};
@@ -230,7 +242,7 @@ TEST(PlacementPieceParenting, ChildFollowsPlacerThroughTheHierarchySystem)
 
     const auto* pieceWorld = world.GetComponent<WorldTransform>(piece.GetHandle());
     ASSERT_NE(pieceWorld, nullptr);
-    ExpectMatrixNear(pieceWorld->matrix, expectedWorld.matrix, 1e-3f, "child world pose");
+    ExpectMatrixNear(WorldMatrix(*pieceWorld).Data(), LocalMatrix(expectedWorld).Data(), 1e-3f, "child world pose");
 
     // Move the placer. No rebuild runs; propagation alone must carry the piece.
     Matrix4x4 movedPlacer = placerWorld;
@@ -239,18 +251,19 @@ TEST(PlacementPieceParenting, ChildFollowsPlacerThroughTheHierarchySystem)
     movedPlacer.Data()[14] += 9.5f;
     auto* placerTransform = world.GetComponentForWrite<Transform>(placer.GetHandle());
     ASSERT_NE(placerTransform, nullptr);
-    std::memcpy(placerTransform->matrix, movedPlacer.Data(), sizeof(placerTransform->matrix));
+    *placerTransform = Transform::FromMatrix4x4(movedPlacer);
 
     hierarchy.Update(world, 0.0f);
 
-    const Matrix4x4 expectedMoved = movedPlacer * Matrix4x4::FromColumnMajor(pieceLocal.matrix);
+    const Matrix4x4 expectedMoved = movedPlacer * LocalMatrix(pieceLocal);
     const auto* movedPieceWorld = world.GetComponent<WorldTransform>(piece.GetHandle());
     ASSERT_NE(movedPieceWorld, nullptr);
-    ExpectMatrixNear(movedPieceWorld->matrix, expectedMoved.Data(), 1e-3f, "child world pose after placer move");
+    ExpectMatrixNear(WorldMatrix(*movedPieceWorld).Data(), expectedMoved.Data(), 1e-3f,
+                     "child world pose after placer move");
 
     // The piece really did move with the placer, rather than simply not being
     // re-evaluated: its world translation shifted by the placer's delta.
-    EXPECT_NEAR(movedPieceWorld->matrix[12] - expectedWorld.matrix[12], 25.0f, 1e-3f);
-    EXPECT_NEAR(movedPieceWorld->matrix[13] - expectedWorld.matrix[13], -4.0f, 1e-3f);
-    EXPECT_NEAR(movedPieceWorld->matrix[14] - expectedWorld.matrix[14], 9.5f, 1e-3f);
+    EXPECT_NEAR(movedPieceWorld->Position.X - expectedWorld.Position.X, 25.0, 1e-3);
+    EXPECT_NEAR(movedPieceWorld->Position.Y - expectedWorld.Position.Y, -4.0, 1e-3);
+    EXPECT_NEAR(movedPieceWorld->Position.Z - expectedWorld.Position.Z, 9.5, 1e-3);
 }

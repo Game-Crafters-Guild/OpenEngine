@@ -16,17 +16,18 @@ bool CBTKeepSearchOpen(int32_t offFrustumKeepStep, int32_t offFrustumKeepFloor)
     return offFrustumKeepStep > offFrustumKeepFloor;
 }
 
-bool CBTUpdateRestGate::CanSkip(std::span<const uint8_t> inputs)
+bool CBTUpdateRestGate::CanSkip(std::span<const uint8_t> inputs, std::chrono::steady_clock::time_point now)
 {
     if (!m_HasInputs || !std::equal(inputs.begin(), inputs.end(), m_Inputs.begin(), m_Inputs.end()))
     {
         m_Inputs.assign(inputs.begin(), inputs.end());
         m_HasInputs = true;
-        m_InputsHeld = false;
+        m_InputsSince = now;
+        m_Settle = kSettleMoved;
         Restart();
         return false;
     }
-    m_InputsHeld = true;
+    m_Settle = now - m_InputsSince >= kKeepProbeSettle ? kSettleLasted : kSettleHeld;
     return m_QuietReadings >= kQuietReadingsToRest;
 }
 
@@ -56,7 +57,7 @@ void CBTUpdateRestGate::Reset()
 {
     m_Inputs.clear();
     m_HasInputs = false;
-    m_InputsHeld = false;
+    m_Settle = kSettleMoved;
     Restart();
 }
 

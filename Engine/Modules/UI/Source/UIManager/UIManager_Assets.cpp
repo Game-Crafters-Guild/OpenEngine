@@ -27,7 +27,7 @@
 #include "UI/UITemplateNode.h"
 #include "UI/UiContext.h"
 #include "../UIAttributeAccess.h"
-#include "../Assets/CssImports.h"
+#include "../Assets/CssImportsInternal.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -439,11 +439,7 @@ bool UIManager::BindLayoutToSubtreeChildrenFromAsset(UIElement* target, const UI
         const UITemplateNode* root = asset.GetRoot();
         if (!root)
             return false;
-        for (const auto& cls : root->Classes)
-        {
-            if (!cls.empty())
-                target->AddClass(cls);
-        }
+        m_HotReload->ApplyLayoutRootAttributes(*target, *root);
         for (const auto& childTemplate : root->Children)
         {
             if (!childTemplate)

@@ -49,8 +49,10 @@ Transform ObliqueTransform(float x, float y, float z, float yaw, float scale)
     const float c = std::cos(yaw);
     const float s = std::sin(yaw);
     Transform t{};
-    const float m[16] = {c * scale, 0, -s * scale, 0, 0, scale * 0.5f, 0, 0, s * scale, 0, c * scale, 0, x, y, z, 1};
-    std::memcpy(t.matrix, m, sizeof(m));
+    t.Basis[0] = glm::vec3(c * scale, 0.0f, -s * scale);
+    t.Basis[1] = glm::vec3(0.0f, scale * 0.5f, 0.0f);
+    t.Basis[2] = glm::vec3(s * scale, 0.0f, c * scale);
+    t.Position = GameEngine::Mathematics::WorldPosition{x, y, z};
     return t;
 }
 
@@ -85,7 +87,10 @@ class HierarchyEmptyParentTest : public ::testing::Test
         const auto* wt = m_World.GetComponent<WorldTransform>(e);
         EXPECT_NE(wt, nullptr);
         if (wt)
-            std::memcpy(m.data(), wt->matrix, sizeof(wt->matrix));
+        {
+            const auto world = wt->ToMatrix4x4(wt->GetPosition() - GameEngine::Mathematics::WorldPosition{});
+            std::memcpy(m.data(), world.Data(), sizeof(m));
+        }
         return m;
     }
 
@@ -108,7 +113,9 @@ class HierarchyEmptyParentTest : public ::testing::Test
             r.HasOrder = true;
             r.Order = o->order;
         }
-        std::memcpy(r.Local.data(), m_World.GetComponent<Transform>(e)->matrix, sizeof(r.Local));
+        const Transform* local = m_World.GetComponent<Transform>(e);
+        const auto localMatrix = local->ToMatrix4x4(local->GetPosition() - GameEngine::Mathematics::WorldPosition{});
+        std::memcpy(r.Local.data(), localMatrix.Data(), sizeof(r.Local));
         return r;
     }
 

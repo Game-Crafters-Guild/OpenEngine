@@ -109,10 +109,11 @@ class WorkerGate
             });
         }
     }
+    // Waits for every job it enqueued, not only those that entered: a job that starts late still uses the gate.
     ~WorkerGate()
     {
         Open();
-        while (m_Left.load(std::memory_order_acquire) < m_Entered.load(std::memory_order_acquire))
+        while (m_Left.load(std::memory_order_acquire) < m_Workers)
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 
@@ -184,12 +185,13 @@ TEST(ExternalWait, TheMainThreadRunsItsTaggedJobsWhileWaiting)
 // a hang. The foreign jobs run on the workers once they are free.
 TEST(ExternalWait, AWaiterNeverRunsAJobItsCounterDoesNotOwn)
 {
+    // Declared before the pool: a foreign job can still read it after the wait returns.
+    std::atomic<bool> waitReturned{false};
     WorkStealingThreadPool pool(2);
     WorkerGate gate(pool, 2);
     ASSERT_TRUE(gate.AllInside()) << "workers never entered the gate";
 
     const std::thread::id waiter = std::this_thread::get_id();
-    std::atomic<bool> waitReturned{false};
     std::atomic<int> foreignRan{0};
     std::atomic<int> foreignOnWaiter{0};
     std::atomic<int> foreignWedged{0};

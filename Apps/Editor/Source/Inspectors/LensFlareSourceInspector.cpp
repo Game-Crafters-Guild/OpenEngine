@@ -67,7 +67,7 @@ Editor::UndoRedoService::SnapshotTarget MakeFlareSnapshotTarget(FlareAsset* flar
     {
         if (!flare)
             return false;
-        GameEngine::Vector<GameEngine::uint8> bytes;
+        GameEngine::ByteBuffer bytes;
         if (!GameEngine::ReadFileBytesShared(flare->GetPath(), bytes))
             return false;
         out.assign(bytes.begin(), bytes.end());

@@ -6,12 +6,14 @@
 #include "Components/Transform.h"
 #include "ECS/ECSTemplates.h"
 #include "ECS/World.h"
+#include "Mathematics/Interpolation.h"
 #include "Terrain/Heightfield.h"
 #include "TerrainECS/TerrainModifierSystem.h"
 #include "TerrainECS/TerrainService.h"
 #include "TerrainECS/TerrainZoneAuthoring.h"
 #include "TerrainECS/TerrainZonePayload.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -101,11 +103,10 @@ Components::WorldTransform MakeYRotScaleXf(float32 x, float32 z, float32 yawRad,
     Components::WorldTransform xf{};
     const float32 c = std::cos(yawRad);
     const float32 s = std::sin(yawRad);
-    xf.matrix[0] = c * scaleX;  xf.matrix[1] = 0.0f; xf.matrix[2] = -s * scaleX;
-    xf.matrix[4] = 0.0f;        xf.matrix[5] = 1.0f; xf.matrix[6] = 0.0f;
-    xf.matrix[8] = s * scaleZ;  xf.matrix[9] = 0.0f; xf.matrix[10] = c * scaleZ;
-    xf.matrix[12] = x;          xf.matrix[13] = 0.0f; xf.matrix[14] = z;
-    xf.matrix[15] = 1.0f;
+    xf.Basis[0] = glm::vec3(c * scaleX, 0.0f, -s * scaleX);
+    xf.Basis[1] = glm::vec3(0.0f, 1.0f, 0.0f);
+    xf.Basis[2] = glm::vec3(s * scaleZ, 0.0f, c * scaleZ);
+    xf.Position = Mathematics::WorldPosition{x, 0.0, z};
     return xf;
 }
 
@@ -748,6 +749,143 @@ TEST(TerrainZoneAuthoring, RegrowColorIsIdentityOutsideTheOldBlock)
                 EXPECT_EQ(t[3], 0.0f) << x << "," << z;
             }
         }
+}
+
+namespace
+{
+// Lowers the payload with the brush's smoothstep dab (TerrainBrushTool::ApplyDab).
+void LowerZoneDab(TerrainZonePayload& payload, const ZoneFootprint& fp, float32 hitX, float32 hitZ,
+                  float32 radius, float32 strength)
+{
+    for (uint32 tz = 0; tz < payload.Height; ++tz)
+        for (uint32 tx = 0; tx < payload.Width; ++tx)
+        {
+            const float32 worldX = fp.CenterX - fp.ExtentX
+                + static_cast<float32>(tx) * 2.0f * fp.ExtentX / static_cast<float32>(payload.Width - 1);
+            const float32 worldZ = fp.CenterZ - fp.ExtentZ
+                + static_cast<float32>(tz) * 2.0f * fp.ExtentZ / static_cast<float32>(payload.Height - 1);
+            const float32 distance = std::hypot(worldX - hitX, worldZ - hitZ);
+            if (distance > radius)
+                continue;
+            const float32 t = 1.0f - distance / radius;
+            payload.Offsets[static_cast<size_t>(tz) * payload.Width + tx] -= strength * Math::SmoothStep(0.0f, 1.0f, t);
+        }
+}
+
+// The largest height change between neighbor texels along the payload row nearest `worldZ`.
+float32 LargestRowStep(const TerrainZonePayload& payload, const ZoneFootprint& fp, float32 worldZ)
+{
+    float32 tx = 0.0f;
+    float32 tz = 0.0f;
+    WorldToPayloadTexel(fp, payload.Width, payload.Height, fp.CenterX, worldZ, tx, tz);
+    const size_t row = static_cast<size_t>(std::lround(tz)) * payload.Width;
+    float32 largest = 0.0f;
+    for (uint32 x = 1; x < payload.Width; ++x)
+        largest = std::max(largest, std::abs(payload.Offsets[row + x] - payload.Offsets[row + x - 1]));
+    return largest;
+}
+} // namespace
+
+// A stroke that grows its auto zone dab by dab (the brush's path) keeps every texel the earlier
+// dabs wrote: no height step along the stroke is larger than the dabs' own slope.
+TEST(TerrainZoneAuthoring, AStrokeThatGrowsTheZoneKeepsEveryTexel)
+{
+    const ZoneAuthoringSettings s;
+    constexpr float32 kRadius = 30.0f;
+    constexpr float32 kStrength = 0.12f;
+    constexpr float32 kStartX = -60.0f;
+    constexpr float32 kEndX = -5.0f;
+    constexpr float32 kZ = 40.0f;
+    constexpr int kDabs = 44;
+
+    ZoneFootprint fp = FitZoneToDab(kStartX, kZ, kRadius, s);
+    TerrainZonePayload grown;
+    grown.Allocate(ZonePayloadFormat::SculptOffsetR32F, PayloadDimForExtent(fp.ExtentX, s),
+                   PayloadDimForExtent(fp.ExtentZ, s));
+    for (int dab = 0; dab < kDabs; ++dab)
+    {
+        const float32 x = kStartX + (kEndX - kStartX) * static_cast<float32>(dab) / static_cast<float32>(kDabs - 1);
+        const bool inside = std::abs(x - fp.CenterX) + kRadius <= fp.ExtentX
+            && std::abs(kZ - fp.CenterZ) + kRadius <= fp.ExtentZ;
+        if (!inside)
+        {
+            ZoneFootprint next = fp;
+            ASSERT_TRUE(GrowZoneToDab(next, x, kZ, kRadius, s)) << "dab " << dab << " left the zone cap";
+            grown = RegrowPayload(grown, fp, next, PayloadDimForExtent(next.ExtentX, s),
+                                  PayloadDimForExtent(next.ExtentZ, s));
+            fp = next;
+        }
+        LowerZoneDab(grown, fp, x, kZ, kRadius, kStrength);
+    }
+
+    // The same stroke in one zone that holds it from the first dab: no regrow.
+    ZoneFootprint whole = FitZoneToDab(kStartX, kZ, kRadius, s);
+    ASSERT_TRUE(GrowZoneToDab(whole, kEndX, kZ, kRadius, s));
+    TerrainZonePayload reference;
+    reference.Allocate(ZonePayloadFormat::SculptOffsetR32F, PayloadDimForExtent(whole.ExtentX, s),
+                       PayloadDimForExtent(whole.ExtentZ, s));
+    for (int dab = 0; dab < kDabs; ++dab)
+    {
+        const float32 x = kStartX + (kEndX - kStartX) * static_cast<float32>(dab) / static_cast<float32>(kDabs - 1);
+        LowerZoneDab(reference, whole, x, kZ, kRadius, kStrength);
+    }
+
+    const float32 dabSlopeStep = LargestRowStep(reference, whole, kZ);
+    ASSERT_GT(dabSlopeStep, 0.0f);
+    EXPECT_LE(LargestRowStep(grown, fp, kZ), dabSlopeStep * 1.25f);
+}
+
+// A grown footprint keeps the texel lattice of the footprint it grew from: every old texel
+// center is also a new texel center, so a regrow moves no sculpted value.
+TEST(TerrainZoneAuthoring, GrowKeepsTheTexelLattice)
+{
+    const ZoneAuthoringSettings s;
+    const ZoneFootprint before = FitZoneToDab(-60.3f, 40.1f, 30.0f, s);
+    ZoneFootprint after = before;
+    ASSERT_TRUE(GrowZoneToDab(after, -59.04f, 38.84f, 30.0f, s));
+    ASSERT_GT(after.ExtentX, before.ExtentX);
+    ASSERT_GT(after.ExtentZ, before.ExtentZ);
+
+    const uint32 oldWidth = PayloadDimForExtent(before.ExtentX, s);
+    const uint32 newWidth = PayloadDimForExtent(after.ExtentX, s);
+    const uint32 newHeight = PayloadDimForExtent(after.ExtentZ, s);
+    for (uint32 ox = 0; ox < oldWidth; ++ox)
+    {
+        const float32 worldX = before.CenterX - before.ExtentX
+            + static_cast<float32>(ox) * 2.0f * before.ExtentX / static_cast<float32>(oldWidth - 1);
+        const float32 worldZ = before.CenterZ - before.ExtentZ;
+        float32 tx = 0.0f;
+        float32 tz = 0.0f;
+        WorldToPayloadTexel(after, newWidth, newHeight, worldX, worldZ, tx, tz);
+        EXPECT_NEAR(tx, std::round(tx), 1e-3f) << "old texel " << ox;
+        EXPECT_NEAR(tz, std::round(tz), 1e-3f);
+    }
+}
+
+// A regrow between footprints of different texel spacing writes every new texel inside the
+// old footprint: no texel keeps the zero of a fresh payload.
+TEST(TerrainZoneAuthoring, RegrowAcrossSpacingsLeavesNoHole)
+{
+    // Two footprints off the texel lattice: the spacing changes from 0.5012 m to 0.4987 m.
+    const ZoneFootprint oldFp{-49.894737f, 40.0f, 44.105263f, 34.0f};
+    const ZoneFootprint newFp{-47.368421f, 40.0f, 46.631579f, 34.0f};
+    constexpr uint32 kOldWidth = 177;
+    constexpr uint32 kNewWidth = 188;
+    constexpr uint32 kHeight = 9;
+    TerrainZonePayload old;
+    old.Allocate(ZonePayloadFormat::SculptOffsetR32F, kOldWidth, kHeight);
+    std::fill(old.Offsets.begin(), old.Offsets.end(), -1.0f);
+
+    const TerrainZonePayload grown = RegrowPayload(old, oldFp, newFp, kNewWidth, kHeight);
+    const float32 oldMaxX = oldFp.CenterX + oldFp.ExtentX;
+    for (uint32 x = 0; x < kNewWidth; ++x)
+    {
+        const float32 worldX = newFp.CenterX - newFp.ExtentX
+            + static_cast<float32>(x) * 2.0f * newFp.ExtentX / static_cast<float32>(kNewWidth - 1);
+        if (worldX > oldMaxX)
+            continue;
+        EXPECT_EQ(grown.Offsets[static_cast<size_t>(kHeight / 2) * kNewWidth + x], -1.0f) << "texel " << x;
+    }
 }
 
 // ---------------------------------------------------------------------------

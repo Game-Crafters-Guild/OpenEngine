@@ -1,4 +1,6 @@
-// FormatFixed and FormatMeters: fixed notation for display, trailing zeros trimmed, locale-independent.
+// The display number formats, all locale-independent: FormatFixed trims trailing zeros, FormatMeters
+// adds the unit, FormatGroupedWholeNumber rounds to a whole number and groups the digits, and
+// AppendHexBytes writes two lowercase digits for each byte.
 
 #include "Types/FormatNumber.h"
 
@@ -10,6 +12,7 @@
 
 using GameEngine::AppendHexBytes;
 using GameEngine::FormatFixed;
+using GameEngine::FormatGroupedWholeNumber;
 using GameEngine::FormatMeters;
 
 TEST(FormatNumberTests, FormatFixedTrimsTrailingZerosAndNeverReadsMinusZero)
@@ -31,6 +34,20 @@ TEST(FormatNumberTests, FormatMetersGivesTheLengthToItsDecimalsAndTheUnit)
     EXPECT_EQ(FormatMeters(10.0, 1), "10 m");
     EXPECT_EQ(FormatMeters(61.97, 1), "62 m");
     EXPECT_EQ(FormatMeters(-0.01, 1), "0 m");
+}
+
+TEST(FormatNumberTests, FormatGroupedWholeNumberRoundsToWholeAndGroupsTheDigits)
+{
+    EXPECT_EQ(FormatGroupedWholeNumber(1048576.0), "1,048,576");
+    EXPECT_EQ(FormatGroupedWholeNumber(2000000.4), "2,000,000");
+    EXPECT_EQ(FormatGroupedWholeNumber(250880.5), "250,881");
+    EXPECT_EQ(FormatGroupedWholeNumber(999.6), "1,000");
+    EXPECT_EQ(FormatGroupedWholeNumber(100.0), "100");
+    EXPECT_EQ(FormatGroupedWholeNumber(-2500.6), "-2,501");
+    EXPECT_EQ(FormatGroupedWholeNumber(-0.4), "0");
+    EXPECT_EQ(FormatGroupedWholeNumber(1e15), "1e+15");
+    EXPECT_EQ(FormatGroupedWholeNumber(std::numeric_limits<double>::infinity()), "inf");
+    EXPECT_EQ(FormatGroupedWholeNumber(std::numeric_limits<double>::quiet_NaN()), "nan");
 }
 
 TEST(FormatNumberTests, AppendHexBytesAppendsTwoLowercaseDigitsPerByte)

@@ -1,6 +1,6 @@
 #include "Particles/Processors/ParticleNoiseProcessor.h"
 
-#include "Noise/GradientCurl3D.h"
+#include "Noise/Gradient/GradientCurl3D.h"
 #include "Processors/ParticleBuiltInProcessors.h"
 #include "Processors/ParticleProcessorOptions.h"
 #include "Processors/ParticleValueSamples.h"

@@ -64,6 +64,26 @@ bool TryLockUntil(std::mutex& mutex, std::chrono::steady_clock::time_point deadl
         std::this_thread::sleep_for(kCrashLockRetryInterval);
     }
 }
+
+// Call it only after Initialized reads false. While the logger is not initialized, writes "[LEVEL] message" and a
+// newline to std::cout in one call and returns true. Otherwise returns false, and the caller sends the line to the
+// sinks. It reads Initialized again under FallbackMutex, so a fallback line never overlaps a sink line.
+bool WriteFallbackLine(Log::LoggerState& state, LogLevel level, std::string_view message)
+{
+    const std::string line = std::format("[{}] {}\n", LogLevelToString(level), message);
+    std::lock_guard<std::mutex> lock(state.FallbackMutex);
+    if (state.Initialized.load(std::memory_order_acquire))
+        return false;
+    std::cout.write(line.data(), static_cast<std::streamsize>(line.size()));
+    return true;
+}
+
+// Sets Initialized under FallbackMutex, so a fallback line in progress ends before the change.
+void SetInitialized(Log::LoggerState& state, bool initialized)
+{
+    std::lock_guard<std::mutex> lock(state.FallbackMutex);
+    state.Initialized.store(initialized, std::memory_order_release);
+}
 } // namespace
 
 Log::LoggerState& Log::GetState()
@@ -96,8 +116,8 @@ void Log::Initialize(const Config& config)
 {
     auto& state = GetState();
 
-    // Configure sinks under Mutex (released before touching QueueMutex to
-    // preserve lock ordering: QueueMutex -> Mutex, never the reverse).
+    // Initialize does not touch the queue: a running drain thread delivers the queued records,
+    // and after Shutdown a record whose push raced Shutdown goes to the new drain thread.
     {
         std::lock_guard<std::mutex> lock(state.Mutex);
         state.m_Config = config;
@@ -114,28 +134,17 @@ void Log::Initialize(const Config& config)
         state.Channels.SetGlobalLevel(state.m_Config.GlobalMinLevel);
     }
 
-    // Clear stale async state from previous session (handles re-init after Shutdown)
-    {
-        std::lock_guard<std::mutex> qLock(state.QueueMutex);
-        state.Queue.clear();
-        for (auto& p : state.FlushPromises)
-        {
-            p.set_value();
-        }
-        state.FlushPromises.clear();
-    }
-
     // Start drain thread. Threadless wasm cannot: std::thread construction
     // throws, and under -fno-exceptions the throw is an abort the catch below
     // never sees — so don't attempt the spawn. DrainRunning stays false, the
     // state the catch establishes, and every log call routes synchronously.
 #if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
-    state.Initialized.store(true, std::memory_order_release);
+    SetInitialized(state, true);
 #else
     if (!state.DrainRunning.load(std::memory_order_relaxed))
     {
         state.DrainRunning.store(true, std::memory_order_release);
-        state.Initialized.store(true, std::memory_order_release);
+        SetInitialized(state, true);
         try
         {
             state.DrainThread = std::thread(&Log::DrainThreadFunc);
@@ -145,12 +154,12 @@ void Log::Initialize(const Config& config)
         catch (const std::exception&)
         {
             state.DrainRunning.store(false, std::memory_order_relaxed);
-            state.Initialized.store(true, std::memory_order_release);
+            SetInitialized(state, true);
         }
     }
     else
     {
-        state.Initialized.store(true, std::memory_order_release);
+        SetInitialized(state, true);
     }
 #endif
 }
@@ -225,7 +234,7 @@ void Log::Shutdown()
         state.Sinks.clear();
     }
 
-    state.Initialized.store(false, std::memory_order_release);
+    SetInitialized(state, false);
     state.Channels.SetGlobalLevel(LogLevel::Off);
 }
 
@@ -244,6 +253,9 @@ void Log::AddSink(std::unique_ptr<LogSink> sink)
 
 void Log::ClearSinks()
 {
+    // Flush returns with QueueMutex released, and only then is Mutex taken. The lock order is QueueMutex -> Mutex.
+    Flush();
+
     auto& state = GetState();
     std::lock_guard<std::mutex> lock(state.Mutex);
 
@@ -498,11 +510,9 @@ void Log::EnqueueString(LogLevel level, std::string_view message)
 
 void Log::CriticalImpl(std::string_view message)
 {
-    if (!GetState().Initialized.load(std::memory_order_acquire))
-    {
-        std::cout << "[CRITICAL] " << message << '\n';
+    auto& state = GetState();
+    if (!state.Initialized.load(std::memory_order_acquire) && WriteFallbackLine(state, LogLevel::Critical, message))
         return;
-    }
 
     LogMessage msg(LogLevel::Critical, std::string(message.data(), message.size()));
     msg.SetThreadId(GetCachedThreadId());
@@ -513,11 +523,8 @@ void Log::CriticalImpl(std::string_view message)
 void Log::DispatchCritical(const LogMessage& msg)
 {
     auto& state = GetState();
-    if (!state.Initialized.load(std::memory_order_acquire))
-    {
-        std::cout << "[CRITICAL] " << msg.Message << '\n';
+    if (!state.Initialized.load(std::memory_order_acquire) && WriteFallbackLine(state, LogLevel::Critical, msg.Message))
         return;
-    }
 
     // Re-entrancy guard: drain thread already holds state.Mutex during dispatch.
     // Acquiring it again would deadlock (non-recursive mutex).
@@ -557,12 +564,9 @@ void Log::PushEntry(LogMessage&& entry)
 {
     auto& state = GetState();
 
-    // Pre-initialization fallback
-    if (!state.Initialized.load(std::memory_order_acquire))
-    {
-        std::cout << "[" << LogLevelToString(entry.Level) << "] " << entry.Message << '\n';
+    // Fallback while the logger is not initialized
+    if (!state.Initialized.load(std::memory_order_acquire) && WriteFallbackLine(state, entry.Level, entry.Message))
         return;
-    }
 
     // Async path
     if (state.DrainRunning.load(std::memory_order_acquire))

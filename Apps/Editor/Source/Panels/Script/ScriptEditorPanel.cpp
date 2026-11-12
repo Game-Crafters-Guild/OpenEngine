@@ -633,7 +633,7 @@ void ScriptEditorPanel::PromptSaveBeforeQuit(std::function<void()> onProceed)
 
     if (!m_QuitModal)
     {
-        auto modal = std::make_unique<SaveSceneChangesModal>();
+        auto modal = std::make_unique<SaveSceneChangesModal>("script-editor");
         m_QuitModal = modal.get();
         UIManager* ui = GetOwnerManager();
         UIElement* uiRoot = ui ? ui->GetRootElement() : nullptr;

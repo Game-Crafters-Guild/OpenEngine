@@ -3,6 +3,7 @@
 #include "Ocean/OceanFrameStamp.h"
 
 #include "Engine/Rendering/Pipeline/RenderPipelineNodes.h"
+#include "Engine/Rendering/RenderOrigin.h"
 #include "Engine/Rendering/RenderServices.h"
 
 #include "Mathematics/Matrix4x4.h"
@@ -165,10 +166,10 @@ CameraData OceanPlanarReflection::MakeMirroredCamera(const CameraData& main, flo
     out.view = reflView;
     out.proj = reflProj;
     out.viewProj = reflViewProj;
-    out.cameraPos.x = main.cameraPos.x;
-    out.cameraPos.y = 2.0f * seaLevel - main.cameraPos.y;
-    out.cameraPos.z = main.cameraPos.z;
     out.cameraPos.w = main.cameraPos.w;
+    const Mathematics::WorldPosition mainEye = Engine::Renderer::CameraEye(main);
+    Engine::Renderer::SetCameraEye(
+        out, Mathematics::WorldPosition{mainEye.X, 2.0 * static_cast<float64>(seaLevel) - mainEye.Y, mainEye.Z});
     return out;
 }
 
@@ -292,7 +293,8 @@ bool OceanPlanarReflection::DeclareForView(Engine::Renderer::Pipeline::ViewDecla
 
     // Mirror the main camera across the sea plane. Set BEFORE building the draw
     // stream so frustum culling + the world pass camera UBO use the mirror.
-    rs.Views().SetCameraData(mirror.CameraId, MakeMirroredCamera(mainCam, seaLevel));
+    rs.Views().SetCameraData(mirror.CameraId, MakeMirroredCamera(mainCam, seaLevel),
+                             rs.Views().FindCameraRanges(mainCameraId));
 
     // Track the main view's mask/world each frame (cheap; covers a main-view
     // reconfigure). These persist on the view for next frame's extraction.

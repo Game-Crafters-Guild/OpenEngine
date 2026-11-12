@@ -174,7 +174,7 @@ class CBTResources
     // Binding 17: write `rowCount` 16-B indirection rows into the frame's ring slot from
     // the residency controller's table (host-visible; completes before submit, like the
     // params UBO). `rows` points at kAtlasRowBytes-sized TileAtlasSlot entries; the copy is
-    // clamped to kAtlasMaxTiles. Rows past `rowCount` in the slot are zeroed so a shrunk
+    // clamped to kAtlasWindowRows. Rows past `rowCount` in the slot are zeroed so a shrunk
     // table never resolves a stale tile as resident.
     void UploadAtlasRows(uint32_t frameCounter, const void* rows, uint32_t rowCount);
     // ---- The paged height resolve (bindings 22/23, wide arm only; no-ops on the narrow arm) ----
@@ -190,39 +190,8 @@ class CBTResources
     Rendering::TextureHandle GetDefaultAtlasCoarseTexture() const { return m_DefaultAtlasCoarse; }
     Rendering::BufferHandle GetAtlasRowsBuffer() const { return m_AtlasRows; }
 
-    // Sphere sculpt physical page POOL (binding 16) + page TABLE (binding 20) — planet editing v2.
-    // Both host-visible SSBO rings: UploadSphereSculptPool / UploadSphereSculptPageTable write the
-    // frame's ring slot from the caller's authoritative page store, so the slot the shader reads this
-    // frame was written before this frame's GPU work (same ring discipline as UploadFrameParams — no
-    // barrier/staging). Created zeroed (pool 0.0, table kSculptNoPage) so the default (no edits) reads
-    // additive 0. The pool holds SculptPagePoolCount() pages; a page id addresses one 128^2 tile.
-    //
-    // Only the spherical domain reads them (every shader read is behind a spherical-domain gate), so
-    // Initialize creates placeholders of kSculptPlaceholderSlotWords per ring slot that only keep
-    // bindings 16 and 20 valid, and ProvisionSculptRings swaps in the full rings (64 MiB host-visible
-    // at the default page budget) for a sphere and back for a planar tree. The uploads are no-ops on
-    // the placeholders.
-    void UploadSphereSculptPool(uint32_t frameCounter, const float* pool, uint32_t texelCount);
-    void UploadSphereSculptPageTable(uint32_t frameCounter, const uint32_t* table, uint32_t entryCount);
-    // Re-creates the two rings for the domain (true = spherical, with `pagePoolCount` physical pages:
-    // ResolveSculptPagePoolCount in production; ignored for the placeholders) and rewrites the
-    // descriptor sets. No-op when they already match. The new rings are created before the old ones
-    // are destroyed: on an allocation failure it returns false with the previous rings, and the sets
-    // that point at them, untouched. The caller guarantees no GPU work references the old rings
-    // (CBTInstance::InitializeRoots first waits for prior graphics submissions).
-    bool ProvisionSculptRings(bool spherical, uint32_t pagePoolCount);
-    bool HasSphericalSculptRings() const { return m_SculptRingsSpherical; }
-    uint32_t GetSculptPagePoolCount() const { return m_SculptPagePoolCount; }
-    // One ring slot of each, in bytes: what the graphics side offset-binds per frame slot.
-    uint64_t GetSculptPoolSlotBytes() const { return static_cast<uint64_t>(m_SculptPoolSlotWords) * sizeof(float); }
-    uint64_t GetSculptTableSlotBytes() const { return static_cast<uint64_t>(m_SculptTableSlotWords) * sizeof(uint32_t); }
-    // Both rings are bound to the GRAPHICS set 2 (by name) so the fragment can sample them for the
-    // per-pixel sphere normal. Whole-buffer handles; the fragment offset-binds one ring slot.
-    Rendering::BufferHandle GetSphereSculptBuffer() const { return m_SphereSculpt; }
-    Rendering::BufferHandle GetSphereSculptPageTableBuffer() const { return m_SphereSculptTable; }
-
     // Planet-shading surface params (plan §planet-shading) — a small host-visible ring the
-    // fragment reads (radius, relief amplitude/frequency/octaves, sculpt-enabled). Written
+    // fragment reads (radius, relief amplitude/frequency/octaves, the planet pages). Written
     // once per frame like the params UBO; offset-bound per slot on the graphics side.
     Rendering::BufferHandle GetSurfaceParamsBuffer() const { return m_SurfaceParams; }
     void UploadSurfaceParams(uint32_t frameCounter, const CBTSurfaceParams& params);
@@ -241,20 +210,6 @@ class CBTResources
     bool CreateNormalChain(uint32_t width, uint32_t height, uint32_t mips);
     void DestroyNormalChain();
     void WriteDescriptorSet();
-    // One pair of sculpt rings and its shape, built before it replaces the bound pair.
-    struct SculptRings
-    {
-        Rendering::BufferHandle Pool{};
-        Rendering::BufferHandle Table{};
-        uint32_t PagePoolCount = 0u;
-        uint32_t PoolSlotWords = 0u;
-        uint32_t TableSlotWords = 0u;
-        uint64_t Bytes = 0;
-        bool Spherical = false;
-    };
-    bool CreateSculptRings(bool spherical, uint32_t pagePoolCount, SculptRings& out);
-    void AdoptSculptRings(const SculptRings& rings);
-    void DestroySculptRings();
 
     Rendering::IDevice* m_Device = nullptr;
     // Unwraps the device's wrapped frame slot so all kCBTFrameParamsRing elements rotate
@@ -265,13 +220,6 @@ class CBTResources
     Rendering::BufferHandle m_IdentityIndexBuffer{};
     Rendering::BufferHandle m_DrawCountBuffer{};
     Rendering::BufferHandle m_FrameParams{};       // UBO ring (binding 14)
-    Rendering::BufferHandle m_SphereSculpt{};      // host-visible SSBO ring: page pool (binding 16)
-    Rendering::BufferHandle m_SphereSculptTable{}; // host-visible SSBO ring: page table (binding 20)
-    uint32_t m_SculptPagePoolCount = 0u;           // physical page count (ResolveSculptPagePoolCount); 0 on the placeholders
-    uint32_t m_SculptPoolSlotWords = 0u;           // floats per pool ring slot
-    uint32_t m_SculptTableSlotWords = 0u;          // entries per page-table ring slot
-    uint64_t m_SculptRingBytes = 0;                // both rings, all slots
-    bool m_SculptRingsSpherical = false;           // false = the placeholders
     Rendering::BufferHandle m_SurfaceParams{};     // host-visible ring, graphics set 2 (plan §planet-shading)
     Rendering::TextureHandle m_DefaultHeight{};    // 1x1 flat fallback heightmap
     std::array<Rendering::TextureHandle, kCBTTextureRingMax> m_BoundHeight{}; // per-ring-slot bound texture (binding 15)

@@ -114,8 +114,8 @@ TEST(CBTKernelSet, PendingUntilItsRequestedBuildsRunThenReady)
     // Stands in for the engine's worker dispatcher; declared after the device, so a
     // job never run is destroyed while the device lives.
     std::vector<std::function<void()>> heldBuilds;
-    device->SetPipelineBuildDispatcher([&heldBuilds](std::function<void()> build)
-                                       { heldBuilds.push_back(std::move(build)); });
+    device->SetPipelineBuildDispatcher({.Dispatch = [&heldBuilds](std::function<void()> build, GameEngine::Rendering::PipelineBuildPriority)
+                                       { heldBuilds.push_back(std::move(build)); }});
 
     CBTKernelSet kernels;
     ASSERT_TRUE(kernels.Initialize(*device, ShaderOutputDir()))

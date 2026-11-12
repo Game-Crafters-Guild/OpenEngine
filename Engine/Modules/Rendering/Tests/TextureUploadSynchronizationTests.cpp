@@ -170,7 +170,9 @@ TEST_P(TextureUploadSynchronization, GraphicsSamplesEveryUploadedMipAndLayerWith
                                                                           static_cast<uint32_t>(requests.size()));
     ASSERT_TRUE(uploaded.IsValid());
     if (GetParam())
+    {
         ASSERT_TRUE(m_Device->WaitGpuSyncToken(uploaded, kTimeoutNanoseconds));
+    }
     for (auto& pixels : source)
         std::fill(pixels.begin(), pixels.end(), 0u);
 

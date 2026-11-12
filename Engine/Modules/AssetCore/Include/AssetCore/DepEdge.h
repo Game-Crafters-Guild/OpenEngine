@@ -28,6 +28,8 @@ enum class DepEdgeKind : uint16_t
     UILayoutStyle = 7,         // UI layout -> style sheet
     UIElementImage = 8,        // UI element -> image / texture
     SceneResource = 9,         // Scene [resource] header -> the asset an instance or #id uses
+    UIStyleImport = 10,        // Style sheet -> the style sheet it @imports
+    ShaderInclude = 11,        // Shader source -> the source it #includes
 };
 
 const char* ToString(DepEdgeKind kind) noexcept;
@@ -45,12 +47,14 @@ const char* ToString(DepEdgeKind kind) noexcept;
 //     retarget UX where we want to show "missing reference X" with the path
 //     the user authored.
 //
-// Path form is canonical mount-relative — same form as AssetMetadata::Path.
+// Path form is canonical mount-relative — same form as AssetMetadata::Path. An edge that
+// its parser resolves by the runtime's rule (UIStyleImport, ShaderInclude) holds the
+// absolute path of the file that the runtime loads.
 struct DepEdge
 {
     GUID Referrer;            // Asset that has the dependency.
     GUID Target;              // Resolved target GUID. Null when path-targeted.
-    std::string TargetPath;   // Mount-relative path. Empty when GUID-targeted.
+    std::string TargetPath;   // Mount-relative or absolute path. Empty when GUID-targeted.
     DepEdgeKind Kind = DepEdgeKind::Other;
 
     // Locator path to the field within the referrer that holds this

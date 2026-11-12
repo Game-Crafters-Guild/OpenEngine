@@ -13,6 +13,7 @@ AudioListener: game data, a full mirror
 BloomEffect: game data, a full mirror
 Camera: game data, a full mirror
 ChromaticAberrationEffect: game data, a full mirror
+ClipPlaybackState: engine-internal, no mirror (@ge-engine-internal)
 ColorFilterEffect: game data, a full mirror
 ColorGradeEffect: game data, a full mirror
 ContrastAdaptiveSharpenEffect: game data, a full mirror
@@ -26,6 +27,7 @@ FastBlurEffect: game data, a full mirror
 FilmSimulationEffect: game data, a full mirror
 GIEmitter: game data, a full mirror
 GameLogicGraphRef: game data, a full mirror
+GeneratedEntity: engine-internal, no mirror (@ge-engine-internal)
 HLODProxy: engine-internal, no mirror (@ge-engine-internal)
 HLODVolume: game data, a full mirror
 HeatDistortionEffect: game data, a full mirror
@@ -107,6 +109,8 @@ SkyScalarCubicBezier: element struct, mirrored inside its owner
 SkyScalarDayKeys: element struct, mirrored inside its owner
 SkyVec3DayKeys: element struct, mirrored inside its owner
 Skybox: game data, a full mirror
+SpatialGridMover: game data, a full mirror
+SpatialGridSettings: game data, a full mirror
 SplineComponent: game data, a full mirror
 SplineExtrude: game data, a full mirror
 SplineFence: game data, a full mirror
@@ -121,6 +125,7 @@ SplinePavingMember: element struct, mirrored inside its owner
 SplinePlacement: game data, a full mirror
 SplineSpanOverride: element struct, mirrored inside its owner
 SplineWall: game data, a full mirror
+TemplateGroundPlaceholder: editor-only, no mirror (@ge-editor-only)
 Terrain: game data, a full mirror
 TerrainColorZone: game data, a full mirror
 TerrainGrass: game data, a full mirror
@@ -140,5 +145,4 @@ VignetteEffect: game data, a full mirror
 VolumetricClouds: game data, a full mirror
 VolumetricFogEffect: game data, a full mirror
 WindVolume: game data, a full mirror
-WorldSectorCoord: game data, a full mirror
 WorldTransform: engine-owned, a readonly mirror (@ge-readonly)

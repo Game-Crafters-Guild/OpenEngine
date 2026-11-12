@@ -32,6 +32,7 @@
 #include "Engine/Rendering/ModelEntityFactory.h"
 #include "Engine/Rendering/Pipeline/Nodes/LensFlareRenderNode.h"
 #include "Engine/Rendering/PrimitiveGenerator.h"
+#include "Engine/Rendering/RenderOrigin.h"
 #include "Engine/Rendering/RenderServices.h"
 #include "Engine/Rendering/RenderWorldHooks.h"
 #include "Engine/Rendering/ShaderGraphMaterial.h"
@@ -236,8 +237,7 @@ void ModelThumbnailHandler::SpawnOrUpdateModel(RenderLane& lane, Slot& slot, con
         // Create orbit root entity carrying the framing transform; parent
         // the model's root entity to it so TransformHierarchySystem propagates.
         lane.orbitRootEntity = thumbWorld.CreateEntity();
-        Components::Transform orbitXf{};
-        std::memcpy(orbitXf.matrix, modelMatrix.Data(), sizeof(orbitXf.matrix));
+        const Components::Transform orbitXf = Components::Transform::FromMatrix4x4(modelMatrix);
         thumbWorld.AddComponentImmediate(lane.orbitRootEntity, orbitXf);
 
         // Parent model root to orbit root.
@@ -259,7 +259,7 @@ void ModelThumbnailHandler::SpawnOrUpdateModel(RenderLane& lane, Slot& slot, con
             auto* orbitXf = thumbWorld.GetComponentForWrite<Components::Transform>(lane.orbitRootEntity);
             if (orbitXf)
             {
-                std::memcpy(orbitXf->matrix, modelMatrix.Data(), sizeof(orbitXf->matrix));
+                *orbitXf = Components::Transform::FromMatrix4x4(modelMatrix);
             }
         }
     }
@@ -463,9 +463,7 @@ void ModelThumbnailHandler::UpdatePreviewLights(RenderLane& lane, float orbitYaw
     auto* lightXf = thumbWorld.GetComponentForWrite<Components::WorldTransform>(lane.keyLightEntity);
     if (lightXf)
     {
-        lightXf->matrix[8] = dirX;
-        lightXf->matrix[9] = dirY;
-        lightXf->matrix[10] = dirZ;
+        lightXf->Basis[2] = glm::vec3(dirX, dirY, dirZ);
         // Direct-writer contract (Transform.h): bump Version with the matrix.
         // Lights aren't version-gated today, but extraction's instance skip
         // makes the contract load-bearing for anything renderable. Thumbnail
@@ -544,11 +542,8 @@ void ModelThumbnailHandler::SetupCameraMatrices(const RenderLane& lane, uint32_t
     cam.view = viewM;
     cam.proj = projM;
     cam.viewProj = viewProjM;
-    cam.cameraPos.x = eye.x;
-    cam.cameraPos.y = eye.y;
-    cam.cameraPos.z = eye.z;
-    cam.cameraPos.w = 0.0f;
-    m_RenderServices->Views().SetCameraData(lane.cameraId, cam);
+    GameEngine::Engine::Renderer::SetCameraEye(cam, GameEngine::Mathematics::WorldPosition::FromVector3(eye));
+    m_RenderServices->Views().SetCameraData(lane.cameraId, cam, {kCameraNearZ, kCameraFarZ});
 }
 
 bool ModelThumbnailHandler::IsSpawnedModelGpuReady(const RenderLane& lane) const
@@ -916,7 +911,8 @@ Engine::Renderer::StagingWorldPassRG ModelThumbnailHandler::DeclareLaneWorldPass
         Engine::Renderer::Camera camera{};
         const Mathematics::Vector3 target(0.0f, 0.0f, 0.0f);
         const Mathematics::Vector3 up(0.0f, 1.0f, 0.0f);
-        camera.worldTransform = Mathematics::Inverse(Mathematics::MakeLookAtLH(kCameraEye, target, up));
+        const Mathematics::Matrix4x4 pose = Mathematics::Inverse(Mathematics::MakeLookAtLH(kCameraEye, target, up));
+        camera.SetPose(pose, Mathematics::WorldPosition{pose[3][0], pose[3][1], pose[3][2]});
         camera.params.FovY = kCameraFovDegrees;
         camera.params.NearZ = kCameraNearZ;
         camera.params.FarZ = kCameraFarZ;
@@ -1137,12 +1133,8 @@ void ModelThumbnailHandler::SpawnOrUpdateLensFlareEntity(RenderLane& lane,
         thumbWorld.GetComponentForWrite<Components::WorldTransform>(lane.lensFlareEntity);
     if (!worldTransform)
         return;
-    worldTransform->matrix[8] = dx * invLength;
-    worldTransform->matrix[9] = dy * invLength;
-    worldTransform->matrix[10] = dz * invLength;
-    worldTransform->matrix[12] = sourceX;
-    worldTransform->matrix[13] = sourceY;
-    worldTransform->matrix[14] = sourceZ;
+    worldTransform->Basis[2] = glm::vec3(dx * invLength, dy * invLength, dz * invLength);
+    worldTransform->Position = Mathematics::WorldPosition{sourceX, sourceY, sourceZ};
     ++worldTransform->Version;
 }
 
@@ -1215,8 +1207,7 @@ void ModelThumbnailHandler::SpawnOrUpdateMaterialEntity(RenderLane& lane,
 
         // Orbit root entity carries the framing transform.
         lane.orbitRootEntity = thumbWorld.CreateEntity();
-        Components::Transform orbitXf{};
-        std::memcpy(orbitXf.matrix, orbitMatrix.Data(), sizeof(orbitXf.matrix));
+        const Components::Transform orbitXf = Components::Transform::FromMatrix4x4(orbitMatrix);
         thumbWorld.AddComponentImmediate(lane.orbitRootEntity, orbitXf);
 
         // Primitive entity.
@@ -1233,9 +1224,7 @@ void ModelThumbnailHandler::SpawnOrUpdateMaterialEntity(RenderLane& lane,
         thumbWorld.AddComponentImmediate(lane.primitiveEntity, localBounds);
 
         // Local identity transform — orbit root drives world position.
-        Components::Transform localXf{};
-        localXf.matrix[0] = localXf.matrix[5] = localXf.matrix[10] = localXf.matrix[15] = 1.0f;
-        thumbWorld.AddComponentImmediate(lane.primitiveEntity, localXf);
+        thumbWorld.AddComponentImmediate(lane.primitiveEntity, Components::Transform{});
 
         Components::Parent parentComp{};
         parentComp.Entity = lane.orbitRootEntity;
@@ -1253,7 +1242,7 @@ void ModelThumbnailHandler::SpawnOrUpdateMaterialEntity(RenderLane& lane,
             auto* orbitXf = thumbWorld.GetComponentForWrite<Components::Transform>(lane.orbitRootEntity);
             if (orbitXf)
             {
-                std::memcpy(orbitXf->matrix, orbitMatrix.Data(), sizeof(orbitXf->matrix));
+                *orbitXf = Components::Transform::FromMatrix4x4(orbitMatrix);
             }
         }
     }

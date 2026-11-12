@@ -220,7 +220,7 @@ All GLSL. Compiled at build time to `.spv` via `shaderc` (vcpkg dep). The build 
 | `Terrain/` | Terrain-specific vertex/surface shaders |
 | `UI/` | UI-specific (SDF, glyph) shaders |
 | `Sources/` | Common bases: `fullscreen_noinput.vert` (3-vertex fullscreen triangle), `solidcolor.frag` |
-| (root) | Pass-specific shaders. Notable ones: `clustered_light_cull.comp`, `shadow_depth_shared.vert` / `shadow_depth_shared_skinned.vert` (depth-only cascade VS, reads BonePaletteAtlas), `pbr_forward.vert`/`.frag`, `forwardplus_lighting.frag`, `bloom_*`, `tonemap.frag`, `evsm_*`, `cas.frag`, `crt.frag`, `frustum_culling.comp`, `draw_command_scatter.comp`, `visibility_compaction.comp`, `depth_reduce.comp`, `sky_*` |
+| (root) | Pass-specific shaders. Notable ones: `clustered_light_cull.comp`, `shadow_depth_shared.vert` / `shadow_depth_shared_skinned.vert` (depth-only cascade VS, reads BonePaletteAtlas), `pbr_forward.vert`/`.frag`, `bloom_*`, `tonemap.frag`, `evsm_*`, `cas.frag`, `crt.frag`, `frustum_culling.comp`, `draw_command_scatter.comp`, `visibility_compaction.comp`, `depth_reduce.comp`, `sky_*` |
 
 ## Engine rendering layer
 
@@ -265,7 +265,7 @@ All GLSL. Compiled at build time to `.spv` via `shaderc` (vcpkg dep). The build 
 |---|---|
 | `WorldDrawTypes.h` | `WorldSubmissionRecord`: the unit of work submitted per frame |
 | `PerFrameWritePool.h` | Double-buffered shared SSBOs for per-frame data (instance transforms, material params, bone palettes) |
-| `RenderOrigin.h` | Camera-relative rendering (Earth-scale precision): derives the per-view render origin (integer sector + fp32 local) from the camera, packs each instance's sector into `GPUInstance`, and provides the rebased view/view-proj the vertex stage projects render-origin-relative positions through. Inactive (sector 0) inside the activation radius ⇒ byte-identical to the full-world path |
+| `RenderOrigin.h` | Camera-relative rendering: derives each view's render origin (the eye's integer sector) from the camera, packs each instance's sector into `GPUInstance`, and provides the view and view-projection relative to that origin, which the vertex stage projects through. `SetCameraEye` sets a camera's eye from a double position; every camera that reaches the GPU calls it |
 
 ### Animation / skinning (GPU)
 
@@ -581,9 +581,10 @@ The engine uses non-default Vulkan conventions for performance and correctness. 
 
 ### Camera-relative rendering (Earth-scale precision)
 
-- The render origin is expressed as an **integer sector + fp32 local** derived from the camera each frame (`RenderOrigin.h`). It is *not* a global re-shift: each instance stores its own sector (packed into the two reserved `GPUInstance` words) and the vertex stage differences it against the camera's sector, so a moving camera re-uploads only the CameraUBO. The persistent, change-tracked instance buffer is untouched (quiescence preserved)
+- The render origin is the **eye's integer sector**, derived from the camera each frame (`RenderOrigin.h`). It is *not* a global re-shift: each instance stores its own sector (packed into the two reserved `GPUInstance` words) and the vertex stage differences it against the camera's sector, so a moving camera re-uploads only the CameraUBO. The persistent, change-tracked instance buffer is untouched (quiescence preserved)
 - The `CameraUBO` carries rebased view / view-proj (built from the camera's sector-local position) plus the origin sector; the vertex stage projects a render-origin-relative position through them for a fp32-precise clip position, while `vPosWS` stays full world for the fragment stage (lighting / shadows / fog are world-space this slice)
-- Inactive (sector 0) inside the activation radius ⇒ the shader takes the full-world path, byte-identical to the pre-feature build. Kills far-from-origin vertex jitter / z-fighting for meshes out to planetary radius. Terrain (CBT), shadow-map precision, and clustered-light precision are the documented follow-up slices
+- The render origin is the eye's own sector at any distance, and the vertex stage has one path: every view projects relative to its origin. In sector (0,0,0) the rebased matrices equal the full-world ones. Meshes draw without vertex jitter or z-fighting out to planetary radius
+- Every producer of a `CameraData` (the game and editor cameras, the previews and thumbnails, the ocean mirror and depth capture, the reflection probe faces, the spot, point and area light shadows) calls `SetCameraEye` after it sets the matrices. `ViewRegistry::SetCameraData` asserts on a camera without an eye. A view derived from another camera gets that camera's eye from `CameraEye`. The cascades carry the fit's rebased light view-projection in the camera's sector
 
 ## Writing a render pass (recipes)
 
@@ -732,7 +733,7 @@ See [GPU debugging guide](gpu-debugging-guide.mdx) for the full playbook.
 |---|---|
 | **Modify shadows** (PCF kernel, bias, PCSS params, cascade lambda) | Edit `shadow_sampling.glsl` (staged copy) for filter; edit `ShadowMapRenderFeature.cpp` for cascade math; runtime knobs already exist as setters on the feature class |
 | **Add GBuffer pass (deferred)** | New `GBufferNode` (pipeline node) with multi-RT outputs; new `adapter_gbuffer.glsl` so any surface gains deferred path; new resources in JSON; replace `WorldRender` entry with `GBuffer + DeferredLighting` |
-| **Deferred lighting pass** | New `FullscreenShader` JSON entry referencing a new `deferred_lighting.frag` that samples GBuffer + reuses cluster + shadow bindings (read `forwardplus_lighting.frag` as template) |
+| **Deferred lighting pass** | New `FullscreenShader` JSON entry referencing a new `deferred_lighting.frag` that samples GBuffer + reuses the cluster and shadow bindings and the light loop of `Includes/clustered_lighting.glsl` |
 | **SSAO** | Recipe 2 (Pipeline Node) reading `View.Depth` + GBuffer normal, writing a half-res AO target — or even pure JSON via `FullscreenShader` type if no special logic needed |
 | **Raytracing** | Recipe 3 (Render Feature) + pipeline node. Verify `IDevice` exposes RT extension (`kRayTracing`). There is no GPU TLAS yet: `SceneTlas` in `Engine/Modules/Scene` is a CPU BVH for editor picking, not an acceleration structure, so the feature builds its own. RT shaders may need a new compile path (current pipeline is Vulkan-GLSL via shaderc — verify if `.rgen/.rchit/.rmiss` GLSL is supported or if HLSL is required) |
 

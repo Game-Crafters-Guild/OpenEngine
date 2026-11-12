@@ -7,6 +7,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
+#include "Mathematics/Matrix3x3.h"
 #include "Mathematics/Vector3.h"
 #include "Mathematics/Vector4.h"
 
@@ -25,15 +26,22 @@ public:
 	
 	    static Matrix4x4 Identity() { return Matrix4x4(glm::mat4(1.0f)); }
 
-	    // From 16 floats in column-major order (the layout of the ECS transform
-	    // components' matrix fields).
+	    // From 16 floats in column-major order.
 	    static Matrix4x4 FromColumnMajor(const float columnMajor[16])
 	    {
 	        Matrix4x4 out;
 	        std::memcpy(out.Data(), columnMajor, sizeof(float) * 16u);
 	        return out;
 	    }
-	
+
+	    // The 3x3 `basis` with `translation` in the fourth column; the bottom row is 0, 0, 0, 1.
+	    static Matrix4x4 FromBasis(const Matrix3x3& basis, const Vector3& translation)
+	    {
+	        Matrix4x4 out(glm::mat4(basis.GetGLM()));
+	        out.m_Matrix[3] = glm::vec4(translation.x, translation.y, translation.z, 1.0f);
+	        return out;
+	    }
+
 	    // Convenience constructors for common camera and transform matrices so
 	    // higher-level systems and tests can avoid depending directly on GLM.
 	    static Matrix4x4 LookAt(const Vector3& eye,

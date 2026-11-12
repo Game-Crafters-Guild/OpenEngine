@@ -10,8 +10,9 @@
 //
 // The instrument here is the GPU's own CBTBisectorData::BisectorState, read back after the tree has
 // converged: with nothing left to serve, that word is exactly the decision Kernel_Classify reached.
-// The CPU mirror below (ClassifyPairs) restates the screen-space edge rule the arms without a height
-// pyramid keep; here it only sorts the pairs into the population the census counts.
+// The CPU mirror below (ClassifyPairs) sorts the pairs into the population the census counts: which
+// branch each child took, and whether the off-frustum gate owns the pair. Its edge ratios restate the
+// criterion's parent edge, which only the relief arm reads.
 //
 // EVERY test runs BOTH height regimes: flat ground and the shipped ComposedIsland relief (512 m,
 // heightScale 60).
@@ -52,7 +53,7 @@ constexpr uint32_t kBisectorStateWord = 1u; // CBTBisectorData::BisectorState
 
 // Height regimes. TerrainSize[2] is heightScale (CBTLayout.h). Flat (0) is a control. Relief binds the
 // unified height texture, where the planar criterion decides; atlas binds the same relief through the atlas
-// source, where the screen-space edge rule decides.
+// source, where the projected-area metric decides.
 struct Regime
 {
     const char* Label;
@@ -176,7 +177,7 @@ bool PlanarFrustumGated(const CBTFrameParams& p, const Proj& p0, const Proj& p1,
     if (!p0.InFront && !p1.InFront && !p2.InFront)
         return true; // fully behind the eye — the gate reports CBT_OFF_FRUSTUM_BEHIND_NDC excess
     if (!p0.InFront || !p1.InFront || !p2.InFront)
-        return false; // straddling the near plane: genuinely close, gate says RELEVANT
+        return false; // crosses the eye plane: the gate says RELEVANT and the near-field bound holds it
     const float m = kSplitNdcMargin;
     auto ndc = [&](const Proj& q) {
         return std::array<float, 2>{q.Px / p.Screen[0] * 2.0f - 1.0f, q.Py / p.Screen[1] * 2.0f - 1.0f};
@@ -189,11 +190,18 @@ bool PlanarFrustumGated(const CBTFrameParams& p, const Proj& p0, const Proj& p1,
     return std::max(std::max(exL, exR), std::max(exB, exT)) > 0.0f;
 }
 
-// Is the planar off-frustum gate live? Planar retains totally at keep step 0 (Kernel_Reset), so there
-// the domain metric is the only thing deciding merges.
-bool PlanarGateActive(CBTInstance& inst)
+// Whether the planar criterion decides the arm: the relief arm binds the unified height texture and its
+// pyramid. The flat and atlas arms take the projected-area metric.
+bool CriterionDecides(const Regime& regime)
 {
-    return inst.ReadWorkQueueCounter(kWQOffFrustumKeepStep) > 0;
+    return regime.HeightScale != 0.0f && !regime.AtlasSource;
+}
+
+// Is the planar off-frustum gate live? The area metric gates the off-frustum field at every occupancy. Under
+// the criterion, planar retains totally at keep step 0 (Kernel_Reset), so there the criterion alone decides.
+bool PlanarGateActive(CBTInstance& inst, const Regime& regime)
+{
+    return !CriterionDecides(regime) || inst.ReadWorkQueueCounter(kWQOffFrustumKeepStep) > 0;
 }
 
 struct Facet
@@ -328,7 +336,7 @@ class CBTParentMergeMetric : public ::testing::Test
 
     // Classify every live sibling pair: which branch it took and what the GPU decided.
     std::vector<PairVerdict> ClassifyPairs(const std::vector<Facet>& live, const CBTFrameParams& p,
-                                           float occupancy, bool gateActive)
+                                           float occupancy, bool gateActive, bool areaMetric)
     {
         const float contention =
             p.NearBias[0] != 0.0f
@@ -352,7 +360,9 @@ class CBTParentMergeMetric : public ::testing::Test
                        e2 = ProjectPix(p.ViewProjRel, even.C2);
             const Proj o0 = ProjectPix(p.ViewProjRel, odd.C0), o1 = ProjectPix(p.ViewProjRel, odd.C1),
                        o2 = ProjectPix(p.ViewProjRel, odd.C2);
-            v.OnDomainBranch = e0.InFront && e2.InFront && o0.InFront && o2.InFront;
+            // The area branch also needs each apex in front.
+            v.OnDomainBranch = e0.InFront && e2.InFront && o0.InFront && o2.InFront &&
+                               (!areaMetric || (e1.InFront && o1.InFront));
             if (!v.OnDomainBranch)
             {
                 out.push_back(v);
@@ -380,7 +390,7 @@ class CBTParentMergeMetric : public ::testing::Test
 
             // The parent's split edge runs from the odd child's corner2 to the even child's corner0, and the
             // shader reads both from the stored corners (CBT_ParentSplitEdgeFar), so both children measure
-            // it alike. The threshold is taken at the edge's midpoint, as CBT_PlanarParentMergeWish takes it.
+            // it alike. The threshold is taken at the edge's midpoint.
             const Vector3 parentMid = 0.5f * (odd.C2 + even.C0);
             const float parentMergePx = p.Screen[3] * NearBiasCoarsen(p, contention, parentMid);
             const float parentLenPx = std::hypot(o2.Px - e0.Px, o2.Py - e0.Py);
@@ -457,8 +467,8 @@ void BuildGrazingPlanarParams(CBTFrameParams& p, const Pose& pose, const Regime&
 } // namespace
 
 // Two children of one parent reach the same merge decision: on the relief arm by the parent's box, on the
-// atlas arm by the parent's split edge from the stored corners (CBT_ParentSplitEdgeFar). Red when the merge
-// reads the facet's own box (relief) or reflects the held corner through the midpoint (atlas).
+// flat and atlas arms by the parent's projected area from the stored corners (CBT_ParentSplitEdgeFar). Red
+// when the merge reads the facet's own box (relief) or its own area (flat, atlas).
 TEST_F(CBTParentMergeMetric, SiblingsAgreeOnTheMergeDecision)
 {
     for (const Regime& regime : kRegimes)
@@ -492,7 +502,8 @@ TEST_F(CBTParentMergeMetric, SiblingsAgreeOnTheMergeDecision)
     EXPECT_EQ(ValidationErrors(inst), 0u) << "the census must read a conforming tree";
 
     const float occ = static_cast<float>(stats.LiveCount) / static_cast<float>(kDefaultBisectorPoolSize);
-    const std::vector<PairVerdict> pairs = ClassifyPairs(ReadLiveFacets(inst), p, occ, PlanarGateActive(inst));
+    const std::vector<PairVerdict> pairs = ClassifyPairs(ReadLiveFacets(inst), p, occ, PlanarGateActive(inst, regime),
+                                                         !CriterionDecides(regime));
 
     uint64_t domainPairs = 0, bothSimplify = 0, disagree = 0, offBranch = 0;
     uint64_t gateOwned = 0, gateOwnedDisagree = 0;
@@ -543,9 +554,21 @@ TEST_F(CBTParentMergeMetric, SiblingsAgreeOnTheMergeDecision)
 
     EXPECT_EQ(disagree, 0u) << pose.Label << ": " << disagree << " of " << domainPairs
                             << " sibling pairs disagree on the merge";
-    // A merge test that never fires agrees on every pair, so the atlas arm must merge some pairs.
+    // The diamond rule: both parents of a diamond decide as one, so on the area metric no converged pair that
+    // the metric owns asks for a merge that PrepareSimplify refuses.
+    if (!CriterionDecides(regime))
+        EXPECT_EQ(bothSimplify, 0u) << pose.Label << ": " << bothSimplify << " half-diamond merges stand";
+    // A merge test that never fires agrees on every pair. A converged tree holds no merge that can be served,
+    // so the atlas arm must serve merges one frame after its target coarsens 2x.
     if (regime.AtlasSource)
-        EXPECT_GT(bothSimplify, 0u) << pose.Label << ": no sibling pair merges on the atlas arm";
+    {
+        CBTFrameParams coarse = p;
+        coarse.Screen[2] *= 2.0f;
+        coarse.Screen[3] *= 2.0f;
+        RunFrame(inst, c, coarse, kConvergeFrames);
+        EXPECT_GT(inst.ReadTessellationStats().MergeServed, 0)
+            << pose.Label << ": no sibling pair merges on the atlas arm when its target coarsens";
+    }
 
     // And the consequence, read off the GPU's own counters rather than re-derived from geometry: a
     // converged tree must not stand at a large unservable merge demand. Every disagreeing pair
@@ -559,126 +582,6 @@ TEST_F(CBTParentMergeMetric, SiblingsAgreeOnTheMergeDecision)
         << pose.Label << ": " << stats.MergeDemand << " standing merge candidates against "
         << stats.LiveCount << " live facets (" << 100.0 * demandFraction
         << "%) — a converged tree is asking for merges that cannot be served";
-    inst.Shutdown();
-    }
-}
-
-// The parent-edge merge of the screen-space edge rule, on an arm without a height pyramid. The flat
-// regime binds no height texture, so the planar criterion is off (CBT_PlanarCriterionOn) and Classify
-// runs the edge rule the atlas source, the narrow heap and a lattice too large for the pyramid keep: a
-// facet merges on its parent's split edge (CBT_ParentSplitEdgeFar), not on its own. The over-conservative
-// case: a pair where at least one child REFUSES on its own edge while the parent they would collapse into
-// is comfortably inside the merge band. A per-child metric pins exactly these; the parent edge must merge
-// them.
-//
-// RED ARM: neuter the parent branch and this population is classified NOT-SIMPLIFY on the refusing
-// child, so bothSimplify collapses to 0 while the population itself stays non-empty.
-TEST_F(CBTParentMergeMetric, ChildRefusesButAdequateParentIsMerged)
-{
-    const Regime& regime = kFlat;
-    for (const Pose& pose : kPoses)
-    {
-    SCOPED_TRACE(testing::Message() << "arm " << regime.Label << "/" << pose.Label);
-    CBTInstance inst;
-    ASSERT_TRUE(inst.Initialize(*m_Device, m_KernelSet));
-    ASSERT_TRUE(inst.InitializeRoots(kDomainPlanar));
-    CBTClassifyDesc c{};
-    c.Mode = kClassifyScreenSpace;
-    c.TargetDepth = kMaxDepth;
-    c.NearFieldGate = 1u;
-    CBTFrameParams p;
-    BuildGrazingPlanarParams(p, pose, regime, kSplitPx, kMergePx);
-    const ReliefHeightSource relief = ArmRelief(inst, regime);
-
-    Converge(inst, c, p, kConvergeFrames);
-    const CBTTessellationStats stats = inst.ReadTessellationStats();
-    EXPECT_EQ(ValidationErrors(inst), 0u) << "the census must read a conforming tree";
-
-    const float occ = static_cast<float>(stats.LiveCount) / static_cast<float>(kDefaultBisectorPoolSize);
-    const std::vector<PairVerdict> pairs = ClassifyPairs(ReadLiveFacets(inst), p, occ, PlanarGateActive(inst));
-
-    // The over-conservative population: one child's own edge is at/over its merge threshold (it
-    // would have refused), and the parent is inside the parent band.
-    uint64_t overConservative = 0, merged = 0, unexplainedRefusals = 0, boundaryRefusals = 0;
-    // The control population: the parent is well OVER the band, so the pair must NOT be merged
-    // however short one child's leg happens to project. Guards the comparison's direction.
-    uint64_t parentTooCoarse = 0, wronglyMerged = 0;
-    for (const PairVerdict& v : pairs)
-    {
-        if (!v.OnDomainBranch || v.GateOwned)
-            continue;
-        const bool aChildRefuses = v.EvenChildRatio >= 1.0f || v.OddChildRatio >= 1.0f;
-        if (aChildRefuses && v.ParentRatio < kLebParentEdgeScale)
-        {
-            ++overConservative;
-            if (v.EvenSimplify && v.OddSimplify)
-                ++merged;
-            else if (v.NearBound)
-                ++boundaryRefusals; // the mirror cannot call this pair's side of the bound
-            else
-                ++unexplainedRefusals;
-        }
-        if (v.ParentRatio > 2.0f * kLebParentEdgeScale)
-        {
-            ++parentTooCoarse;
-            if (v.EvenSimplify || v.OddSimplify)
-                ++wronglyMerged;
-        }
-    }
-
-    std::printf("[parent-merge:%s/%s] over-conservative pairs=%llu of which SIMPLIFY=%llu "
-                "(mirror-boundary refusals=%llu) | control parent-too-coarse=%llu of which "
-                "flagged=%llu\n",
-                regime.Label, pose.Label, static_cast<unsigned long long>(overConservative),
-                static_cast<unsigned long long>(merged),
-                static_cast<unsigned long long>(boundaryRefusals),
-                static_cast<unsigned long long>(parentTooCoarse),
-                static_cast<unsigned long long>(wronglyMerged));
-
-    // EXPECT + continue rather than ASSERT: an inner-loop ASSERT would skip every later arm.
-    EXPECT_GT(overConservative, 0u)
-        << "this pose no longer produces the over-conservative case, so the assertions below prove "
-           "nothing -- pick a pose whose far field is seen edge-on";
-    EXPECT_GT(parentTooCoarse, 0u) << "no control population, so the direction of the test is "
-                                      "unguarded";
-    if (overConservative == 0u || parentTooCoarse == 0u)
-    {
-        inst.Shutdown();
-        continue;
-    }
-
-    // ATTRIBUTION, not a tuned threshold. An over-conservative pair either merges, or it sits so close
-    // to the bound that this CPU mirror cannot say which side the shader chose (kMirrorBoundaryRelTol).
-    EXPECT_EQ(unexplainedRefusals, 0u)
-        << regime.Label << "/" << pose.Label << ": " << unexplainedRefusals << " of "
-        << overConservative
-        << " over-conservative pairs refused to merge away from the bound -- the parent rule is not "
-           "reaching them";
-
-    // Magnitude guard: the rule must still fire for the large majority, so a wholesale regression
-    // that made every pair "explained" cannot pass quietly.
-    constexpr double kMinMergedFraction = 0.75;
-    const double mergedFraction =
-        static_cast<double>(merged) / static_cast<double>(overConservative);
-    EXPECT_GT(mergedFraction, kMinMergedFraction)
-        << regime.Label << "/" << pose.Label << ": only " << merged << " of " << overConservative
-        << " (" << 100.0 * mergedFraction << "%) over-conservative pairs merged";
-
-    // The abstention band must stay a sliver here too, or widening the tolerance
-    // could quietly reclassify a real regression as "the mirror cannot say".
-    // Measured population at the shipped tolerance: 0-1 of hundreds.
-    if (overConservative > 0)
-    {
-        EXPECT_LT(static_cast<double>(boundaryRefusals) / static_cast<double>(overConservative),
-                  0.01)
-            << regime.Label << "/" << pose.Label << ": " << boundaryRefusals << " of "
-            << overConservative << " over-conservative pairs fell in the boundary band";
-    }
-
-    // The control sits at twice the band, so a hit here is an inverted comparison.
-    EXPECT_EQ(wronglyMerged, 0u)
-        << regime.Label << "/" << pose.Label << ": " << wronglyMerged
-        << " pairs were flagged SIMPLIFY with a parent well past the band";
     inst.Shutdown();
     }
 }
@@ -792,7 +695,8 @@ TEST_F(CBTParentMergeMetric, PoseSweepCharacterizesTheLiveCountDeltaSign)
 
         const float occ =
             static_cast<float>(stats.LiveCount) / static_cast<float>(kDefaultBisectorPoolSize);
-        const std::vector<PairVerdict> pairs = ClassifyPairs(ReadLiveFacets(inst), p, occ, PlanarGateActive(inst));
+        const std::vector<PairVerdict> pairs =
+            ClassifyPairs(ReadLiveFacets(inst), p, occ, PlanarGateActive(inst, kRelief), false);
 
         uint64_t domainPairs = 0, overConservative = 0;
         for (const PairVerdict& v : pairs)

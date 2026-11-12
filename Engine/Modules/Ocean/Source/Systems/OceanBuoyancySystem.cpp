@@ -49,7 +49,8 @@ void OceanBuoyancySystem::Update(ECS::World& world, float32 /*deltaTime*/)
                 if (!pb.body.IsValid())
                     return;
 
-                const float32* m = wt.matrix;
+                const Mathematics::Matrix4x4 worldMatrix = wt.ToMatrix4x4(wt.GetPosition() - Mathematics::WorldPosition{});
+                const float32* m = worldMatrix.Data();
                 const float32 ox = m[12];
                 const float32 oy = m[13];
                 const float32 oz = m[14];
@@ -129,7 +130,7 @@ void OceanBuoyancySystem::Update(ECS::World& world, float32 /*deltaTime*/)
                         waterVelocity[2] += water[i].VelocityWS[2] + current[i].FlowZ;
                         const float32 f = pb.mass * buoy.BuoyancyStrength * submergence * 0.25f;
                         physics->AddForceAtPosition(pb.body, Physics::Vector3(0.0f, f, 0.0f),
-                                                    Physics::Vector3(wx, wy, wz));
+                                                    Physics::WorldPosition{wx, wy, wz});
                     }
                 }
 

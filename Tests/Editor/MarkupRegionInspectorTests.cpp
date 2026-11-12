@@ -130,19 +130,29 @@ class MarkupRegionInspectorTest : public ::testing::Test
         const ECS::EntityHandle entity = World.CreateEntity();
         World.AddComponentImmediate(entity, transform);
         Components::WorldTransform placed{};
-        std::copy(std::begin(transform.matrix), std::end(transform.matrix), std::begin(placed.matrix));
+        placed.Position = transform.Position;
+        placed.Basis = transform.Basis;
         World.AddComponentImmediate(entity, placed);
         World.AddComponentImmediate(entity, Components::Markup{});
         (void)MarkupECS::MarkupService::Get().BeginMarkup(World, entity, Components::MarkupAuthor::User, 1000);
         return entity;
     }
 
+    // The entity's local matrix, with its position as the translation.
+    Mathematics::Matrix4x4 LocalMatrix(ECS::EntityHandle entity)
+    {
+        const auto* transform = World.GetComponent<Components::Transform>(entity);
+        return transform->ToMatrix4x4(transform->GetPosition() - Mathematics::WorldPosition{});
+    }
+
     ECS::EntityHandle CreateRegion(const std::vector<Vector2>& knots)
     {
         const Editor::RegionPlacement placement =
-            Editor::NewRegionPlacement(knots, Components::WorldTransform{}.matrix, 0.0f);
+            Editor::NewRegionPlacement(knots, Mathematics::Matrix4x4::Identity(), 0.0f);
         const ECS::EntityHandle entity = BeginMarkup(placement.Local);
-        Editor::AddRegionParts(World, entity, placement.World.matrix, knots, Spline::SplineType::Linear, 8.0f);
+        Editor::AddRegionParts(World, entity,
+                               placement.World.ToMatrix4x4(placement.World.GetPosition() - Mathematics::WorldPosition{}),
+                               knots, Spline::SplineType::Linear, 8.0f);
         return entity;
     }
 
@@ -157,7 +167,7 @@ class MarkupRegionInspectorTest : public ::testing::Test
     ECS::EntityHandle CreateBox(const Vector3& center, const Vector3& size)
     {
         const ECS::EntityHandle entity = BeginMarkup(Components::Transform::FromTRS(
-            center, Mathematics::Quaternion::Identity(), size));
+            Mathematics::WorldPosition::FromVector3(center), Mathematics::Quaternion::Identity(), size));
         World.AddComponentImmediate(entity, Components::MarkupVolume{});
         return entity;
     }
@@ -436,7 +446,7 @@ TEST_F(MarkupRegionInspectorTest, ConvertToRegionIsOneUndoStepAndUndoGivesTheBox
         SplineECS::SplineHandle(spline->SplineDataIndex, spline->SplineDataGeneration));
     ASSERT_NE(data, nullptr);
     EXPECT_EQ(data->Points.size(), 4u) << "the box's footprint is four knots";
-    EXPECT_FLOAT_EQ(World.GetComponent<Components::WorldTransform>(box)->matrix[13], 0.0f)
+    EXPECT_DOUBLE_EQ(World.GetComponent<Components::WorldTransform>(box)->Position.Y, 0.0)
         << "the region stands where the box's base stood";
 
     Undo.Undo();
@@ -478,8 +488,7 @@ TEST_F(MarkupRegionInspectorTest, APathShowsItsBlockAndItsKind)
 {
     const std::vector<Vector3> points{{0.0f, 0.0f, 0.0f}, {30.0f, 0.0f, 5.0f}, {60.0f, 0.0f, -5.0f}};
     const ECS::EntityHandle road = BeginMarkup(Editor::NewPathPlacement(points));
-    Editor::AddPathParts(World, road, World.GetComponent<Components::Transform>(road)->matrix, points,
-                         Spline::SplineType::Linear);
+    Editor::AddPathParts(World, road, LocalMatrix(road), points, Spline::SplineType::Linear);
     const std::unique_ptr<UIElement> section = BuildSection<Components::Markup>(road);
     EXPECT_TRUE(HasClassBelow(*section, "markup-path-edit"));
     bool points3 = false;
@@ -497,8 +506,7 @@ TEST_F(MarkupRegionInspectorTest, TheEditKnotsButtonsReadInTitleCase)
 {
     const std::vector<Vector3> points{{0.0f, 0.0f, 0.0f}, {30.0f, 0.0f, 5.0f}};
     const ECS::EntityHandle road = BeginMarkup(Editor::NewPathPlacement(points));
-    Editor::AddPathParts(World, road, World.GetComponent<Components::Transform>(road)->matrix, points,
-                         Spline::SplineType::Linear);
+    Editor::AddPathParts(World, road, LocalMatrix(road), points, Spline::SplineType::Linear);
     const ECS::EntityHandle forest = CreateRegion(kForest);
     std::vector<std::string> texts;
     for (const ECS::EntityHandle entity : {forest, road})
@@ -520,8 +528,7 @@ TEST_F(MarkupRegionInspectorTest, TheClosedRowSaysWhyInTheOwnersWords)
     const ECS::EntityHandle forest = CreateRegion(kForest);
     const std::vector<Vector3> points{{0.0f, 0.0f, 0.0f}, {30.0f, 0.0f, 5.0f}};
     const ECS::EntityHandle road = BeginMarkup(Editor::NewPathPlacement(points));
-    Editor::AddPathParts(World, road, World.GetComponent<Components::Transform>(road)->matrix, points,
-                         Spline::SplineType::Linear);
+    Editor::AddPathParts(World, road, LocalMatrix(road), points, Spline::SplineType::Linear);
     const Editor::SplineOwnerClaim region = Editor::QueryMarkupSpline(World, forest);
     const Editor::SplineOwnerClaim path = Editor::QueryMarkupSpline(World, road);
     ASSERT_TRUE(region.Claimed && path.Claimed);
@@ -542,10 +549,10 @@ TEST_F(MarkupRegionInspectorTest, TheMoveGizmoOnARegionStandsAtItsOrigin)
     ASSERT_EQ(collector.GetGizmos().size(), 1u);
     const auto* translate = dynamic_cast<Editor::SceneTools::TransformTranslateGizmo*>(collector.GetGizmos()[0]);
     ASSERT_NE(translate, nullptr);
-    const float* origin = World.GetComponent<Components::WorldTransform>(forest)->matrix;
-    EXPECT_NEAR(translate->GetPivot().x, origin[12], 1.0e-3f);
-    EXPECT_NEAR(translate->GetPivot().y, origin[13], 1.0e-3f);
-    EXPECT_NEAR(translate->GetPivot().z, origin[14], 1.0e-3f);
+    const Mathematics::WorldPosition origin = World.GetComponent<Components::WorldTransform>(forest)->GetPosition();
+    EXPECT_NEAR(translate->GetPivot().x, origin.X, 1.0e-3);
+    EXPECT_NEAR(translate->GetPivot().y, origin.Y, 1.0e-3);
+    EXPECT_NEAR(translate->GetPivot().z, origin.Z, 1.0e-3);
 }
 
 // A region is always closed: one whose outline arrives open, from a scene file or a component

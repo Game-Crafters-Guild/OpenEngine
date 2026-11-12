@@ -70,6 +70,22 @@
 	background-image: url("editor:Icons/OptionPictures/paving-mouth-straight.svg");
 }
 
+.option-picture--paving-seam-hard-cut {
+	background-image: url("editor:Icons/OptionPictures/paving-seam-hard-cut.svg");
+}
+
+.option-picture--paving-seam-blend {
+	background-image: url("editor:Icons/OptionPictures/paving-seam-blend.svg");
+}
+
+.option-picture--paving-seam-joint-line {
+	background-image: url("editor:Icons/OptionPictures/paving-seam-joint-line.svg");
+}
+
+.option-picture--paving-seam-stone-course {
+	background-image: url("editor:Icons/OptionPictures/paving-seam-stone-course.svg");
+}
+
 .option-picture--paving-conform-terrain-only {
 	background-image: url("editor:Icons/OptionPictures/paving-conform-terrain-only.svg");
 }

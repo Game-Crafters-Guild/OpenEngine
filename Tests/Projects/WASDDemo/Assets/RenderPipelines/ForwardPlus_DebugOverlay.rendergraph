@@ -145,31 +145,6 @@
         "uExposure": "Storage"
       }
     }
-    ,
-    {
-      "id": "ForwardPlusLighting",
-      "type": "FullscreenShader",
-      "enabled": false,
-      "blendMode": "Additive",
-      "output": "View.Color",
-      "shaderPkg": "Shaders/forwardplus_lighting.shaderpkg",
-      "inputs": { "DepthTex": "View.DepthResolved" },
-      "inputUsages": { "DepthTex": "Sampled" },
-      "buffers": {
-        "ClusterBuffer": "ClusterBuffer",
-        "LightIndexBuffer": "LightIndexBuffer",
-        "LightBuffer": "LightBuffer",
-        "ClusterParams": "ClusterParams",
-        "ViewParams": "ViewParams"
-      },
-      "bufferUsages": {
-        "ClusterBuffer": "StorageRead",
-        "LightIndexBuffer": "StorageRead",
-        "LightBuffer": "StorageRead",
-        "ClusterParams": "Sampled",
-        "ViewParams": "ConstantBuffer"
-      }
-    }
   ],
   "outputs": { "FinalColor": "View.Resolve" }
 }

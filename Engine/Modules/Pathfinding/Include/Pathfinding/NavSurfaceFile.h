@@ -23,7 +23,7 @@ namespace GameEngine::Pathfinding
 
 /// The one format version a reader accepts. Changes with every change to the layout or to what
 /// decides a tile's bytes or its content hash, so an older file is refused rather than misread.
-inline constexpr uint32 kNavSurfaceFormatVersion = 1u;
+inline constexpr uint32 kNavSurfaceFormatVersion = 2u;
 /// Bits a polygon's flags hold, one name per bit in the flag-name table.
 inline constexpr uint32 kNavSurfaceFlagBits = 16u;
 /// Detour's area ids: 0 is the null area (not walkable, what a carve marks) and 63 the default

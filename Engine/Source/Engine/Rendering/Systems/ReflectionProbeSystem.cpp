@@ -48,8 +48,8 @@ struct ProbeCandidate
     float NormalizedDistanceSq = 0.0f;
     float Weight = 1.0f;
     float InfluenceRadius = 0.0f;
-    Vector3 Position{0.0f, 0.0f, 0.0f};
-    Vector3 BoxCenter{0.0f, 0.0f, 0.0f};
+    Mathematics::WorldPosition Position{};
+    Mathematics::WorldPosition BoxCenter{};
     Vector3 BoxHalfExtents{0.0f, 0.0f, 0.0f};
     Vector3 BoxAxisX{1.0f, 0.0f, 0.0f};
     Vector3 BoxAxisY{0.0f, 1.0f, 0.0f};
@@ -60,7 +60,7 @@ struct ProbeCandidate
 
 struct ProbeVolume
 {
-    Vector3 Center{0.0f, 0.0f, 0.0f};
+    Mathematics::WorldPosition Center{};
     Vector3 AxisX{1.0f, 0.0f, 0.0f};
     Vector3 AxisY{0.0f, 1.0f, 0.0f};
     Vector3 AxisZ{0.0f, 0.0f, 1.0f};
@@ -127,12 +127,11 @@ bool IsBetterCandidate(const ProbeCandidate& candidate, const ProbeCandidate& be
 ProbeVolume ExtractProbeVolume(const Components::WorldTransform& xf)
 {
     ProbeVolume volume{};
-    const float* m = xf.matrix;
     volume.Center = xf.GetPosition();
 
-    const Vector3 ax(m[0], m[1], m[2]);
-    const Vector3 ay(m[4], m[5], m[6]);
-    const Vector3 az(m[8], m[9], m[10]);
+    const Vector3 ax(xf.Basis[0]);
+    const Vector3 ay(xf.Basis[1]);
+    const Vector3 az(xf.Basis[2]);
     const float sx = std::sqrt(ax.LengthSquared());
     const float sy = std::sqrt(ay.LengthSquared());
     const float sz = std::sqrt(az.LengthSquared());
@@ -150,9 +149,10 @@ ProbeVolume ExtractProbeVolume(const Components::WorldTransform& xf)
     return volume;
 }
 
+// The selection weights and the capture radius use fp32 world positions.
 Vector3 ProjectToVolumeLocal(const ProbeVolume& volume, const Vector3& worldPos)
 {
-    const Vector3 d = worldPos - volume.Center;
+    const Vector3 d = worldPos - (volume.Center - Mathematics::WorldPosition{});
     return Vector3(Vector3::Dot(d, volume.AxisX), Vector3::Dot(d, volume.AxisY), Vector3::Dot(d, volume.AxisZ));
 }
 
@@ -196,10 +196,7 @@ void ReflectionProbeSystem::Update(ECS::World& world, float32 /*deltaTime*/)
     const std::optional<Camera> activeCamera = FindActiveCamera(world);
     const bool hasCamera = activeCamera.has_value();
     if (hasCamera)
-    {
-        const float* m = activeCamera->worldTransform.Data();
-        cameraPos = Vector3(m[12], m[13], m[14]);
-    }
+        cameraPos = activeCamera->Eye() - Mathematics::WorldPosition{};
 
     ProbeCandidate best{};
     bool found = false;
@@ -219,13 +216,13 @@ void ReflectionProbeSystem::Update(ECS::World& world, float32 /*deltaTime*/)
 
         float normalizedDistanceSq = 0.0f;
         float weight = 1.0f;
-        const Vector3 capturePosition = volume.Center + volume.AxisX * probe.OriginOffsetX +
-                                        volume.AxisY * probe.OriginOffsetY +
-                                        volume.AxisZ * probe.OriginOffsetZ;
+        const Mathematics::WorldPosition capturePosition =
+            volume.Center + (volume.AxisX * probe.OriginOffsetX + volume.AxisY * probe.OriginOffsetY +
+                             volume.AxisZ * probe.OriginOffsetZ);
         const bool hasBox = probe.BoxProjection;
         const Vector3 originOffsetLocal(probe.OriginOffsetX, probe.OriginOffsetY, probe.OriginOffsetZ);
         const float influenceRadius = hasBox
-                                          ? ComputeBoxCaptureRadius(volume, capturePosition)
+                                          ? ComputeBoxCaptureRadius(volume, capturePosition - Mathematics::WorldPosition{})
                                           : std::max({volume.HalfExtents.x, volume.HalfExtents.y, volume.HalfExtents.z}) +
                                                 std::sqrt(originOffsetLocal.LengthSquared());
         if (hasCamera && hasBox)

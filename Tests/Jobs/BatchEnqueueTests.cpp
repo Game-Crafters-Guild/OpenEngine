@@ -3,8 +3,8 @@
 // Layers:
 //  - BatchEnqueueTest: EnqueueWorkBatch correctness — every size runs, both
 //    counters conserve under an MPMC mix with single EnqueueWork producers
-//    (the Shutdown Debug tripwire is the conservation oracle), the caller's
-//    wake fan-out is bounded by kMaxWakePerBatch while the worker-side F3
+//    (the Shutdown Debug tripwire is the conservation oracle), the caller
+//    claims one idle worker per batch while the worker-side F3
 //    propagation still reaches full width, and batches racing Shutdown()
 //    strand nothing (F13c up-front gate + post-publish self-drain).
 //  - JobSystemBench.BENCHMARK_BatchCallerCost: the slice acceptance gate —
@@ -14,21 +14,30 @@
 
 #include "JobSystem/ParallelAlgorithms.h"
 #include "JobSystem/WorkStealingThreadPool.h"
+#include "Types/FalseSharing.h"
+#include "Types/FormatNumber.h"
+#include "Types/ParseNumber.h"
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <functional>
 #include <memory>
+#include <new>
+#include <optional>
 #include <random>
 #include <span>
+#include <string>
 #include <thread>
 #include <vector>
 
+#include "HeldWorkers.h"
 #include "LatencyBudget.h"
 #include "TestPlatform.h"
 
@@ -43,18 +52,6 @@ using SteadyClock = std::chrono::steady_clock;
 double ElapsedUs(SteadyClock::time_point t0, SteadyClock::time_point t1)
 {
     return std::chrono::duration<double, std::micro>(t1 - t0).count();
-}
-
-bool WaitUntil(const std::function<bool()>& pred, std::chrono::milliseconds timeout)
-{
-    const auto deadline = SteadyClock::now() + timeout;
-    while (!pred()) {
-        if (SteadyClock::now() >= deadline) {
-            return false;
-        }
-        std::this_thread::yield();
-    }
-    return true;
 }
 
 void BusyWaitUs(int us)
@@ -108,20 +105,69 @@ struct CountingFn
     void operator()() const { Counter->fetch_add(1, std::memory_order_relaxed); }
 };
 
+// The environment variable that sets where BENCHMARK_BatchCallerCost puts its pool: bytes past a
+// kFalseSharingSeparation boundary, default 0. A timing sweeps it to find if a pool time depends on the pool's address.
+constexpr const char* kPoolOffsetBytesVariable = "GE_TEST_POOL_OFFSET_BYTES";
+
+// The offset in kPoolOffsetBytesVariable. Text that is not decimal digits only gives SIZE_MAX, an offset that
+// IsValidPoolOffset rejects.
+size_t ReadPoolOffsetBytes()
+{
+    const char* text = std::getenv(kPoolOffsetBytesVariable);
+    if (text == nullptr || *text == '\0')
+    {
+        return 0;
+    }
+    const std::optional<uint64_t> value = ParseUnsigned(text);
+    return value ? static_cast<size_t>(*value) : SIZE_MAX;
+}
+
+// The offsets that put a pool at a different address modulo kFalseSharingSeparation, aligned as the pool needs.
+bool IsValidPoolOffset(size_t offsetBytes)
+{
+    return offsetBytes < kFalseSharingSeparation && offsetBytes % alignof(WorkStealingThreadPool) == 0;
+}
+
+// A pool built offsetBytes past a kFalseSharingSeparation boundary inside a buffer that this object owns, so the
+// pool's address modulo the separation is offsetBytes on every platform. The buffer is aligned by hand, not by
+// alignas, because MSVC reports C4324 for an over-aligned class.
+class PlacedPool
+{
+public:
+    PlacedPool(size_t offsetBytes, size_t numThreads)
+        : m_Storage(std::make_unique<std::byte[]>(sizeof(WorkStealingThreadPool) + 2 * kFalseSharingSeparation))
+    {
+        const size_t pastBoundary = reinterpret_cast<uintptr_t>(m_Storage.get()) % kFalseSharingSeparation;
+        std::byte* const base = m_Storage.get() + (kFalseSharingSeparation - pastBoundary);
+        m_Pool = new (base + offsetBytes) WorkStealingThreadPool(numThreads);
+    }
+    ~PlacedPool() { m_Pool->~WorkStealingThreadPool(); }
+    PlacedPool(const PlacedPool&) = delete;
+    PlacedPool& operator=(const PlacedPool&) = delete;
+
+    WorkStealingThreadPool& Pool() { return *m_Pool; }
+    size_t AddressModSeparation() const { return reinterpret_cast<uintptr_t>(m_Pool) % kFalseSharingSeparation; }
+
+private:
+    std::unique_ptr<std::byte[]> m_Storage;
+    WorkStealingThreadPool* m_Pool = nullptr;
+};
+
 } // namespace
 
 /**
  * @brief Batch sizes across every staging boundary (single, tiny, one under /
- * over the kStackBatch run length, exactly one run, multi-run) all execute
- * fully, concurrently with 4 threads of single EnqueueWork producers (the
+ * over kStackBatch, exactly kStackBatch on the stack, one scratch run, two
+ * scratch runs over kMaxBulkRun) all execute fully, concurrently with 4 threads of single EnqueueWork producers (the
  * MPMC mix). Conservation oracle: both public counters return to zero and the
  * Shutdown Debug tripwire stays silent.
  */
 TEST(BatchEnqueueTest, SizesRunAndConserveUnderMpmcMix)
 {
-    static_assert(WorkStealingThreadPool::kStackBatch == 64,
-                  "size ladder below straddles the staging-run boundary");
-    constexpr size_t kSizes[] = {1, 2, 31, 33, 64, 200};
+    static_assert(WorkStealingThreadPool::kStackBatch == 64 && WorkStealingThreadPool::kMaxBulkRun == 1024,
+                  "size ladder below straddles the stack, scratch and run boundaries");
+    constexpr size_t kTwoRuns = WorkStealingThreadPool::kMaxBulkRun + 33;
+    constexpr size_t kSizes[] = {1, 2, 31, 33, 64, 200, kTwoRuns};
     constexpr int kRounds = 250;
     constexpr int kSingleProducers = 4;
     constexpr int kSinglesPerProducer = 20000;
@@ -142,16 +188,16 @@ TEST(BatchEnqueueTest, SizesRunAndConserveUnderMpmcMix)
     }
 
     uint64_t batchSubmitted = 0;
-    CountingFn batch[200];
+    std::vector<CountingFn> batch(kTwoRuns);
     for (int round = 0; round < kRounds; ++round) {
         for (const size_t n : kSizes) {
             for (size_t i = 0; i < n; ++i) {
                 batch[i] = CountingFn{&batchRan};
             }
             if (n == 33) {
-                pool.EnqueueWorkBatch(std::span<CountingFn>(batch, n)); // span overload
+                pool.EnqueueWorkBatch(std::span<CountingFn>(batch.data(), n)); // span overload
             } else {
-                pool.EnqueueWorkBatch(batch, n);
+                pool.EnqueueWorkBatch(batch.data(), n);
             }
             batchSubmitted += n;
         }
@@ -183,34 +229,32 @@ TEST(BatchEnqueueTest, SizesRunAndConserveUnderMpmcMix)
 }
 
 /**
- * @brief Bounded-wake pin (§7 batch form): with every worker asleep (spin
- * disabled, backstop rescue raised to 500ms so nothing hides a strand), one
- * batch of 200 issues exactly min(need, sleepers, kMaxWakePerBatch) = 4
- * caller-side notifies — and the F3 worker-side propagation still fans the
- * wake front out to ALL workers (sleeping count reaches zero), every task
- * starting well inside the 100ms strand line.
+ * @brief With every worker parked (spin off, backstop 500 ms), one batch of
+ * 200 makes exactly one caller-side claim. The F3 chain wakes every other
+ * worker (the idle count reaches zero), and no task waits for a backstop.
  */
-TEST(BatchEnqueueTest, BatchWakeBoundedAndPropagatesToFullWidth)
+TEST(BatchEnqueueTest, BatchWakeClaimsOneWorkerAndPropagatesToFullWidth)
 {
     constexpr size_t kWorkers = 8;
     constexpr size_t kTasks = 200;
 
+    // Declared before the pool: a queued job can still use it when an ASSERT returns early.
+    std::atomic<uint64_t> warm{0};
     WorkStealingThreadPool pool(kWorkers);
     pool.SetSpinConfigForTest(0, 0);                 // no spinners: sleepers only
     pool.SetSleepBackstopForTest(kStressBackstopUs); // a lost wake stalls until a backstop
     const LatencyBudget budget = ReadLatencyBudget();
 
     // Cycle the workers once, then let all of them park.
-    std::atomic<uint64_t> warm{0};
     CountingFn warmup[kWorkers];
     for (auto& w : warmup) {
         w = CountingFn{&warm};
     }
     pool.EnqueueWorkBatch(warmup, kWorkers);
     ASSERT_TRUE(WaitUntil([&] { return warm.load() == kWorkers; }, std::chrono::seconds(5)));
-    ASSERT_TRUE(WaitUntil([&] { return pool.GetSleepingCountForTests() == kWorkers; },
+    ASSERT_TRUE(WaitUntil([&] { return pool.GetIdleCountForTests() == kWorkers; },
                           std::chrono::seconds(5)))
-        << "workers never parked; sleeping=" << pool.GetSleepingCountForTests();
+        << "workers never parked; sleeping=" << pool.GetIdleCountForTests();
 
     struct WakeFn
     {
@@ -244,23 +288,20 @@ TEST(BatchEnqueueTest, BatchWakeBoundedAndPropagatesToFullWidth)
     const uint64_t callerNotifies = pool.GetBatchNotifyCountForTests() - notifiesBefore;
 
     // Track how wide the wake front gets while the burst drains.
-    uint32_t minSleeping = pool.GetSleepingCountForTests();
+    uint32_t minSleeping = pool.GetIdleCountForTests();
     const bool allDone = WaitUntil(
         [&] {
-            minSleeping = std::min(minSleeping, pool.GetSleepingCountForTests());
+            minSleeping = std::min(minSleeping, pool.GetIdleCountForTests());
             return completed.load() == kTasks;
         },
         std::chrono::seconds(10));
 
-    std::printf("[BatchWakeBounded] callerNotifies=%llu (cap %u) minSleeping=%u "
-                "maxTaskWait=%.3fms\n",
-                static_cast<unsigned long long>(callerNotifies),
-                WorkStealingThreadPool::kMaxWakePerBatch, minSleeping,
+    std::printf("[BatchWakeClaimsOne] callerNotifies=%llu minSleeping=%u maxTaskWait=%.3fms\n",
+                static_cast<unsigned long long>(callerNotifies), minSleeping,
                 maxWaitUs.load() / 1000.0);
 
     EXPECT_TRUE(allDone) << "batch did not complete: " << completed.load() << "/" << kTasks;
-    EXPECT_EQ(callerNotifies, WorkStealingThreadPool::kMaxWakePerBatch)
-        << "the caller's wake fan-out must be exactly min(need, sleepers, kMaxWakePerBatch)";
+    EXPECT_EQ(callerNotifies, 1u) << "a batch publish claims exactly one idle worker";
     EXPECT_EQ(minSleeping, 0u)
         << "F3 propagation never reached full width — the wake chain stalled";
     const double maxWait = static_cast<double>(maxWaitUs.load());
@@ -357,6 +398,24 @@ TEST(BatchEnqueueTest, BatchVsShutdownNothingStranded)
 }
 
 /**
+ * @brief A PlacedPool sits at its offset modulo kFalseSharingSeparation and runs work there, so the
+ * GE_TEST_POOL_OFFSET_BYTES sweep of BENCHMARK_BatchCallerCost moves the pool on every platform.
+ */
+TEST(BatchEnqueueTest, PlacedPoolAddressFollowsItsOffset)
+{
+    constexpr size_t kPoolAlignment = alignof(WorkStealingThreadPool);
+    for (const size_t offset : {size_t{0}, kPoolAlignment, size_t{64}, kFalseSharingSeparation - kPoolAlignment})
+    {
+        ASSERT_TRUE(IsValidPoolOffset(offset)) << "offset " << offset;
+        std::atomic<uint64_t> executed{0};
+        PlacedPool placedPool(offset, 1);
+        EXPECT_EQ(placedPool.AddressModSeparation(), offset);
+        placedPool.Pool().EnqueueWork(CountingFn{&executed});
+        EXPECT_TRUE(WaitUntil([&] { return executed.load() == 1; }, std::chrono::seconds(10))) << "offset " << offset;
+    }
+}
+
+/**
  * @brief Slice-4 acceptance gate: submit-side cost of publishing 200 tasks
  * from one thread, completion awaited OUTSIDE the timed region. Three
  * regimes, interleaved sample-for-sample:
@@ -364,18 +423,29 @@ TEST(BatchEnqueueTest, BatchVsShutdownNothingStranded)
  *    caller cost, ~1.5-3us/task -> 300-600us on the design baseline);
  *  - storm:    the same runs of 2-30, one EnqueueWorkBatch per run — 13
  *    independent bounded-wake decisions. Each batch call against sleeping
- *    workers legitimately pays P4 + up to kMaxWakePerBatch kernel wakes, so
+ *    workers legitimately pays P4 + one kernel wake, so
  *    the 30us spec line is logged (PR table) and the assert carries
  *    headroom, same convention as the TrueColdFork p99.9 gate;
  *  - burst:    one EnqueueWorkBatch(200) — the spec §3 "200-task burst"
  *    literal, asserted at the spec target <30us.
+ * GE_TEST_POOL_OFFSET_BYTES sets the pool's address modulo kFalseSharingSeparation; the [bench] placement line
+ * prints the address that the run used.
  */
 TEST(JobSystemBench, BENCHMARK_BatchCallerCost)
 {
     const LatencyBudget budget = ReadLatencyBudget();
     LogTimerResolution();
 
-    WorkStealingThreadPool pool(8);
+    const size_t poolOffset = ReadPoolOffsetBytes();
+    const char* poolOffsetText = std::getenv(kPoolOffsetBytesVariable);
+    ASSERT_TRUE(IsValidPoolOffset(poolOffset))
+        << kPoolOffsetBytesVariable << " must be a decimal multiple of " << alignof(WorkStealingThreadPool)
+        << " below " << kFalseSharingSeparation << ", read '" << (poolOffsetText ? poolOffsetText : "") << "'";
+    PlacedPool placedPool(poolOffset, 8);
+    WorkStealingThreadPool& pool = placedPool.Pool();
+    std::printf("[bench] pool placement: %s=%zu, pool address mod %zu = %zu (pool alignment %zu)\n",
+                kPoolOffsetBytesVariable, poolOffset, kFalseSharingSeparation, placedPool.AddressModSeparation(),
+                alignof(WorkStealingThreadPool));
     pool.SetSpinConfigForTest(100, 2); // shipping spin config, deterministic vs env
 
     // Deterministic run-size schedule: uniform 2-30, chopped to sum exactly
@@ -493,9 +563,22 @@ TEST(JobSystemBench, BENCHMARK_BatchCallerCost)
                 "decisions vs the burst's 1)\n",
                 stormMedian < 30.0 ? "PASS" : "MISS", stormMedian);
 
-    // Absolute ceilings are calibrated on the Windows bench box (macOS sits
-    // right at the storm line and crosses it on box noise) — REPORT-only off
-    // Windows. The relative gate asserts on every platform; the machine load can widen or skip all three.
+    // The storm beats the per-task loop by this factor. In DebugFast the ratio floats from 2.7 to 3.9 on macOS and
+    // from 3.1 to 4.5 on Windows, by how fast a woken worker leaves the sleep wait.
+    // A factor of 2 still fails a batch path that costs as much as the loop.
+    constexpr double kStormBeatsSinglesFactor = 2.0;
+    // Every run prints and records the ratio, so that each run gives a row. A load skip leaves the gate not judged.
+    const std::string record = "singles/storm " + FormatFixed(singlesMedian / stormMedian, 2) + " against the " +
+                               FormatFixed(kStormBeatsSinglesFactor, 0) + "x line, " +
+                               (budget.Verdict == LatencyBudgetVerdict::Skip ? "not judged: " : "judged: ") +
+                               budget.Describe();
+    std::printf("[bench] relative gate storm %.2fus, line %.2fus, %s\n", stormMedian,
+                singlesMedian / kStormBeatsSinglesFactor, record.c_str());
+    ::testing::Test::RecordProperty("BatchCallerCostRatio", record);
+
+    // Absolute ceilings are calibrated on the Windows bench box (macOS sits right at the storm line and crosses it on
+    // box noise): REPORT-only off Windows. The load can widen them and skip all three gates; the relative gate is not
+    // widened, because its two medians come from the same samples.
     if (budget.Verdict == LatencyBudgetVerdict::Skip)
     {
         pool.Shutdown();
@@ -509,8 +592,194 @@ TEST(JobSystemBench, BENCHMARK_BatchCallerCost)
     // the spec line above for the PR table (TrueColdFork convention).
     EXPECT_LT(stormMedian, budget.Scale(100.0)) << budget.Describe();
 #endif
-    EXPECT_LT(stormMedian, budget.Scale(singlesMedian / 3.0))
-        << "batch publication no longer meaningfully beats the per-task loop; " << budget.Describe();
+    EXPECT_LT(stormMedian, singlesMedian / kStormBeatsSinglesFactor)
+        << "batch publication no longer meaningfully beats the per-task loop; " << budget.Describe()
+        << "; the load does not widen this gate";
+
+    pool.Shutdown();
+}
+
+namespace {
+
+// Blocking parks (a worker past its queued-count check) in every pool. Only
+// the burst bench's wake hook writes it.
+std::atomic<uint64_t> g_BurstBlockingParks{0};
+
+// One burst of the burst bench. The job that finishes last records the park
+// count and the time, then sets Finished; no job reads the state after that.
+struct BurstState
+{
+    uint32_t Count = 0;
+    std::atomic<int64_t> LastStartNs{0};
+    std::atomic<uint32_t> Done{0};
+    int64_t DoneNs = 0;
+    uint64_t ParksAtDone = 0;
+    std::atomic<bool> Finished{false};
+};
+
+// A 3 us job that records the latest start time of its burst. The body spins
+// without a yield: under load a yield gives the core away, and the burst then
+// measures the scheduler.
+struct BurstJobFn
+{
+    BurstState* State = nullptr;
+    void operator()() const
+    {
+        const int64_t now = SteadyNowNs();
+        int64_t last = State->LastStartNs.load(std::memory_order_relaxed);
+        while (last < now &&
+               !State->LastStartNs.compare_exchange_weak(last, now, std::memory_order_relaxed)) {
+        }
+        constexpr int64_t kBodyNs = 3000;
+        while (SteadyNowNs() - now < kBodyNs) {
+        }
+        // Count is read before the add: after it, the burst can end and its state can go out of scope.
+        const uint32_t count = State->Count;
+        if (State->Done.fetch_add(1, std::memory_order_acq_rel) + 1 == count) {
+            State->ParksAtDone = g_BurstBlockingParks.load(std::memory_order_relaxed);
+            State->DoneNs = SteadyNowNs();
+            State->Finished.store(true, std::memory_order_release);
+        }
+    }
+};
+
+// One cell of the burst bench: a burst size, a publish shape and a gap.
+struct BurstCell
+{
+    size_t Size = 0;
+    bool Batch = false;
+    bool Cold = false;
+    std::vector<double> StartedUs;
+    std::vector<double> DoneUs;
+    std::vector<double> PublishUs;
+    uint64_t Tasks = 0;
+    uint64_t Claims = 0;
+    uint64_t Parks = 0;
+    uint64_t BatchWakes = 0;
+};
+
+#if GE_DEBUG_INSTRUMENTATION
+void CountBlockingPark(WorkStealingThreadPool::WakePoint point, size_t)
+{
+    if (point == WorkStealingThreadPool::WakePoint::BeforeSlotLock) {
+        g_BurstBlockingParks.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+#endif
+
+// Publishes one burst and waits for it. Records the cell's samples when
+// `record` is true.
+void RunBurst(WorkStealingThreadPool& pool, BurstCell& cell, bool record)
+{
+    BurstState state;
+    state.Count = static_cast<uint32_t>(cell.Size);
+    BurstJobFn jobs[64];
+    for (size_t i = 0; i < cell.Size; ++i) {
+        jobs[i] = BurstJobFn{&state};
+    }
+#if GE_DEBUG_INSTRUMENTATION
+    const uint64_t claimsBefore = pool.GetWakeCountsForTests().Claims;
+#endif
+    const uint64_t parksBefore = g_BurstBlockingParks.load(std::memory_order_relaxed);
+    const uint64_t batchWakesBefore = pool.GetBatchNotifyCountForTests();
+    const auto t0 = SteadyClock::now();
+    if (cell.Batch) {
+        pool.EnqueueWorkBatch(jobs, cell.Size);
+    } else {
+        for (size_t i = 0; i < cell.Size; ++i) {
+            pool.EnqueueWork(jobs[i]);
+        }
+    }
+    const auto t1 = SteadyClock::now();
+    ASSERT_TRUE(WaitUntil([&] { return state.Finished.load(std::memory_order_acquire); },
+                          std::chrono::seconds(10)))
+        << "burst of " << cell.Size << " ran " << state.Done.load() << " jobs";
+    if (!record) {
+        return;
+    }
+    const int64_t t0Ns = std::chrono::duration_cast<std::chrono::nanoseconds>(t0.time_since_epoch()).count();
+    cell.StartedUs.push_back(static_cast<double>(state.LastStartNs.load() - t0Ns) / 1000.0);
+    cell.DoneUs.push_back(static_cast<double>(state.DoneNs - t0Ns) / 1000.0);
+    cell.PublishUs.push_back(ElapsedUs(t0, t1));
+    cell.Tasks += cell.Size;
+    cell.Parks += state.ParksAtDone - parksBefore;
+    cell.BatchWakes += pool.GetBatchNotifyCountForTests() - batchWakesBefore;
+#if GE_DEBUG_INSTRUMENTATION
+    cell.Claims += pool.GetWakeCountsForTests().Claims - claimsBefore;
+#endif
+}
+
+} // namespace
+
+/**
+ * Burst wake bench: one external thread publishes a burst of 8, 17 or 64
+ * 3 us jobs, as one EnqueueWorkBatch or as one EnqueueWork per job, after a
+ * cold gap (5 ms, every worker parked) or a warm gap (50 us). Per cell it
+ * reports the time from the publish start until every job started and until
+ * every job finished, the caller publish time, the claimed wakes per task and
+ * the blocking parks per task before the burst finished (debug builds; -1
+ * otherwise). Report only: it asserts that every burst runs.
+ */
+TEST(JobSystemBench, BENCHMARK_BurstWake)
+{
+    WorkStealingThreadPool pool(8);
+    pool.SetSpinConfigForTest(100, 2); // shipping spin config, deterministic vs env
+#if GE_DEBUG_INSTRUMENTATION
+    ScopedWakeHook hook(&CountBlockingPark);
+#endif
+
+    std::vector<BurstCell> cells;
+    for (const bool cold : {true, false}) {
+        for (const size_t size : {size_t{8}, size_t{17}, size_t{64}}) {
+            for (const bool batch : {true, false}) {
+                BurstCell cell;
+                cell.Size = size;
+                cell.Batch = batch;
+                cell.Cold = cold;
+                cells.push_back(std::move(cell));
+            }
+        }
+    }
+
+    constexpr int kWarmupBursts = 20;
+    constexpr int kColdBursts = 200;
+    constexpr int kWarmBursts = 1000;
+    for (int i = 0; i < kWarmupBursts + kWarmBursts; ++i) {
+        for (BurstCell& cell : cells) {
+            if (!cell.Cold) {
+                BusyWaitUs(50);
+                RunBurst(pool, cell, i >= kWarmupBursts);
+            }
+        }
+    }
+    for (int i = 0; i < kColdBursts; ++i) {
+        for (BurstCell& cell : cells) {
+            if (cell.Cold) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                RunBurst(pool, cell, true);
+            }
+        }
+    }
+
+    for (BurstCell& cell : cells) {
+        std::sort(cell.StartedUs.begin(), cell.StartedUs.end());
+        std::sort(cell.DoneUs.begin(), cell.DoneUs.end());
+        std::sort(cell.PublishUs.begin(), cell.PublishUs.end());
+        const double tasks = static_cast<double>(cell.Tasks);
+#if GE_DEBUG_INSTRUMENTATION
+        const double claimsPerTask = static_cast<double>(cell.Claims) / tasks;
+        const double parksPerTask = static_cast<double>(cell.Parks) / tasks;
+#else
+        const double claimsPerTask = -1.0;
+        const double parksPerTask = -1.0;
+#endif
+        std::printf("[bench] burst N=%2zu %-6s %-4s all-started med=%8.2fus p90=%8.2fus all-done med=%8.2fus "
+                    "publish med=%7.2fus wakes/task=%5.2f parks/task=%5.2f batch-wakes/task=%5.2f\n",
+                    cell.Size, cell.Batch ? "batch" : "single", cell.Cold ? "cold" : "warm",
+                    Percentile(cell.StartedUs, 0.5), Percentile(cell.StartedUs, 0.9),
+                    Percentile(cell.DoneUs, 0.5), Percentile(cell.PublishUs, 0.5), claimsPerTask,
+                    parksPerTask, static_cast<double>(cell.BatchWakes) / tasks);
+    }
 
     pool.Shutdown();
 }

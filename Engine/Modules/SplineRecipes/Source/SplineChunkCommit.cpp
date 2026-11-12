@@ -1,11 +1,11 @@
 #include "SplineRecipes/SplineChunkCommit.h"
 
 #include "Assets/ModelAsset.h"
+#include "Components/GeneratedEntity.h"
 #include "Components/Hierarchy.h"
 #include "Components/Rendering/LocalBounds.h"
 #include "Components/Rendering/MeshGPUData.h"
 #include "Components/Rendering/MeshRenderer.h"
-#include "Components/RuntimeOnlyEntity.h"
 #include "Components/Transform.h"
 #include "ECS/ECSTemplates.h"
 #include "ECS/Entity.h"
@@ -134,7 +134,7 @@ bool SplineChunkCommit::CommitSlots(ECS::World& world, Rendering::MeshGPURegistr
         chunk.Set(chunkRenderer);
         chunk.Set(bounds);
         chunk.Set(Components::MeshGPUData{});
-        chunk.Set(Components::RuntimeOnlyEntity{});
+        chunk.Set(Components::GeneratedEntity{});
         chunk.Set(Components::Parent{owner});
         chunk.Set(SplineLayout::MakePieceLabel("Section", c));
         m_Chunks[c] = chunk.GetHandle();

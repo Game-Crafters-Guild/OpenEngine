@@ -7,8 +7,8 @@
 // An fp32 world store quantizes a corner on a 0.5 m grid at Earth radius (fp32 octave
 // [2^22, 2^23)), before the camera-relative origin subtraction. This store holds each corner as
 // an integer SECTOR on the 1024 m world grid and an fp32 LOCAL offset (|local| <= 512·√3 m, ULP
-// ~6e-5 m), as instanced meshes do (camera_relative.glsl GE_ClipFromSectorLocal;
-// Components::WorldSectorCoord). The draw computes rel = float(sector - originSector) * 1024 + local.
+// ~6e-5 m), as instanced meshes do (camera_relative.glsl GE_ClipFromSectorLocal).
+// The draw computes rel = float(sector - originSector) * 1024 + local.
 //
 // The decode arithmetic is df64 ("double-float": an unevaluated sum of two fp32 values,
 // Dekker/Knuth error-free transforms, ~2^-47 relative) — NOT fp64. Rationale (design §5):
@@ -44,6 +44,7 @@
 
 #include "CBTTerrain/CBTLayout.h"      // kMaxDecodeSubdiv
 #include "CBTTerrain/CBTSphereRoots.h" // CBTSphereRoot (exact integer root corners)
+#include "Mathematics/WorldPosition.h"
 
 // The error-free transforms below are correct ONLY without FP contraction (see header
 // note). MSVC: float_control(push) saves the includer's fp_contract state so this
@@ -69,11 +70,6 @@ namespace GameEngine::CBTTerrain::DeepDecode
 // the int64 walk-exactness ceiling (~52: Scale = 2^52 < 2^63; design §4). The heap key
 // itself (u64, findMSB-bounded) holds depth ~58 and is NOT the binding limit.
 inline constexpr uint32_t kDeepDecodeSubdiv = 50u;
-
-// World sector grid (metres). Mirror of camera_relative.glsl GE_SECTOR_SIZE /
-// Components::kWorldSectorCoord's 1024 — the render-origin machinery's intrinsic
-// constant. Deliberately a power of two: dividing/multiplying by it is exact in fp32.
-inline constexpr float kSectorSizeMeters = 1024.0f;
 
 // ---------------------------------------------------------------------------
 // Exact integer LEB walk (CPU twin of Kernel_VertexEval's int64 walk)
@@ -280,14 +276,16 @@ inline DeepVertex DecodeCorner(const CubeNum& num, float radiusMeters, float rel
     const DF w[3] = {Mul(cx, scaleR), Mul(cy, scaleR), Mul(cz, scaleR)};
 
     DeepVertex out{};
-    constexpr float kInvSector = 1.0f / kSectorSizeMeters; // exact power of two
+    // The sector size in fp32: a power of two, so a multiply or a divide by it is exact.
+    constexpr float kSectorSize = static_cast<float>(Mathematics::kWorldSectorSize);
+    constexpr float kInvSector = 1.0f / kSectorSize;
     for (int c = 0; c < 3; ++c)
     {
         // floor(x + 0.5) is the shared CPU/GPU tie convention (GLSL round()'s half-tie is
         // implementation-defined; roundf's half-away differs at negative ties). x + 0.5 is
         // exact while |x| < 2^22 (sector magnitude ~6.2e3 at Earth — vast margin).
         const float k = std::floor(w[c].Hi * kInvSector + 0.5f);
-        const DF local = Add(w[c], DF{-k * kSectorSizeMeters, 0.0f}); // k*1024 exact (< 2^23)
+        const DF local = Add(w[c], DF{-k * kSectorSize, 0.0f}); // k*1024 exact (< 2^23)
         out.Sector[c] = static_cast<int32_t>(k);
         out.Local[c] = local.Hi + local.Lo; // |local| <= 512 -> single fp32 holds it to ~6e-5 m
     }
@@ -299,8 +297,9 @@ inline DeepVertex DecodeCorner(const CubeNum& num, float radiusMeters, float rel
 // render origin the delta is small, so the result is fp32-precise at any planet radius.
 inline void ReconstructRel(const DeepVertex& v, const int32_t originSector[3], float out[3])
 {
+    constexpr float kSectorSize = static_cast<float>(Mathematics::kWorldSectorSize);
     for (int c = 0; c < 3; ++c)
-        out[c] = static_cast<float>(v.Sector[c] - originSector[c]) * kSectorSizeMeters + v.Local[c];
+        out[c] = static_cast<float>(v.Sector[c] - originSector[c]) * kSectorSize + v.Local[c];
 }
 
 // Double-precision reference decode (probes only — the "true" geometry the fp32/df64

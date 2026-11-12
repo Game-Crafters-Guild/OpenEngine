@@ -62,9 +62,9 @@ const Refusal kRefusals[] = {
     {"UnknownKind", "Components/Bad.h", 17,
      "the field `Data` of `FixtureBad` has the type `Opaque::Handle`, which no mirror kind covers, so the component cannot be "
      "mirrored. Fix: give it a type a mirror holds (a scalar, a Mathematics type, ColorLinear, ECS::EntityHandle, StringId, "
-     "Rendering::RenderLayerMask, an AssetRef, GUID, Math::Curve, Mathematics::BoundingBox, an enum, a reflected struct, or a "
-     "fixed array of one of them; a char array for text), or mark the component // @ge-engine-internal when it is engine "
-     "runtime state"},
+     "Rendering::RenderLayerMask, an AssetRef, GUID, Math::Curve, Mathematics::BoundingBox, Mathematics::WorldPosition, "
+     "Mathematics::Matrix3x3, an enum, a reflected struct, or a fixed array of one of them; a char array for text), or mark "
+     "the component // @ge-engine-internal when it is engine runtime state"},
     {"ArrayOfEnums", "Components/Bad.h", 14,
      "the array field `Modes` of `FixtureBad` holds enums, and no setter can check an element written through the array. Fix: "
      "hold the values in an array of the enum's underlying type, or give each element its own field"},
@@ -80,9 +80,9 @@ const Refusal kRefusals[] = {
     {"KindNamedOutOfScope", "Components/Bad.h", 16,
      "the field `Shape` of `FixtureBad` has the type `Curve`, which no mirror kind covers, so the component cannot be "
      "mirrored. Fix: give it a type a mirror holds (a scalar, a Mathematics type, ColorLinear, ECS::EntityHandle, StringId, "
-     "Rendering::RenderLayerMask, an AssetRef, GUID, Math::Curve, Mathematics::BoundingBox, an enum, a reflected struct, or a "
-     "fixed array of one of them; a char array for text), or mark the component // @ge-engine-internal when it is engine "
-     "runtime state"},
+     "Rendering::RenderLayerMask, an AssetRef, GUID, Math::Curve, Mathematics::BoundingBox, Mathematics::WorldPosition, "
+     "Mathematics::Matrix3x3, an enum, a reflected struct, or a fixed array of one of them; a char array for text), or mark "
+     "the component // @ge-engine-internal when it is engine runtime state"},
     {"ArrayNameCollision", "Components/Bad.h", 8,
      "the array field `Weights` of `FixtureBad` needs the nested type `WeightsArray`, which another member of `FixtureBad` "
      "names. Fix: rename the field or the other member"},

@@ -1,6 +1,7 @@
 #include "TerrainECS/TerrainColorMap/TerrainColorMap.h"
 
 #include "Mathematics/Interpolation.h"
+#include "Mathematics/Transcendental.h"
 #include "TerrainColorMapCompose.h"
 
 #include "TerrainECS/TerrainGrass/TerrainGrassField.h"
@@ -219,6 +220,18 @@ bool TerrainColorHasWriters(const TerrainColorComposeInputs& inputs)
 
 } // namespace
 
+const std::array<float32, 256>& SrgbByteToLinearTable()
+{
+    static const std::array<float32, 256> kTable = []
+    {
+        std::array<float32, 256> table{};
+        for (uint32 byte = 0; byte < table.size(); ++byte)
+            table[byte] = Detail::SRGBChannelToLinear(static_cast<float32>(byte) / 255.0f);
+        return table;
+    }();
+    return kTable;
+}
+
 uint8 EncodeLinearToSrgbByte(float32 linear)
 {
     const float32 clamped = std::isfinite(linear) ? Math::Clamp01(linear) : 0.0f;
@@ -289,8 +302,9 @@ void ComposeTerrainColorMap(TerrainColorMap& map, const TerrainColorComposeInput
             continue;
         ZoneSampler& sampler = zones.emplace_back();
         sampler.Zone = &zone;
-        sampler.Cos = std::cos(-zone.YawRadians);
-        sampler.Sin = std::sin(-zone.YawRadians);
+        const Math::SinAndCos inverseYaw = Math::SinCos(-zone.YawRadians);
+        sampler.Cos = inverseYaw.Cos;
+        sampler.Sin = inverseYaw.Sin;
         sampler.InvExtX = zone.RectHalfX > 0.0f ? 1.0f / zone.RectHalfX : 0.0f;
         sampler.InvExtZ = zone.RectHalfZ > 0.0f ? 1.0f / zone.RectHalfZ : 0.0f;
     }

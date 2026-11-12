@@ -18,12 +18,13 @@
 // the bake uses) means the ring the gizmo draws is the true set of surface
 // directions the bake weights — "what it affects", not an approximation.
 
-#include <array>
 #include <cmath>
 #include <cstdint>
+#include <iterator>
 #include <vector>
 
 #include "CBTTerrain/CBTPlanetShading.h" // AnyTangent — the tangent frame the sphere bake uses
+#include "Mathematics/Vector2.h"
 #include "Mathematics/Vector3.h"
 
 namespace GameEngine::Editor::SceneTools::ModifierGizmoGeometry
@@ -44,7 +45,7 @@ enum class FootprintShape : std::uint8_t
 // modifier direction. Shared by both projections so the shape convention has a
 // single source of truth and matches the bake's ComputeWeight / SphereShapeWeight
 // rotation exactly (rect corners are R(yaw) * (±halfX, ±halfZ)).
-inline void ComputeFootprintLocalRing(std::vector<std::array<float, 2>>& out,
+inline void ComputeFootprintLocalRing(std::vector<Mathematics::Vector2>& out,
                                       FootprintShape shape, float radius, float rectHalfX,
                                       float rectHalfZ, float yawRadians, std::uint32_t segments)
 {
@@ -53,19 +54,15 @@ inline void ComputeFootprintLocalRing(std::vector<std::array<float, 2>>& out,
     {
         const float c = std::cos(yawRadians);
         const float s = std::sin(yawRadians);
-        const float corners[4][2] = {
+        const Mathematics::Vector2 corners[] = {
             {rectHalfX, rectHalfZ},
             {-rectHalfX, rectHalfZ},
             {-rectHalfX, -rectHalfZ},
             {rectHalfX, -rectHalfZ},
         };
-        out.reserve(4u);
-        for (const auto& corner : corners)
-        {
-            const float lx = corner[0];
-            const float lz = corner[1];
-            out.push_back({c * lx - s * lz, s * lx + c * lz});
-        }
+        out.reserve(std::size(corners));
+        for (const Mathematics::Vector2& corner : corners)
+            out.emplace_back(c * corner.x - s * corner.y, s * corner.x + c * corner.y);
         return;
     }
 
@@ -75,7 +72,7 @@ inline void ComputeFootprintLocalRing(std::vector<std::array<float, 2>>& out,
     for (std::uint32_t i = 0; i < count; ++i)
     {
         const float a = kTwoPi * static_cast<float>(i) / static_cast<float>(count);
-        out.push_back({radius * std::cos(a), radius * std::sin(a)});
+        out.emplace_back(radius * std::cos(a), radius * std::sin(a));
     }
 }
 
@@ -83,7 +80,7 @@ inline void ComputeFootprintLocalRing(std::vector<std::array<float, 2>>& out,
 // layout GizmoRenderContext::DrawColoredLines consumes) connecting `points` in
 // order, with the last point joined back to the first.
 inline void AppendClosedLoopSegments(std::vector<Mathematics::Vector3>& out,
-                                     const std::vector<std::array<float, 3>>& points)
+                                     const std::vector<Mathematics::Vector3>& points)
 {
     const std::size_t n = points.size();
     if (n < 2u)
@@ -91,10 +88,8 @@ inline void AppendClosedLoopSegments(std::vector<Mathematics::Vector3>& out,
     out.reserve(out.size() + n * 2u);
     for (std::size_t i = 0; i < n; ++i)
     {
-        const std::array<float, 3>& a = points[i];
-        const std::array<float, 3>& b = points[(i + 1u) % n];
-        out.emplace_back(a[0], a[1], a[2]);
-        out.emplace_back(b[0], b[1], b[2]);
+        out.push_back(points[i]);
+        out.push_back(points[(i + 1u) % n]);
     }
 }
 
@@ -103,17 +98,17 @@ inline void AppendClosedLoopSegments(std::vector<Mathematics::Vector3>& out,
 // Ordered world-space ring points of a planar footprint at height `y`. The
 // footprint-local offset (l0, l1) maps directly to a world XZ offset from the
 // modifier position, matching ComputeModifierBounds' rect rotation.
-inline void ComputePlanarRingPoints(std::vector<std::array<float, 3>>& out, FootprintShape shape,
+inline void ComputePlanarRingPoints(std::vector<Mathematics::Vector3>& out, FootprintShape shape,
                                     float centerX, float y, float centerZ, float radius,
                                     float rectHalfX, float rectHalfZ, float yawRadians,
                                     std::uint32_t segments)
 {
-    std::vector<std::array<float, 2>> local;
+    std::vector<Mathematics::Vector2> local;
     ComputeFootprintLocalRing(local, shape, radius, rectHalfX, rectHalfZ, yawRadians, segments);
     out.clear();
     out.reserve(local.size());
-    for (const auto& p : local)
-        out.push_back({centerX + p[0], y, centerZ + p[1]});
+    for (const Mathematics::Vector2& p : local)
+        out.emplace_back(centerX + p.x, y, centerZ + p.y);
 }
 
 // Closed planar footprint outline as a DrawColoredLines-ready line list.
@@ -121,7 +116,7 @@ inline void AppendPlanarFootprint(std::vector<Mathematics::Vector3>& out, Footpr
                                   float y, float centerZ, float radius, float rectHalfX,
                                   float rectHalfZ, float yawRadians, std::uint32_t segments)
 {
-    std::vector<std::array<float, 3>> pts;
+    std::vector<Mathematics::Vector3> pts;
     ComputePlanarRingPoints(pts, shape, centerX, y, centerZ, radius, rectHalfX, rectHalfZ,
                             yawRadians, segments);
     AppendClosedLoopSegments(out, pts);
@@ -132,26 +127,24 @@ inline void AppendPlanarFootprint(std::vector<Mathematics::Vector3>& out, Footpr
 // Radial tangent frame at a modifier direction, matching MakeSpherePlacement.
 struct SphereFrame
 {
-    std::array<float, 3> N{0.0f, 1.0f, 0.0f};  // centre direction = normalize(worldPos - centre)
-    std::array<float, 3> E1{1.0f, 0.0f, 0.0f}; // AnyTangent(N) — local footprint X axis
-    std::array<float, 3> E2{0.0f, 0.0f, 1.0f}; // cross(N, E1) — local footprint Z axis
+    Mathematics::Vector3 N{0.0f, 1.0f, 0.0f};  // centre direction = normalize(worldPos - centre)
+    Mathematics::Vector3 E1{1.0f, 0.0f, 0.0f}; // AnyTangent(N) — local footprint X axis
+    Mathematics::Vector3 E2{0.0f, 0.0f, 1.0f}; // cross(N, E1) — local footprint Z axis
     bool Valid = false;                        // false when the modifier sits on the planet centre
 };
 
-inline SphereFrame MakeSphereFrame(const std::array<float, 3>& planetCenter,
-                                   const std::array<float, 3>& modifierWorldPos)
+inline SphereFrame MakeSphereFrame(const Mathematics::Vector3& planetCenter,
+                                   const Mathematics::Vector3& modifierWorldPos)
 {
     SphereFrame f{};
-    const float rx = modifierWorldPos[0] - planetCenter[0];
-    const float ry = modifierWorldPos[1] - planetCenter[1];
-    const float rz = modifierWorldPos[2] - planetCenter[2];
-    const float len = std::sqrt(rx * rx + ry * ry + rz * rz);
+    const Mathematics::Vector3 radial = modifierWorldPos - planetCenter;
+    const float len = std::sqrt(radial.x * radial.x + radial.y * radial.y + radial.z * radial.z);
     if (len <= 0.0f)
         return f; // no radial direction at the centre
-    f.N = {rx / len, ry / len, rz / len};
+    f.N = radial / len;
     f.E1 = CBTTerrain::AnyTangent(f.N);
-    f.E2 = {f.N[1] * f.E1[2] - f.N[2] * f.E1[1], f.N[2] * f.E1[0] - f.N[0] * f.E1[2],
-            f.N[0] * f.E1[1] - f.N[1] * f.E1[0]};
+    f.E2 = {f.N.y * f.E1.z - f.N.z * f.E1.y, f.N.z * f.E1.x - f.N.x * f.E1.z,
+            f.N.x * f.E1.y - f.N.y * f.E1.x};
     f.Valid = true;
     return f;
 }
@@ -161,20 +154,18 @@ inline SphereFrame MakeSphereFrame(const std::array<float, 3>& planetCenter,
 // inverse of the bake's l0 = R*dot(dir, E1). A footprint wider than the
 // hemisphere saturates at the horizon (radicand clamped at 0); the result is
 // renormalized so an over-wide footprint stays a unit direction.
-inline std::array<float, 3> TangentOffsetToDirection(const SphereFrame& f, float radius, float l0,
-                                                     float l1)
+inline Mathematics::Vector3 TangentOffsetToDirection(const SphereFrame& f, float radius, float l0, float l1)
 {
     const float invR = radius > 0.0f ? 1.0f / radius : 0.0f;
     const float a = l0 * invR;
     const float b = l1 * invR;
     const float rad = 1.0f - a * a - b * b;
     const float n = rad > 0.0f ? std::sqrt(rad) : 0.0f;
-    std::array<float, 3> dir = {f.N[0] * n + f.E1[0] * a + f.E2[0] * b,
-                                f.N[1] * n + f.E1[1] * a + f.E2[1] * b,
-                                f.N[2] * n + f.E1[2] * a + f.E2[2] * b};
-    const float dl = std::sqrt(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]);
+    const Mathematics::Vector3 dir = {f.N.x * n + f.E1.x * a + f.E2.x * b, f.N.y * n + f.E1.y * a + f.E2.y * b,
+                                      f.N.z * n + f.E1.z * a + f.E2.z * b};
+    const float dl = std::sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
     const float dinv = dl > 0.0f ? 1.0f / dl : 0.0f;
-    return {dir[0] * dinv, dir[1] * dinv, dir[2] * dinv};
+    return {dir.x * dinv, dir.y * dinv, dir.z * dinv};
 }
 
 // Ordered world-space points of a footprint projected onto the sphere of
@@ -183,8 +174,8 @@ inline std::array<float, 3> TangentOffsetToDirection(const SphereFrame& f, float
 // returning 0 for the base sphere. Each point is
 // planetCenter + dir * (radius + heightAbove(dir)).
 template <typename HeightFn>
-inline void ComputeSphereProjectedRingPoints(std::vector<std::array<float, 3>>& out,
-                                             const std::array<float, 3>& planetCenter,
+inline void ComputeSphereProjectedRingPoints(std::vector<Mathematics::Vector3>& out,
+                                             const Mathematics::Vector3& planetCenter,
                                              const SphereFrame& frame, float radius,
                                              FootprintShape shape, float footprintRadius,
                                              float rectHalfX, float rectHalfZ, float yawRadians,
@@ -193,29 +184,27 @@ inline void ComputeSphereProjectedRingPoints(std::vector<std::array<float, 3>>& 
     out.clear();
     if (!frame.Valid || radius <= 0.0f)
         return;
-    std::vector<std::array<float, 2>> local;
+    std::vector<Mathematics::Vector2> local;
     ComputeFootprintLocalRing(local, shape, footprintRadius, rectHalfX, rectHalfZ, yawRadians,
                               segments);
     out.reserve(local.size());
-    for (const auto& p : local)
+    for (const Mathematics::Vector2& p : local)
     {
-        const std::array<float, 3> dir = TangentOffsetToDirection(frame, radius, p[0], p[1]);
-        const float h = static_cast<float>(heightAbove(dir[0], dir[1], dir[2]));
-        const float r = radius + h;
-        out.push_back({planetCenter[0] + dir[0] * r, planetCenter[1] + dir[1] * r,
-                       planetCenter[2] + dir[2] * r});
+        const Mathematics::Vector3 dir = TangentOffsetToDirection(frame, radius, p.x, p.y);
+        const float h = static_cast<float>(heightAbove(dir.x, dir.y, dir.z));
+        out.push_back(planetCenter + dir * (radius + h));
     }
 }
 
 // Closed spherical footprint outline as a DrawColoredLines-ready line list.
 template <typename HeightFn>
 inline void AppendSphereFootprint(std::vector<Mathematics::Vector3>& out,
-                                  const std::array<float, 3>& planetCenter, const SphereFrame& frame,
+                                  const Mathematics::Vector3& planetCenter, const SphereFrame& frame,
                                   float radius, FootprintShape shape, float footprintRadius,
                                   float rectHalfX, float rectHalfZ, float yawRadians,
                                   std::uint32_t segments, HeightFn&& heightAbove)
 {
-    std::vector<std::array<float, 3>> pts;
+    std::vector<Mathematics::Vector3> pts;
     ComputeSphereProjectedRingPoints(pts, planetCenter, frame, radius, shape, footprintRadius,
                                      rectHalfX, rectHalfZ, yawRadians, segments,
                                      std::forward<HeightFn>(heightAbove));

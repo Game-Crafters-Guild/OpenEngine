@@ -34,6 +34,8 @@
 
 #include <gtest/gtest.h>
 
+#include "TerrainTestHelpers.h"
+
 #include "Components/Spline/SplineComponent.h"
 #include "Components/Terrain/Terrain.h"
 #include "Components/Terrain/TerrainModifierEffects.h"
@@ -123,10 +125,7 @@ TerrainHandle CreateBakedTerrain(TerrainService& svc)
 {
     const TerrainHandle handle = svc.CreateTerrain(MakeTestConfig());
     auto* data = svc.GetTerrainData(handle);
-    FillHeightfieldBaseRegion(data->Heightfield, Components::TerrainBaseSource::ProceduralNoise,
-                              nullptr, 0, 0,
-                              static_cast<int32>(kHeightmapDim) - 1,
-                              static_cast<int32>(kHeightmapDim) - 1);
+    TerrainTests::SeedNoiseBaseHeightmap(svc, data->Heightfield);
     data->MarkFullDirty();
     svc.RebuildQuadtree(handle);
     data->ResetSplatmapAndCommitRange();
@@ -136,9 +135,9 @@ TerrainHandle CreateBakedTerrain(TerrainService& svc)
 Components::WorldTransform IdentityAt(float32 x, float32 y, float32 z)
 {
     Components::WorldTransform xf{};
-    xf.matrix[12] = x;
-    xf.matrix[13] = y;
-    xf.matrix[14] = z;
+    xf.Position.X = x;
+    xf.Position.Y = y;
+    xf.Position.Z = z;
     return xf;
 }
 
@@ -151,7 +150,7 @@ ECS::EntityHandle CreateTerrainEntity(ECS::World& world, TerrainHandle handle)
     terrain.HeightScale = kHeightScale;
     terrain.TerrainDataHandle = handle.Index;
     terrain.TerrainDataGeneration = handle.Generation;
-    terrain.BaseSource = Components::TerrainBaseSource::ProceduralNoise;
+    TerrainTests::UseNoiseBaseHeightmap(terrain);
     world.AddComponentImmediate<Components::Terrain>(e, terrain);
     world.AddComponentImmediate<Components::WorldTransform>(e, IdentityAt(0.0f, 0.0f, 0.0f));
     return e;
@@ -405,7 +404,7 @@ TEST(TerrainRouteGeometry, ResampleDividesTheRouteIntoEqualIntervals)
     svc.RebuildCache(handle);
 
     RoutePolyline polyline;
-    BuildRoutePolyline(*data, 1.0f, polyline);
+    BuildRoutePolyline(*data, 1.0f, 0.0f, polyline);
 
     ASSERT_TRUE(polyline.IsValid());
     // ceil(10 / 1) = 10 intervals, so 11 stations.
@@ -437,7 +436,7 @@ TEST(TerrainRouteGeometry, SpacingIsAnUpperBoundAndIsClampedFromBelow)
 
     // A route that is not a whole number of steps long still ends on its end.
     RoutePolyline uneven;
-    BuildRoutePolyline(*data, 2.0f, uneven);
+    BuildRoutePolyline(*data, 2.0f, 0.0f, uneven);
     ASSERT_TRUE(uneven.IsValid());
     EXPECT_EQ(uneven.Stations.size(), 3u) << "ceil(3 / 2) = 2 intervals";
     EXPECT_NEAR(uneven.Stations.back().X, 3.0f, 1e-3f);
@@ -446,13 +445,13 @@ TEST(TerrainRouteGeometry, SpacingIsAnUpperBoundAndIsClampedFromBelow)
     // Scene text is untrusted: a zero or negative spacing is a station count of
     // infinity, and must clamp rather than hang.
     RoutePolyline degenerate;
-    BuildRoutePolyline(*data, 0.0f, degenerate);
+    BuildRoutePolyline(*data, 0.0f, 0.0f, degenerate);
     ASSERT_TRUE(degenerate.IsValid());
     EXPECT_LE(degenerate.Stations.size(),
               static_cast<std::size_t>(3.0f / kMinRouteStationSpacing) + 2u);
 
     RoutePolyline negative;
-    BuildRoutePolyline(*data, -5.0f, negative);
+    BuildRoutePolyline(*data, -5.0f, 0.0f, negative);
     EXPECT_EQ(negative.Stations.size(), degenerate.Stations.size())
         << "a negative spacing must land on the same floor a zero one does";
 }
@@ -851,7 +850,7 @@ TEST(TerrainFlattenPoolContracts, RegionBakeOfAMovedRouteMatchesAFullBake)
         if (moveAfterAuthoring)
         {
             auto* xf = world.GetComponentForWrite<Components::WorldTransform>(lowRoute);
-            xf->matrix[14] = kMovedZ;
+            xf->Position.Z = kMovedZ;
         }
         return lowRoute;
     };
@@ -873,7 +872,7 @@ TEST(TerrainFlattenPoolContracts, RegionBakeOfAMovedRouteMatchesAFullBake)
 
     auto* xf = worldA.GetComponentForWrite<Components::WorldTransform>(lowRoute);
     ASSERT_NE(xf, nullptr);
-    xf->matrix[14] = kMovedZ;
+    xf->Position.Z = kMovedZ;
 
     systemA.Update(worldA, 1.0f / 60.0f);
 
@@ -1116,7 +1115,7 @@ TEST(TerrainPoolParity, EmitsTheFixtureTheOfflineTwinIsHeldTo)
             // curve-vs-polyline residual that used to land in the mask is zero by
             // construction. Resampling a claim finer than its volume asked for is
             // what left the twin evaluating a curve the engine never did.
-            BuildRoutePolyline(*spline, vol.StationSpacing, entry.Polyline);
+            BuildRoutePolyline(*spline, vol.StationSpacing, vol.Falloff, entry.Polyline);
             if (const auto* claim = world.GetComponent<Components::TerrainGroundClaimEffect>(e))
             {
                 entry.Kind = "claim";
@@ -1523,7 +1522,7 @@ TEST(TerrainFlattenPoolContracts, RegionBakeWithAMemberOutsideTheRegionMatchesFu
         if (moveAfterAuthoring)
         {
             auto* xf = world.GetComponentForWrite<Components::WorldTransform>(nearRoute);
-            xf->matrix[14] = kSlide;
+            xf->Position.Z = kSlide;
         }
         return nearRoute;
     };
@@ -1542,7 +1541,7 @@ TEST(TerrainFlattenPoolContracts, RegionBakeWithAMemberOutsideTheRegionMatchesFu
     const uint64 cursor = dataA->HeightfieldVersion;
     auto* xf = worldA.GetComponentForWrite<Components::WorldTransform>(nearRoute);
     ASSERT_NE(xf, nullptr);
-    xf->matrix[14] = kSlide;
+    xf->Position.Z = kSlide;
     systemA.Update(worldA, 1.0f / 60.0f);
 
     DirtyRegionLog::Region dirty;
@@ -2254,7 +2253,7 @@ TEST(TerrainRouteCurvature, DISABLED_CurveVsPolylineAtLaneGeometry)
         svc.RebuildCache(handle);
 
         RoutePolyline polyline;
-        BuildRoutePolyline(*spline, kSpacing, polyline);
+        BuildRoutePolyline(*spline, kSpacing, 0.0f, polyline);
         ASSERT_TRUE(polyline.IsValid()) << arm.Name;
 
         float32 maxDistanceDelta = 0.0f;

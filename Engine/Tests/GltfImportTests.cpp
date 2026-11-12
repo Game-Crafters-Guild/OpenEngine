@@ -17,6 +17,7 @@
 #include "Assets/ModelExtras.h"
 #include "Engine/Rendering/ModelMaterialBridge.h"
 #include "AssetCore/GUID.h"
+#include "ECSModules/Rendering/ClipStore.h"
 #include "ECSModules/Rendering/SkeletonStore.h"
 #include "EngineLogCapture.h"
 #include "GltfAccessorUnpack.h"
@@ -239,6 +240,18 @@ constexpr std::string_view kSkinShortOfInverseBindMatrices = R"({
   "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": 36},
                   {"buffer": 0, "byteOffset": 36, "byteLength": 64}],
   "buffers": [{"byteLength": 100, "uri": "data:application/octet-stream;base64,AACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/AACAPwAAAAAAAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAAAAAACAPw=="}]
+})";
+
+// A triangle under node "Lens", whose matrix has the projective bottom row 0, 0, 0.5, 1.
+constexpr std::string_view kProjectiveNodeMatrix = R"({
+  "asset": {"version": "2.0"},
+  "scene": 0, "scenes": [{"nodes": [0]}],
+  "nodes": [{"name": "Lens", "mesh": 0, "matrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0.5, 0, 0, 0, 1]}],
+  "meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}],
+  "accessors": [{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3",
+                 "min": [0, 0, 0], "max": [1, 1, 1]}],
+  "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": 36}],
+  "buffers": [{"byteLength": 36, "uri": "data:application/octet-stream;base64,AACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/"}]
 })";
 
 // "Body" is skinned to "Hip", "Spine" and "Head" under "Armature", listed in the skin as Head, Hip,
@@ -1297,8 +1310,8 @@ TEST(GltfImport, SmallExternalBuffersKeepOnlyOneDeclaredPrefixOfALargeFile)
     const auto& backing = document.get_deleter().ExternalBuffers;
     ASSERT_TRUE(backing);
     ASSERT_EQ(backing->size(), 1u);
-    EXPECT_EQ(backing->begin()->second.size(), 64u);
-    EXPECT_EQ(backing->begin()->second.capacity(), 64u);
+    EXPECT_EQ(backing->begin()->second.Size(), 64u);
+    
 }
 
 // Inside a decode, the bytes the IO reader read for a glTF's external buffer and image are the only
@@ -1330,7 +1343,7 @@ TEST(GltfImport, DecodeViewsTheExternalBufferAndTakesTheImageItWasHanded)
     String bufferFile;
     String imageFile;
     for (const AssetDecodeInput& input : ModelAsset::ResolveDecodeInputs(json, model)) {
-        Vector<uint8> bytes;
+        ByteBuffer bytes;
         ASSERT_TRUE(ReadAssetDecodeInputFromDisk(input, bytes)) << input.Path;
         if (input.PrefixBytes)
             bufferFile = input.Path.generic_string();
@@ -1339,8 +1352,8 @@ TEST(GltfImport, DecodeViewsTheExternalBufferAndTakesTheImageItWasHanded)
         files.Files.emplace(input.Path.generic_string(), std::move(bytes));
     }
     ASSERT_EQ(files.Files.size(), 2u);
-    const uint8* bufferBytes = files.Files.at(bufferFile)->data();
-    const uint8* imageBytes = files.Files.at(imageFile)->data();
+    const uint8* bufferBytes = files.Files.at(bufferFile)->Data();
+    const uint8* imageBytes = files.Files.at(imageFile)->Data();
 
     {
         const ScopedAssetDecodeInputFiles published(&files);
@@ -1355,9 +1368,11 @@ TEST(GltfImport, DecodeViewsTheExternalBufferAndTakesTheImageItWasHanded)
         ModelAsset asset(GUID::Generate(), model);
         ASSERT_TRUE(ModelAssetFbxTestAccess::LoadGltf(asset, json, FbxLoaderOptions{}));
         ASSERT_EQ(asset.GetEmbeddedImages().size(), 2u);
-        EXPECT_EQ(asset.GetEmbeddedImages()[0].Data.data(), imageBytes) << "the model copied the image it was handed";
-        EXPECT_EQ(asset.GetEmbeddedImages()[0].Data, image);
-        EXPECT_EQ(asset.GetEmbeddedImages()[1].Data, image);
+        const ByteBuffer& first = asset.GetEmbeddedImages()[0].Data;
+        const ByteBuffer& second = asset.GetEmbeddedImages()[1].Data;
+        EXPECT_EQ(first.Data(), imageBytes) << "the model copied the image it was handed";
+        EXPECT_EQ(Vector<uint8>(first.begin(), first.end()), image);
+        EXPECT_EQ(Vector<uint8>(second.begin(), second.end()), image);
     }
     std::error_code ignored;
     std::filesystem::remove_all(root, ignored);
@@ -1451,6 +1466,16 @@ TEST(GltfImport, SkinWithFewerInverseBindMatricesThanJointsIsRefused)
     EXPECT_FALSE(load.Loaded);
     const std::string refusal = TestLog::FirstLineContaining(load.Lines, "short_inverse_binds.gltf");
     EXPECT_NE(refusal.find("inverseBindMatrices"), std::string::npos) << refusal;
+}
+
+TEST(GltfImport, NodeMatrixWithAProjectiveRowIsRefusedByName)
+{
+    const ModelLoad load = LoadModel(kProjectiveNodeMatrix, "projective_node.gltf");
+    ASSERT_EQ(TestLog::CountLinesContaining(load.Lines, "sink is live"), 1u);
+    EXPECT_FALSE(load.Loaded);
+    const std::string refusal = TestLog::FirstLineContaining(load.Lines, "projective_node.gltf");
+    EXPECT_NE(refusal.find("'Lens'"), std::string::npos) << refusal;
+    EXPECT_NE(refusal.find("not (0, 0, 0, 1)"), std::string::npos) << refusal;
 }
 
 TEST(GltfImport, RequiredExtensionsTheEngineLacksAreRefusedByName)
@@ -1851,9 +1876,9 @@ TEST(GltfImport, DataUriImagesImportTheirBytesForEverySlot)
         SCOPED_TRACE(slots[slot].first);
         EXPECT_EQ(*slots[slot].second, "__embedded:" + std::to_string(slot));
         const EmbeddedImage& image = images[slot];
-        ASSERT_EQ(image.Data.size(), 70u);
-        EXPECT_EQ(std::memcmp(image.Data.data(), "\x89PNG\r\n\x1a\n", 8), 0);
-        EXPECT_EQ(image.Data.back(), 0x82);
+        ASSERT_EQ(image.Data.Size(), 70u);
+        EXPECT_EQ(std::memcmp(image.Data.Data(), "\x89PNG\r\n\x1a\n", 8), 0);
+        EXPECT_EQ(image.Data.Data()[image.Data.Size() - 1], 0x82);
         EXPECT_EQ(image.MimeType, "image/png");
     }
 }
@@ -1877,7 +1902,7 @@ TEST(GltfImport, DataUriImagesThatDoNotDecodeImportEmptyWithAWarningEach)
     ASSERT_EQ(images.size(), 2u);
     for (size_t index = 0; index < images.size(); ++index) {
         SCOPED_TRACE(index);
-        EXPECT_TRUE(images[index].Data.empty());
+        EXPECT_EQ(images[index].Data.Size(), 0u);
         const std::string named = "glTF 'undecodable.gltf': image " + std::to_string(index) + " has a data URI";
         const auto count = std::count_if(lines.begin(), lines.end(), [&](const std::string& line) {
             return line.find(named) != std::string::npos && line.find("re-export") != std::string::npos;
@@ -1908,7 +1933,7 @@ TEST(GltfImport, OcclusionTextureImportsAsTheOcclusionMap)
     EXPECT_EQ(packed.SpecularTexture, "__embedded:1");
     ASSERT_EQ(asset.GetEmbeddedImages().size(), 2u);
     for (const EmbeddedImage& image : asset.GetEmbeddedImages())
-        EXPECT_EQ(image.Data.size(), 70u) << "the occlusion image's bytes did not survive the import";
+        EXPECT_EQ(image.Data.Size(), 70u) << "the occlusion image's bytes did not survive the import";
 
     // The material each converts to samples the occlusion map in its aoMap slot.
     for (uint32_t index = 0; index < 2; ++index) {
@@ -3179,6 +3204,77 @@ TEST(AnimationClipEditableData, AnUnreadableAnimFileIsRefusedNamingThePlaceOrThe
     const std::string field = TestLog::FirstLineContaining(mistyped.Lines, "Mistyped.anim");
     EXPECT_NE(field.find("'channels[0].keys[0].rotation[1]' is a string; write it as a number"), std::string::npos)
         << field;
+}
+
+// A pose clip has one key per channel at time 0. The model load registers it as a clip of length 0.
+TEST(GltfImport, PoseClipWithOneKeyAtTimeZeroIsRegistered)
+{
+    constexpr std::string_view kPoseModel = R"({"asset": {"version": "2.0"},
+  "scene": 0, "scenes": [{"nodes": [0]}], "nodes": [{"name": "Hips", "mesh": 0}],
+  "meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}],
+  "accessors": [{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0, 0, 0], "max": [1, 1, 1]},
+                {"bufferView": 1, "componentType": 5126, "count": 1, "type": "SCALAR", "min": [0], "max": [0]},
+                {"bufferView": 2, "componentType": 5126, "count": 1, "type": "VEC3"}],
+  "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": 36}, {"buffer": 0, "byteOffset": 36, "byteLength": 4},
+                  {"buffer": 0, "byteOffset": 40, "byteLength": 12}],
+  "buffers": [{"byteLength": 52, "uri": "data:application/octet-stream;base64,AACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAAA/AAAAAA=="}],
+  "animations": [{"name": "Sit_Floor_Pose", "samplers": [{"input": 1, "output": 2}],
+                  "channels": [{"sampler": 0, "target": {"node": 0, "path": "translation"}}]}]})";
+    ModelAsset asset(GUID::Generate(), "Rogue_Hooded.gltf");
+    std::vector<std::string> lines;
+    {
+        TestLog::ScopedEngineLogCapture capture(&lines, Logger::LogLevel::Warning);
+        Logger::Log::Warning("GltfImportTests sink is live");
+        ASSERT_TRUE(ModelAssetFbxTestAccess::LoadGltf(asset, Bytes(kPoseModel), FbxLoaderOptions{}));
+        Logger::Log::Flush();
+    }
+    EXPECT_EQ(TestLog::CountLinesContaining(lines, "sink is live"), 1u);
+    EXPECT_EQ(TestLog::CountLinesContaining(lines, "failed to load embedded glTF clip"), 0u);
+    EXPECT_EQ(TestLog::CountLinesContaining(lines, "has no length and no key"), 0u);
+
+    auto& clips = Engine::Renderer::ClipStore::Instance();
+    const uint32 clipIndex = clips.GetIndexIfPresent(ModelAsset::DeriveEmbeddedClipGuid(asset.GetGUID(), 0));
+    ASSERT_NE(clipIndex, 0u) << "the pose clip is not in the ClipStore";
+    const auto clip = clips.Get(clipIndex);
+    ASSERT_NE(clip, nullptr);
+    EXPECT_FALSE(clip->IsEmpty());
+    EXPECT_EQ(clip->GetDuration(), 0.0f);
+    ASSERT_EQ(clip->GetChannels().size(), 1u);
+    ASSERT_EQ(clip->GetChannels()[0].keys.size(), 1u);
+    EXPECT_FLOAT_EQ(clip->GetChannels()[0].keys[0].translation[1], 0.5f);
+}
+
+// An animation with no key has no length. The model load refuses it and says why and what to do.
+TEST(GltfImport, AnimationWithNoKeyIsRefusedWithItsCause)
+{
+    constexpr std::string_view kEmptyModel = R"({"asset": {"version": "2.0"},
+  "scene": 0, "scenes": [{"nodes": [0]}], "nodes": [{"name": "Hips", "mesh": 0}],
+  "meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}],
+  "accessors": [{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0, 0, 0], "max": [1, 1, 1]},
+                {"componentType": 5126, "count": 0, "type": "SCALAR"},
+                {"componentType": 5126, "count": 0, "type": "VEC3"}],
+  "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": 36}],
+  "buffers": [{"byteLength": 36, "uri": "data:application/octet-stream;base64,AACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/"}],
+  "animations": [{"name": "Empty_Take", "samplers": [{"input": 1, "output": 2}],
+                  "channels": [{"sampler": 0, "target": {"node": 0, "path": "translation"}}]}]})";
+    ModelAsset asset(GUID::Generate(), "Rogue_Hooded.gltf");
+    std::vector<std::string> lines;
+    {
+        TestLog::ScopedEngineLogCapture capture(&lines, Logger::LogLevel::Warning);
+        Logger::Log::Warning("GltfImportTests sink is live");
+        ASSERT_TRUE(ModelAssetFbxTestAccess::LoadGltf(asset, Bytes(kEmptyModel), FbxLoaderOptions{}));
+        Logger::Log::Flush();
+    }
+    EXPECT_EQ(TestLog::CountLinesContaining(lines, "sink is live"), 1u);
+    EXPECT_EQ(TestLog::CountLinesContaining(lines, "failed to load embedded glTF clip"), 0u);
+    const std::string refusal = TestLog::FirstLineContaining(lines, "Empty_Take");
+    EXPECT_NE(refusal.find("animation 'Empty_Take' of 'Rogue_Hooded' has no length and no key, so it cannot play. "
+                           "Add a key to it in the source file, or delete it there."),
+              std::string::npos)
+        << refusal;
+    EXPECT_EQ(Engine::Renderer::ClipStore::Instance().GetIndexIfPresent(
+                  ModelAsset::DeriveEmbeddedClipGuid(asset.GetGUID(), 0)),
+              0u);
 }
 
 } // namespace GameEngine

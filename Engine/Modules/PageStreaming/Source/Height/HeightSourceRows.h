@@ -31,7 +31,7 @@ public:
 private:
     HeightCookSource m_Source;
     std::unique_ptr<SourceRangeReader> m_Reader;
-    std::vector<uint8> m_Band;     // a band of raw samples
+    ByteBuffer m_Band;     // a band of raw samples
     std::vector<uint16> m_Decoded; // the whole PNG
     uint32 m_FirstRow = 0;
     uint32 m_RowCount = 0;

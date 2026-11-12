@@ -1,7 +1,6 @@
-// AddFullscreenPass's input caps. The widest caller, the ocean's underwater overlay with shadowed god
-// rays, binds five buffers (params, shadow data, ribbons, materials, the view's ExposureHistory); a cap
-// below that aborted DebugFast and silently dropped the fifth binding in Release. Over a cap the pass is
-// refused whole. Part of RenderPipelineDeclareTests.
+// AddFullscreenPass's input caps. The widest caller, the ocean's underwater overlay with shadowed god rays,
+// binds six buffers (params, shadow data, ViewParams, ribbons, materials, ExposureHistory). Over a cap the
+// pass is refused whole. Part of RenderPipelineDeclareTests.
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/RenderGraph/RGFrame.h"
 #include "Rendering/Core/RenderGraph/RGFullscreen.h"
@@ -22,7 +21,7 @@ using namespace GameEngine::Rendering;
 namespace
 {
 // The underwater overlay's buffer inputs with shadowed god rays (OceanUnderwater::DeclareForView).
-constexpr uint32_t kUnderwaterShadowedBufferInputs = 5;
+constexpr uint32_t kUnderwaterShadowedBufferInputs = 6;
 
 struct FullscreenInputsFrame
 {
@@ -98,7 +97,7 @@ struct FullscreenInputsFrame
 };
 } // namespace
 
-TEST(FullscreenPassInputs, TheUnderwaterOverlaysFiveBuffersAreAllDeclared)
+TEST(FullscreenPassInputs, TheUnderwaterOverlaysSixBuffersAreAllDeclared)
 {
     FullscreenInputsFrame f;
     if (!f.Up())

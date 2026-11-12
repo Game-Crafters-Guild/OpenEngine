@@ -45,6 +45,16 @@ struct MetalArgumentSlot
     // ::msl_buffer: the slot holds an MTLResourceID, not a gpuAddress, so the
     // update path must never treat it as a buffer.
     uint32_t AccelerationStructureId = kUnused;
+    // A storage buffer or storage image that the shader can write. Only these residents are declared
+    // with Write usage, because Metal allocates for each resource that a command buffer declares writable.
+    bool Writable = false;
+};
+
+// A storage buffer or storage image that a shader stage uses and does not declare read-only.
+struct MetalWrittenBinding
+{
+    uint32_t Set = 0;
+    uint32_t Binding = 0;
 };
 
 struct MetalArgumentBufferLayout
@@ -66,6 +76,25 @@ struct MetalArgumentBufferLayout
     }
 };
 
+// The slots of one binding: one per element. A combined image sampler takes a texture slot and a
+// sampler slot per element.
+inline uint32_t MetalArgumentSlotWidth(DescriptorType type, uint32_t count)
+{
+    const uint32_t elements = std::max(1u, count);
+    return type == DescriptorType::CombinedImageSampler ? 2 * elements : elements;
+}
+
+// The TotalSlotCount of ComputeMetalArgumentBufferLayout(desc), without the allocations of a layout.
+inline uint32_t MetalArgumentSlotCount(const DescriptorSetLayoutDesc& desc)
+{
+    uint32_t total = 0;
+    for (const DescriptorBinding& binding : desc.bindings)
+    {
+        total += MetalArgumentSlotWidth(binding.type, binding.count);
+    }
+    return total;
+}
+
 inline MetalArgumentBufferLayout ComputeMetalArgumentBufferLayout(const DescriptorSetLayoutDesc& desc)
 {
     MetalArgumentBufferLayout layout;
@@ -76,6 +105,9 @@ inline MetalArgumentBufferLayout ComputeMetalArgumentBufferLayout(const Descript
         slot.Binding = binding.binding;
         slot.Type = binding.type;
         slot.Count = std::max(1u, binding.count);
+        slot.Writable = (binding.type == DescriptorType::StorageBuffer &&
+                         (binding.flags & kDescriptorBindingReadOnlyStorage) == 0) ||
+                        (binding.type == DescriptorType::StorageImage && !binding.storageReadOnly);
         layout.Slots.PushBack(slot);
     }
     std::sort(layout.Slots.begin(), layout.Slots.end(),
@@ -89,28 +121,23 @@ inline MetalArgumentBufferLayout ComputeMetalArgumentBufferLayout(const Descript
         case DescriptorType::UniformBuffer:
         case DescriptorType::StorageBuffer:
             slot.BufferId = next;
-            next += slot.Count;
             break;
         case DescriptorType::Texture:
         case DescriptorType::StorageImage:
             slot.TextureId = next;
-            next += slot.Count;
             break;
         case DescriptorType::Sampler:
             slot.SamplerId = next;
-            next += slot.Count;
             break;
         case DescriptorType::CombinedImageSampler:
             slot.TextureId = next;
-            next += slot.Count;
-            slot.SamplerId = next;
-            next += slot.Count;
+            slot.SamplerId = next + slot.Count;
             break;
         case DescriptorType::AccelerationStructure:
             slot.AccelerationStructureId = next;
-            next += slot.Count;
             break;
         }
+        next += MetalArgumentSlotWidth(slot.Type, slot.Count);
     }
     layout.TotalSlotCount = next;
     layout.SizeConstantsSlot = next;

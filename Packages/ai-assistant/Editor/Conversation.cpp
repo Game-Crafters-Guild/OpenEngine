@@ -111,6 +111,7 @@ void Conversation::Finish(TurnId turn, const TurnResult& result)
     AppendCapped(*reply, result.Text);
     reply->Status = StatusOf(result.Outcome);
     reply->Notice = result.Outcome == TurnOutcome::Failed ? result.Error : result.Note;
+    reply->NotReady = result.Outcome == TurnOutcome::Failed && result.NotReady;
     reply->AnsweredModel = result.Model;
     reply->CostUsd = result.CostUsd;
     reply->InputTokens = result.InputTokens;

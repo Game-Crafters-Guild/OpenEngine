@@ -262,7 +262,9 @@ TEST(IblShaderContract, SurfaceReflectionTakesTheEnvironmentSourcesAndIsReplacea
     {
         EXPECT_LT(parallax, lobe);
         if (ddgi != std::string::npos)
+        {
             EXPECT_LT(ddgi, lobe) << "the DDGI composite must reach the surface's own reflection";
+        }
     }
     EXPECT_NE(body.find("vec3replaceableWeight=(specularWeight+so.environmentReflectionWeight)*specAO;"),
               std::string::npos)

@@ -2,6 +2,9 @@
 #include "UI/Controls/Label.h"
 #include "UI/UIEvents.h"
 
+#include <algorithm>
+#include <memory>
+
 namespace GameEngine
 {
 
@@ -84,6 +87,33 @@ void Foldout::SetIconClass(const std::string& iconClass)
         }
     }
     MarkDirty(LayoutDirty | VisualDirty);
+}
+
+void Foldout::SetHeaderBadge(const std::string& text, const std::string& tooltip)
+{
+    EnsureStructure();
+    if (!m_Badge)
+    {
+        auto badge = std::make_unique<Label>();
+        m_Badge = badge.get();
+        m_Badge->AddClass("foldout-badge");
+        const auto& children = m_Header->GetChildren();
+        const auto title = std::ranges::find(children, static_cast<UIElement*>(m_TitleLabel),
+                                             &std::unique_ptr<UIElement>::get);
+        m_Header->InsertChild(static_cast<size_t>(title - children.begin()) + 1, std::move(badge));
+    }
+    m_Badge->SetText(text);
+    m_Badge->SetTooltip(tooltip);
+    if (text.empty())
+    {
+        m_Badge->AddClass("hidden");
+        m_TitleLabel->RemoveClass("foldout-title-badged");
+    }
+    else
+    {
+        m_Badge->RemoveClass("hidden");
+        m_TitleLabel->AddClass("foldout-title-badged");
+    }
 }
 
 void Foldout::SetExpanded(bool expanded)

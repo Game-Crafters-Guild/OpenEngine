@@ -608,7 +608,7 @@ int AppendEmbeddedTextureForUfbx(const ufbx_texture* tex,
     {
         EmbeddedImage ei{};
         const auto* bytes = static_cast<const uint8_t*>(tex->content.data);
-        ei.Data.assign(bytes, bytes + tex->content.size);
+        ei.Data = ByteBuffer::CopyOf({bytes, tex->content.size});
         ei.MimeType = tex->filename.length > 0
             ? MimeFromTextureExtension(std::filesystem::path(std::string(tex->filename.data, tex->filename.length)))
             : "image/png";
@@ -635,13 +635,15 @@ int AppendEmbeddedTextureForUfbx(const ufbx_texture* tex,
     }
 
     EmbeddedImage ei{};
-    if (!ReadFileBytesShared(resolved, ei.Data))
+    ByteBuffer fileBytes;
+    if (!ReadFileBytesShared(resolved, fileBytes))
     {
         Logger::Log::Warning("FBX: could not read external texture '{}'", resolved.string());
         cache.emplace(tex, -1);
         return -1;
     }
-    if (ei.Data.empty())
+    ei.Data = std::move(fileBytes);
+    if (ei.Data.Size() == 0)
     {
         Logger::Log::Warning("FBX: external texture is empty '{}'", resolved.string());
         cache.emplace(tex, -1);
@@ -695,7 +697,7 @@ int MergeAlphaTextureIntoAlbedo(Vector<EmbeddedImage>& images,
         return albedoIndex;
 
     EmbeddedImage merged{};
-    merged.Data = std::move(encoded);
+    merged.Data = ByteBuffer::CopyOf(encoded);
     merged.MimeType = "image/png";
     const int mergedIndex = static_cast<int>(images.size());
     images.push_back(std::move(merged));
@@ -981,7 +983,7 @@ bool StackAnimatesAnyProperty(const ufbx_anim_stack& stack)
 
 } // namespace
 
-bool ModelAsset::LoadFBX(const Vector<uint8>& data,
+bool ModelAsset::LoadFBX(std::span<const uint8> data,
                          const std::filesystem::path& modelPathForExternalTextures,
                          const FbxLoaderOptions& loaderOptions)
 {
@@ -2348,14 +2350,20 @@ bool ModelAsset::LoadFBX(const Vector<uint8>& data,
         clip->SetSourceInfo(modelPathForExternalTextures, static_cast<uint32>(ai));
         // Parse from the bytes this load already holds: Load() would read the
         // file again and keep a copy of it for the clip's lifetime.
-        if (clip->LoadFromData(data) && clip->GetDuration() > 0.0f)
-        {
-            StageOrPublishRuntimeClip(clipGuid, std::move(clip));
-        }
-        else
+        if (!clip->LoadFromData(data))
         {
             Logger::Log::Warning("ModelAsset: failed to load embedded clip {} of '{}'",
                                  ai, GetName());
+        }
+        else if (clip->IsEmpty())
+        {
+            Logger::Log::Warning("ModelAsset: animation '{}' of '{}' has no length and no key, so it "
+                                 "cannot play. Add a key to it in the source file, or delete it there.",
+                                 m_AnimationNames.back(), GetName());
+        }
+        else
+        {
+            StageOrPublishRuntimeClip(clipGuid, std::move(clip));
         }
     }
 

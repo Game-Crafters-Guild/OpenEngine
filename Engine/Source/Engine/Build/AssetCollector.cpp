@@ -9,10 +9,13 @@
 #include "Assets/Parsers/SceneAssetParser.h"
 #include "Assets/RuntimeHumanoidProfile.h"
 #include "Engine/GameUI/GameUIHost.h"
+#include "UI/ControlAssetPaths.h"
 #include "Logger/Logger.h"
+#include "Types/PathUtils.h"
+#include "Types/StringUtils.h"
 #include "Types/Types.h"
 
-#include <cctype>
+#include <algorithm>
 #include <unordered_set>
 
 namespace GameEngine {
@@ -68,23 +71,24 @@ uint64_t AssetCollector::ComputeContentHash(const AssetMetadata& meta)
 // happens to contain an Editor/ directory above the root would deny wrongly.
 bool AssetCollector::IsShippableContent(const std::filesystem::path& path)
 {
-    const std::string name = path.filename().string();
+    const std::string name = PathToUtf8(path.filename());
     if (!name.empty() && name[0] == '.') // .DS_Store and other dotfiles
         return false;
 
-    std::string ext = path.extension().string();
-    for (char& c : ext)
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    const std::string ext = LowerCaseExtension(path);
     static const std::unordered_set<std::string> kDenied = {
         ".cs", ".csproj", ".sln", ".cpp", ".cc", ".cxx", ".c",
         ".h", ".hpp", ".hxx", ".hh", ".meta"};
     if (kDenied.count(ext) != 0)
         return false;
+    // The scene editor's backup copy of a scene (<name>.backup.scene).
+    if (AssetPaths::FoldStorePathKey(name).ends_with(".backup.scene"))
+        return false;
 
     // obj/ and bin/ build-output directories, any segment.
     for (const auto& seg : path)
     {
-        const std::string s = seg.string();
+        const std::string s = PathToUtf8(seg);
         if (s == "obj" || s == "bin")
             return false;
     }
@@ -176,7 +180,7 @@ bool AssetCollector::TryAddAsset(const GUID& guid, AssetManifest& manifest)
     return true;
 }
 
-void AssetCollector::WalkDependencies(const GUID& root, AssetManifest& manifest)
+void AssetCollector::WalkDependencies(const GUID& root, AssetManifest& manifest, EdgeRefresh refresh)
 {
     // BFS transitive dependency walk with cycle detection.
     // The visited set replaces manifest.ContainsGuid() for O(1) duplicate checks
@@ -184,10 +188,14 @@ void AssetCollector::WalkDependencies(const GUID& root, AssetManifest& manifest)
     std::vector<GUID> queue;
     std::unordered_set<GUID> visited;
     visited.reserve(512);
+    // The asset whose edge first reached each node, for the chain a Never error names.
+    FlatMap<GUID, GUID> reachedFrom;
 
     queue.push_back(root);
     visited.insert(root);
 
+    // A parser resolves a reference by the runtime's rule, which reads the mounts of this manager.
+    AssetManager::ScopedThreadAssetManager currentManager(&m_AssetManager);
     auto& registry = m_AssetManager.GetRegistry();
 
     while (!queue.empty())
@@ -195,35 +203,52 @@ void AssetCollector::WalkDependencies(const GUID& root, AssetManifest& manifest)
         GUID current = queue.back();
         queue.pop_back();
 
+        if (current != root && IsNeverShipped(current))
+        {
+            std::vector<std::string> chain{DisplayPath(current)};
+            for (const GUID* from = reachedFrom.Find(current); from != nullptr; from = reachedFrom.Find(*from))
+                chain.push_back(DisplayPath(*from));
+            std::reverse(chain.begin(), chain.end());
+            m_ShipErrors.push_back(ShipRules::DescribeNever(chain.back(), m_ShipRules.Resolve(ProjectRelativePath(current))) +
+                                   ", but a shipped asset uses it: " + Join(chain, " → ") +
+                                   ". Remove the reference, or change the rule.");
+            continue;
+        }
         TryAddAsset(current, manifest);
 
-        // Root assets (the scenes/pipeline being built) re-extract their edges
-        // NOW: extraction is lazy, so a freshly-authored scene can present an
-        // empty/stale cached edge set at build time — which would silently skip
-        // both the dep-walk shipping and the disabled-package validation. One
-        // file parse per built root is cheap next to the copy that follows.
-        // (Non-root nodes rely on GetDependencies' lazy extraction plus the
-        // modified-file invalidation in TryUpdateFilesystemMetadata.)
-        Vector<GUID> deps = (current == root) ? registry.RefreshDependencies(current)
-                                              : registry.GetDependencies(current);
+        // A cached edge set can be stale: a root (a built scene or pipeline) may be new, and a style
+        // sheet or shader source resolves @import and #include through the thread's manager, which the
+        // cache does not record. These re-extract now; other nodes rely on the modified-file invalidation.
+        AssetMetadata meta;
+        const bool haveMeta = registry.TryGetAssetMetadata(current, meta);
+        const bool reextract =
+            current == root || (haveMeta && (meta.Type == AssetType::UIStyle || meta.Type == AssetType::Shader));
+        Vector<GUID> deps;
+        // An Always walk re-extracts every node once per collection: the cache can miss by-path references.
+        if (refresh == EdgeRefresh::EveryNode)
+        {
+            const Vector<GUID>* fresh = m_FreshEdges.Find(current);
+            deps = fresh != nullptr ? *fresh : m_FreshEdges.InsertOrAssign(current, registry.RefreshDependencies(current));
+        }
+        else
+        {
+            deps = reextract ? registry.RefreshDependencies(current) : registry.GetDependencies(current);
+        }
 
         // Loud per-asset trace: which assets contributed edges to the shipped
         // manifest is exactly what a "package X never referenced" build report
         // needs to be debuggable.
-        {
-            AssetMetadata meta;
-            const bool haveMeta = registry.TryGetAssetMetadata(current, meta);
-            Logger::Log::Info("AssetCollector: '{}' -> {} dependency edge(s){}",
-                              haveMeta ? meta.Path.generic_string() : current.ToString(),
-                              deps.size(),
-                              current == root ? " (root, re-extracted)" : "");
-        }
+        Logger::Log::Info("AssetCollector: '{}' -> {} dependency edge(s){}",
+                          haveMeta ? meta.Path.generic_string() : current.ToString(),
+                          deps.size(),
+                          (refresh == EdgeRefresh::EveryNode || reextract) ? " (re-extracted)" : "");
 
         for (const GUID& dep : deps)
         {
             if (!dep.IsNull() && visited.find(dep) == visited.end())
             {
                 visited.insert(dep);
+                reachedFrom.InsertOrAssign(dep, current);
                 queue.push_back(dep);
             }
         }
@@ -236,9 +261,42 @@ bool AssetCollector::CollectGameContent(const std::vector<std::string>& scenePat
                                         std::vector<std::string>& outWarnings, std::string& outError)
 {
     namespace fs = std::filesystem;
-    outManifest = CollectFromScenes(scenePaths);
+    m_ShipErrors.clear();
+    m_FreshEdges.Clear();
+    m_ShipRules = ShipRules::Load(projectAssetRoot, m_ShipErrors);
+    // The folder rules have keys relative to projectAssetRoot, and the walk has keys relative to the registry's root.
+    std::error_code rootError;
+    if (!m_ShipRules.IsEmpty() && !fs::equivalent(projectAssetRoot, m_ProjectAssetRoot, rootError))
+        m_ShipErrors.push_back("The export reads folder rules under " + PathToUtf8(projectAssetRoot) +
+                               ", but the asset registry's root is " + PathToUtf8(m_ProjectAssetRoot) +
+                               ", so no rule can apply. Open the project again and export again.");
+    // The asset rules have keys from the registry's store, so they load after the root check.
+    m_ShipRules.LoadAssetRules(m_AssetManager.GetRegistry(), kAssetSourceAliasProject, projectAssetRoot, m_ShipErrors);
+    if (!m_ShipErrors.empty())
+    {
+        outError = Join(m_ShipErrors, "\n");
+        return false;
+    }
 
-    // If the dependency-based collector found nothing, fall back to the project's
+    std::vector<std::string> shippedScenes;
+    for (const std::string& scenePath : scenePaths)
+    {
+        const ShipRules::Resolved resolved = m_ShipRules.Resolve(scenePath);
+        if (resolved.Rule != ShipRule::Never)
+            shippedScenes.push_back(scenePath);
+        else
+            m_ShipErrors.push_back(ShipRules::DescribeNever(scenePath, resolved) +
+                                   ", but it is in the build's scene list. Remove it from the list, or change the rule.");
+    }
+    outManifest = CollectFromScenes(shippedScenes);
+    CollectAlwaysShipped(outManifest, outWarnings);
+    if (!m_ShipErrors.empty())
+    {
+        outError = Join(m_ShipErrors, "\n");
+        return false;
+    }
+
+    // If the scene and Always walks found nothing, fall back to the project's
     // registered assets. This handles cases where the asset registry hasn't
     // scanned the project yet or scene paths don't match.
     if (outManifest.entries.empty())
@@ -265,7 +323,7 @@ bool AssetCollector::CollectGameContent(const std::vector<std::string>& scenePat
                     continue;
                 // Checked on the root-relative path so the Editor/ deny only sees
                 // segments under the asset root.
-                if (!IsShippableContent(rel))
+                if (!IsShippableContent(rel) || m_ShipRules.Resolve(PathToUtf8(rel)).Rule == ShipRule::Never)
                     continue;
                 AssetManifestEntry manifestEntry;
                 manifestEntry.sourcePath = entry.path();
@@ -293,7 +351,85 @@ bool AssetCollector::CollectGameContent(const std::vector<std::string>& scenePat
         outError = "Default game UI font is missing; see the asset collection log";
         return false;
     }
+    for (const std::string& missing : CollectUIControlAssets(outManifest))
+        outWarnings.push_back("UI control asset not found; the control draws unstyled: " + missing);
+    // The walks and the fallbacks add no Never asset, so a Never entry here is an engine default.
+    m_ShipRules.ReportNeverEntries(outManifest, projectAssetRoot,
+                                   "every game ships it as an engine default (the render pipeline, the runtime "
+                                   "humanoid profile, the default UI font or the UI control assets). Change the rule.",
+                                   m_ShipErrors);
+    if (!m_ShipErrors.empty())
+    {
+        outError = Join(m_ShipErrors, "\n");
+        return false;
+    }
     return true;
+}
+
+void AssetCollector::CollectAlwaysShipped(AssetManifest& manifest, std::vector<std::string>& outWarnings)
+{
+    if (m_ShipRules.IsEmpty())
+        return;
+    // Sorted by path, so the manifest order does not depend on the registry's order.
+    std::vector<std::pair<std::string, GUID>> roots;
+    std::vector<std::string> keptOut;
+    for (const GUID& guid : m_AssetManager.GetRegistry().GetAssetsForSource(std::string(kAssetSourceAliasProject)))
+    {
+        std::string relative = ProjectRelativePath(guid);
+        if (relative.empty() || !IsShippableContent(PathFromUtf8(relative)))
+            continue;
+        const ShipRules::Resolved resolved = m_ShipRules.Resolve(relative);
+        if (resolved.Rule == ShipRule::Always)
+        {
+            roots.emplace_back(std::move(relative), guid);
+            continue;
+        }
+        // An own Never inside an Always folder: the folder would ship it, so the build says it does not.
+        const ShipRules::Resolved inherited = m_ShipRules.ResolveInherited(relative);
+        if (resolved.From == ShipRules::Source::Asset && resolved.Rule == ShipRule::Never &&
+            inherited.Rule == ShipRule::Always)
+            keptOut.push_back(ShipRules::DescribeNever(DisplayPath(guid), resolved) +
+                              ", so it does not ship, although " + ShipRules::DescribeFolder(inherited) + " is Always.");
+    }
+    std::sort(keptOut.begin(), keptOut.end());
+    outWarnings.insert(outWarnings.end(), keptOut.begin(), keptOut.end());
+    std::sort(roots.begin(), roots.end());
+    const size_t before = manifest.entries.size();
+    for (const auto& [relative, guid] : roots)
+        WalkDependencies(guid, manifest, EdgeRefresh::EveryNode);
+    Logger::Log::Info("AssetCollector: {} asset(s) set to Always ship add {} asset(s)", roots.size(),
+                      manifest.entries.size() - before);
+}
+
+std::string AssetCollector::ProjectRelativePath(const GUID& guid)
+{
+    AssetMetadata meta;
+    if (!m_AssetManager.GetRegistry().TryGetAssetMetadata(guid, meta) || meta.Path.empty())
+        return {};
+    if (meta.Path.is_relative())
+        return AssetPaths::CanonicalizeStorePath(PathToUtf8(meta.Path));
+    std::string relative;
+    if (!AssetPaths::TryMakeCanonicalRelativePath(m_ProjectAssetRoot, meta.Path, relative))
+        return {};
+    return relative;
+}
+
+std::string AssetCollector::DisplayPath(const GUID& guid)
+{
+    AssetMetadata meta;
+    if (!m_AssetManager.GetRegistry().TryGetAssetMetadata(guid, meta) || meta.Path.empty())
+        return guid.ToString();
+    const std::filesystem::path file = meta.Path.is_absolute() ? meta.Path : m_ProjectAssetRoot / meta.Path;
+    std::string relative = ShipRules::SpelledRelativePath(m_ProjectAssetRoot, file);
+    return relative.empty() ? PathToUtf8(meta.Path) : relative;
+}
+
+bool AssetCollector::IsNeverShipped(const GUID& guid)
+{
+    if (m_ShipRules.IsEmpty())
+        return false;
+    const std::string relative = ProjectRelativePath(guid);
+    return !relative.empty() && m_ShipRules.Resolve(relative).Rule == ShipRule::Never;
 }
 
 AssetManifest AssetCollector::CollectFromScenes(const std::vector<std::string>& scenePaths)
@@ -333,7 +469,10 @@ AssetManifest AssetCollector::CollectAllAssets()
     // game UI font by CollectDefaultUIFont.
     auto guids = registry.GetAssetsForSource(std::string(kAssetSourceAliasProject));
     for (const GUID& guid : guids)
-        TryAddAsset(guid, manifest);
+    {
+        if (!IsNeverShipped(guid))
+            TryAddAsset(guid, manifest);
+    }
 
     Logger::Log::Info("AssetCollector: Collected {} project asset(s) (fallback)", manifest.entries.size());
     return manifest;
@@ -384,6 +523,23 @@ bool AssetCollector::CollectDefaultUIFont(AssetManifest& manifest)
                        "move it out of there",
                        GameUIHost::kDefaultFontPath, source.string());
     return false;
+}
+
+std::vector<std::string> AssetCollector::CollectUIControlAssets(AssetManifest& manifest)
+{
+    const std::string_view source = m_AssetManager.GetSourceRoot(kAssetSourceAliasEditor).empty()
+                                        ? kAssetSourceAliasProject
+                                        : kAssetSourceAliasEditor;
+    std::vector<std::string> missing;
+    for (std::string_view path : UI::kControlAssetPaths)
+    {
+        const GUID guid = m_AssetManager.ResolveAssetGuid(std::string(path), source);
+        if (!guid.IsNull())
+            WalkDependencies(guid, manifest);
+        if (guid.IsNull() || !manifest.ContainsGuid(guid))
+            missing.emplace_back(path);
+    }
+    return missing;
 }
 
 bool AssetCollector::CollectRenderPipeline(const std::string& renderPipelinePath, AssetManifest& manifest)

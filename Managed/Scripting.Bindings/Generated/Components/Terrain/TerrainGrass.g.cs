@@ -26,7 +26,7 @@ namespace GameEngine.Scripting
         Stylized = 4,
     }
 
-    [StructLayout(LayoutKind.Explicit, Size = 252)]
+    [StructLayout(LayoutKind.Explicit, Size = 256)]
     [BuiltInComponent("GameEngine::Components::TerrainGrass")]
     public partial struct TerrainGrass : IComponent
     {
@@ -68,153 +68,156 @@ namespace GameEngine.Scripting
         public float DensityFalloff;
 
         [FieldOffset(16)]
-        public float PlacementSeed;
+        public float FarThinning;
 
         [FieldOffset(20)]
-        public float ClumpSize;
+        public float PlacementSeed;
 
         [FieldOffset(24)]
-        public float ClumpHeightVariance;
+        public float ClumpSize;
 
         [FieldOffset(28)]
-        public float ClumpAlignment;
+        public float ClumpHeightVariance;
 
         [FieldOffset(32)]
-        public float ClumpTaper;
+        public float ClumpAlignment;
 
         [FieldOffset(36)]
-        public float BladeHeight;
+        public float ClumpTaper;
 
         [FieldOffset(40)]
-        public float BladeWidth;
+        public float BladeHeight;
 
         [FieldOffset(44)]
-        public float BladeTilt;
+        public float BladeWidth;
 
         [FieldOffset(48)]
-        public float BladeBend;
+        public float BladeTilt;
 
         [FieldOffset(52)]
-        public float BladeTwist;
+        public float BladeBend;
 
         [FieldOffset(56)]
-        public float BladeTaperStart;
+        public float BladeTwist;
 
         [FieldOffset(60)]
-        public float TuftFan;
+        public float BladeTaperStart;
 
         [FieldOffset(64)]
-        public uint BladeSegments;
+        public float TuftFan;
 
         [FieldOffset(68)]
-        public float RandomScale;
+        public uint BladeSegments;
 
         [FieldOffset(72)]
-        public uint LayerIndex;
+        public float RandomScale;
 
         [FieldOffset(76)]
-        public float MaskThreshold;
+        public uint LayerIndex;
 
         [FieldOffset(80)]
-        public float WindDirection;
+        public float MaskThreshold;
 
         [FieldOffset(84)]
-        public float WindGustSpeed;
+        public float WindDirection;
 
         [FieldOffset(88)]
-        public float WindGustScale;
+        public float WindGustSpeed;
 
         [FieldOffset(92)]
-        public float WindStrength;
+        public float WindGustScale;
 
         [FieldOffset(96)]
-        public float WindRestingLean;
+        public float WindStrength;
 
         [FieldOffset(100)]
-        public float WindFlutterAmount;
+        public float WindRestingLean;
 
         [FieldOffset(104)]
-        public float WindFlutterSpeed;
+        public float WindFlutterAmount;
 
         [FieldOffset(108)]
-        public float WindSeed;
+        public float WindFlutterSpeed;
 
         [FieldOffset(112)]
-        public float Brightness;
+        public float WindSeed;
 
         [FieldOffset(116)]
-        public float RandomBrightness;
+        public float Brightness;
 
         [FieldOffset(120)]
-        public float HueVariation;
+        public float RandomBrightness;
 
         [FieldOffset(124)]
-        public float RootFadeStart;
+        public float HueVariation;
 
         [FieldOffset(128)]
-        public float RootFadeEnd;
+        public float RootFadeStart;
 
         [FieldOffset(132)]
-        public float GroundingStrength;
+        public float RootFadeEnd;
 
         [FieldOffset(136)]
-        public float GroundTintHeight;
+        public float GroundingStrength;
 
         [FieldOffset(140)]
-        public float CanopyShade;
+        public float GroundTintHeight;
 
         [FieldOffset(144)]
-        public float GroundDarkening;
+        public float CanopyShade;
 
         [FieldOffset(148)]
-        public float Translucency;
+        public float GroundDarkening;
 
         [FieldOffset(152)]
-        public bool TextureGrass;
+        public float Translucency;
 
         [FieldOffset(156)]
-        public float TextureCardsPerSquareMeter;
+        public bool TextureGrass;
 
         [FieldOffset(160)]
-        public float TextureSize;
+        public float TextureCardsPerSquareMeter;
 
         [FieldOffset(164)]
-        public bool UseSplatRootColor;
+        public float TextureSize;
 
         [FieldOffset(168)]
-        public uint RootColor;
+        public bool UseSplatRootColor;
 
         [FieldOffset(172)]
-        public uint TipColor;
+        public uint RootColor;
 
         [FieldOffset(176)]
-        public uint BacklightColor;
+        public uint TipColor;
 
         [FieldOffset(180)]
-        public uint SoilColor;
+        public uint BacklightColor;
 
         [FieldOffset(184)]
+        public uint SoilColor;
+
+        [FieldOffset(188)]
         public AssetGuid AlbedoTextureAssetGuid;
 
-        [FieldOffset(200)]
+        [FieldOffset(204)]
         public AssetGuid AlphaTextureAssetGuid;
 
-        [FieldOffset(216)]
+        [FieldOffset(220)]
         public AssetGuid NormalTextureAssetGuid;
 
-        [FieldOffset(232)]
+        [FieldOffset(236)]
         public uint AtlasColumns;
 
-        [FieldOffset(236)]
+        [FieldOffset(240)]
         public uint AtlasRows;
 
-        [FieldOffset(240)]
+        [FieldOffset(244)]
         public uint AtlasTileCount;
 
-        [FieldOffset(244)]
+        [FieldOffset(248)]
         public float AlphaCutoff;
 
-        [FieldOffset(248)]
+        [FieldOffset(252)]
         public float NormalStrength;
     }
 }

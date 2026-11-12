@@ -182,15 +182,10 @@ uint64 ChannelRunDigest(float32 endTaperMetres)
 
 } // namespace
 
-// The digests are per architecture, because libm rounds sin, cos and normalize differently on x86-64 and arm64. Both
-// pairs detect a change; TheTaperActuallyChangesTheRun compares two runs and needs no captured constant.
-#if defined(__aarch64__) || defined(_M_ARM64)
-constexpr uint64 kUntaperedRunDigest = 17246085919231709071ull;
-constexpr uint64 kTaperedRunDigest = 14094433706161054375ull;
-#else
-constexpr uint64 kUntaperedRunDigest = 6517947516823628650ull;
-constexpr uint64 kTaperedRunDigest = 2319233531916964652ull;
-#endif
+// The run calls no libm function, and the compiler fuses no multiply-add, so the digests are the same on every
+// platform. TheTaperActuallyChangesTheRun compares two runs and needs no captured constant.
+constexpr uint64 kUntaperedRunDigest = 7100849413005382363ull;
+constexpr uint64 kTaperedRunDigest = 2450809779616435071ull;
 
 // Captured from the pre-fill builder. If the fill slice moved a Channel byte,
 // this is where it says so.

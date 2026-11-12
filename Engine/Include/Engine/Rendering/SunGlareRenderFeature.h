@@ -9,6 +9,15 @@
 #include <cstdint>
 #include <vector>
 
+namespace GameEngine::Mathematics
+{
+struct Vector3;
+}
+namespace GameEngine::Rendering
+{
+struct CameraData;
+}
+
 namespace GameEngine::Engine::Renderer
 {
 
@@ -46,7 +55,7 @@ static_assert(sizeof(SunGlarePushConstants) + 32u <= 128u,
 // Push-constant mirror of CastersPC in sun_glare_casters.comp.
 struct SunGlareCastersPushConstants
 {
-    ::GameEngine::Mathematics::Vector4 Eye{0.0f, 0.0f, 0.0f, 0.0f};          // xyz camera, w unused
+    ::GameEngine::Mathematics::Vector4 Eye{0.0f, 0.0f, 0.0f, 0.0f};          // xyz eye relative to the render origin, w unused
     ::GameEngine::Mathematics::Vector4 SunDirRadius{0.0f, 1.0f, 0.0f, 0.0f}; // xyz toward sun, w disc radius (rad)
 };
 static_assert(sizeof(SunGlareCastersPushConstants) == 32,
@@ -96,7 +105,12 @@ class SunGlareRenderFeature : public IRenderFeature
     // entry reads as "no terrain" rather than as an error. One call per frame, so there is no
     // begin/end pair to get wrong and no capacity to overflow.
     void SetSkylines(const ViewSkyline* entries, size_t count);
-    float GetSkylineTangent(uint32_t viewId) const;
+
+    /// The visible fraction of the sun's disc over the view's published skyline, in [0, 1]. It
+    /// reads only the sun direction and the skyline, so it holds on and off screen. The fade spans
+    /// the disc's own diameter. A view with no published skyline reads 1 (fully visible).
+    /// @param sunDir Unit vector toward the sun, world space, +Y up.
+    float GetSkylineVisibility(uint32_t viewId, const ::GameEngine::Mathematics::Vector3& sunDir) const;
 
     // `sampleCount` is the scene depth attachment's own sample count. An MSAA view with no
     // multisampled variant available returns an invalid id rather than binding a
@@ -134,6 +148,12 @@ class SunGlareRenderFeature : public IRenderFeature
     uint32_t GetCastersShadowArrayBinding() const { return m_CastersShadowArrayBinding; }
     uint32_t GetCastersShadowDataBinding() const { return m_CastersShadowDataBinding; }
     uint32_t GetCastersOutputBinding() const { return m_CastersOutputBinding; }
+
+    /// The cascade term's push constants for a view: the eye of `camera` relative to its render origin (the frame
+    /// of the cascade matrices), `sunDir` (unit, toward the sun) and the disc's angular radius in radians.
+    static SunGlareCastersPushConstants MakeCastersPushConstants(const ::GameEngine::Rendering::CameraData& camera,
+                                                                 const ::GameEngine::Mathematics::Vector3& sunDir,
+                                                                 float discRadius);
 
   private:
     void InitializeCastersPipeline(::GameEngine::Rendering::IDevice& device);

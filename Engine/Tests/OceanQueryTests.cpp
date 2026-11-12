@@ -9,6 +9,7 @@
 #include "Ocean/OceanQuery.h"
 #include "Ocean/OceanRayTrace.h"
 #include "Ocean/OceanRenderFeature.h"
+#include "OceanRingMesh.h"
 #include "Ocean/OceanSeabedDepth.h"
 #include "Ocean/OceanSeabedVisibility.h"
 #include "Ocean/OceanSimulationDemand.h"
@@ -25,8 +26,10 @@
 #include "ECS/Component/ComponentFieldRegistry.h"
 #include "ECS/ECS.h"
 #include "ECS/ECSTemplates.h"
+#include "ECS/Systems.h"
 #include "Mathematics/Matrix4x4.h"
 #include "Mathematics/MatrixOps.h"
+#include "DeathTestChild.h"
 
 #include <gtest/gtest.h>
 
@@ -518,6 +521,43 @@ TEST(OceanQueryTests, UnderwaterPolygonVolumeMatchesFootprint)
     EXPECT_FALSE(feature.TestUnderwaterVolume(8.0f, 0.0f, 8.0f, depth));
     EXPECT_FALSE(feature.TestUnderwaterVolume(1.0f, 3.0f, 1.0f, depth));
     EXPECT_FALSE(feature.TestUnderwaterVolume(1.0f, -4.0f, 1.0f, depth));
+}
+
+// The surface culls back faces for a view whose camera is at least the clearance
+// above the displaced surface under it. A submerged or near-surface camera and a view
+// with no sample this frame draw two-sided. With the authored look off, every view culls.
+TEST(OceanQueryTests, SurfaceCullsBackFacesOnlyForAViewAboveTheSurface)
+{
+    OceanRenderFeature feature;
+    OceanParamsGPU params{};
+    params.Underwater = 1u;
+    feature.SetParams(params);
+
+    constexpr ::GameEngine::Rendering::ViewId kAbove = 1;
+    constexpr ::GameEngine::Rendering::ViewId kNear = 2;
+    constexpr ::GameEngine::Rendering::ViewId kSubmerged = 3;
+    constexpr ::GameEngine::Rendering::ViewId kUnstamped = 4;
+    constexpr ::GameEngine::Rendering::ViewId kAtClearance = 5;
+    constexpr float kClearance = OceanRenderFeature::kSurfaceCullClearance;
+    feature.SetUnderwaterActive(kAbove, false, -kClearance - 7.0f);
+    feature.SetUnderwaterActive(kNear, false, -0.9f * kClearance);
+    feature.SetUnderwaterActive(kAtClearance, false, -kClearance);
+    feature.SetUnderwaterActive(kSubmerged, true, 1.0f);
+
+    EXPECT_FALSE(feature.IsSurfaceUndersideVisible(kAbove));
+    EXPECT_TRUE(feature.IsSurfaceUndersideVisible(kNear));
+    EXPECT_FALSE(feature.IsSurfaceUndersideVisible(kAtClearance));
+    EXPECT_TRUE(feature.IsSurfaceUndersideVisible(kSubmerged));
+    EXPECT_TRUE(feature.IsSurfaceUndersideVisible(kUnstamped));
+
+    feature.SetParams(params);
+    EXPECT_TRUE(feature.IsSurfaceUndersideVisible(kAbove)) << "a new frame clears the stamps";
+
+    params.Underwater = 0u;
+    feature.SetParams(params);
+    feature.SetUnderwaterActive(kSubmerged, true, 1.0f);
+    EXPECT_FALSE(feature.IsSurfaceUndersideVisible(kSubmerged)) << "the authored look is off";
+    EXPECT_FALSE(feature.IsSurfaceUndersideVisible(kUnstamped)) << "the authored look is off";
 }
 
 TEST(OceanQueryTests, UnderwaterPortalDataKeepsPolygonVolumesExact)
@@ -2563,13 +2603,33 @@ TEST(OceanQueryTests, ExtractionCarriesTheAuthoredShallowClarityWindowToTheRende
     EXPECT_EQ(feature->GetParams().ShallowClarityFloor, 1.0f);
 }
 
+// The scheduler hands the ocean a delta of 0 while the world clock is paused, so the wave time holds.
+TEST(OceanQueryTests, APausedWorldClockHoldsTheWaveTime)
+{
+    ECS::World world;
+    world.AddComponentImmediate(world.CreateEntity(), Components::OceanSurface{});
+    Engine::Renderer::RenderServices rs;
+    ECS::SystemManager systems;
+    systems.AddSystem<OceanExtractionSystem>(&rs);
+    systems.Update(world, 0.1f);
+    const auto* feature = rs.GetFeature<OceanRenderFeature>();
+    ASSERT_NE(feature, nullptr);
+    const float32 held = feature->GetParams().Time;
+    ASSERT_GT(held, 0.0f);
+
+    world.GetSimulationClock().SetTimeScale(0.0);
+    for (int frame = 0; frame < 5; ++frame)
+        systems.Update(world, 0.1f);
+    EXPECT_EQ(feature->GetParams().Time, held) << "a paused clock holds the wave time";
+}
+
 namespace
 {
 // Moves the body to worldX, runs one extraction and returns the wave impulses of that frame.
 uint32 MoveBodyAndCountImpulses(ECS::World& world, OceanExtractionSystem& system, ECS::EntityHandle body,
                                 const OceanRenderFeature& feature, float32 worldX)
 {
-    world.GetComponentForWrite<Components::WorldTransform>(body)->matrix[12] = worldX;
+    world.GetComponentForWrite<Components::WorldTransform>(body)->Position.X = worldX;
     system.Update(world, 1.0f / 60.0f);
     return feature.GetInputStats().DynamicWaveImpulses;
 }
@@ -2611,6 +2671,58 @@ TEST(OceanQueryTests, OceanShadowSettingsRejectInvalidHistoryAndJitter)
     settings.Shadows.HardJitterDiameter = 0.6f;
     settings.Shadows.SoftChannelScale = std::numeric_limits<float>::quiet_NaN();
     EXPECT_FALSE(settings.Validate());
+}
+
+TEST(OceanQueryTests, RingDensityFactorsScaleCellsPerTileSide)
+{
+    EXPECT_EQ(kDefaultOceanRingCellsPerTile, 24u);
+    EXPECT_EQ(ResolveOceanRingCellsPerTile(0u, 0u), 24u);
+    EXPECT_EQ(ResolveOceanRingCellsPerTile(2u, 1u), 16u);
+    EXPECT_EQ(ResolveOceanRingCellsPerTile(3u, 1u), 24u);
+    EXPECT_EQ(ResolveOceanRingCellsPerTile(4u, 1u), 32u);
+    EXPECT_EQ(ResolveOceanRingCellsPerTile(2u, 2u), 8u);
+    EXPECT_EQ(ResolveOceanRingCellsPerTile(1u, 4u), kMinOceanRingCellsPerTile);
+    EXPECT_EQ(ResolveOceanRingCellsPerTile(100u, 1u), kMaxOceanRingCellsPerTile);
+}
+
+#if !defined(NDEBUG)
+void SetRingCellsPerTileInQuietChild(uint32 cellsPerTile)
+{
+    TestUtils::SuppressCrtDialogsInDeathTestChild();
+    OceanRenderFeature feature;
+    feature.SetRingCellsPerTile(cellsPerTile);
+}
+
+// The shader's morph band and the mesh build assume an even count in [8, 64].
+TEST(OceanQueryTests, RingCellsPerTileOutsideTheResolvedRangeStopsAtTheSetter)
+{
+    GTEST_FLAG_SET(death_test_style, "threadsafe");
+    for (const uint32 cellsPerTile : {6u, 17u, 66u})
+    {
+        SCOPED_TRACE(::testing::Message() << "cells per tile=" << cellsPerTile);
+        EXPECT_DEATH(SetRingCellsPerTileInQuietChild(cellsPerTile), "ResolveOceanRingCellsPerTile");
+    }
+    for (const uint32 cellsPerTile : {0u, kMinOceanRingCellsPerTile, kDefaultOceanRingCellsPerTile, kMaxOceanRingCellsPerTile})
+    {
+        OceanRenderFeature feature;
+        feature.SetRingCellsPerTile(cellsPerTile);
+    }
+}
+#endif
+
+TEST(OceanQueryTests, RingMeshAtTheDefaultDensityIsOneBoundedDrawAtEveryHeight)
+{
+    // One mesh serves every camera height; the vertex stage scales it. 16 tiles
+    // in LOD 0 plus 12 per coarser ring, each at most (cells + 2)^2 vertices.
+    constexpr size_t kPatchCount = 16u + 12u * 7u;
+    const size_t cells = kDefaultOceanRingCellsPerTile;
+    const OceanRingMesh mesh = BuildOceanRingMesh(kDefaultOceanRingCellsPerTile);
+    const size_t vertexCount = mesh.Vertices.size();
+    EXPECT_LE(vertexCount, kPatchCount * (cells + 2u) * (cells + 2u));
+    EXPECT_LE(mesh.Indices.size(), kPatchCount * (cells + 1u) * (cells + 1u) * 6u);
+    EXPECT_LE(mesh.Indices.size(), 375000u);
+    EXPECT_TRUE(std::all_of(mesh.Indices.begin(), mesh.Indices.end(),
+                            [vertexCount](uint32 index) { return index < vertexCount; }));
 }
 
 TEST(OceanQueryTests, OceanSetupValidationReportsAndFixesUnsafeRanges)

@@ -24,7 +24,8 @@ namespace
 WorldTransform WorldFromLocal(const Transform& local)
 {
     WorldTransform wt{};
-    std::memcpy(wt.matrix, local.matrix, sizeof(wt.matrix));
+    wt.Position = local.Position;
+    wt.Basis = local.Basis;
     return wt;
 }
 
@@ -61,9 +62,7 @@ TEST(AudioListener, IdentityWorldTransformLooksAlongPlusZ)
 TEST(AudioListener, TranslatedIdentityKeepsPlusZAndCopiesPosition)
 {
     WorldTransform wt{};
-    wt.matrix[12] = 3.0f;
-    wt.matrix[13] = 4.0f;
-    wt.matrix[14] = 5.0f;
+    wt.Position = GameEngine::Mathematics::WorldPosition{3.0, 4.0, 5.0};
 
     ListenerState s{};
     FillListenerStateFromWorldTransform(wt, s);
@@ -83,7 +82,7 @@ TEST(AudioListener, YawPositiveSendsForwardTowardPlusX)
     constexpr float kHalfPi = 1.57079632679f;
     const Quaternion q = Quaternion::FromAxisAngle(Vector3(0.0f, 1.0f, 0.0f), kHalfPi);
     const Transform local =
-        Transform::FromTRS(Vector3(1.0f, 2.0f, 3.0f), q, Vector3(1.0f, 1.0f, 1.0f));
+        Transform::FromTRS(GameEngine::Mathematics::WorldPosition{1.0, 2.0, 3.0}, q, Vector3(1.0f, 1.0f, 1.0f));
     const WorldTransform wt = WorldFromLocal(local);
 
     ListenerState s{};

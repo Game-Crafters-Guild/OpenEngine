@@ -30,8 +30,8 @@ namespace GameEngine { namespace Engine::Renderer {
 // Hierarchy members — entities with a Parent component, and the roots above
 // them — also live in a cached parent->child CSR, rebuilt only after a Parent
 // edit or a structural change. Each frame the dirty members are the
-// Parent-holders whose local matrix changed (narrowed to exact entities by
-// cached local matrices) and the hierarchy roots whose WorldTransform Version
+// Parent-holders whose local pose changed (narrowed to exact entities by
+// cached local poses) and the hierarchy roots whose WorldTransform Version
 // moved since their children last composed against it (the flat pass's own
 // write, or a direct writer's BumpWorldTransform).
 // Only the topmost of them are walked (a dirty node under a dirty ancestor is
@@ -62,13 +62,14 @@ private:
     struct Node {
         ECS::EntityHandle entity{};
         const Components::Transform* local = nullptr;
-        // Where propagation writes this node's world matrix; null when the
+        // Where propagation writes this node's world pose; null when the
         // flat pass owns it.
         Components::WorldTransform* world = nullptr;
         // Where its children read it from (the same component either way).
         const Components::WorldTransform* worldRead = nullptr;
         ECS::EntityHandle parentEntity{};
-        std::array<float32, 16> localSnapshot{};
+        // The bytes of the local Transform at its last resolve.
+        std::array<uint64, 8> localSnapshot{};
         // A root without a Parent component: the flat pass writes its
         // WorldTransform, so propagation only reads it (world is null).
         bool flatOwned = false;
@@ -93,6 +94,12 @@ private:
     // fanned out over the job system (serial when the world has no pool).
     // Records the cached hierarchy roots whose WorldTransform Version moved.
     void ResolveFlatParallel(ECS::World& world, FlatScope scope);
+    // One chunk of the flat pass: writes the rows whose pose changed and queues the chunk
+    // for the stamp after the pass. Runs on a worker; one call per chunk.
+    void ResolveFlatChunk(ECS::World& world, const ECS::EntityHandle* entities,
+                          const Components::Transform* locals,
+                          const Components::WorldTransform* readWorlds, std::size_t chunkCount,
+                          bool feedOn, bool recordRoots);
     bool HasParentColumnChange(ECS::World& world, uint64 entryVersion);
     // After a structural change that edited no Parent column: true when the
     // cached topology still describes the world, so no rebuild is owed. Every
@@ -105,7 +112,7 @@ private:
     bool IsTopologyCacheCurrent(ECS::World& world) const;
     size_t FindNodeIndex(ECS::EntityHandle entity) const;
     void AddNode(ECS::EntityHandle entity, const Components::Transform& local,
-                 Components::WorldTransform& worldTransform, ECS::EntityHandle parent);
+                 const Components::WorldTransform& worldTransform, ECS::EntityHandle parent);
     // Appends a node for every Parent-holder's parent that has no Parent
     // component itself (a hierarchy root the flat pass owns).
     void AddFlatOwnedRoots(ECS::World& world);
@@ -114,20 +121,10 @@ private:
     // costs O(nodes) in total however many dirty nodes share a long clean spine.
     bool HasDirtyAncestor(size_t index);
 
-    // Whether a propagation pass must collect write grants for the
-    // WorldTransforms it rewrites. The cached-node path writes through
-    // pointers captured at topology rebuild, outside any query visit, so
-    // nothing stamps those columns for it and Changed<WorldTransform>
-    // consumers would never see a propagated move. The rebuild pass is the
-    // exception: its node gather binds Write<WorldTransform> and its
-    // stamp-at-visit has already covered every chunk.
-    enum class StampCollection { Collect, AlreadyGranted };
-
-    // Propagates each root's subtree (the roots' subtrees must be disjoint),
-    // in parallel on the world's job system when there are enough of them,
-    // then emits the rewritten entities to the dirty feed and, for Collect,
-    // stamps their write grants in one batch.
-    void PropagateRoots(ECS::World& world, std::span<const size_t> roots, StampCollection stamps);
+    // Propagates each root's subtree (the subtrees must be disjoint), on the job system when there are
+    // enough of them, then emits the rewritten entities to the dirty feed and stamps their write grants
+    // in one batch.
+    void PropagateRoots(ECS::World& world, std::span<const size_t> roots);
     // Walks one subtree depth-first, rewriting world matrices whose bytes
     // change (Version bumped) and appending those entities to `changed`.
     // Touches only the subtree's nodes, so disjoint subtrees run concurrently.
@@ -182,14 +179,16 @@ private:
     std::vector<size_t> m_Roots;
     std::vector<size_t> m_DirtyNodes;
     std::vector<size_t> m_TraversalStack;
-    // Entities whose WorldTransform this pass actually rewrote, staged for one
-    // batched write-grant stamp. Filled and drained inside a single Update.
+    // Entities whose WorldTransform a pass actually rewrote (on the flat pass,
+    // one entity per such chunk), staged for one batched write-grant stamp.
+    // Filled and drained inside a single pass.
     std::vector<ECS::EntityHandle> m_StampScratch;
     std::vector<uint8_t> m_TopologyState;
     // Hierarchy roots whose WorldTransform Version moved this frame (node indices), appended
     // under the mutex once per chunk that recorded any.
     std::vector<size_t> m_ChangedFlatRoots;
-    std::mutex m_ChangedFlatRootsMutex;
+    // Guards m_ChangedFlatRoots and m_StampScratch while the flat pass runs on the job system.
+    std::mutex m_FlatPassMutex;
     // Topmost-dirty filter: the pass that last marked each node dirty, and
     // the pass that last resolved whether the node or an ancestor is dirty
     // (the answer in m_CoveredByNode), with the climb's scratch path.

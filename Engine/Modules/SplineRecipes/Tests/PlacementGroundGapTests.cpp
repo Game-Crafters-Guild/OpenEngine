@@ -107,21 +107,10 @@ Components::WorldTransform PoseAt(const Vector3& position, float32 pitchDeg, flo
     const float32 sy = std::sin(yawDeg * kDegToRad);
 
     Components::WorldTransform xf{};
-    xf.matrix[0] = cy * scale.x;
-    xf.matrix[1] = 0.0f;
-    xf.matrix[2] = -sy * scale.x;
-
-    xf.matrix[4] = sy * sp * scale.y;
-    xf.matrix[5] = cp * scale.y;
-    xf.matrix[6] = cy * sp * scale.y;
-
-    xf.matrix[8] = sy * cp * scale.z;
-    xf.matrix[9] = -sp * scale.z;
-    xf.matrix[10] = cy * cp * scale.z;
-
-    xf.matrix[12] = position.x;
-    xf.matrix[13] = position.y;
-    xf.matrix[14] = position.z;
+    xf.Basis[0] = glm::vec3(cy * scale.x, 0.0f, -sy * scale.x);
+    xf.Basis[1] = glm::vec3(sy * sp * scale.y, cp * scale.y, cy * sp * scale.y);
+    xf.Basis[2] = glm::vec3(sy * cp * scale.z, -sp * scale.z, cy * cp * scale.z);
+    xf.Position = Mathematics::WorldPosition::FromVector3(position);
     return xf;
 }
 
@@ -134,9 +123,7 @@ Components::WorldTransform IdentityAt(float32 x, float32 y, float32 z)
 // piece without changing the box it occupies.
 Components::WorldTransform MirrorColumn(Components::WorldTransform xf, uint32 column)
 {
-    xf.matrix[column * 4u] *= -1.0f;
-    xf.matrix[column * 4u + 1u] *= -1.0f;
-    xf.matrix[column * 4u + 2u] *= -1.0f;
+    xf.Basis[static_cast<int>(column)] *= -1.0f;
     return xf;
 }
 
@@ -259,7 +246,7 @@ SplineRecipes::PieceGroundGap Measure(const TerrainECS::SurfaceHeightQuery& quer
                        const Components::WorldTransform& xf)
 {
     SplineRecipes::PieceGroundGap gap{};
-    MeasurePieceGroundGap(query, BoundsOf(half).Box, GameEngine::Mathematics::Matrix4x4::FromColumnMajor(xf.matrix), gap);
+    MeasurePieceGroundGap(query, BoundsOf(half).Box, xf.ToMatrix4x4(xf.GetPosition() - Mathematics::WorldPosition{}), gap);
     return gap;
 }
 
@@ -463,7 +450,8 @@ TEST(PlacementGroundGap, PitchedPieceMeasuresItsOwnUndersideNotTheBoxUnderIt)
     // The bias a world AABB carries, stated as a number rather than left implicit:
     // its floor is the lowest underside CORNER, not the underside under any
     // probe.
-    const Mathematics::AABB worldBox = BoundsOf(kSlabHalf).Box.TransformToAABB(xf.matrix);
+    const Mathematics::AABB worldBox =
+        BoundsOf(kSlabHalf).Box.TransformToAABB(xf.ToMatrix4x4(xf.GetPosition() - Mathematics::WorldPosition{}).Data());
     EXPECT_NEAR(gap.UndersideCenterY - worldBox.min.y,
                 kSlabHalf.z * std::sin(kPitchDeg * kDegToRad), kHeightTolerance);
 }
@@ -516,7 +504,8 @@ TEST(PlacementGroundGap, YawedPieceProbesOnlyGroundItActuallyCovers)
     // Level, with its underside exactly on the untouched base ground.
     const Components::WorldTransform xf =
         PoseAt(Vector3{0.0f, kBaseGroundY + plankHalf.y, 0.0f}, 0.0f, kYawDeg, kUnitScale);
-    const Mathematics::AABB worldBox = BoundsOf(plankHalf).Box.TransformToAABB(xf.matrix);
+    const Mathematics::AABB worldBox =
+        BoundsOf(plankHalf).Box.TransformToAABB(xf.ToMatrix4x4(xf.GetPosition() - Mathematics::WorldPosition{}).Data());
 
     // The spike sits under the box's (max.x, min.z) corner — a corner of the
     // inflated box, and nowhere near the plank.

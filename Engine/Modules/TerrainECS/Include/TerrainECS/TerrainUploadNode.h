@@ -31,6 +31,8 @@ public:
 
     bool Initialize(std::string nodeId, std::string nodeJson, std::string* outError) override;
     void DeclareForView(Engine::Renderer::Pipeline::ViewDeclare& d) override;
+    // A paused view still uploads, so the terrain is ready when the world draws again.
+    bool DeclaresForPausedView() const override { return true; }
 
 private:
     std::string m_Id;

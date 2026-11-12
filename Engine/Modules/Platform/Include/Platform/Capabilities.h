@@ -24,7 +24,8 @@ bool SupportsMultipleWindows();
 
 /**
  * @brief Worker-thread budget for the engine JobSystem.
- * Hardware concurrency on desktop; on threaded wasm a smaller budget matched
+ * The processors this process may run on (JobSystem::AvailableProcessors)
+ * on desktop; on threaded wasm a smaller budget matched
  * to the pre-spawned pthread pool; 0 on single-threaded wasm, where the
  * JobSystem runs inline.
  */

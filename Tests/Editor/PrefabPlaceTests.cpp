@@ -7,7 +7,9 @@
 #include "Assets/AssetsFolderDropRegistry.h"
 #include "Editor/DragDropPayloads.h"
 #include "Editor/Entities/EditorComponentTraits.h"
+#include "Editor/Entities/EditorECSHelpers.h"
 #include "Editor/Entities/EntityDuplicate.h"
+#include "Editor/Hierarchy/EntityNameEdit.h"
 #include "Editor/Hierarchy/HierarchyEntity/HierarchyEntityIcon.h"
 #include "Editor/Registries/EditorPluginRegistry.h"
 #include "EditorChangeNotifications.h"
@@ -26,14 +28,19 @@
 #include "InspectorRegistry.h"
 #include "Inspectors/DefaultComponentInspector.h"
 #include "Inspectors/InspectorUIHelpers.h"
+#include "Inspectors/MeshRendererInspector.h"
+#include "Inspectors/SplineRecipe/Paving/SplinePavingSettingRows.h"
+#include "Inspectors/TransformInspector.h"
 #include "UI/EditorIcons.h"
 #include "UI/ControlLayoutLoader.h"
 #include "RecordingContextMenu.h"
+#include "RowContextMenuGesture.h"
 #include "Scene/SceneDocumentManager.h"
 #include "SceneView/SceneViewDropPlacement.h"
 #include "SceneViewNoticeRecorder.h"
 #include "Thumbnails/IThumbnailProvider.h"
 #include "UndoRedo/DuplicateEntitiesCommand.h"
+#include "UndoRedo/MultiEntityComponentSnapshot.h"
 #include "UndoRedo/SceneViewDropUndoCommand.h"
 #include "UndoRedo/UndoRedoService.h"
 
@@ -45,11 +52,14 @@
 #include "Components/Name.h"
 #include "Components/PrefabInstance.h"
 #include "Components/Rendering/Light.h"
+#include "Components/Rendering/MeshRenderer.h"
 #include "Components/Rendering/ReflectionProbe.h"
 #include "Components/Rendering/SkyEnvironment.h"
 #include "Components/SceneEntityTag.h"
+#include "Components/Spline/SplinePaving.h"
 #include "Components/Transform.h"
 #include "Core/Engine.h"
+#include "ECS/Component/ComponentFieldRegistry.h"
 #include "ECS/ECSTemplates.h"
 #include "ECS/Query.h"
 #include "ECS/World.h"
@@ -65,6 +75,7 @@
 #include "UI/Interaction/DropTarget.h"
 #include "UI/Interaction/FocusQueries.h"
 #include "UI/Registration/ElementRegistration.h"
+#include "UI/StyleProperties.h"
 #include "UI/UIManager.h"
 #include "UIRgTestHarness.h"
 
@@ -127,6 +138,8 @@ class PrefabPlaceTests : public ::testing::Test
 
     void TearDown() override
     {
+        // A test's undo service ends with the test.
+        Editor::PrefabInstanceDescriptions::Get().Track(Notifications(), nullptr, {});
         std::error_code ec;
         std::filesystem::remove_all(m_Folder, ec);
     }
@@ -169,8 +182,8 @@ TEST_F(PrefabPlaceTests, ADroppedPrefabIsALiveInstanceWithItsTree)
     EXPECT_EQ(marker->Source, EngineCore::GetInstance().GetAssetManager().ResolveAssetGuid(crate));
     const auto* transform = world.GetComponent<Components::Transform>(root);
     ASSERT_NE(transform, nullptr);
-    EXPECT_FLOAT_EQ(transform->GetPosition().x, 1.0f);
-    EXPECT_FLOAT_EQ(transform->GetPosition().z, 3.0f);
+    EXPECT_DOUBLE_EQ(transform->GetPosition().X, 1.0);
+    EXPECT_DOUBLE_EQ(transform->GetPosition().Z, 3.0);
     EXPECT_NE(world.GetComponent<Components::HierarchyOrder>(root), nullptr);
 
     std::vector<std::string> children;
@@ -388,7 +401,8 @@ TEST_F(PrefabPlaceTests, AnUndoOfCreateAfterASavedSceneUsesThePrefabKeepsTheFile
     Scene::SceneWriteOptions options;
     options.assetResolver = &resolver;
     const std::filesystem::path scene = m_Folder / "Yard.scene";
-    ASSERT_TRUE(Scene::WriteSceneFile(world, scene, options)) << Scene::GetLastSceneIOError().message;
+    const auto writeResult = Scene::WriteSceneFile(world, scene, options);
+    ASSERT_TRUE(writeResult) << writeResult.Error->message;
     ASSERT_TRUE(engine.GetAssetManager().GetRegistry().RegisterAssetByPath(scene).IsOk());
 
     undo.Undo();
@@ -631,7 +645,7 @@ UI::Interaction::DropRequest HierarchyDrag(std::vector<std::uint64_t> treeIds)
 TEST_F(PrefabPlaceTests, AHierarchyEntityDroppedOnAnAssetsFolderCreatesThePrefabThere)
 {
     UIRegistration::RegisterBuiltInControls();
-    Editor::RegisterPrefabEditor(Notifications(), nullptr, {}, {});
+    Editor::RegisterPrefabEditor(Notifications(), nullptr, nullptr, {}, {});
     ECS::World world;
     const ECS::EntityHandle sphere = CreateTagged(world, "Sphere", "sphere", {});
     CreateTagged(world, "Lid", "lid", sphere);
@@ -674,7 +688,7 @@ TEST_F(PrefabPlaceTests, AHierarchyEntityDroppedOnAnAssetsFolderCreatesThePrefab
 TEST_F(PrefabPlaceTests, ADropCreateWithAnOutsideReferenceSaysWhatItKeepsAndReturnsTheNewFile)
 {
     UIRegistration::RegisterBuiltInControls();
-    Editor::RegisterPrefabEditor(Notifications(), nullptr, {}, {});
+    Editor::RegisterPrefabEditor(Notifications(), nullptr, nullptr, {}, {});
     ECS::World world;
     const ECS::EntityHandle sun = CreateTagged(world, "Sun", "sun", {});
     const ECS::EntityHandle rig = CreateTagged(world, "Sky Rig", "sky_rig", {});
@@ -745,7 +759,7 @@ uint32_t CreatePrefabCommandOf(Editor::IEditorPlugin& prefabs, ECS::World& world
 TEST_F(PrefabPlaceTests, CreatePrefabFromTheMenuOpensTheDialogAtTheNextSafePoint)
 {
     UIRegistration::RegisterBuiltInControls();
-    Editor::RegisterPrefabEditor(Notifications(), nullptr, {}, {});
+    Editor::RegisterPrefabEditor(Notifications(), nullptr, nullptr, {}, {});
     // First local: destroyed last, after the UIManager released its buffers.
     SharedDeviceReleaseRetirement releaseRetirement;
     Rendering::IDevice* device = SharedHeadlessDevice();
@@ -796,7 +810,7 @@ TEST_F(PrefabPlaceTests, CreatePrefabFromTheMenuOpensTheDialogAtTheNextSafePoint
 // opens no dialog.
 TEST_F(PrefabPlaceTests, CreatePrefabWithNothingSelectedShowsTheFix)
 {
-    Editor::RegisterPrefabEditor(Notifications(), nullptr, {}, {});
+    Editor::RegisterPrefabEditor(Notifications(), nullptr, nullptr, {}, {});
     ECS::World world;
     Editor::IEditorPlugin* prefabs = FindPrefabPlugin();
     ASSERT_NE(prefabs, nullptr);
@@ -818,7 +832,7 @@ TEST_F(PrefabPlaceTests, CreatePrefabWithNothingSelectedShowsTheFix)
 TEST_F(PrefabPlaceTests, ACreateOfSeveralRootsThatFailsAtOneRootLeavesNoPrefab)
 {
     UIRegistration::RegisterBuiltInControls();
-    Editor::RegisterPrefabEditor(Notifications(), nullptr, {}, {});
+    Editor::RegisterPrefabEditor(Notifications(), nullptr, nullptr, {}, {});
     // First local: destroyed last, after the UIManager released its buffers.
     SharedDeviceReleaseRetirement releaseRetirement;
     Rendering::IDevice* device = SharedHeadlessDevice();
@@ -898,7 +912,7 @@ ECS::EntityHandle FindChild(ECS::World& world, ECS::EntityHandle parent)
 // added on the instance shows the plus and no member tone, and an unchanged entity shows neither.
 TEST_F(PrefabPlaceTests, TheRowsOfAnInstanceMarkAnOverrideAndAnAddedEntity)
 {
-    Editor::RegisterPrefabEditor(Notifications(), nullptr, {}, {});
+    Editor::RegisterPrefabEditor(Notifications(), nullptr, nullptr, {}, {});
     const std::filesystem::path crate = WriteAsset("Props/Crate.prefab", kCratePrefab);
     ECS::World world;
     const ECS::EntityHandle root = PlaceAt(world, crate, 0.0f, 0.0f, 0.0f);
@@ -938,7 +952,7 @@ TEST_F(PrefabPlaceTests, TheRowsOfAnInstanceMarkAnOverrideAndAnAddedEntity)
 
     EXPECT_EQ(PrefabMarkerState(rootRow), "");
     EXPECT_EQ(PrefabMarkerState(lidRow), "overridden");
-    EXPECT_EQ(lidRow.GetTooltip(), "This entity differs from its prefab.");
+    EXPECT_EQ(lidRow.GetTooltip(), "This entity has overrides.");
     EXPECT_TRUE(lidRow.HasClass("hierarchy-prefab-member"));
     EXPECT_EQ(PrefabMarkerState(signRow), "added");
     EXPECT_FALSE(signRow.HasClass("hierarchy-prefab-member")) << "an added entity is not part of the prefab";
@@ -950,7 +964,7 @@ TEST_F(PrefabPlaceTests, TheRowsOfAnInstanceMarkAnOverrideAndAnAddedEntity)
 // for its glyph and the member class for the badge.
 TEST_F(PrefabPlaceTests, ANestedInstanceRootRowIsAlsoAMemberOfTheOuterInstance)
 {
-    Editor::RegisterPrefabEditor(Notifications(), nullptr, {}, {});
+    Editor::RegisterPrefabEditor(Notifications(), nullptr, nullptr, {}, {});
     WriteAsset("Props/Wheel.prefab", "[prefab version=1]\n"
                                      "[entity id=\"root\"]\n"
                                      "[entity id=\"hub\" parent=\"root\"]\n");
@@ -988,7 +1002,7 @@ TEST_F(PrefabPlaceTests, ANestedInstanceRootRowIsAlsoAMemberOfTheOuterInstance)
 // A root whose prefab the project does not have shows red, and its tooltip names the prefab and the fix.
 TEST_F(PrefabPlaceTests, AMissingPrefabRowNamesThePrefabAndTheFixInItsTooltip)
 {
-    Editor::RegisterPrefabEditor(Notifications(), nullptr, {}, {});
+    Editor::RegisterPrefabEditor(Notifications(), nullptr, nullptr, {}, {});
     ECS::World world;
     const GUID source = GUID::Generate();
     const ECS::EntityHandle root = world.CreateEntity();
@@ -1010,7 +1024,7 @@ TEST_F(PrefabPlaceTests, AMissingPrefabRowNamesThePrefabAndTheFixInItsTooltip)
 // elsewhere in the world describes nothing again, and a committed change to a member does.
 TEST_F(PrefabPlaceTests, TheRowsDescribeAnInstanceAgainOnlyWhenTheEditorReportsAChangeToIt)
 {
-    Editor::RegisterPrefabEditor(Notifications(), nullptr, {}, {});
+    Editor::RegisterPrefabEditor(Notifications(), nullptr, nullptr, {}, {});
     const std::filesystem::path crate = WriteAsset("Props/Crate.prefab", kCratePrefab);
     ECS::World world;
     const ECS::EntityHandle root = PlaceAt(world, crate, 0.0f, 0.0f, 0.0f);
@@ -1086,7 +1100,7 @@ std::string TagOf(ECS::World& world, ECS::EntityHandle entity)
 TEST_F(PrefabPlaceTests, UnpackFromTheMenuIsOneUndoStepAndTheRedoUnpacksAgain)
 {
     UIRegistration::RegisterBuiltInControls();
-    Editor::RegisterPrefabEditor(Notifications(), nullptr, {}, {});
+    Editor::RegisterPrefabEditor(Notifications(), nullptr, nullptr, {}, {});
     const std::filesystem::path file = WriteAsset("Crate.prefab", kCratePrefab);
     ECS::World world;
     const ECS::EntityHandle crate = PlaceAt(world, file, 0.0f, 0.0f, 0.0f);
@@ -1123,7 +1137,7 @@ TEST_F(PrefabPlaceTests, UnpackFromTheMenuIsOneUndoStepAndTheRedoUnpacksAgain)
 TEST_F(PrefabPlaceTests, SelectAssetShowsThePrefabFileOfTheInstanceInTheAssetsPanel)
 {
     UIRegistration::RegisterBuiltInControls();
-    Editor::RegisterPrefabEditor(Notifications(), nullptr, {}, {});
+    Editor::RegisterPrefabEditor(Notifications(), nullptr, nullptr, {}, {});
     const std::filesystem::path file = WriteAsset("Crate.prefab", kCratePrefab);
     ECS::World world;
     const ECS::EntityHandle crate = PlaceAt(world, file, 0.0f, 0.0f, 0.0f);
@@ -1184,7 +1198,7 @@ TEST_F(PrefabPlaceTests, ADuplicateOfAnInstanceIsAnInstanceWithItsOverridesInOne
 TEST_F(PrefabPlaceTests, SeveralRootsDroppedOnAFolderBecomeOnePrefabEachInOneUndoStep)
 {
     UIRegistration::RegisterBuiltInControls();
-    Editor::RegisterPrefabEditor(Notifications(), nullptr, {}, {});
+    Editor::RegisterPrefabEditor(Notifications(), nullptr, nullptr, {}, {});
     ECS::World world;
     const ECS::EntityHandle crate = CreateTagged(world, "Crate", "crate", {});
     const ECS::EntityHandle lid = CreateTagged(world, "Lid", "lid", crate);
@@ -1280,7 +1294,7 @@ class RecordingThumbnailProvider final : public IThumbnailProvider
 TEST(PrefabAssetTileTests, ThePrefabEditorRegistersThePrefabGlyphAsTheTile)
 {
     RecordingThumbnailProvider thumbnails;
-    Editor::RegisterPrefabEditor(Notifications(), &thumbnails, {}, {});
+    Editor::RegisterPrefabEditor(Notifications(), nullptr, &thumbnails, {}, {});
     ASSERT_NE(thumbnails.PrefabHandler, nullptr);
     EXPECT_EQ(thumbnails.PrefabHandler->GetOrRequest("Props/Crate.prefab", 128, nullptr),
               Editor::PrefabThumbnailHandler::kGlyphPath);
@@ -1359,7 +1373,7 @@ std::string PrefabBarText(ECS::World& world, ECS::EntityHandle entity, std::stri
 TEST_F(PrefabPlaceTests, TheInspectorShowsThePrefabBarOnEveryEntityOfAnInstance)
 {
     UIRegistration::RegisterBuiltInControls();
-    Editor::RegisterPrefabEditor(Notifications(), nullptr, {}, {});
+    Editor::RegisterPrefabEditor(Notifications(), nullptr, nullptr, {}, {});
     const std::filesystem::path file = WriteAsset("Crate.prefab", kCratePrefab);
     ECS::World world;
     const ECS::EntityHandle root = PlaceAt(world, file, 0.0f, 0.0f, 0.0f);
@@ -1433,6 +1447,13 @@ bool HasOverrideMark(const UIElement& element)
     return false;
 }
 
+// Runs every override mark refresh an inspector registered: each bound row registers its own.
+void RunMarkRefreshes(const std::vector<std::function<void()>>& refreshes)
+{
+    for (const std::function<void()>& refresh : refreshes)
+        refresh();
+}
+
 // The default inspector's row whose label reads `labelText` under `parent`, or null.
 const UIElement* FindFieldRow(const UIElement& parent, std::string_view labelText)
 {
@@ -1455,7 +1476,7 @@ const UIElement* FindFieldRow(const UIElement& parent, std::string_view labelTex
 TEST_F(PrefabPlaceTests, TheDefaultRowsMarkTheFieldsAnInstanceOverrides)
 {
     UIRegistration::RegisterBuiltInControls();
-    Editor::RegisterPrefabEditor(Notifications(), nullptr, {}, {});
+    Editor::RegisterPrefabEditor(Notifications(), nullptr, nullptr, {}, {});
     const std::filesystem::path file = WriteAsset("Probe.prefab", kProbePrefab);
     ECS::World world;
     const ECS::EntityHandle root = PlaceAt(world, file, 0.0f, 0.0f, 0.0f);
@@ -1486,10 +1507,231 @@ TEST_F(PrefabPlaceTests, TheDefaultRowsMarkTheFieldsAnInstanceOverrides)
     EXPECT_FALSE(HasOverrideMark(*boxProjection));
 }
 
+namespace
+{
+
+// A prefab whose child carries a transform, a mesh renderer and a paving, so their inspectors show rows of the
+// prefab's fields.
+constexpr std::string_view kRendererPrefab = "[prefab version=1]\n"
+                                             "[entity id=\"root\"]\n"
+                                             "[entity id=\"lid\" parent=\"root\"]\n"
+                                             "Name.value = \"Lid\"\n"
+                                             "Transform.position = (0, 0, 0)\n"
+                                             "MeshRenderer.receiveShadows = true\n"
+                                             "SplinePaving.BorderWidth = 0.3\n";
+
+constexpr const char* kOverriddenLabelClass = "inspector-label-overridden";
+
+// The label under `parent` that reads `labelText`, or null.
+Label* FindLabel(UIElement& parent, std::string_view labelText)
+{
+    for (const auto& child : parent.GetChildren())
+    {
+        if (auto* label = dynamic_cast<Label*>(child.get()); label && label->GetText() == labelText)
+            return label;
+        if (Label* found = FindLabel(*child, labelText))
+            return found;
+    }
+    return nullptr;
+}
+
+// The row that holds `label`: the nearest ancestor that is an Inspector row of either kind.
+UIElement* RowOfLabel(Label& label)
+{
+    for (UIElement* up = label.GetParent(); up; up = up->GetParent())
+        if (up->HasClass("inspector-row") || up->HasClass("inspector-transform-trs-row"))
+            return up;
+    return nullptr;
+}
+
+// Runs the inspector registered for TComponent on `entity` into `parent`, as the Inspector panel does.
+template <typename TComponent>
+void ShowInspector(UIElement& parent, ECS::World& world, ECS::EntityHandle entity, Editor::UndoRedoService& undo)
+{
+    InspectorContext context;
+    context.Parent = &parent;
+    context.World = &world;
+    context.Entity = entity;
+    context.Undo = &undo;
+    context.ChangeNotifications = &Notifications();
+    InspectorFn* inspector = InspectorRegistry::Get().TryGetComponentInspector<TComponent>();
+    ASSERT_NE(inspector, nullptr);
+    (*inspector)(context);
+}
+
+} // namespace
+
+// Design 4.4 on a custom inspector: the Transform's Local Position row of an instance that moved its child is
+// bold and has the edge, and the row menu offers Apply and Revert before the row's own entries. Revert is one
+// undo step that puts back the prefab's position.
+TEST_F(PrefabPlaceTests, TheTransformRowOfAMovedChildIsMarkedAndItsMenuOffersApplyAndRevert)
+{
+    UIRegistration::RegisterBuiltInControls();
+    Editor::RegisterPrefabEditor(Notifications(), nullptr, nullptr, {}, {});
+    RegisterTransformInspector();
+    const std::filesystem::path file = WriteAsset("Crate.prefab", kRendererPrefab);
+    ECS::World world;
+    const ECS::EntityHandle root = PlaceAt(world, file, 0.0f, 0.0f, 0.0f);
+    ASSERT_TRUE(root.IsValid());
+    const ECS::EntityHandle lid = FindChild(world, root);
+    auto* transform = world.GetComponentForWrite<Components::Transform>(lid);
+    ASSERT_NE(transform, nullptr);
+    *transform = Components::Transform::FromTRS(Mathematics::WorldPosition{0.0, 5.0, 0.0}, transform->GetRotation(),
+                                                transform->GetScale());
+    Notifications().NotifyComponentCommit<Components::Transform>(&world, lid);
+
+    Editor::UndoRedoService undo;
+    UIElement parent{"div"};
+    ShowInspector<Components::Transform>(parent, world, lid, undo);
+    Label* position = FindLabel(parent, "Local Position");
+    Label* rotation = FindLabel(parent, "Local Rotation");
+    ASSERT_NE(position, nullptr);
+    ASSERT_NE(rotation, nullptr);
+    UIElement* positionRow = RowOfLabel(*position);
+    ASSERT_NE(positionRow, nullptr);
+    EXPECT_TRUE(position->HasClass(kOverriddenLabelClass));
+    EXPECT_TRUE(HasOverrideMark(*positionRow));
+    EXPECT_FALSE(rotation->HasClass(kOverriddenLabelClass));
+
+    const auto menu = EditorTesting::OpenRowContextMenu(*positionRow, *position);
+    ASSERT_TRUE(menu.has_value()) << "a right-click on the row opened no menu";
+    const std::vector<std::string> rows = EditorTesting::CapturedRows(*menu);
+    ASSERT_GE(rows.size(), 4u);
+    EXPECT_EQ(rows[0], "Apply to prefab 'Crate'");
+    EXPECT_EQ(rows[1], "Revert to prefab value");
+    EXPECT_EQ(rows[2], "---");
+    EXPECT_EQ(rows[3], "Copy Local Position (X, Y, Z)");
+
+    menu->Invoke(EditorTesting::CapturedCommand(*menu, "Revert to prefab value"));
+    EXPECT_EQ(undo.GetUndoCount(), 1u);
+    EXPECT_STREQ(undo.PeekUndoName(), "Revert Local Position") << "the undo step names the row";
+    EXPECT_DOUBLE_EQ(world.GetComponent<Components::Transform>(lid)->GetPosition().Y, 0.0);
+    undo.Undo();
+    EXPECT_DOUBLE_EQ(world.GetComponent<Components::Transform>(lid)->GetPosition().Y, 5.0);
+}
+
+// Design 4.4 on a custom inspector: the Mesh Renderer's Receive Shadows row of an instance that turned it off is
+// bold and has the edge, and its row menu offers Apply and Revert. Revert is one undo step.
+TEST_F(PrefabPlaceTests, TheMeshRendererRowOfAnOverriddenFieldIsMarkedAndItsMenuOffersApplyAndRevert)
+{
+    UIRegistration::RegisterBuiltInControls();
+    Editor::RegisterPrefabEditor(Notifications(), nullptr, nullptr, {}, {});
+    RegisterMeshRendererInspector();
+    const std::filesystem::path file = WriteAsset("Crate.prefab", kRendererPrefab);
+    ECS::World world;
+    const ECS::EntityHandle root = PlaceAt(world, file, 0.0f, 0.0f, 0.0f);
+    ASSERT_TRUE(root.IsValid());
+    const ECS::EntityHandle lid = FindChild(world, root);
+    auto* renderer = world.GetComponentForWrite<Components::MeshRenderer>(lid);
+    ASSERT_NE(renderer, nullptr);
+    renderer->receiveShadows = false;
+    Notifications().NotifyComponentCommit<Components::MeshRenderer>(&world, lid);
+
+    Editor::UndoRedoService undo;
+    UIElement parent{"div"};
+    ShowInspector<Components::MeshRenderer>(parent, world, lid, undo);
+    Label* receive = FindLabel(parent, "Receive Shadows");
+    Label* motion = FindLabel(parent, "Motion Vectors");
+    ASSERT_NE(receive, nullptr);
+    ASSERT_NE(motion, nullptr);
+    UIElement* receiveRow = RowOfLabel(*receive);
+    ASSERT_NE(receiveRow, nullptr);
+    EXPECT_TRUE(receive->HasClass(kOverriddenLabelClass));
+    EXPECT_TRUE(HasOverrideMark(*receiveRow));
+    EXPECT_FALSE(motion->HasClass(kOverriddenLabelClass));
+
+    const auto menu = EditorTesting::OpenRowContextMenu(*receiveRow, *receive);
+    ASSERT_TRUE(menu.has_value()) << "a right-click on the row opened no menu";
+    EXPECT_EQ(EditorTesting::CapturedRows(*menu),
+              (std::vector<std::string>{"Apply to prefab 'Crate'", "Revert to prefab value"}));
+
+    menu->Invoke(EditorTesting::CapturedCommand(*menu, "Revert to prefab value"));
+    EXPECT_EQ(undo.GetUndoCount(), 1u);
+    EXPECT_STREQ(undo.PeekUndoName(), "Revert Receive Shadows");
+    EXPECT_TRUE(world.GetComponent<Components::MeshRenderer>(lid)->receiveShadows);
+}
+
+// A multi-selection shows no source: an overridden row of the primary entity has no marks and no override menu.
+TEST_F(PrefabPlaceTests, AMultiSelectionMarksNoRowAndOffersNoOverrideMenu)
+{
+    UIRegistration::RegisterBuiltInControls();
+    Editor::RegisterPrefabEditor(Notifications(), nullptr, nullptr, {}, {});
+    RegisterMeshRendererInspector();
+    const std::filesystem::path file = WriteAsset("Crate.prefab", kRendererPrefab);
+    ECS::World world;
+    const ECS::EntityHandle first = FindChild(world, PlaceAt(world, file, 0.0f, 0.0f, 0.0f));
+    const ECS::EntityHandle second = FindChild(world, PlaceAt(world, file, 5.0f, 0.0f, 0.0f));
+    ASSERT_TRUE(first.IsValid());
+    ASSERT_TRUE(second.IsValid());
+    world.GetComponentForWrite<Components::MeshRenderer>(first)->receiveShadows = false;
+    Notifications().NotifyComponentCommit<Components::MeshRenderer>(&world, first);
+
+    Editor::UndoRedoService undo;
+    UIElement parent{"div"};
+    InspectorContext context;
+    context.Parent = &parent;
+    context.World = &world;
+    context.Entity = first;
+    context.Entities = {first, second};
+    context.Undo = &undo;
+    context.ChangeNotifications = &Notifications();
+    InspectorFn* inspector = InspectorRegistry::Get().TryGetComponentInspector<Components::MeshRenderer>();
+    ASSERT_NE(inspector, nullptr);
+    (*inspector)(context);
+    Label* receive = FindLabel(parent, "Receive Shadows");
+    ASSERT_NE(receive, nullptr);
+    UIElement* receiveRow = RowOfLabel(*receive);
+    ASSERT_NE(receiveRow, nullptr);
+    EXPECT_FALSE(receive->HasClass(kOverriddenLabelClass));
+    EXPECT_FALSE(HasOverrideMark(*receiveRow));
+    EXPECT_FALSE(EditorTesting::OpenRowContextMenu(*receiveRow, *receive).has_value());
+}
+
+// Design 4.4 on the shared length row: the paving's Border Width row of an instance that changed it has the
+// mark and its row menu offers Apply and Revert.
+TEST_F(PrefabPlaceTests, TheLengthSliderRowOfAnOverriddenFieldIsMarkedAndItsMenuOffersApplyAndRevert)
+{
+    UIRegistration::RegisterBuiltInControls();
+    Editor::RegisterPrefabEditor(Notifications(), nullptr, nullptr, {}, {});
+    const std::filesystem::path file = WriteAsset("Crate.prefab", kRendererPrefab);
+    ECS::World world;
+    const ECS::EntityHandle root = PlaceAt(world, file, 0.0f, 0.0f, 0.0f);
+    ASSERT_TRUE(root.IsValid());
+    const ECS::EntityHandle lid = FindChild(world, root);
+    auto* paving = world.GetComponentForWrite<Components::SplinePaving>(lid);
+    ASSERT_NE(paving, nullptr);
+    paving->BorderWidth = 0.5f;
+    Notifications().NotifyComponentCommit<Components::SplinePaving>(&world, lid);
+
+    Editor::UndoRedoService undo;
+    UIElement parent{"div"};
+    InspectorContext context;
+    context.Parent = &parent;
+    context.World = &world;
+    context.Entity = lid;
+    context.Undo = &undo;
+    context.ChangeNotifications = &Notifications();
+    AddPavingBorderSizeRows(context, *paving);
+    const ECS::FieldInfo* widthField =
+        ECS::ComponentFieldRegistry::FindField(ECS::GetComponentTypeId<Components::SplinePaving>(), "BorderWidth");
+    ASSERT_NE(widthField, nullptr);
+    Label* width = FindLabel(parent, FieldDisplayName(*widthField));
+    ASSERT_NE(width, nullptr);
+    UIElement* widthRow = RowOfLabel(*width);
+    ASSERT_NE(widthRow, nullptr);
+    EXPECT_TRUE(width->HasClass(kOverriddenLabelClass));
+    EXPECT_TRUE(HasOverrideMark(*widthRow));
+
+    const auto menu = EditorTesting::OpenRowContextMenu(*widthRow, *width);
+    ASSERT_TRUE(menu.has_value()) << "a right-click on the row opened no menu";
+    EXPECT_EQ(EditorTesting::CapturedRows(*menu),
+              (std::vector<std::string>{"Apply to prefab 'Crate'", "Revert to prefab value"}));
+}
+
 // The entity's name is a field row of the Name component: an overridden name gets the mark too.
 TEST_F(PrefabPlaceTests, TheEntityHeaderMarksAnOverriddenName)
 {
-    Editor::RegisterPrefabEditor(Notifications(), nullptr, {}, {});
+    Editor::RegisterPrefabEditor(Notifications(), nullptr, nullptr, {}, {});
     const std::filesystem::path file = WriteAsset("Crate.prefab", kCratePrefab);
     ECS::World world;
     const ECS::EntityHandle root = PlaceAt(world, file, 0.0f, 0.0f, 0.0f);
@@ -1509,7 +1751,21 @@ TEST_F(PrefabPlaceTests, TheEntityHeaderMarksAnOverriddenName)
     SetName(world, lid, "Lid");
     Notifications().NotifyComponentCommit<Components::Name>(&world, lid);
     UpdateEntityNameOverrideMark(header, nameField, world, lid);
-    EXPECT_FALSE(header.HasClass("inspector-header-container-overridden")) << "the name is the prefab's again";
+    EXPECT_TRUE(header.HasClass("inspector-header-container-overridden")) << "a name set back to the prefab's keeps its record";
+
+    Editor::UndoRedoService undo;
+    const std::vector<OverrideMenuEntry> menu = InspectorRegistry::Get().QueryOverrideMenu(
+        {.World = &world,
+         .Entity = lid,
+         .Component = ECS::GetComponentTypeId<Components::Name>(),
+         .Field = "value",
+         .Undo = &undo,
+         .Notifications = &Notifications()});
+    ASSERT_FALSE(menu.empty());
+    ASSERT_EQ(menu.back().Label, "Revert to prefab value");
+    menu.back().Run();
+    UpdateEntityNameOverrideMark(header, nameField, world, lid);
+    EXPECT_FALSE(header.HasClass("inspector-header-container-overridden")) << "the revert drops the record";
     EXPECT_FALSE(nameField.HasClass("inspector-header-overridden"));
 }
 
@@ -1518,7 +1774,7 @@ TEST_F(PrefabPlaceTests, TheEntityHeaderMarksAnOverriddenName)
 TEST_F(PrefabPlaceTests, TheEntityHeaderOfAnAddedEntityReadsAdded)
 {
     UIRegistration::RegisterBuiltInControls();
-    Editor::RegisterPrefabEditor(Notifications(), nullptr, {}, {});
+    Editor::RegisterPrefabEditor(Notifications(), nullptr, nullptr, {}, {});
     const std::filesystem::path file = WriteAsset("Crate.prefab", kCratePrefab);
     ECS::World world;
     const ECS::EntityHandle root = PlaceAt(world, file, 0.0f, 0.0f, 0.0f);
@@ -1560,7 +1816,7 @@ TEST_F(PrefabPlaceTests, TheEntityHeaderOfAnAddedEntityReadsAdded)
 TEST_F(PrefabPlaceTests, AnAddedComponentHasItsBadgeAndARemovedOneItsHeaderAfterTheComponents)
 {
     UIRegistration::RegisterBuiltInControls();
-    Editor::RegisterPrefabEditor(Notifications(), nullptr, {}, {});
+    Editor::RegisterPrefabEditor(Notifications(), nullptr, nullptr, {}, {});
     const std::filesystem::path file = WriteAsset("Probe.prefab", kProbePrefab);
     ECS::World world;
     const ECS::EntityHandle root = PlaceAt(world, file, 0.0f, 0.0f, 0.0f);
@@ -1682,7 +1938,7 @@ TEST_F(PrefabPlaceTests, ThePrefabBarReadsNothingAtACommitInAnotherInstance)
 TEST_F(PrefabPlaceTests, ThePrefabBarOfANestedMemberNamesItsScope)
 {
     UIRegistration::RegisterBuiltInControls();
-    Editor::RegisterPrefabEditor(Notifications(), nullptr, {}, {});
+    Editor::RegisterPrefabEditor(Notifications(), nullptr, nullptr, {}, {});
     WriteAsset("Props/Wheel.prefab", "[prefab version=1]\n"
                                      "[entity id=\"root\"]\n"
                                      "[entity id=\"hub\" parent=\"root\"]\n"
@@ -1724,7 +1980,7 @@ TEST_F(PrefabPlaceTests, ThePrefabBarOfANestedMemberNamesItsScope)
 TEST_F(PrefabPlaceTests, ThePrefabBarOfAnAddedEntitySaysItWasAdded)
 {
     UIRegistration::RegisterBuiltInControls();
-    Editor::RegisterPrefabEditor(Notifications(), nullptr, {}, {});
+    Editor::RegisterPrefabEditor(Notifications(), nullptr, nullptr, {}, {});
     const std::filesystem::path file = WriteAsset("Crate.prefab", kCratePrefab);
     ECS::World world;
     const ECS::EntityHandle root = PlaceAt(world, file, 0.0f, 0.0f, 0.0f);
@@ -1790,7 +2046,8 @@ namespace
 
 // The sheets the editor attaches after the theme for a prefab bar: the Hierarchy's glyph, the buttons
 // and the bar's own sheet.
-const std::vector<std::string> kPrefabBarSheets{"Assets/UI/theme/views.css", "Assets/UI/controls/Button.css",
+const std::vector<std::string> kPrefabBarSheets{"Assets/UI/theme/views.css",
+                                                GE_UI_MODULE_SOURCE_DIR "/Assets/UI/controls/Button.css",
                                                 "Assets/UI/controls/PrefabBar/PrefabBar.css"};
 
 // The resolved style of the element `id` of `bar`; null when the bar has no such element.
@@ -1908,7 +2165,7 @@ TEST_F(PrefabPlaceTests, ThePrefabBarsSelectButtonKeepsOneHeightWhenTheCountLine
 // A committed field change marks the member's Hierarchy row with no change to the world's structure.
 TEST_F(PrefabPlaceTests, TheRowOfAMemberMarksAnOverrideAtTheCommit)
 {
-    Editor::RegisterPrefabEditor(Notifications(), nullptr, {}, {});
+    Editor::RegisterPrefabEditor(Notifications(), nullptr, nullptr, {}, {});
     const std::filesystem::path file = WriteAsset("Probe.prefab", kProbePrefab);
     ECS::World world;
     const ECS::EntityHandle root = PlaceAt(world, file, 0.0f, 0.0f, 0.0f);
@@ -1929,10 +2186,10 @@ TEST_F(PrefabPlaceTests, TheDescriptionsTrackAChannelMadeWhereADestroyedOneWas)
 {
     std::optional<Editor::EditorChangeNotifications> channel;
     channel.emplace();
-    Editor::PrefabInstanceDescriptions::Get().Track(*channel);
+    Editor::PrefabInstanceDescriptions::Get().Track(*channel, nullptr, {});
     channel.reset();
     channel.emplace();
-    Editor::PrefabInstanceDescriptions::Get().Track(*channel);
+    Editor::PrefabInstanceDescriptions::Get().Track(*channel, nullptr, {});
     const std::filesystem::path file = WriteAsset("Probe.prefab", kProbePrefab);
     ECS::World world;
     const ECS::EntityHandle root = PlaceAt(world, file, 0.0f, 0.0f, 0.0f);
@@ -1947,14 +2204,14 @@ TEST_F(PrefabPlaceTests, TheDescriptionsTrackAChannelMadeWhereADestroyedOneWas)
     const Editor::DescribedPrefabInstance* after = Editor::PrefabInstanceDescriptions::Get().FindInstance(world, lid);
     ASSERT_NE(after, nullptr);
     EXPECT_TRUE(after->Find(lid)->HasOverrides()) << "the commit on the new channel left the description stale";
-    Editor::PrefabInstanceDescriptions::Get().Track(Notifications());
+    Editor::PrefabInstanceDescriptions::Get().Track(Notifications(), nullptr, {});
 }
 
 // Unpack takes the shown entity out of its instance: the bar asks for the rebuild that drops it.
 TEST_F(PrefabPlaceTests, ThePrefabBarRebuildsTheInspectorWhenTheEntityLeavesItsInstance)
 {
     UIRegistration::RegisterBuiltInControls();
-    Editor::RegisterPrefabEditor(Notifications(), nullptr, {}, {});
+    Editor::RegisterPrefabEditor(Notifications(), nullptr, nullptr, {}, {});
     const std::filesystem::path file = WriteAsset("Crate.prefab", kCratePrefab);
     ECS::World world;
     const ECS::EntityHandle crate = PlaceAt(world, file, 0.0f, 0.0f, 0.0f);
@@ -1977,7 +2234,7 @@ TEST_F(PrefabPlaceTests, ThePrefabBarRebuildsTheInspectorWhenTheEntityLeavesItsI
 TEST_F(PrefabPlaceTests, ANameTypedOnAMemberKeepsTheFieldFocusedAndMarksItInPlace)
 {
     UIRegistration::RegisterBuiltInControls();
-    Editor::RegisterPrefabEditor(Notifications(), nullptr, {}, {});
+    Editor::RegisterPrefabEditor(Notifications(), nullptr, nullptr, {}, {});
     // First local: destroyed last, after the UIManager released its buffers.
     SharedDeviceReleaseRetirement releaseRetirement;
     Rendering::IDevice* device = SharedHeadlessDevice();
@@ -2059,11 +2316,11 @@ TEST_F(PrefabPlaceTests, ThePrefabBarAsksForARebuildWhenTheInstanceRemovesACompo
 }
 
 // The rows of a member set their marks again in place: the same row gains the mark at a commit that
-// overrides its field and loses it at a commit that sets the prefab's value again.
+// overrides its field, keeps it at a commit that sets the prefab's value again, and loses it at the revert.
 TEST_F(PrefabPlaceTests, TheDefaultRowsSetTheirMarksAgainInPlace)
 {
     UIRegistration::RegisterBuiltInControls();
-    Editor::RegisterPrefabEditor(Notifications(), nullptr, {}, {});
+    Editor::RegisterPrefabEditor(Notifications(), nullptr, nullptr, {}, {});
     const std::filesystem::path file = WriteAsset("Probe.prefab", kProbePrefab);
     ECS::World world;
     const ECS::EntityHandle root = PlaceAt(world, file, 0.0f, 0.0f, 0.0f);
@@ -2078,20 +2335,34 @@ TEST_F(PrefabPlaceTests, TheDefaultRowsSetTheirMarksAgainInPlace)
     context.Entity = lid;
     context.OverrideMarkRefreshCallbacks = &refreshMarks;
     ASSERT_TRUE(RenderDefaultComponentInspector(context, probeType));
-    ASSERT_EQ(refreshMarks.size(), 1u);
+    ASSERT_FALSE(refreshMarks.empty());
     const UIElement* intensity = FindFieldRow(parent, "Intensity");
     ASSERT_NE(intensity, nullptr);
     EXPECT_FALSE(HasOverrideMark(*intensity));
 
     world.GetComponentForWrite<Components::ReflectionProbe>(lid)->Intensity = 2.0f;
     Notifications().NotifyComponentCommit<Components::ReflectionProbe>(&world, lid);
-    refreshMarks.front()();
+    RunMarkRefreshes(refreshMarks);
     EXPECT_EQ(FindFieldRow(parent, "Intensity"), intensity) << "the row was built again";
     EXPECT_TRUE(HasOverrideMark(*intensity));
 
     world.GetComponentForWrite<Components::ReflectionProbe>(lid)->Intensity = 1.0f;
     Notifications().NotifyComponentCommit<Components::ReflectionProbe>(&world, lid);
-    refreshMarks.front()();
+    RunMarkRefreshes(refreshMarks);
+    EXPECT_TRUE(HasOverrideMark(*intensity)) << "a field set back to the prefab's value keeps its record";
+
+    Editor::UndoRedoService undo;
+    const std::vector<OverrideMenuEntry> menu =
+        InspectorRegistry::Get().QueryOverrideMenu({.World = &world,
+                                                    .Entity = lid,
+                                                    .Component = probeType,
+                                                    .Field = "Intensity",
+                                                    .Undo = &undo,
+                                                    .Notifications = &Notifications()});
+    ASSERT_FALSE(menu.empty());
+    ASSERT_EQ(menu.back().Label, "Revert to prefab value");
+    menu.back().Run();
+    RunMarkRefreshes(refreshMarks);
     EXPECT_FALSE(HasOverrideMark(*intensity));
 }
 
@@ -2110,13 +2381,87 @@ std::vector<std::string> LabelsOf(const std::vector<OverrideMenuEntry>& entries)
 std::vector<OverrideMenuEntry> OverrideMenuOf(ECS::World& world, ECS::EntityHandle entity, ECS::ComponentTypeId typeId,
                                               std::string field, Editor::UndoRedoService& undo)
 {
-    return InspectorRegistry::Get().QueryOverrideMenu({&world, entity, typeId, std::move(field), &undo, &Notifications()});
+    return InspectorRegistry::Get().QueryOverrideMenu({.World = &world,
+                                                       .Entity = entity,
+                                                       .Component = typeId,
+                                                       .Field = std::move(field),
+                                                       .Undo = &undo,
+                                                       .Notifications = &Notifications()});
 }
 
 float IntensityOf(ECS::World& world, ECS::EntityHandle entity)
 {
     const auto* probe = world.GetComponent<Components::ReflectionProbe>(entity);
     return probe ? probe->Intensity : -1.0f;
+}
+
+// Sets the probe's Intensity on `entity` through the Inspector's edit path: one interactive edit in `undo`, announced
+// as a commit on the tests' channel.
+void CommitIntensity(ECS::World& world, ECS::EntityHandle entity, Editor::UndoRedoService& undo, float intensity)
+{
+    const ECS::ComponentTypeId probeType = ECS::GetComponentTypeId<Components::ReflectionProbe>();
+    auto edit = undo.BeginInteractiveEdit(
+        "Set Intensity",
+        Editor::MultiEntityUndo::MakeComponentSnapshotTarget(&world, {entity}, probeType, &Notifications(), "Intensity"));
+    world.GetComponentForWrite<Components::ReflectionProbe>(entity)->Intensity = intensity;
+    edit.Commit();
+}
+
+// Sets the probe's Intensity on `entity` as a custom inspector's toggle does: a commit that pushes no undo step.
+void CommitIntensityOutsideTheUndoHistory(ECS::World& world, ECS::EntityHandle entity, float intensity)
+{
+    Components::ReflectionProbe probe = *world.GetComponent<Components::ReflectionProbe>(entity);
+    probe.Intensity = intensity;
+    Editor::CommitComponentUpdate(&world, entity, &Notifications(), probe);
+}
+
+// An undo step that changes no component, as the Hierarchy's selection step does.
+class SelectionStep final : public Editor::IEditorCommand
+{
+  public:
+    const char* GetName() const override { return "Hierarchy Selection"; }
+    void Do() override {}
+    void Undo() override {}
+};
+
+// Sets the probe's Intensity on `entity` and announces a Commit in Do and in Undo, as a command that announces its
+// own writes does (the material drop, the reparent).
+class IntensityCommand final : public Editor::IEditorCommand
+{
+  public:
+    IntensityCommand(ECS::World& world, ECS::EntityHandle entity, float before, float after)
+        : m_World(world), m_Entity(entity), m_Before(before), m_After(after)
+    {
+    }
+    const char* GetName() const override { return "Set Intensity"; }
+    void Do() override { Apply(m_After); }
+    void Undo() override { Apply(m_Before); }
+
+  private:
+    void Apply(float intensity)
+    {
+        m_World.GetComponentForWrite<Components::ReflectionProbe>(m_Entity)->Intensity = intensity;
+        Notifications().NotifyComponentCommit<Components::ReflectionProbe>(&m_World, m_Entity);
+    }
+
+    ECS::World& m_World;
+    ECS::EntityHandle m_Entity;
+    float m_Before = 0.0f;
+    float m_After = 0.0f;
+};
+
+bool IsNameOverridden(ECS::World& world, ECS::EntityHandle entity)
+{
+    return InspectorRegistry::Get()
+        .QueryComponentOverrides(world, entity, ECS::GetComponentTypeId<Components::Name>())
+        .IsFieldOverridden("value");
+}
+
+bool IsIntensityOverridden(ECS::World& world, ECS::EntityHandle entity)
+{
+    return InspectorRegistry::Get()
+        .QueryComponentOverrides(world, entity, ECS::GetComponentTypeId<Components::ReflectionProbe>())
+        .IsFieldOverridden("Intensity");
 }
 
 } // namespace
@@ -2126,7 +2471,7 @@ float IntensityOf(ECS::World& world, ECS::EntityHandle entity)
 TEST_F(PrefabPlaceTests, TheRowMenuOfAnOverriddenFieldAppliesItToThePrefabAndEveryInstanceInOneUndoStep)
 {
     UIRegistration::RegisterBuiltInControls();
-    Editor::RegisterPrefabEditor(Notifications(), nullptr, {}, {});
+    Editor::RegisterPrefabEditor(Notifications(), nullptr, nullptr, {}, {});
     const std::filesystem::path file = WriteAsset("Probe.prefab", kProbePrefab);
     ECS::World world;
     const ECS::EntityHandle first = PlaceAt(world, file, 0.0f, 0.0f, 0.0f);
@@ -2144,7 +2489,7 @@ TEST_F(PrefabPlaceTests, TheRowMenuOfAnOverriddenFieldAppliesItToThePrefabAndEve
     const std::vector<OverrideMenuEntry> menu = OverrideMenuOf(world, firstLid, probeType, "Intensity", undo);
     ASSERT_EQ(LabelsOf(menu), (std::vector<std::string>{"Apply to prefab 'Probe'", "Revert to prefab value"}));
     EXPECT_EQ(menu[0].IconPath, EditorIcons::kCube);
-    EXPECT_EQ(menu[1].IconPath, EditorIcons::kReset);
+    EXPECT_EQ(menu[1].IconPath, EditorIcons::kRevert);
 
     menu[0].Run();
     EXPECT_EQ(undo.GetUndoCount(), 1u);
@@ -2170,7 +2515,7 @@ TEST_F(PrefabPlaceTests, TheRowMenuOfAnOverriddenFieldAppliesItToThePrefabAndEve
 TEST_F(PrefabPlaceTests, TheRowMenuRevertsAFieldAndAStaleOverrideIsRefusedWithANotice)
 {
     UIRegistration::RegisterBuiltInControls();
-    Editor::RegisterPrefabEditor(Notifications(), nullptr, {}, {});
+    Editor::RegisterPrefabEditor(Notifications(), nullptr, nullptr, {}, {});
     const std::filesystem::path file = WriteAsset("Probe.prefab", kProbePrefab);
     ECS::World world;
     const ECS::EntityHandle root = PlaceAt(world, file, 0.0f, 0.0f, 0.0f);
@@ -2205,12 +2550,358 @@ TEST_F(PrefabPlaceTests, TheRowMenuRevertsAFieldAndAStaleOverrideIsRefusedWithAN
     EXPECT_EQ(undo.GetUndoCount(), steps);
 }
 
+// Design 2.6: a field set back to the prefab's value at a commit keeps a record, so its row keeps the mark, the
+// bar and the Overrides list count it, and the row menu offers the revert. The revert drops the record in one
+// undo step, and the undo gives the record back.
+TEST_F(PrefabPlaceTests, AFieldSetBackToThePrefabValueStaysAnOverrideUntilTheRowMenuRevertsIt)
+{
+    UIRegistration::RegisterBuiltInControls();
+    Editor::RegisterPrefabEditor(Notifications(), nullptr, nullptr, {}, {});
+    const std::filesystem::path file = WriteAsset("Probe.prefab", kProbePrefab);
+    ECS::World world;
+    const ECS::EntityHandle root = PlaceAt(world, file, 0.0f, 0.0f, 0.0f);
+    ASSERT_TRUE(root.IsValid());
+    const ECS::EntityHandle lid = FindChild(world, root);
+    const ECS::ComponentTypeId probeType = ECS::GetComponentTypeId<Components::ReflectionProbe>();
+    world.GetComponentForWrite<Components::ReflectionProbe>(lid)->Intensity = 2.0f;
+    Notifications().NotifyComponentCommit<Components::ReflectionProbe>(&world, lid);
+    ASSERT_TRUE(InspectorRegistry::Get().QueryComponentOverrides(world, lid, probeType).IsFieldOverridden("Intensity"));
+    world.GetComponentForWrite<Components::ReflectionProbe>(lid)->Intensity = 1.0f;
+    Notifications().NotifyComponentCommit<Components::ReflectionProbe>(&world, lid);
+
+    EXPECT_TRUE(InspectorRegistry::Get().QueryComponentOverrides(world, lid, probeType).IsFieldOverridden("Intensity"));
+    UIElement parent{"div"};
+    InspectorContext context;
+    context.Parent = &parent;
+    context.World = &world;
+    context.Entity = lid;
+    ASSERT_TRUE(RenderDefaultComponentInspector(context, probeType));
+    const UIElement* intensity = FindFieldRow(parent, "Intensity");
+    ASSERT_NE(intensity, nullptr);
+    EXPECT_TRUE(HasOverrideMark(*intensity));
+    EXPECT_EQ(Editor::PrefabOverridesListModel::Count(world, lid, {}).Overrides, 1u);
+    Editor::PrefabBar bar(world, lid, &Notifications(), nullptr, {}, {}, {}, {});
+    EXPECT_EQ(EntityCountText(bar), "1 override on Lid");
+
+    Editor::UndoRedoService undo;
+    const std::vector<OverrideMenuEntry> menu = OverrideMenuOf(world, lid, probeType, "Intensity", undo);
+    ASSERT_EQ(LabelsOf(menu), (std::vector<std::string>{"Apply to prefab 'Probe'", "Revert to prefab value"}));
+    menu[1].Run();
+    EXPECT_EQ(undo.GetUndoCount(), 1u);
+    EXPECT_FLOAT_EQ(IntensityOf(world, lid), 1.0f);
+    EXPECT_FALSE(InspectorRegistry::Get().QueryComponentOverrides(world, lid, probeType).Overridden);
+    EXPECT_EQ(EntityCountText(bar), "No overrides");
+    undo.Undo();
+    EXPECT_TRUE(InspectorRegistry::Get().QueryComponentOverrides(world, lid, probeType).IsFieldOverridden("Intensity"));
+    undo.Redo();
+    EXPECT_FALSE(InspectorRegistry::Get().QueryComponentOverrides(world, lid, probeType).Overridden);
+}
+
+// Design 2.6: the record a commit writes joins the commit's undo step, so two undos give back the state before two
+// edits, and two redos give the record back.
+TEST_F(PrefabPlaceTests, TwoUndosOfInspectorEditsLeaveNoOverrideAndTwoRedosGiveTheRecordBack)
+{
+    Editor::UndoRedoService undo;
+    Editor::RegisterPrefabEditor(Notifications(), &undo, nullptr, {}, {});
+    const std::filesystem::path file = WriteAsset("Probe.prefab", kProbePrefab);
+    ECS::World world;
+    const ECS::EntityHandle root = PlaceAt(world, file, 0.0f, 0.0f, 0.0f);
+    ASSERT_TRUE(root.IsValid());
+    const ECS::EntityHandle lid = FindChild(world, root);
+    CommitIntensity(world, lid, undo, 2.0f);
+    ASSERT_TRUE(IsIntensityOverridden(world, lid));
+    CommitIntensity(world, lid, undo, 1.0f);
+    ASSERT_TRUE(IsIntensityOverridden(world, lid)) << "a field set back to the prefab's value keeps its record";
+    ASSERT_EQ(undo.GetUndoCount(), 2u);
+
+    undo.Undo();
+    EXPECT_FLOAT_EQ(IntensityOf(world, lid), 2.0f);
+    EXPECT_TRUE(IsIntensityOverridden(world, lid));
+    undo.Undo();
+    EXPECT_FLOAT_EQ(IntensityOf(world, lid), 1.0f);
+    EXPECT_FALSE(IsIntensityOverridden(world, lid)) << "two undos give back the state before the two edits";
+    undo.Redo();
+    undo.Redo();
+    EXPECT_FLOAT_EQ(IntensityOf(world, lid), 1.0f);
+    EXPECT_TRUE(IsIntensityOverridden(world, lid)) << "the redo gives the record back";
+}
+
+// The Overrides list row of a field that keeps its record at the prefab's value says that the two values are the same.
+TEST_F(PrefabPlaceTests, TheOverridesListRowOfAFieldSetBackSaysItIsTheSameAsThePrefab)
+{
+    Editor::UndoRedoService undo;
+    Editor::RegisterPrefabEditor(Notifications(), &undo, nullptr, {}, {});
+    const std::filesystem::path file = WriteAsset("Probe.prefab", kProbePrefab);
+    ECS::World world;
+    const ECS::EntityHandle root = PlaceAt(world, file, 0.0f, 0.0f, 0.0f);
+    ASSERT_TRUE(root.IsValid());
+    const ECS::EntityHandle lid = FindChild(world, root);
+    CommitIntensity(world, lid, undo, 2.0f);
+    ASSERT_TRUE(IsIntensityOverridden(world, lid));
+    CommitIntensity(world, lid, undo, 1.0f);
+
+    const Editor::PrefabOverridesListModel model = Editor::PrefabOverridesListModel::Describe(world, lid, {});
+    ASSERT_EQ(model.Groups.size(), 1u);
+    ASSERT_EQ(model.Groups[0].Rows.size(), 1u);
+    const Editor::PrefabOverrideRow& row = model.Groups[0].Rows[0];
+    EXPECT_EQ(row.Label, "Reflection Probe: Intensity");
+    EXPECT_EQ(row.PrefabValue, "1");
+    EXPECT_TRUE(row.SameAsPrefab);
+}
+
+// An interactive edit that changes no value pushes no undo step, so it gives no record and keeps the redo.
+TEST_F(PrefabPlaceTests, AnInteractiveEditThatChangesNoValueGivesNoRecordAndKeepsTheRedo)
+{
+    Editor::UndoRedoService undo;
+    Editor::RegisterPrefabEditor(Notifications(), &undo, nullptr, {}, {});
+    const std::filesystem::path file = WriteAsset("Probe.prefab", kProbePrefab);
+    ECS::World world;
+    const ECS::EntityHandle root = PlaceAt(world, file, 0.0f, 0.0f, 0.0f);
+    ASSERT_TRUE(root.IsValid());
+    const ECS::EntityHandle lid = FindChild(world, root);
+    CommitIntensity(world, lid, undo, 2.0f);
+    ASSERT_TRUE(IsIntensityOverridden(world, lid));
+    CommitIntensity(world, lid, undo, 3.0f);
+    undo.Undo();
+    ASSERT_TRUE(IsIntensityOverridden(world, lid));
+
+    CommitIntensity(world, lid, undo, 2.0f);
+    EXPECT_EQ(undo.GetUndoCount(), 1u);
+    EXPECT_EQ(undo.GetRedoCount(), 1u);
+    world.GetComponentForWrite<Components::ReflectionProbe>(lid)->Intensity = 1.0f;
+    Notifications().NotifyComponentChanged({&world, lid, ECS::GetComponentTypeId<Components::ReflectionProbe>(),
+                                            Editor::EditorChangeNotifications::ChangeKind::UndoRedo});
+    EXPECT_FALSE(IsIntensityOverridden(world, lid)) << "the commit that changed nothing gave no record";
+}
+
+// One Inspector commit of several entities pushes one step and announces each entity: each one gets its record.
+TEST_F(PrefabPlaceTests, AMultiEntityCommitGivesARecordToEachEntity)
+{
+    Editor::UndoRedoService undo;
+    Editor::RegisterPrefabEditor(Notifications(), &undo, nullptr, {}, {});
+    const std::filesystem::path file = WriteAsset("Probe.prefab", kProbePrefab);
+    ECS::World world;
+    const ECS::EntityHandle first = PlaceAt(world, file, 0.0f, 0.0f, 0.0f);
+    const ECS::EntityHandle second = PlaceAt(world, file, 4.0f, 0.0f, 0.0f);
+    ASSERT_TRUE(first.IsValid() && second.IsValid());
+    const ECS::EntityHandle firstLid = FindChild(world, first);
+    const ECS::EntityHandle secondLid = FindChild(world, second);
+    const ECS::ComponentTypeId probeType = ECS::GetComponentTypeId<Components::ReflectionProbe>();
+    for (const float intensity : {2.0f, 1.0f})
+    {
+        ASSERT_EQ(IsIntensityOverridden(world, firstLid), intensity == 1.0f);
+        ASSERT_EQ(IsIntensityOverridden(world, secondLid), intensity == 1.0f);
+        const std::vector<ECS::EntityHandle> lids = {firstLid, secondLid};
+        auto edit = undo.BeginInteractiveEdit(
+            "Set Intensity",
+            Editor::MultiEntityUndo::MakeComponentSnapshotTarget(&world, lids, probeType, &Notifications(), "Intensity"));
+        world.GetComponentForWrite<Components::ReflectionProbe>(firstLid)->Intensity = intensity;
+        world.GetComponentForWrite<Components::ReflectionProbe>(secondLid)->Intensity = intensity;
+        edit.Commit();
+    }
+    EXPECT_TRUE(IsIntensityOverridden(world, firstLid));
+    EXPECT_TRUE(IsIntensityOverridden(world, secondLid)) << "the second entity of the commit keeps its record";
+    EXPECT_EQ(undo.GetUndoCount(), 2u);
+}
+
+// A commit outside the undo history (a custom inspector's toggle, the Inspector header's rename) has no step to
+// join, so a field set back to the prefab's value keeps its record with no step.
+TEST_F(PrefabPlaceTests, ACommitOutsideTheUndoHistoryKeepsTheRecordOfAFieldSetBack)
+{
+    Editor::UndoRedoService undo;
+    Editor::RegisterPrefabEditor(Notifications(), &undo, nullptr, {}, {});
+    const std::filesystem::path file = WriteAsset("Probe.prefab", kProbePrefab);
+    ECS::World world;
+    const ECS::EntityHandle root = PlaceAt(world, file, 0.0f, 0.0f, 0.0f);
+    ASSERT_TRUE(root.IsValid());
+    const ECS::EntityHandle lid = FindChild(world, root);
+    CommitIntensityOutsideTheUndoHistory(world, lid, 2.0f);
+    ASSERT_TRUE(IsIntensityOverridden(world, lid));
+    CommitIntensityOutsideTheUndoHistory(world, lid, 1.0f);
+
+    EXPECT_TRUE(IsIntensityOverridden(world, lid)) << "a field set back to the prefab's value keeps its record";
+    EXPECT_EQ(undo.GetUndoCount(), 0u);
+}
+
+// A step that announces no component change (the Hierarchy's selection) is not the step of a later commit outside
+// the undo history, so the undo of that step keeps the commit's record.
+TEST_F(PrefabPlaceTests, TheUndoOfASelectionStepKeepsTheRecordOfALaterCommitOutsideTheUndoHistory)
+{
+    Editor::UndoRedoService undo;
+    Editor::RegisterPrefabEditor(Notifications(), &undo, nullptr, {}, {});
+    const std::filesystem::path file = WriteAsset("Probe.prefab", kProbePrefab);
+    ECS::World world;
+    const ECS::EntityHandle root = PlaceAt(world, file, 0.0f, 0.0f, 0.0f);
+    ASSERT_TRUE(root.IsValid());
+    const ECS::EntityHandle lid = FindChild(world, root);
+    CommitIntensity(world, lid, undo, 2.0f);
+    ASSERT_TRUE(IsIntensityOverridden(world, lid));
+    undo.Execute(std::make_unique<SelectionStep>());
+    CommitIntensityOutsideTheUndoHistory(world, lid, 1.0f);
+    ASSERT_TRUE(IsIntensityOverridden(world, lid));
+    ASSERT_EQ(undo.GetUndoCount(), 2u);
+    EXPECT_STREQ(undo.GetUndoTypeNameAt(1), "Command") << "the selection step holds only the selection";
+
+    undo.Undo();
+    EXPECT_FLOAT_EQ(IntensityOf(world, lid), 1.0f);
+    EXPECT_TRUE(IsIntensityOverridden(world, lid)) << "the undo of the selection keeps the record";
+}
+
+// A cancelled edit restores the value it started from and pushes no step, so it gives no record: the undo of the
+// commit before it leaves no override.
+TEST_F(PrefabPlaceTests, ACancelledEditGivesNoRecord)
+{
+    Editor::UndoRedoService undo;
+    Editor::RegisterPrefabEditor(Notifications(), &undo, nullptr, {}, {});
+    const std::filesystem::path file = WriteAsset("Probe.prefab", kProbePrefab);
+    ECS::World world;
+    const ECS::EntityHandle root = PlaceAt(world, file, 0.0f, 0.0f, 0.0f);
+    ASSERT_TRUE(root.IsValid());
+    const ECS::EntityHandle lid = FindChild(world, root);
+    CommitIntensity(world, lid, undo, 2.0f);
+    ASSERT_TRUE(IsIntensityOverridden(world, lid));
+    {
+        auto edit = undo.BeginInteractiveEdit(
+            "Set Intensity", Editor::MultiEntityUndo::MakeComponentSnapshotTarget(
+                                 &world, {lid}, ECS::GetComponentTypeId<Components::ReflectionProbe>(),
+                                 &Notifications(), "Intensity"));
+        world.GetComponentForWrite<Components::ReflectionProbe>(lid)->Intensity = 3.0f;
+        edit.Cancel();
+    }
+    ASSERT_EQ(undo.GetUndoCount(), 1u);
+
+    undo.Undo();
+    EXPECT_FLOAT_EQ(IntensityOf(world, lid), 1.0f);
+    EXPECT_FALSE(IsIntensityOverridden(world, lid)) << "the cancelled edit gave no record";
+}
+
+// The Hierarchy rename pushes its step, then announces the Name commit: the record of the name set back joins that
+// step, so the undo of both renames leaves no override.
+TEST_F(PrefabPlaceTests, TwoUndosOfAHierarchyRenameSetBackLeaveNoOverride)
+{
+    Editor::UndoRedoService undo;
+    Editor::RegisterPrefabEditor(Notifications(), &undo, nullptr, {}, {});
+    const std::filesystem::path file = WriteAsset("Probe.prefab", kProbePrefab);
+    ECS::World world;
+    const ECS::EntityHandle root = PlaceAt(world, file, 0.0f, 0.0f, 0.0f);
+    ASSERT_TRUE(root.IsValid());
+    const ECS::EntityHandle lid = FindChild(world, root);
+    ASSERT_TRUE(Editor::CommitEntityRename(world, lid, "Top", &undo, &Notifications()));
+    ASSERT_TRUE(IsNameOverridden(world, lid));
+    ASSERT_TRUE(Editor::CommitEntityRename(world, lid, "Lid", &undo, &Notifications()));
+    ASSERT_TRUE(IsNameOverridden(world, lid)) << "the name set back keeps its record";
+    ASSERT_EQ(undo.GetUndoCount(), 2u);
+
+    undo.Undo();
+    undo.Undo();
+    EXPECT_EQ(world.GetComponent<Components::Name>(lid)->View(), "Lid");
+    EXPECT_FALSE(IsNameOverridden(world, lid)) << "the record left with the rename's step";
+}
+
+// A command run by Execute that announces its own commit: the record of the field set back joins the command's
+// step, so the undo of that step and the step before it leaves no override.
+TEST_F(PrefabPlaceTests, TheRecordOfACommitAnnouncedByAnExecutedCommandJoinsItsStep)
+{
+    Editor::UndoRedoService undo;
+    Editor::RegisterPrefabEditor(Notifications(), &undo, nullptr, {}, {});
+    const std::filesystem::path file = WriteAsset("Probe.prefab", kProbePrefab);
+    ECS::World world;
+    const ECS::EntityHandle root = PlaceAt(world, file, 0.0f, 0.0f, 0.0f);
+    ASSERT_TRUE(root.IsValid());
+    const ECS::EntityHandle lid = FindChild(world, root);
+    CommitIntensity(world, lid, undo, 2.0f);
+    ASSERT_TRUE(IsIntensityOverridden(world, lid));
+    undo.Execute(std::make_unique<IntensityCommand>(world, lid, 2.0f, 1.0f));
+    ASSERT_TRUE(IsIntensityOverridden(world, lid)) << "the field set back keeps its record";
+    ASSERT_EQ(undo.GetUndoCount(), 2u) << "the record joins the command's step";
+
+    undo.Undo();
+    EXPECT_FLOAT_EQ(IntensityOf(world, lid), 2.0f);
+    undo.Undo();
+    EXPECT_FLOAT_EQ(IntensityOf(world, lid), 1.0f);
+    EXPECT_FALSE(IsIntensityOverridden(world, lid)) << "the record left with the command's step";
+}
+
+// A commit announced while Undo runs a command writes no record: the undo puts back a value, it makes no edit.
+TEST_F(PrefabPlaceTests, ACommitAnnouncedDuringAnUndoWritesNoRecord)
+{
+    Editor::UndoRedoService undo;
+    Editor::RegisterPrefabEditor(Notifications(), &undo, nullptr, {}, {});
+    const std::filesystem::path file = WriteAsset("Probe.prefab", kProbePrefab);
+    ECS::World world;
+    const ECS::EntityHandle root = PlaceAt(world, file, 0.0f, 0.0f, 0.0f);
+    ASSERT_TRUE(root.IsValid());
+    const ECS::EntityHandle lid = FindChild(world, root);
+    ASSERT_FALSE(IsIntensityOverridden(world, lid));
+    undo.Execute(std::make_unique<IntensityCommand>(world, lid, 1.0f, 2.0f));
+    ASSERT_TRUE(IsIntensityOverridden(world, lid));
+
+    undo.Undo();
+    EXPECT_FLOAT_EQ(IntensityOf(world, lid), 1.0f);
+    EXPECT_FALSE(IsIntensityOverridden(world, lid)) << "the undo wrote a record";
+}
+
+// Design 2.6: a commit in Play writes no record, so a field the game changed and Stop restores is no override.
+TEST_F(PrefabPlaceTests, ACommitInPlayLeavesNoOverrideAfterStop)
+{
+    const auto playing = std::make_shared<bool>(true);
+    Editor::RegisterPrefabEditor(Notifications(), nullptr, nullptr, [playing]() { return *playing; }, {});
+    const std::filesystem::path file = WriteAsset("Probe.prefab", kProbePrefab);
+    ECS::World world;
+    const ECS::EntityHandle root = PlaceAt(world, file, 0.0f, 0.0f, 0.0f);
+    ASSERT_TRUE(root.IsValid());
+    const ECS::EntityHandle lid = FindChild(world, root);
+    const ECS::ComponentTypeId probeType = ECS::GetComponentTypeId<Components::ReflectionProbe>();
+    world.GetComponentForWrite<Components::ReflectionProbe>(lid)->Intensity = 2.0f;
+    Notifications().NotifyComponentChanged(
+        {&world, lid, probeType, Editor::EditorChangeNotifications::ChangeKind::UndoRedo});
+    ASSERT_TRUE(IsIntensityOverridden(world, lid)) << "the game changed the field";
+    Notifications().NotifyComponentCommit<Components::ReflectionProbe>(&world, lid);
+
+    world.GetComponentForWrite<Components::ReflectionProbe>(lid)->Intensity = 1.0f;
+    Notifications().NotifyComponentChanged(
+        {&world, lid, probeType, Editor::EditorChangeNotifications::ChangeKind::UndoRedo});
+    *playing = false;
+    EXPECT_FALSE(InspectorRegistry::Get().QueryComponentOverrides(world, lid, probeType).Overridden)
+        << "a Play session leaves no override in the edit world";
+}
+
+// Design 2.6: Apply drops the record of the applied field in its undo step, and the undo gives the record back.
+TEST_F(PrefabPlaceTests, TheUndoOfAnApplyGivesTheRecordBack)
+{
+    UIRegistration::RegisterBuiltInControls();
+    Editor::UndoRedoService undo;
+    Editor::RegisterPrefabEditor(Notifications(), &undo, nullptr, {}, {});
+    const std::filesystem::path file = WriteAsset("Probe.prefab", kProbePrefab);
+    ECS::World world;
+    const ECS::EntityHandle root = PlaceAt(world, file, 0.0f, 0.0f, 0.0f);
+    ASSERT_TRUE(root.IsValid());
+    const ECS::EntityHandle lid = FindChild(world, root);
+    const ECS::ComponentTypeId probeType = ECS::GetComponentTypeId<Components::ReflectionProbe>();
+    CommitIntensity(world, lid, undo, 2.0f);
+    ASSERT_TRUE(IsIntensityOverridden(world, lid));
+    CommitIntensity(world, lid, undo, 1.0f);
+    ASSERT_TRUE(IsIntensityOverridden(world, lid));
+    const std::size_t steps = undo.GetUndoCount();
+
+    const std::vector<OverrideMenuEntry> menu = OverrideMenuOf(world, lid, probeType, "Intensity", undo);
+    ASSERT_EQ(LabelsOf(menu), (std::vector<std::string>{"Apply to prefab 'Probe'", "Revert to prefab value"}));
+    menu[0].Run();
+    EXPECT_EQ(undo.GetUndoCount(), steps + 1);
+    EXPECT_FALSE(InspectorRegistry::Get().QueryComponentOverrides(world, lid, probeType).Overridden)
+        << "the prefab holds the value";
+    undo.Undo();
+    EXPECT_TRUE(IsIntensityOverridden(world, lid)) << "the undo gives the record back";
+    undo.Redo();
+    EXPECT_FALSE(InspectorRegistry::Get().QueryComponentOverrides(world, lid, probeType).Overridden);
+}
+
 // Apply and Revert edit the edit world and the prefab file, so the menus offer nothing in Play mode.
 TEST_F(PrefabPlaceTests, TheOverrideMenuIsEmptyInPlayMode)
 {
     UIRegistration::RegisterBuiltInControls();
     const auto playing = std::make_shared<bool>(true);
-    Editor::RegisterPrefabEditor(Notifications(), nullptr, [playing]() { return *playing; }, {});
+    Editor::RegisterPrefabEditor(Notifications(), nullptr, nullptr, [playing]() { return *playing; }, {});
     const std::filesystem::path file = WriteAsset("Probe.prefab", kProbePrefab);
     ECS::World world;
     const ECS::EntityHandle root = PlaceAt(world, file, 0.0f, 0.0f, 0.0f);
@@ -2231,7 +2922,7 @@ TEST_F(PrefabPlaceTests, TheOverrideMenuIsEmptyInPlayMode)
 TEST_F(PrefabPlaceTests, TheHeaderMenuOfAnAddedComponentAppliesItToThePrefabOrRemovesItFromTheInstance)
 {
     UIRegistration::RegisterBuiltInControls();
-    Editor::RegisterPrefabEditor(Notifications(), nullptr, {}, {});
+    Editor::RegisterPrefabEditor(Notifications(), nullptr, nullptr, {}, {});
     const std::filesystem::path file = WriteAsset("Probe.prefab", kProbePrefab);
     ECS::World world;
     const ECS::EntityHandle first = PlaceAt(world, file, 0.0f, 0.0f, 0.0f);
@@ -2266,7 +2957,7 @@ TEST_F(PrefabPlaceTests, TheHeaderMenuOfAnAddedComponentAppliesItToThePrefabOrRe
 TEST_F(PrefabPlaceTests, TheHeaderMenuOfARemovedComponentRestoresItOrAppliesTheRemovalToThePrefab)
 {
     UIRegistration::RegisterBuiltInControls();
-    Editor::RegisterPrefabEditor(Notifications(), nullptr, {}, {});
+    Editor::RegisterPrefabEditor(Notifications(), nullptr, nullptr, {}, {});
     const std::filesystem::path file = WriteAsset("Probe.prefab", kProbePrefab);
     ECS::World world;
     const ECS::EntityHandle first = PlaceAt(world, file, 0.0f, 0.0f, 0.0f);
@@ -2416,7 +3107,8 @@ std::string YardScene(const std::filesystem::path& folder, std::string_view over
 void MoveTo(ECS::World& world, ECS::EntityHandle entity, const Vector3& position, const Quaternion& rotation)
 {
     auto* transform = world.GetComponentForWrite<Components::Transform>(entity);
-    *transform = Components::Transform::FromTRS(position, rotation, transform->GetScale());
+    *transform = Components::Transform::FromTRS(Mathematics::WorldPosition::FromVector3(position), rotation,
+                                                transform->GetScale());
 }
 
 } // namespace
@@ -2426,7 +3118,7 @@ void MoveTo(ECS::World& world, ECS::EntityHandle entity, const Vector3& position
 TEST_F(PrefabPlaceTests, TheOverridesListGroupsEveryOverrideByEntityWithThePrefabsValue)
 {
     UIRegistration::RegisterBuiltInControls();
-    Editor::RegisterPrefabEditor(Notifications(), nullptr, {}, {});
+    Editor::RegisterPrefabEditor(Notifications(), nullptr, nullptr, {}, {});
     const std::filesystem::path file = WriteAsset("Crate.prefab", kTwoProbePrefab);
     ECS::World world;
     const ListedInstance instance = OverrideThreeWays(world, PlaceAt(world, file, 0.0f, 0.0f, 0.0f));
@@ -2444,8 +3136,9 @@ TEST_F(PrefabPlaceTests, TheOverridesListGroupsEveryOverrideByEntityWithThePrefa
     EXPECT_EQ(model.Groups[1].Name, "Lid");
     ASSERT_EQ(model.Groups[1].Rows.size(), 1u);
     EXPECT_EQ(model.Groups[1].Rows[0].Kind, Kind::ChangedField);
-    EXPECT_EQ(model.Groups[1].Rows[0].Label, "Reflection Probe . Intensity");
+    EXPECT_EQ(model.Groups[1].Rows[0].Label, "Reflection Probe: Intensity");
     EXPECT_EQ(model.Groups[1].Rows[0].PrefabValue, "1");
+    EXPECT_FALSE(model.Groups[1].Rows[0].SameAsPrefab);
     EXPECT_EQ(model.Groups[2].Name, "Base");
     ASSERT_EQ(model.Groups[2].Rows.size(), 1u);
     EXPECT_EQ(model.Groups[2].Rows[0].Kind, Kind::RemovedComponent);
@@ -2459,7 +3152,7 @@ TEST_F(PrefabPlaceTests, TheOverridesListGroupsEveryOverrideByEntityWithThePrefa
 TEST_F(PrefabPlaceTests, TheOverridesListShowsATransformRowAsTheInspectorDoes)
 {
     UIRegistration::RegisterBuiltInControls();
-    Editor::RegisterPrefabEditor(Notifications(), nullptr, {}, {});
+    Editor::RegisterPrefabEditor(Notifications(), nullptr, nullptr, {}, {});
     const std::filesystem::path file = WriteAsset("Crate.prefab", kTwoProbePrefab);
     ECS::World world;
     const ListedInstance instance = OverrideThreeWays(world, PlaceAt(world, file, 0.0f, 0.0f, 0.0f));
@@ -2472,15 +3165,16 @@ TEST_F(PrefabPlaceTests, TheOverridesListShowsATransformRowAsTheInspectorDoes)
     std::vector<std::string> lid;
     for (const Editor::PrefabOverrideRow& row : model.Groups[1].Rows)
         lid.push_back(row.Label + " = " + row.PrefabValue);
-    EXPECT_EQ(lid, (std::vector<std::string>{"Local Position = (0, 0, 0)", "Local Rotation = (0, 0, 0)",
-                                             "Reflection Probe . Intensity = 1"}));
+    EXPECT_EQ(lid, (std::vector<std::string>{"Transform: Local Position = (0, 0, 0)",
+                                             "Transform: Local Rotation = (0, 0, 0)",
+                                             "Reflection Probe: Intensity = 1"}));
 }
 
 // Design 2.6: a field that holds several floats, such as a light's color, shows every value.
 TEST_F(PrefabPlaceTests, TheOverridesListShowsEveryValueOfAFloatArrayField)
 {
     UIRegistration::RegisterBuiltInControls();
-    Editor::RegisterPrefabEditor(Notifications(), nullptr, {}, {});
+    Editor::RegisterPrefabEditor(Notifications(), nullptr, nullptr, {}, {});
     const std::filesystem::path file = WriteAsset("Lantern.prefab", "[prefab version=1]\n"
                                                                     "[entity id=\"root\"]\n"
                                                                     "Light.color = (1, 0.5, 0.25)\n");
@@ -2503,7 +3197,7 @@ TEST_F(PrefabPlaceTests, TheOverridesListShowsEveryValueOfAFloatArrayField)
 TEST_F(PrefabPlaceTests, OnlyTheLoadersOrphanedOverridesAreStaleRows)
 {
     UIRegistration::RegisterBuiltInControls();
-    Editor::RegisterPrefabEditor(Notifications(), nullptr, {}, {});
+    Editor::RegisterPrefabEditor(Notifications(), nullptr, nullptr, {}, {});
     std::string faultyPrefab(kTwoProbePrefab);
     faultyPrefab.insert(faultyPrefab.find("ReflectionProbe.Intensity"), "Name.bogus = 1\n");
     WriteAsset("Crate.prefab", faultyPrefab);
@@ -2534,7 +3228,7 @@ TEST_F(PrefabPlaceTests, OnlyTheLoadersOrphanedOverridesAreStaleRows)
 TEST_F(PrefabPlaceTests, TheOverrideLinesOfARemovedChildAreItsRemovedRowOnly)
 {
     UIRegistration::RegisterBuiltInControls();
-    Editor::RegisterPrefabEditor(Notifications(), nullptr, {}, {});
+    Editor::RegisterPrefabEditor(Notifications(), nullptr, nullptr, {}, {});
     WriteAsset("Crate.prefab", kTwoProbePrefab);
     const std::filesystem::path scene = WriteAsset(
         "Yard.scene",
@@ -2563,7 +3257,7 @@ TEST_F(PrefabPlaceTests, TheOverrideLinesOfARemovedChildAreItsRemovedRowOnly)
 TEST_F(PrefabPlaceTests, TheCountPillOpensTheOverridesList)
 {
     UIRegistration::RegisterBuiltInControls();
-    Editor::RegisterPrefabEditor(Notifications(), nullptr, {}, {});
+    Editor::RegisterPrefabEditor(Notifications(), nullptr, nullptr, {}, {});
     const std::filesystem::path file = WriteAsset("Crate.prefab", kTwoProbePrefab);
     ECS::World world;
     const ListedInstance instance = OverrideThreeWays(world, PlaceAt(world, file, 0.0f, 0.0f, 0.0f));
@@ -2593,9 +3287,10 @@ TEST_F(PrefabPlaceTests, TheCountPillOpensTheOverridesList)
     std::vector<std::string> lines;
     CollectListLines(*list, lines);
     EXPECT_EQ(lines, (std::vector<std::string>{"Crate (2)", "Reflection Probe Added", "Lid",
-                                               "Reflection Probe . Intensity prefab: 1", "Base",
+                                               "Reflection Probe: Intensity prefab: 1", "Base",
                                                "Reflection Probe Removed"}));
     EXPECT_EQ(BarText(*list, "prefab-overrides-title"), "Overrides on 'Crate (2)'");
+    EXPECT_EQ(BarText(*list, "prefab-overrides-prefab"), "Prefab: Crate");
     EXPECT_FALSE(list->FindById("prefab-overrides-footer"_sid)->HasClass("hidden"));
     std::vector<UIElement*> rows;
     CollectListRows(*list, rows);
@@ -2619,11 +3314,83 @@ TEST_F(PrefabPlaceTests, TheCountPillOpensTheOverridesList)
     EXPECT_FALSE(list->IsPopupOpen());
 }
 
+// The Overrides list is as wide as its longest row up to the bar's width, so no row text is cut at the
+// Inspector's default width or at 589 px; at 351 px the list keeps its 400 px floor. The row's value,
+// "0.12345679, same as the prefab", is too long for a 400 px list.
+TEST_F(PrefabPlaceTests, TheOverridesListGrowsToItsLongestRowUpToTheBarsWidth)
+{
+    constexpr std::string_view kLongValueProbePrefab = "[prefab version=1]\n"
+                                                       "[entity id=\"root\"]\n"
+                                                       "[entity id=\"lid\" parent=\"root\"]\n"
+                                                       "ReflectionProbe.Intensity = 0.12345679\n";
+    constexpr float kPrefabIntensity = 0.12345679f;
+    Editor::UndoRedoService undo;
+    Editor::RegisterPrefabEditor(Notifications(), &undo, nullptr, {}, {});
+    const std::filesystem::path file = WriteAsset("Probe.prefab", kLongValueProbePrefab);
+    ECS::World world;
+    const ECS::EntityHandle root = PlaceAt(world, file, 0.0f, 0.0f, 0.0f);
+    ASSERT_TRUE(root.IsValid());
+    const ECS::EntityHandle lid = FindChild(world, root);
+    CommitIntensity(world, lid, undo, 2.0f);
+    ASSERT_TRUE(IsIntensityOverridden(world, lid));
+    CommitIntensity(world, lid, undo, kPrefabIntensity);
+    ASSERT_TRUE(IsIntensityOverridden(world, lid));
+    UIRegistration::RegisterBuiltInControls();
+
+    constexpr float kListFloorPx = 400.0f;
+    constexpr float kTextTolerancePx = 0.5f;
+    constexpr int kSettleFrames = 3;
+    constexpr float kFrameSeconds = 1.0f / 60.0f;
+    for (const float inspectorWidth : {1015.0f, 589.0f, 351.0f})
+    {
+        SCOPED_TRACE(inspectorWidth);
+        auto panel = std::make_unique<UIElement>();
+        panel->AddClass("inspector-panel");
+        panel->Style().Set(Style::Width, StyleLength::Px(inspectorWidth));
+        auto ownedBar = std::make_unique<Editor::PrefabBar>(world, lid, &Notifications(), &undo,
+                                                            Editor::PrefabOverridesListContext{},
+                                                            Editor::PrefabBar::SelectAssetHandler{},
+                                                            std::function<void()>{}, std::function<void()>{});
+        Editor::PrefabBar& bar = *ownedBar;
+        panel->AddChild(std::move(ownedBar));
+        InspectorLayoutTesting::InspectorLayoutFixture fixture;
+        fixture.ViewportW = 1400;
+        fixture.ExtraSheets = kPrefabBarSheets;
+        fixture.ExtraSheets.push_back("Assets/UI/controls/PrefabOverridesList/PrefabOverridesList.css");
+        if (!fixture.Build(std::move(panel)))
+            GTEST_SKIP() << fixture.Diagnostic;
+        Editor::PrefabOverridesList* list = OverridesListOf(bar);
+        const UIElement* pill = bar.FindById("prefab-bar-count"_sid);
+        ASSERT_TRUE(list && pill);
+        list->Open(*pill, lid);
+        for (int frame = 0; frame < kSettleFrames; ++frame)
+            fixture.Ui->Update(kFrameSeconds, /*interactive=*/true);
+
+        const UIElement* popover = InspectorLayoutTesting::FindByClass(list, "prefab-overrides");
+        ASSERT_NE(popover, nullptr);
+        const float barWidth = bar.GetLayoutWidth();
+        EXPECT_GE(popover->GetLayoutWidth(), kListFloorPx - kTextTolerancePx);
+        EXPECT_LE(popover->GetLayoutWidth(), std::max(kListFloorPx, barWidth) + kTextTolerancePx);
+        if (barWidth < kListFloorPx)
+            continue;
+        std::vector<UIElement*> rows;
+        CollectListRows(*list, rows);
+        ASSERT_EQ(rows.size(), 1u);
+        for (const char* id : {"prefab-override-label", "prefab-override-value"})
+        {
+            const auto* text = dynamic_cast<const Label*>(rows[0]->FindById(HashStringId(id)));
+            ASSERT_NE(text, nullptr) << id;
+            EXPECT_LE(fixture.Ui->MeasureTextWidth(*text, text->GetText()), text->GetLayoutWidth() + kTextTolerancePx)
+                << "the list cuts '" << text->GetText() << "'";
+        }
+    }
+}
+
 // Design 4.4 item 1: with no override the count is plain grey text, not a pill, and the list says so in one line.
 TEST_F(PrefabPlaceTests, NoOverridesIsGreyTextAndTheListSaysSoInOneLine)
 {
     UIRegistration::RegisterBuiltInControls();
-    Editor::RegisterPrefabEditor(Notifications(), nullptr, {}, {});
+    Editor::RegisterPrefabEditor(Notifications(), nullptr, nullptr, {}, {});
     const std::filesystem::path file = WriteAsset("Crate.prefab", kTwoProbePrefab);
     ECS::World world;
     const ECS::EntityHandle root = PlaceAt(world, file, 0.0f, 0.0f, 0.0f);
@@ -2649,7 +3416,7 @@ TEST_F(PrefabPlaceTests, NoOverridesIsGreyTextAndTheListSaysSoInOneLine)
 TEST_F(PrefabPlaceTests, RevertAllAndApplyAllAreOneUndoStepEach)
 {
     UIRegistration::RegisterBuiltInControls();
-    Editor::RegisterPrefabEditor(Notifications(), nullptr, {}, {});
+    Editor::RegisterPrefabEditor(Notifications(), nullptr, nullptr, {}, {});
     const std::filesystem::path file = WriteAsset("Crate.prefab", kTwoProbePrefab);
     ECS::World world;
     const ListedInstance instance = OverrideThreeWays(world, PlaceAt(world, file, 0.0f, 0.0f, 0.0f));
@@ -2673,7 +3440,7 @@ TEST_F(PrefabPlaceTests, RevertAllAndApplyAllAreOneUndoStepEach)
     EXPECT_FALSE(world.HasComponent<Components::ReflectionProbe>(instance.Root));
     EXPECT_FLOAT_EQ(IntensityOf(world, instance.Lid), 1.0f);
     EXPECT_TRUE(world.HasComponent<Components::ReflectionProbe>(instance.Base));
-    EXPECT_FLOAT_EQ(world.GetComponent<Components::Transform>(instance.Lid)->GetPosition().y, 0.0f)
+    EXPECT_DOUBLE_EQ(world.GetComponent<Components::Transform>(instance.Lid)->GetPosition().Y, 0.0)
         << "Revert all reverts the Transform field";
     EXPECT_EQ(BarText(bar, "prefab-bar-count-none"), "No overrides");
     EXPECT_TRUE(list->IsPopupOpen()) << "the list stays open after Revert all";
@@ -2686,13 +3453,14 @@ TEST_F(PrefabPlaceTests, RevertAllAndApplyAllAreOneUndoStepEach)
     EXPECT_TRUE(world.HasComponent<Components::ReflectionProbe>(instance.Root));
     EXPECT_FLOAT_EQ(IntensityOf(world, instance.Lid), 2.0f);
     EXPECT_FALSE(world.HasComponent<Components::ReflectionProbe>(instance.Base));
-    EXPECT_FLOAT_EQ(world.GetComponent<Components::Transform>(instance.Lid)->GetPosition().y, 5.0f);
+    EXPECT_DOUBLE_EQ(world.GetComponent<Components::Transform>(instance.Lid)->GetPosition().Y, 5.0);
     EXPECT_EQ(BarText(bar, "prefab-bar-count"), "4 overrides");
 
     list->Open(bar, instance.Root);
     applyAll->TriggerClick();
     EXPECT_EQ(undo.GetUndoCount(), 1u) << "the apply is one step";
-    EXPECT_STREQ(undo.GetUndoTypeNameAt(0), "ApplyPrefabOverrideCommand") << "one write of the file for every override";
+    EXPECT_STREQ(undo.GetUndoNameAt(0), "Apply all overrides");
+    EXPECT_STREQ(undo.GetUndoTypeNameAt(0), "Compound") << "the file write and the records the apply drops";
     const std::string applied = ReadFileText(file);
     EXPECT_NE(applied.find("ReflectionProbe.Intensity = 2"), std::string::npos) << applied;
     EXPECT_NE(applied.find("Transform"), std::string::npos) << "Apply all writes the Transform field: " << applied;
@@ -2708,7 +3476,7 @@ TEST_F(PrefabPlaceTests, RevertAllAndApplyAllAreOneUndoStepEach)
 TEST_F(PrefabPlaceTests, TheFootSaysThatAddedEntitiesStay)
 {
     UIRegistration::RegisterBuiltInControls();
-    Editor::RegisterPrefabEditor(Notifications(), nullptr, {}, {});
+    Editor::RegisterPrefabEditor(Notifications(), nullptr, nullptr, {}, {});
     const std::filesystem::path file = WriteAsset("Crate.prefab", kTwoProbePrefab);
     ECS::World world;
     const ListedInstance instance = OverrideThreeWays(world, PlaceAt(world, file, 0.0f, 0.0f, 0.0f));
@@ -2733,7 +3501,7 @@ TEST_F(PrefabPlaceTests, TheFootSaysThatAddedEntitiesStay)
 TEST_F(PrefabPlaceTests, AStaleOverrideIsAnAmberGroupWithDiscardAndTheBarCountsIt)
 {
     UIRegistration::RegisterBuiltInControls();
-    Editor::RegisterPrefabEditor(Notifications(), nullptr, {}, {});
+    Editor::RegisterPrefabEditor(Notifications(), nullptr, nullptr, {}, {});
     WriteAsset("Crate.prefab", kTwoProbePrefab);
     const std::filesystem::path scene = WriteAsset("Yard.scene", YardScene(m_Folder, "ghost/Name.value = \"Ghost\"\n"));
     ECS::World world;
@@ -2789,7 +3557,7 @@ TEST_F(PrefabPlaceTests, AStaleOverrideIsAnAmberGroupWithDiscardAndTheBarCountsI
 TEST_F(PrefabPlaceTests, TheOverridesListOffersNoActionInPlayMode)
 {
     UIRegistration::RegisterBuiltInControls();
-    Editor::RegisterPrefabEditor(Notifications(), nullptr, {}, {});
+    Editor::RegisterPrefabEditor(Notifications(), nullptr, nullptr, {}, {});
     const std::filesystem::path file = WriteAsset("Crate.prefab", kTwoProbePrefab);
     ECS::World world;
     const ListedInstance instance = OverrideThreeWays(world, PlaceAt(world, file, 0.0f, 0.0f, 0.0f));

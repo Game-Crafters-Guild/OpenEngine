@@ -1,25 +1,6 @@
-// HotReloadNativeStubs.cpp — Engine.dll's dispatcher for the five hot-reload
-// entry points (GE_PreloadAssemblyContext, GE_SwapPreloadedContext,
-// GE_CleanupOldContext, GE_ClearCompilerCache, GE_GetCompilerStats).
-//
-// Why a dispatcher and not a direct link to GameEngine.Native:
-//   Engine.dll's Jobs/HotReloadTasks.cpp and Jobs/IncrementalCompilationTask.cpp
-//   call these entry points. The real CoreCLR-backed implementations live in
-//   GameEngine.Native.dll (Source/Scripting/ScriptingABI.cpp). If Engine.dll
-//   PRIVATE-linked GameEngine.Native to pull those impls in, the two SHARED
-//   libraries form a link cycle that the linker can't resolve.
-//
-// Architecture:
-//   - Engine.dll always exports the five GE_* entry points (so editor /
-//     player code paths can link Engine alone without dragging in
-//     GameEngine.Native's import lib).
-//   - Each entry point reads a function pointer from g_hotReloadCallbacks
-//     and forwards. Default is null → return GE_Result_Ok so unscripted
-//     builds (CLR disabled, headless tests) keep working.
-//   - GameEngine.Native.dll's GE_HotReloadRegister.cpp installs its real
-//     impls via GE_RegisterHotReloadCallbacks() at module load (global
-//     ctor — runs after Engine.dll's static init since GameEngine.Native
-//     depends on Engine.dll).
+// Engine.dll's five GE_* hot-reload entry points. Each one calls the function that
+// GameEngine.Native.dll (Source/Scripting/ScriptingABI.cpp) registers at load, or returns
+// GE_Result_Ok if none is registered. GameEngine.Native.dll links Engine.dll, not the reverse.
 
 #include "Scripting/ScriptingABI.h"
 

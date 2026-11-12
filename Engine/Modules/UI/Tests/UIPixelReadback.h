@@ -37,7 +37,8 @@ namespace GameEngine::UITesting
 inline constexpr uint32_t kReadbackW = 800;
 inline constexpr uint32_t kReadbackH = 600;
 
-inline std::vector<uint8_t> RenderUiToBytes(UIManager& ui, UI::UITargetSpace targetSpace)
+// The raw RGBA16F readback of one UI render; empty pixels when it failed.
+inline Rendering::ViewReadbackResult RenderUiToReadback(UIManager& ui, UI::UITargetSpace targetSpace)
 {
     using namespace GameEngine::Rendering;
 
@@ -105,6 +106,12 @@ inline std::vector<uint8_t> RenderUiToBytes(UIManager& ui, UI::UITargetSpace tar
         }
     }
     dev->DestroyBuffer(readback);
+    return result;
+}
+
+inline std::vector<uint8_t> RenderUiToBytes(UIManager& ui, UI::UITargetSpace targetSpace)
+{
+    const Rendering::ViewReadbackResult result = RenderUiToReadback(ui, targetSpace);
     if (result.pixels.empty())
         return {};
 

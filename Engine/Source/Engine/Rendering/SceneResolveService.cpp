@@ -17,6 +17,7 @@
 #include "Engine/Rendering/RenderServices.h"
 #include "Engine/Rendering/MaterialSystem.h"
 #include "SceneDrawWarm.h"
+#include "JobSystem/TaskHandle.h"
 #include "Logger/Logger.h"
 
 #include <algorithm>
@@ -37,6 +38,9 @@ struct SceneResolveService::ModelWork
     // The landed asset, held while entities wait for it: the asset stays
     // resident until the entities that waited for it are bound.
     SharedPtr<Asset> LandedAsset;
+    // The job that parses the surfaces of the landed model's materials; invalid
+    // when no job runs. The model waits until the job is done, whether it completed or failed.
+    JobSystem::TaskHandle SurfaceParse;
     bool Missed = false;
     // Held entities in arrival order. A record is live while m_Held still names
     // this model for its entity; a record left behind by a move to another
@@ -50,6 +54,9 @@ struct SceneResolveService::MaterialWork
 {
     std::unique_ptr<AssetFuture> Load;
     SharedPtr<Asset> LandedAsset;
+    // The job that parses the surfaces of the landed material; invalid when no job
+    // runs. The material waits until the job is done, whether it completed or failed.
+    JobSystem::TaskHandle SurfaceParse;
     std::vector<SceneResolveBatch> Batches;
 };
 
@@ -125,6 +132,44 @@ SharedPtr<Asset> TakeLanded(AssetFuture& load, const GUID& assetGuid)
     return assets ? assets->GetAsset(assetGuid) : nullptr;
 }
 
+// Moves each GUID of `preparing` whose surface job is done, or whose work is gone, to `ready`.
+template <typename Works>
+void MoveParsedToReady(std::vector<GUID>& preparing, Works& works, std::deque<GUID>& ready)
+{
+    for (std::size_t index = 0; index < preparing.size();)
+    {
+        const GUID guid = preparing[index];
+        auto found = works.find(guid);
+        if (found != works.end() && !found->second->SurfaceParse.IsDone())
+        {
+            ++index;
+            continue;
+        }
+        preparing[index] = preparing.back();
+        preparing.pop_back();
+        if (found == works.end())
+            continue;
+        found->second->SurfaceParse = JobSystem::TaskHandle{};
+        ready.push_back(guid);
+    }
+}
+
+// Waits for the surface job of the first work of `preparing` that runs one. False when none runs.
+template <typename Works>
+bool WaitForOneSurfaceJob(const std::vector<GUID>& preparing, const Works& works)
+{
+    for (const GUID& guid : preparing)
+    {
+        auto found = works.find(guid);
+        if (found != works.end() && found->second->SurfaceParse.IsValid())
+        {
+            found->second->SurfaceParse.Wait();
+            return true;
+        }
+    }
+    return false;
+}
+
 // Restores the re-entrancy guard however the step ends: registration runs ECS
 // hooks, and a hook that throws must not leave the service refusing every step.
 class StepScope
@@ -149,8 +194,8 @@ void NoteModelDraws(SceneDrawWarm& warm, const ModelRenderResources& resources)
     for (uint32 submesh = 0; submesh < meshCount && submesh < resources.modelAsset->GetMeshCount(); ++submesh)
     {
         const uint32 materialIndex = resources.modelAsset->GetMesh(submesh).MaterialIndex;
-        if (materialIndex < resources.materials.size())
-            warm.Note(resources.meshHandles[submesh], resources.materials[materialIndex].derivedGuid);
+        if (resources.materials && materialIndex < resources.materials->size())
+            warm.Note(resources.meshHandles[submesh], (*resources.materials)[materialIndex].derivedGuid);
     }
 }
 } // namespace
@@ -165,6 +210,7 @@ void SceneResolveService::Reset()
     DropHeldWork();
     m_Materials.clear();
     m_LoadingMaterials.clear();
+    m_PreparingMaterials.clear();
     m_ReadyMaterials.clear();
     m_Batches.clear();
     m_Kept.clear();
@@ -177,6 +223,7 @@ void SceneResolveService::DropHeldWork()
 {
     m_Models.clear();
     m_LoadingModels.clear();
+    m_PreparingModels.clear();
     m_ReadyModels.clear();
     m_Held.clear();
     m_Sweeping = false;
@@ -253,7 +300,7 @@ void SceneResolveService::Enqueue(ECS::World& world, RenderServices& renderServi
     const GUID modelGuid = meshRenderer->modelAssetGuid.ToGuid();
     if (!m_Held.contains(entity) && BindAtEnqueue(world, renderServices, entity, modelGuid))
         return;
-    Hold(entity, modelGuid, SceneResolveBatch::None);
+    Hold(renderServices, entity, modelGuid, SceneResolveBatch::None);
 }
 
 SceneResolveBatch SceneResolveService::EnqueueWorld(ECS::World& world, RenderServices& renderServices)
@@ -268,20 +315,21 @@ SceneResolveBatch SceneResolveService::EnqueueWorld(ECS::World& world, RenderSer
         .Each([&](ECS::EntityHandle entity, const Components::MeshRenderer& meshRenderer)
         {
             if (NeedsModel(meshRenderer))
-                Hold(entity, meshRenderer.modelAssetGuid.ToGuid(), batch);
+                Hold(renderServices, entity, meshRenderer.modelAssetGuid.ToGuid(), batch);
             else
                 RequestMaterial(renderServices, meshRenderer.materialAssetGuid.ToGuid(), batch);
         });
     return batch;
 }
 
-void SceneResolveService::Hold(ECS::EntityHandle entity, const GUID& modelGuid, SceneResolveBatch batch)
+void SceneResolveService::Hold(RenderServices& renderServices, ECS::EntityHandle entity, const GUID& modelGuid,
+                               SceneResolveBatch batch)
 {
     auto [held, inserted] = m_Held.try_emplace(entity, HeldEntity{modelGuid, batch});
     if (inserted)
     {
         AddBatchItem(batch);
-        AddModelRecord(entity, modelGuid);
+        AddModelRecord(renderServices, entity, modelGuid);
         return;
     }
     // Held already: the entity is read again when it resolves, so a later change
@@ -295,11 +343,12 @@ void SceneResolveService::Hold(ECS::EntityHandle entity, const GUID& modelGuid, 
     if (held->second.Model != modelGuid)
     {
         held->second.Model = modelGuid;
-        AddModelRecord(entity, modelGuid);
+        AddModelRecord(renderServices, entity, modelGuid);
     }
 }
 
-void SceneResolveService::AddModelRecord(ECS::EntityHandle entity, const GUID& modelGuid)
+void SceneResolveService::AddModelRecord(RenderServices& renderServices, ECS::EntityHandle entity,
+                                         const GUID& modelGuid)
 {
     auto [found, created] = m_Models.try_emplace(modelGuid);
     if (created)
@@ -313,7 +362,7 @@ void SceneResolveService::AddModelRecord(ECS::EntityHandle entity, const GUID& m
             // Resident (or no asset manager to load with: a miss, reported
             // nowhere, as a headless resolve has always treated it).
             found->second->Missed = !found->second->LandedAsset;
-            m_ReadyModels.push_back(modelGuid);
+            PrepareLandedModel(renderServices, modelGuid, *found->second);
         }
         else
         {
@@ -321,8 +370,9 @@ void SceneResolveService::AddModelRecord(ECS::EntityHandle entity, const GUID& m
             m_LoadingModels.push_back(modelGuid);
         }
     }
-    // A model's work is either loading (in m_LoadingModels) or landed (queued
-    // in m_ReadyModels until its entities are consumed and it is erased), so a
+    // A model's work is loading (in m_LoadingModels), landed with a job parsing
+    // its surfaces (in m_PreparingModels) or ready (queued in
+    // m_ReadyModels until its entities are consumed and it is erased), so a
     // record added here is always reached.
     found->second->Entities.push_back(entity);
 }
@@ -443,7 +493,7 @@ void SceneResolveService::RequestMaterial(RenderServices& renderServices, const 
         found->second->LandedAsset = assets->GetAsset(materialGuid);
         if (found->second->LandedAsset)
         {
-            m_ReadyMaterials.push_back(materialGuid);
+            PrepareLandedMaterial(renderServices, materialGuid, *found->second);
         }
         else
         {
@@ -459,18 +509,18 @@ void SceneResolveService::RequestMaterial(RenderServices& renderServices, const 
     }
 }
 
-void SceneResolveService::PollModelLoads()
+void SceneResolveService::PollModelLoads(RenderServices& renderServices)
 {
-    for (std::size_t i = 0; i < m_LoadingModels.size();)
+    for (std::size_t index = 0; index < m_LoadingModels.size();)
     {
-        const GUID modelGuid = m_LoadingModels[i];
+        const GUID modelGuid = m_LoadingModels[index];
         auto found = m_Models.find(modelGuid);
         if (found != m_Models.end() && found->second->Load && !HasLanded(*found->second->Load))
         {
-            ++i;
+            ++index;
             continue;
         }
-        m_LoadingModels[i] = m_LoadingModels.back();
+        m_LoadingModels[index] = m_LoadingModels.back();
         m_LoadingModels.pop_back();
         if (found == m_Models.end() || !found->second->Load)
             continue;
@@ -480,11 +530,38 @@ void SceneResolveService::PollModelLoads()
         work.Missed = !work.LandedAsset;
         if (work.Missed)
             ReportMiss("model", modelGuid);
-        m_ReadyModels.push_back(modelGuid);
+        PrepareLandedModel(renderServices, modelGuid, work);
     }
 }
 
-void SceneResolveService::PollMaterialLoads()
+void SceneResolveService::PrepareLandedModel(RenderServices& renderServices, const GUID& modelGuid, ModelWork& work)
+{
+    if (!work.Missed)
+        work.SurfaceParse = ParseModelSurfacesOffThread(renderServices, *work.LandedAsset);
+    if (work.SurfaceParse.IsValid())
+        m_PreparingModels.push_back(modelGuid);
+    else
+        m_ReadyModels.push_back(modelGuid);
+}
+
+void SceneResolveService::PrepareLandedMaterial(RenderServices& renderServices, const GUID& materialGuid,
+                                                MaterialWork& work)
+{
+    if (work.LandedAsset && !IsMaterialRegistered(renderServices, materialGuid))
+        work.SurfaceParse = ParseMaterialSurfacesOffThread(renderServices, *work.LandedAsset);
+    if (work.SurfaceParse.IsValid())
+        m_PreparingMaterials.push_back(materialGuid);
+    else
+        m_ReadyMaterials.push_back(materialGuid);
+}
+
+void SceneResolveService::PollPreparedWork()
+{
+    MoveParsedToReady(m_PreparingModels, m_Models, m_ReadyModels);
+    MoveParsedToReady(m_PreparingMaterials, m_Materials, m_ReadyMaterials);
+}
+
+void SceneResolveService::PollMaterialLoads(RenderServices& renderServices)
 {
     for (std::size_t i = 0; i < m_LoadingMaterials.size();)
     {
@@ -502,7 +579,7 @@ void SceneResolveService::PollMaterialLoads()
         MaterialWork& work = *found->second;
         work.LandedAsset = TakeLanded(*work.Load, materialGuid);
         work.Load.reset();
-        m_ReadyMaterials.push_back(materialGuid);
+        PrepareLandedMaterial(renderServices, materialGuid, work);
     }
 }
 
@@ -521,8 +598,9 @@ std::size_t SceneResolveService::Run(ECS::World& world, RenderServices& renderSe
     ++m_Steps;
     ObserveWorld(world);
     SweepGoneEntities(world);
-    PollModelLoads();
-    PollMaterialLoads();
+    PollModelLoads(renderServices);
+    PollMaterialLoads(renderServices);
+    PollPreparedWork();
 
     std::size_t taken = 0;
     do
@@ -588,7 +666,7 @@ void SceneResolveService::ResolveHeldEntity(ECS::World& world, RenderServices& r
     {
         // Its model changed while it was held: it waits for the new one, in its batch.
         m_Held.emplace(entity, HeldEntity{currentModel, batch});
-        AddModelRecord(entity, currentModel);
+        AddModelRecord(renderServices, entity, currentModel);
         return;
     }
 
@@ -699,6 +777,8 @@ bool SceneResolveService::WaitForOneLoad()
             return true;
         }
     }
+    if (WaitForOneSurfaceJob(m_PreparingModels, m_Models))
+        return true;
     for (const GUID& materialGuid : m_LoadingMaterials)
     {
         auto found = m_Materials.find(materialGuid);
@@ -708,7 +788,10 @@ bool SceneResolveService::WaitForOneLoad()
             return true;
         }
     }
-    return !m_LoadingModels.empty() || !m_LoadingMaterials.empty();
+    if (WaitForOneSurfaceJob(m_PreparingMaterials, m_Materials))
+        return true;
+    return !m_LoadingModels.empty() || !m_PreparingModels.empty() || !m_LoadingMaterials.empty()
+           || !m_PreparingMaterials.empty();
 }
 
 bool SceneResolveService::IsResolving(const ECS::World& world, ECS::EntityHandle entity) const

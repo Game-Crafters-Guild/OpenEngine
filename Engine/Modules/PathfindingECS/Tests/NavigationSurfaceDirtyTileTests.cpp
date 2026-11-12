@@ -89,10 +89,7 @@ protected:
         entity.Set(box);
         entity.Set(Components::Transform{});
         Components::WorldTransform placed{};
-        placed.matrix[0] = placed.matrix[5] = placed.matrix[10] = placed.matrix[15] = 1.0f;
-        placed.matrix[12] = x;
-        placed.matrix[13] = halfY;
-        placed.matrix[14] = z;
+        placed.Position = Mathematics::WorldPosition{x, halfY, z};
         placed.Version = 1u;
         entity.Set(placed);
         world->ProcessCommands();

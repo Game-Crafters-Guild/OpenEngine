@@ -104,3 +104,53 @@ TEST(WebExportContent, OnlyWhatTheScenesReachShipsWithoutSourcesEditorFoldersOrE
     EXPECT_NE(shipped.find("MeshRenderer.material"), std::string::npos) << shipped;
     EXPECT_EQ(shipped.find("the team's private plan"), std::string::npos) << shipped;
 }
+
+TEST(WebExportContent, AnAlwaysFolderShipsAndANeverChainFailsTheExport)
+{
+    const TestUtils::ScopedTempDir root{TestUtils::MakeUniqueTempDirectory("ge_web_export_ship_rules")};
+    const fs::path projectAssets = root.Path() / "project" / "Assets";
+    const fs::path editorAssets = root.Path() / "editor" / "Assets";
+    WriteTextFile(projectAssets / "Textures" / "Rock.png", "PNGDATA");
+    WriteTextFile(projectAssets / "Scenes" / "Main.scene",
+                  "[scene name=\"Main\" version=1]\n"
+                  "[resource id=\"rock\" path=\"Textures/Rock.png\"]\n"
+                  "\n"
+                  "[entity id=\"e_1\"]\n"
+                  "MeshRenderer.material = #rock\n");
+    WriteTextFile(projectAssets / "Data" / ".assetfolder", R"({"ship": "always"})");
+    WriteTextFile(projectAssets / "Data" / "units.json", "{}");
+    WriteTextFile(editorAssets / GameUIHost::kDefaultFontPath, "TTFDATA");
+    WriteTextFile(editorAssets / kRuntimeHumanoidProfilePath, "{}");
+
+    AssetManager assets;
+    ASSERT_TRUE(assets.Initialize(projectAssets, nullptr, root.Path() / "project" / "AssetDatabase.assetdb",
+                                  root.Path() / "project" / ".Cache" / "AssetDatabase"));
+    AssetSourceDesc editorSource{};
+    editorSource.Alias = std::string(kAssetSourceAliasEditor);
+    editorSource.Root = editorAssets;
+    editorSource.RegisterFileWatcher = false;
+    ASSERT_TRUE(assets.RegisterSource(editorSource));
+    assets.WaitForStartupScan(std::string(kAssetSourceAliasEditor));
+    assets.WaitForStartupScan();
+
+    BuildSettings settings;
+    settings.scenes = {"Scenes/Main.scene"};
+    const fs::path scratch = root.Path() / "scratch";
+    std::vector<std::string> warnings;
+    std::string error;
+    ASSERT_TRUE(StageWebExportContent(assets, settings, projectAssets, scratch, warnings, error)) << error;
+    std::set<std::string> staged;
+    {
+        std::ifstream in(scratch / kWebExportContentListName, std::ios::binary);
+        const nlohmann::json list = nlohmann::json::parse(in);
+        for (const nlohmann::json& file : list.at("files"))
+            staged.insert(file.at("path").get<std::string>());
+    }
+    EXPECT_EQ(staged.count("Assets/Data/units.json"), 1u) << testing::PrintToString(staged);
+
+    WriteTextFile(projectAssets / "Textures" / ".assetfolder", R"({"ship": "never"})");
+    EXPECT_FALSE(StageWebExportContent(assets, settings, projectAssets, scratch, warnings, error));
+    EXPECT_EQ(error, "Textures/Rock.png is set to Never ship (from its folder Textures/), but a shipped asset "
+                     "uses it: Scenes/Main.scene → Textures/Rock.png. Remove the reference, or change the rule.");
+    assets.Shutdown();
+}

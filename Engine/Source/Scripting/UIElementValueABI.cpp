@@ -32,10 +32,12 @@
 
 #include "UI/Controls/BaseField.h"
 #include "UI/Controls/Dropdown.h"
+#include "UI/Controls/ProgressBar.h"
 #include "UI/Controls/ScrollView.h"
 #include "UI/UIElement.h"
 #include "UI/UIManager.h"
 
+#include <cmath>
 #include <string>
 
 namespace
@@ -312,6 +314,83 @@ GE_API GE_Result GE_CDECL GE_UIElement_GetDropdownSelectedLabel(uint64_t instanc
         if (rc != GE_Result_Ok)
             return rc;
         return GameEngine::ScriptingAbi::CopyTextOut(dropdown->GetSelectedLabel(), buffer, bufferLen, outLen);
+    }
+    catch (...)
+    {
+        return GE_Result_Fail;
+    }
+}
+
+// The end of a progress bar's range. The bar clamps its value again to a new max.
+GE_API GE_Result GE_CDECL GE_UIElement_GetProgressMax(uint64_t instanceId, float* outMax)
+{
+    try
+    {
+        if (!outMax)
+            return GE_Result_InvalidArg;
+        *outMax = 0.0f;
+        GameEngine::ProgressBar* bar = nullptr;
+        const GE_Result rc = ResolveTyped(instanceId, bar);
+        if (rc != GE_Result_Ok)
+            return rc;
+        *outMax = bar->GetMax();
+        return GE_Result_Ok;
+    }
+    catch (...)
+    {
+        return GE_Result_Fail;
+    }
+}
+
+GE_API GE_Result GE_CDECL GE_UIElement_SetProgressMax(uint64_t instanceId, float max)
+{
+    try
+    {
+        if (!std::isfinite(max) || max <= 0.0f)
+            return GE_Result_InvalidArg;
+        GameEngine::ProgressBar* bar = nullptr;
+        const GE_Result rc = ResolveTyped(instanceId, bar);
+        if (rc != GE_Result_Ok)
+            return rc;
+        bar->SetMax(max);
+        return GE_Result_Ok;
+    }
+    catch (...)
+    {
+        return GE_Result_Fail;
+    }
+}
+
+GE_API GE_Result GE_CDECL GE_UIElement_GetProgressIndeterminate(uint64_t instanceId, int32_t* outIndeterminate)
+{
+    try
+    {
+        if (!outIndeterminate)
+            return GE_Result_InvalidArg;
+        *outIndeterminate = 0;
+        GameEngine::ProgressBar* bar = nullptr;
+        const GE_Result rc = ResolveTyped(instanceId, bar);
+        if (rc != GE_Result_Ok)
+            return rc;
+        *outIndeterminate = bar->IsIndeterminate() ? 1 : 0;
+        return GE_Result_Ok;
+    }
+    catch (...)
+    {
+        return GE_Result_Fail;
+    }
+}
+
+GE_API GE_Result GE_CDECL GE_UIElement_SetProgressIndeterminate(uint64_t instanceId, int32_t indeterminate)
+{
+    try
+    {
+        GameEngine::ProgressBar* bar = nullptr;
+        const GE_Result rc = ResolveTyped(instanceId, bar);
+        if (rc != GE_Result_Ok)
+            return rc;
+        bar->SetIndeterminate(indeterminate != 0);
+        return GE_Result_Ok;
     }
     catch (...)
     {

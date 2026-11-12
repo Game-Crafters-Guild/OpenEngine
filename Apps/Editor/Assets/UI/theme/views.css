@@ -718,7 +718,7 @@
 }
 
 /* The prefab marker is the row's own background in its left gutter: a teal dot on an entity that
-   differs from its prefab, a green plus on an entity added on the instance. */
+   has overrides, a green plus on an entity added on the instance. */
 .tree .tree-item.hierarchy-prefab-overridden {
 	background-image: url("editor:Icons/dot.svg");
 	background-size: 6px 6px;

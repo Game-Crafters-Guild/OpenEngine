@@ -1,0 +1,27 @@
+/* MaskField: the parts the .dropdown family (theme/widgets.css) does not draw.
+   Attached by MaskField's constructor. A row rule names .dropdown-item too, so
+   it outranks the theme's .dropdown-item rule. */
+
+/* "Everything" and "Nothing" are actions, not options: no check column. */
+.dropdown-item.mask-field-action {
+	padding-left: 10px;
+}
+
+/* An option row is a checkbox: the box, then the option label. */
+.dropdown-item.mask-field-option {
+	padding-left: 6px;
+}
+
+/* An option label stays on one line, as the text rows of a list sized to its entries do (theme/widgets.css).
+   In a popup narrower than the label it ends in an ellipsis, and the cut label shows its whole
+   text as its tooltip. MaskField sets this class on each option's label. */
+.mask-field-option-label {
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+/* A value that no view or camera would draw reads as a warning. */
+.mask-field-nothing {
+	color: var(--ui_color_warning_text);
+}

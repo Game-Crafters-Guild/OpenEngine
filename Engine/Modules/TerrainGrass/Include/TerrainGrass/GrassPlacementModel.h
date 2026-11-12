@@ -80,7 +80,7 @@ inline constexpr uint32 kGrassMaxCells =
 struct GrassCellPlanGPU
 {
     uint32 Slots = 0;           // slots this cell reserves; 0 means the cell places nothing
-    uint32 SlotsWantedBits = 0; // bit pattern of the unrounded count — the growth ramp reads it
+    uint32 SlotsWantedBits = 0; // classify: bit pattern of the cell's ground Y; plan: of the unrounded count
     uint32 LodAndTerrain = 0;   // valid bit | LOD bit | terrain row
     uint32 Base = 0;            // first reserved slot, counted from this LOD's end of the pool
 };
@@ -91,7 +91,8 @@ static_assert(sizeof(GrassCellPlanGPU) == 16);
 // aligned). The CPU clears the histogram each frame, which is why it needs the size.
 inline constexpr uint32 kGrassMaxRings = kGrassMaxCellHalfSpan + 2u;
 inline constexpr uint32 kGrassRingHistogramWords = 132u;
-static_assert(kGrassRingHistogramWords >= kGrassMaxRings);
+static_assert(kGrassRingHistogramWords > kGrassMaxRings,
+              "the word after the rings holds the ground under the camera (kGrassCameraGroundWord)");
 static_assert(kGrassRingHistogramWords * sizeof(uint32) % 16u == 0u,
               "the cell array that follows the histogram must stay 16-byte aligned");
 inline constexpr uint32 kGrassCellPlanBytes =
@@ -145,6 +146,96 @@ inline float32 GrassSlotsWantedForCell(const GrassPlacementParams& params, float
 {
     const float32 wanted = GrassDensityAtDistance(params, distanceMeters) * kGrassCellArea;
     return std::min(wanted, static_cast<float32>(kGrassMaxSlotsPerCell));
+}
+
+// Width, in pixels, of the whole leaf that a blade never projects below. Under about a pixel a blade
+// shows in one screen column and not the next, which is the grazing-angle hatch.
+inline constexpr float32 kGrassMinPixelWidth = 1.5f;
+
+// Ceiling on how far that floor widens a blade, and the top of the range the floor is quantized over
+// (GrassPackFlags). The two uses are one constant: encoding past the ceiling spends range the clamp
+// discards. An edge-on blade past it is a sliver among slivers.
+inline constexpr float32 kGrassMaxWidthExpansion = 6.0f;
+
+// Optical depth at which a field is closed: exp(-3.912) = 0.02, so the ground shows through 2 percent
+// of a pixel.
+inline constexpr float32 kGrassClosedFieldOpticalDepth = 3.912f;
+
+// Lower limit of the view depth the floor reads, as a share of the eye distance (60 degrees off the
+// view axis). With it, the budget fit can bound the floor over a ring.
+inline constexpr float32 kGrassFloorMinDepthShare = 0.5f;
+
+// The floor's leaf width in meters at a view depth. pixelsPerMeterAtUnitDistance is H * P11 / 2.
+inline float32 GrassFloorWidth(float32 viewDepth, float32 eyeDistance, float32 pixelsPerMeterAtUnitDistance)
+{
+    return kGrassMinPixelWidth * std::max(viewDepth, eyeDistance * kGrassFloorMinDepthShare)
+           / pixelsPerMeterAtUnitDistance;
+}
+
+// kClosed * h against tau * h, with tau = n * kw * hb * (d / h): the kept share is min(1, kClosed / tau).
+// h is clamped to 0, so the share falls to 0 as the camera falls to the ground and stays 0 under it.
+inline float32 GrassFloorKeptShare(float32 opticalDepthTimesHeight, float32 cameraHeight)
+{
+    const float32 closedTimesHeight = kGrassClosedFieldOpticalDepth * std::max(cameraHeight, 0.0f);
+    return opticalDepthTimesHeight > closedTimesHeight ? closedTimesHeight / opticalDepthTimesHeight : 1.0f;
+}
+
+// Share of a cell's slots that the floor band keeps, in [0, 1]. A blade wider than the floor keeps
+// every slot. In the floor band, slots past the closed optical depth cover pixels other blades cover.
+// cameraHeight is the camera above the ground the field stands on.
+inline float32 GrassFloorThinningFactor(float32 bladesPerSquareMeter, float32 bladeWidth, float32 bladeHeight,
+                                        float32 horizontalDistance, float32 viewDepth, float32 cameraHeight,
+                                        float32 pixelsPerMeterAtUnitDistance)
+{
+    // Pixel size unknown (no world pass yet, or an orthographic view), or a card terrain.
+    if (pixelsPerMeterAtUnitDistance <= 0.0f || bladeWidth <= 0.0f)
+        return 1.0f;
+    const float32 height = std::max(cameraHeight, 0.0f);
+    const float32 eyeDistance = std::sqrt(horizontalDistance * horizontalDistance + height * height);
+    const float32 floorWidth = GrassFloorWidth(viewDepth, eyeDistance, pixelsPerMeterAtUnitDistance);
+    if (floorWidth <= bladeWidth)
+        return 1.0f;
+    const float32 drawnWidth = std::min(floorWidth, bladeWidth * kGrassMaxWidthExpansion);
+    return GrassFloorKeptShare(bladesPerSquareMeter * drawnWidth * bladeHeight * horizontalDistance, height);
+}
+
+// The factor of one cell. h is the camera's height above the lower of the cell's ground and the ground
+// under the camera, so ground above the eye reads as flat ground. depthAtEyeHeight is the view depth of
+// the cell center at the camera's height; forwardY is the view direction's y.
+inline float32 GrassFloorThinningCellFactor(float32 bladesPerSquareMeter, float32 bladeWidth, float32 bladeHeight,
+                                            float32 horizontalDistance, float32 depthAtEyeHeight, float32 forwardY,
+                                            float32 cameraY, float32 cellGroundY, float32 groundUnderCameraY,
+                                            float32 pixelsPerMeterAtUnitDistance)
+{
+    const float32 height = cameraY - std::min(cellGroundY, groundUnderCameraY);
+    return GrassFloorThinningFactor(bladesPerSquareMeter, bladeWidth, bladeHeight, horizontalDistance,
+                                    depthAtEyeHeight - forwardY * height, height, pixelsPerMeterAtUnitDistance);
+}
+
+// Upper limit of the factor over a ring's cells, for the budget fit. cameraHeight is the camera above the
+// world's lowest ground, at least every cell's h. The floor is read at the ring's inner distance (h = 0)
+// against the widest blade; in the band, the thinnest and shortest blade bound kw * hb.
+inline float32 GrassFloorThinningRingFactor(float32 bladesPerSquareMeter, float32 widestBladeWidth,
+                                            float32 thinnestBladeWidth, float32 shortestBladeHeight,
+                                            float32 ringInnerDistance, float32 cameraHeight,
+                                            float32 pixelsPerMeterAtUnitDistance)
+{
+    if (pixelsPerMeterAtUnitDistance <= 0.0f || thinnestBladeWidth <= 0.0f)
+        return 1.0f;
+    const float32 height = std::max(cameraHeight, 0.0f);
+    const float32 floorWidth = GrassFloorWidth(0.0f, ringInnerDistance, pixelsPerMeterAtUnitDistance);
+    if (floorWidth <= widestBladeWidth)
+        return 1.0f;
+    const float32 drawnWidth = std::min(floorWidth, thinnestBladeWidth * kGrassMaxWidthExpansion);
+    return GrassFloorKeptShare(bladesPerSquareMeter * drawnWidth * shortestBladeHeight * ringInnerDistance,
+                               height);
+}
+
+// The share the far-thinning dial keeps, from the floor band's kept share: share + (1 - farThinning)(1 - share).
+// This form returns the share exactly at farThinning 1; 0 keeps every slot.
+inline float32 GrassFarThinningKeptShare(float32 floorKeptShare, float32 farThinning)
+{
+    return floorKeptShare + (1.0f - farThinning) * (1.0f - floorKeptShare);
 }
 
 // Scale in [0,1] applied to slot `slot`'s height and width.

@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <unordered_map>
 #include <vector>
 
@@ -43,14 +44,12 @@ enum class ZonePayloadFlushMode
 struct ZonePayloadStagingLedger
 {
     std::unordered_map<GUID, uint64_t> StagedDataVersions;
-    // The sphere sculpt version last staged by the autosave timer (0 = never) —
-    // the planet's single-payload twin of the per-zone map above.
-    uint64_t StagedSphereSculptVersion = 0;
+    uint64_t StagedHeightLayerVersion = 0; // the planet sculpt version last staged (FlushPlanetHeightLayer)
 };
 
 // Write bytes to a sibling temp file then atomically rename over the target, removing the
 // temp on any failure — a crash mid-write can never truncate the last good file. Shared by
-// the zone (.tzone) and sphere sculpt (.tsculpt) flushes.
+// the zone (.tzone) flush and the navigation save.
 bool WriteBlobAtomic(const std::filesystem::path& target, const std::vector<uint8_t>& bytes);
 
 // Persist dirty terrain zone payloads (brush-authored sculpt/paint data) to
@@ -63,5 +62,11 @@ uint32_t FlushDirtyZonePayloads(ECS::World& world, const std::filesystem::path& 
                                 AssetRegistry& registry, TerrainECS::TerrainService& service,
                                 ZonePayloadFlushMode mode,
                                 ZonePayloadStagingLedger* stagingLedger = nullptr);
+
+// Sets Terrain.BakeOriginScene to the saved scene on each terrain that has no scene or has
+// `previousScenePath` (the path of the last save; none for a first save). A subscene or prefab terrain
+// keeps its own file's scene. Call it after the scene file is written.
+void AssignSavedSceneToTerrains(ECS::World& world, const std::optional<std::filesystem::path>& previousScenePath,
+                                const std::filesystem::path& scenePath, AssetRegistry& registry);
 
 } // namespace GameEngine::Editor

@@ -104,6 +104,8 @@ layout(set = 0, binding = 8, std140) uniform ShadowData
     //   source: x = map bindless index; y = height texture bindless index; z = 1 when a map is
     //           published for this view this frame; w = map side (texels)
     //   field: x = the lit field's bindless index (0: none, TerrainShadowMap FieldLit); y = its levels
+    //   heightSpan: x, y = the extent the height texture spans X, Z (whole tiles; grid1.xy is the
+    //               authored size, the bound of "on the terrain")
     // Order matters more than naming: std140 lays this block out by position, matching
     // ShadowDataGPU member for member. A mismatch here is silent garbage, not a compile error.
     vec4 ge_terrainShadowGrid0;
@@ -112,6 +114,7 @@ layout(set = 0, binding = 8, std140) uniform ShadowData
     vec4 ge_terrainShadowGrid3;
     uvec4 ge_terrainShadowSource;
     uvec4 ge_terrainShadowField;
+    vec4 ge_terrainShadowHeightSpan;
 };
 
 layout(set = 0, binding = 9) uniform sampler2DArrayShadow ge_shadowMapArray;
@@ -169,7 +172,7 @@ vec2 GE_TerrainShadowReadClearance(vec2 gridCoord)
 float GE_TerrainShadowReadGround(float x, float z)
 {
     vec2 dim = vec2(textureSize(ge_BindlessTextures[nonuniformEXT(ge_terrainShadowSource.y)], 0));
-    vec2 terrainUV = clamp((vec2(x, z) - ge_terrainShadowGrid0.zw) / ge_terrainShadowGrid1.xy, 0.0, 1.0);
+    vec2 terrainUV = clamp((vec2(x, z) - ge_terrainShadowGrid0.zw) / ge_terrainShadowHeightSpan.xy, 0.0, 1.0);
     return textureLod(GE_BTEX(ge_terrainShadowSource.y, GE_TS_CLAMP), (terrainUV * (dim - 1.0) + 0.5) / dim,
                       0.0).r * ge_terrainShadowGrid3.w;
 }

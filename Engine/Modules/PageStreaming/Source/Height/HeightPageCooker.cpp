@@ -164,7 +164,7 @@ std::string ScanHeightSource(const HeightCookSource& source, AssetIOService* io,
 
     // One chunk is read ahead while the one before it is hashed.
     SourceRangeReader reader(source.File, io);
-    std::vector<uint8> chunk;
+    ByteBuffer chunk;
     uint64 offset = 0;
     if (size > 0)
         reader.Request(0, std::min<uint64>(kScanChunkBytes, size));
@@ -172,7 +172,7 @@ std::string ScanHeightSource(const HeightCookSource& source, AssetIOService* io,
     {
         if (!reader.Take(chunk))
             return "the heightmap " + source.File.string() + " could not be read to its end";
-        offset += chunk.size();
+        offset += chunk.Size();
         if (offset < size)
             reader.Request(offset, std::min<uint64>(kScanChunkBytes, size - offset));
         if (Cancelled(cancel))
@@ -181,10 +181,10 @@ std::string ScanHeightSource(const HeightCookSource& source, AssetIOService* io,
                 reader.Take(chunk); // never leave a read outstanding past the reader
             return "the cook was cancelled";
         }
-        identity.ContentHash = Hashing::Fnv1a64(chunk.data(), chunk.size(), identity.ContentHash);
+        identity.ContentHash = Hashing::Fnv1a64(chunk.Data(), chunk.Size(), identity.ContentHash);
         if (progress)
             progress->RowsDone.store(offset * source.SamplesZ / size);
-        if (ranged && !PlanSteps(chunk.data(), chunk.size() / 4u, planner))
+        if (ranged && !PlanSteps(chunk.Data(), chunk.Size() / 4u, planner))
         {
             if (offset < size)
                 reader.Take(chunk);

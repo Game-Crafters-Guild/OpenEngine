@@ -25,17 +25,18 @@
 #error "cbt_surface.glsl: register the terrain material with MaterialKeyword::SurfaceInputsAtPixelCenter"
 #endif
 
+// The surface computes the terrain's outward normal from its own geometry, so the normal is right
+// for either facet winding. The forward adapter must not negate it on a back face: the material is
+// double-sided, and every planet facet reaches the rasterizer back-facing (#6681).
+#define GE_TWO_SIDED_KEEP_NORMAL
+
 // Global bindless arrays + GE_BTEX — single declaration site (guarded include).
 #include "Includes/bindless_textures.glsl"
 
 // Domain math shared with the compute kernels (pure functions, no bindings): the multi-
 // octave relief + its analytic gradient (per-pixel sphere normal) and the direction ->
-// (face,uv) map (seam-free sculpt sampling). Staged beside this file (Assets/Shaders/CBT).
+// (face,uv) map. Staged beside this file (Assets/Shaders/CBT).
 #include "cbt_domain.glsl"
-
-// Analytic sphere-modifier math (sculpt shape-accuracy S2) — pure math, no bindings, shared with
-// the compute layout. Declares CBTSphereAnalyticFlatten before CBTSurfaceParamsData carries it.
-#include "cbt_analytic.glsl"
 
 // Resident-window atlas resolve (terrain UV -> tile -> slot UV). Pure math, no bindings — bit-for-bit
 // the SAME resolve the compute height path runs (cbt_layout.glsl includes this file too). The surface
@@ -206,85 +207,7 @@ layout(set = 2, binding = 33) uniform sampler2D cbt_NormalChain;
 // resolve below, which is parameterized by it.
 #include "Includes/terrain_blend_width.glsl"
 
-// Terrain params SSBO — same struct + set/binding the CDLOD surface reads, so the two
-// renderers pull identical per-terrain material config. std430, set 2 binding 1.
-struct TerrainParamsEntry
-{
-    float WorldOriginX;
-    float WorldOriginZ;
-    float WorldSizeX;
-    float WorldSizeZ;
-    float HeightScale;
-    float InvHeightmapWidth;
-    float InvHeightmapHeight;
-    float TexelSize;
-    float WorldOriginY;
-    uint SplatmapBindless;
-    float MaterialTiling;
-    uint LayerCount;
-    uint LayerRole[4];
-    float GridDimHalf;
-    uint Flags;
-    uint NormalmapBindless;
-    uint HeightmapBindless;
-    uint GrassEnabled;
-    float GrassDensity;
-    float GrassBladeHeight;
-    float GrassBladeWidth;
-    float GrassMaskThreshold;
-    float GrassDensityFalloff;
-    float GrassRange;
-    float GrassWindStrength;
-    uint GrassLayerIndex;
-    float GrassBrightness;
-    float GrassGroundingStrength;
-    float GrassRandomScale;
-    float GrassRandomBrightness;
-    float GrassTranslucency;
-    uint GrassRootColor;
-    uint GrassTipColor;
-    uint GrassBacklightColor;
-    float GrassWindDirection;
-    float GrassWindGustSpeed;
-    float GrassWindGustScale;
-    float GrassWindRestingLean;
-    float GrassWindFlutterAmount;
-    float GrassWindFlutterSpeed;
-    float GrassWindSeed;
-    uint GrassBladeSegments;
-    uint GrassAlbedoBindless;
-    uint GrassAlphaBindless;
-    uint GrassNormalBindless;
-    uint GrassAtlasColumns;
-    uint GrassAtlasRows;
-    uint GrassAtlasTileCount;
-    float GrassAlphaCutoff;
-    float GrassNormalStrength;
-    float GrassTextureCardsPerSquareMeter;
-    float GrassTextureSize;
-    float GrassPlacementSeed;
-    float GrassBladeTilt;
-    float GrassBladeBend;
-    float GrassBladeTwist;
-    float GrassBladeTaperStart;
-    float GrassTuftFan;
-    float GrassClumpSize;
-    float GrassClumpHeightVariance;
-    float GrassClumpAlignment;
-    float GrassClumpTaper;
-    float GrassHueVariation;
-    float GrassCanopyOcclusion;
-    float GrassRootFadeStart;
-    float GrassRootFadeEnd;
-    uint GrassControlBindless;
-    uint ColorMapBindless;
-    float GrassGroundTintHeight;
-};
-
-layout(std430, set = 2, binding = 1) readonly buffer TerrainParamsBuffer
-{
-    TerrainParamsEntry terrains[];
-};
+#include "cbt_terrain_params.glsl"
 
 // Layer-albedo sampler access with a PLAIN (dynamically uniform) descriptor index. THIS surface
 // draws one terrain, so a layer's bindless index is one per-draw palette/params value — identical
@@ -385,14 +308,7 @@ struct CBTSurfaceParamsData
     float ReliefAmplitude;
     float ReliefFrequency;
     uint ReliefOctaves;
-    uint SphereSculptEnabled;
-    // Paged sculpt geometry (mirror SphereSculptGeometry / CBTSurfaceParams) — the fragment's page
-    // addressing (no hardcode). VirtualDim radius-scaled; Cap fixed table row stride.
-    uint SphereSculptVirtualDim;
-    uint SphereSculptCap;
-    uint SphereSculptPagesPerAxis;
-    uint SphereSculptPoolPageCount;
-    uint DebugMode;           // TerrainDebugView mirror: 0 = off, 1 = facet tint (CBT triangulation)
+    uint DebugMode;          // TerrainDebugView mirror: 0 = off, 1 = facet tint (CBT triangulation)
     uint AtlasBacked;         // Phase E: 1 -> planar terrain resolves splat/normal per-pixel via the atlas
     // Quality-sweep slice 1 atlas geometry + bindless indices (mirror CBTSurfaceParams in CBTLayout.h).
     uint AtlasDim;
@@ -412,25 +328,17 @@ struct CBTSurfaceParamsData
     uint AtlasGrassCoarseBindless;
     uint AtlasColorBindless;
     uint AtlasColorCoarseBindless;
-    // Analytic sphere modifiers (sculpt shape-accuracy S2/S3 — mirror CBTSurfaceParams tail in
-    // CBTLayout.h; math in cbt_analytic.glsl). DabCount keeps the vec4-struct array 16-aligned
-    // (std430: 104 + 4 + 4 = 112); transient brush dabs occupy slots [Count, Count+DabCount). Both
-    // 0 = every analytic branch below is skipped (flag-off dark-ship).
-    uint SphereAnalyticCount;
-    uint SphereAnalyticDabCount;
-    CBTSphereAnalyticFlatten SphereAnalytic[CBT_MAX_SPHERE_ANALYTIC];
-    // The planet's height pages (mirror the CBTSurfaceParams tail, cbt_planet_page.glsl): per cube face
-    // the anchor (x, y its texels, z, w the bits of its fractions), the eye planet-local and relative to
-    // the render origin, and PlanetPaged 1 when the fragment shades from the pages. A planar terrain whose
-    // surface is paged: the first word of its surface table in gPageTable, and a bit per plane it has
+    // The planet's height pages (mirror CBTSurfaceParams, cbt_planet_page.glsl): PlanetPaged 1 when the
+    // fragment shades from the pages; per cube face the anchor (x, y its texels, z, w the bits of its
+    // fractions); the eye planet-local and relative to the render origin. A planar terrain whose surface
+    // is paged: the first word of its surface table in gPageTable, and a bit per plane it has
     // (CBT_SURF_PLANE_*); 0 reads the surface textures.
-    ivec4 PageAnchors[6];
-    vec4 PageEye;
-    vec4 PageEyeRelative;
     uint PlanetPaged;
     uint SurfacePageBase;
     uint SurfacePagedPlanes;
-    uint PlanetPagePad2;
+    ivec4 PageAnchors[6];
+    vec4 PageEye;
+    vec4 PageEyeRelative;
 };
 
 // CBT debug visualization modes (mirror TerrainDebugView in Terrain.h — keep in lockstep).
@@ -438,10 +346,10 @@ const uint CBT_DEBUG_OFF = 0u;
 const uint CBT_DEBUG_FACETS = 1u;
 const uint CBT_DEBUG_ATLAS_SLOTS = 2u; // tint by the per-pixel resolved atlas slot / grey for coarse
 // A UNIFORM block, not a storage buffer, and the type is what matters rather than the size: WebGPU
-// guarantees only 10 storage buffers per stage, and this surface reaches exactly that on its own
-// (6 here + 4 from the lit path) — so the moment the lit path adds one, the terrain pipeline fails
-// to CREATE and the terrain is not degraded but absent. Uniform buffers have their own, separate
-// budget. The record fits: 880 B against the 64 KiB uniform binding limit, and the ring's
+// guarantees only 8 storage buffers per stage by default, and this surface shares that budget with the lit
+// path — when a stage goes over it, the terrain pipeline fails to CREATE and the terrain is not
+// degraded but absent. Uniform buffers have their own, separate budget. The record fits: 224 B
+// against the 64 KiB uniform binding limit, and the ring's
 // per-slot stride is already 256-aligned, which is what a uniform offset-bind needs.
 //
 // One element, because the fragment only ever reads element 0 — CBTRenderFeature offset-binds this
@@ -451,33 +359,6 @@ layout(std140, set = 2, binding = 5) uniform CBTSurfaceParamsBuffer
     CBTSurfaceParamsData Params;
 } gCbtSurf;
 
-// The editable sphere sculpt physical page POOL (planet editing v2) — offset-bound to this frame's
-// ring slot (so page ids index from 0). Read only for the per-pixel normal's sculpt gradient, gated
-// on SphereSculptEnabled. Mirror of the compute binding-16 pool; the paged bilinear + the geometry
-// come from CBTSurfaceParams (no hardcode).
-layout(std430, set = 2, binding = 6) readonly buffer CBTSphereSculptSurfBuffer
-{
-    float Sculpt[];
-} gCbtSculpt;
-// The sculpt PAGE TABLE (set 2, binding 8) — also offset-bound per ring slot (entries index from 0).
-layout(std430, set = 2, binding = 8) readonly buffer CBTSphereSculptTableSurfBuffer
-{
-    uint Table[];
-} gCbtSculptTable;
-// Paging index math (constants + CBT_SculptTableEntry / CBT_SculptPoolIndex), shared with the compute
-// path so the read is single-sourced.
-#include "cbt_sculpt.glsl"
-// pi/2 — a cube face's angular half-extent. One virtual texel of arc is kSculptHalfPi / Dv radians
-// (mirror of SphereSculptPaging.h SculptNormalAngularStep). The sculpt-gradient finite difference
-// used to step by exactly that; the crease-quality fix widens the stencil to the pixel's screen
-// footprint on steep walls (see the sculpt-gradient block below), so this is the BASE (1-texel)
-// step it filters up from — well-resolved ground still steps one texel, matching the CPU oracle.
-const float CBT_SCULPT_HALF_PI = 1.57079632679;
-// Footprint cap for the resolution-appropriate step: on a near-vertical wall many pixels map to few
-// sculpt texels, so the stencil widens to average across them (killing the bilinear-cell banding),
-// but never past this many texels (bounds over-smoothing + keeps the 4 taps local to the store).
-const float CBT_SCULPT_MAX_STEP_TEXELS = 16.0;
-
 // Phase E atlas indirection rows (quality-sweep slice 1) — the SAME per-tile TileAtlasSlot rows the
 // compute binds at binding 17, here OFFSET-bound to this frame's ring slot (CBTRenderFeature), so
 // Rows[tileIndex] is the live row (element-0 base). Resolves terrain UV -> slot for the per-pixel
@@ -486,7 +367,7 @@ layout(std430, set = 2, binding = 7) readonly buffer CBTAtlasRowsSurfBuffer
 {
     CBTTileAtlasSlot Rows[];
 } gAtlasRows;
-// CBT_ATLAS_MAX_TILES comes from cbt_atlas.glsl (included above) — single-sourced with the compute path.
+// The rows are the window of cbt_atlas.glsl (CBT_AtlasRowIndex), shared with the compute path.
 
 #if !defined(GE_COMPAT_PROFILE)
 // The planet's height pages (cbt_page.glsl, cbt_planet_page.glsl), the compute's bindings 22 and 23 here
@@ -509,13 +390,33 @@ layout(set = 2, binding = 37) uniform sampler2D cbt_SurfaceColor;
 #if !defined(GE_COMPAT_PROFILE)
 #include "cbt_planet_page.glsl"
 
+// The level of one level-0 texel of arc a pixel on a planet's `field`, for a pixel `pixelArc` radians across.
+float CBT_SurfPlanetLevel(float pixelArc, CBTPageField field)
+{
+    float texelArc = 1.5707963 / float(max(field.Level0SamplesX, 2u) - 1u);
+    return log2(max(pixelArc / texelArc, 1.0));
+}
+
+// The planet's surface planes at a fragment whose pixel spans `pixelArc` radians: one locate on the
+// surface table at the fragment's lattice point, which the height pages' anchors place.
+CBTSurfacePages CBT_SurfPlanetSurfacePages(SurfaceInput sIn, float pixelArc, CBTSurfaceParamsData sp)
+{
+    CBTPageField field = CBT_SurfPageField(sp.SurfacePageBase);
+    uint face = CBT_PlanetFaceOf(sIn.positionWS);
+    ivec4 anchor = sp.PageAnchors[face];
+    CBTPlanetPagePoint at = CBT_PlanetPagePointAt(sIn.positionWS, sIn.positionRelWS - sp.PageEyeRelative.xyz,
+                                                  sp.PageEye.xyz, anchor.x, anchor.y, intBitsToFloat(anchor.z),
+                                                  intBitsToFloat(anchor.w), field.Level0SamplesX);
+    return CBT_SurfPagesAtPoint(at.Center, CBT_SurfPlanetLevel(pixelArc, field), field, sp.SurfacePageBase,
+                                sp.SurfacePagedPlanes);
+}
+
 // The planet's paged height and gradient at a fragment whose pixel spans `pixelArc` radians: the level
 // of one level-0 texel of arc per pixel, so the central difference steps one pixel's footprint.
 CBTPlanetPageSurface CBT_SurfPlanetPages(SurfaceInput sIn, float pixelArc, CBTSurfaceParamsData sp)
 {
     CBTPageField field = CBT_SurfPageField(0u);
-    float texelArc = 1.5707963 / float(max(field.Level0SamplesX, 2u) - 1u);
-    float lambda = log2(max(pixelArc / texelArc, 1.0));
+    float lambda = CBT_SurfPlanetLevel(pixelArc, field);
     uint face = CBT_PlanetFaceOf(sIn.positionWS);
     ivec4 anchor = sp.PageAnchors[face];
     return CBT_PlanetPageSurfaceAt(sIn.positionWS, sIn.positionRelWS - sp.PageEyeRelative.xyz, sp.PageEye.xyz,
@@ -538,24 +439,15 @@ CBTAtlasParams CBT_SurfAtlasParams(CBTSurfaceParamsData sp)
 }
 
 // Resolve terrain UV -> tile -> slot UV. The rows are offset-bound to this frame's ring slot, so the
-// row index is the tile index directly. A non-resident row yields Resident=false -> the coarse fallback.
+// row index is the window row directly. A non-resident row, or a row another tile owns, yields
+// Resident=false -> the coarse fallback.
 AtlasResolve CBT_SurfResolve(vec2 uv, CBTSurfaceParamsData sp)
 {
     CBTAtlasParams ap = CBT_SurfAtlasParams(sp);
     ivec2 tile;
     vec2 localUV;
     CBT_AtlasTile(uv, ap, tile, localUV);
-    uint tileIndex = CBT_AtlasTileIndex(tile, ap);
-    CBTTileAtlasSlot row;
-    row.Slot = CBT_ATLAS_NO_SLOT;
-    row.Generation = 0u;
-    row.LodBias = 0.0;
-    row.Fade = 1.0; // default settled; overwritten from gAtlasRows below when the tile is in-bounds
-    // tileIndex is always < TilesX*TilesZ (CBT_AtlasTile clamps the tile), and the ring slot holds
-    // CBT_ATLAS_MAX_TILES rows — cap at that so a terrain over the indirection cap can never read past
-    // the offset-bound Range (its tail tiles resolve through the coarse fallback, matching the compute).
-    if (tileIndex < CBT_ATLAS_MAX_TILES)
-        row = gAtlasRows.Rows[tileIndex];
+    CBTTileAtlasSlot row = gAtlasRows.Rows[CBT_AtlasRowIndex(tile, ap)];
     return CBT_AtlasResolve(uv, ap, row);
 }
 
@@ -566,298 +458,6 @@ vec2 CBT_SurfCoarseUV(vec2 uv, uint coarseDim)
     if (coarseDim < 2u)
         return clamp(uv, 0.0, 1.0);
     return CBT_LatticeTextureUV(uv, vec2(float(coarseDim)));
-}
-
-// Build the paged sculpt geometry from the surface params (mirror CBT_SculptGeomFromFrame).
-CBTSculptGeom CBT_SurfSculptGeom(CBTSurfaceParamsData sp)
-{
-    CBTSculptGeom g;
-    g.VirtualDim = sp.SphereSculptVirtualDim;
-    g.Cap = sp.SphereSculptCap;
-    g.PagesPerAxis = sp.SphereSculptPagesPerAxis;
-    g.PoolPageCount = sp.SphereSculptPoolPageCount;
-    return g;
-}
-
-// Fine texel (jx, jy) of the block `entry` decodes to. The SSBOs are offset-bound to this
-// frame's ring slot, so bases are 0 (S4 level-aware pool index).
-float CBT_SculptFineTexelSurf(uint entry, uint jx, uint jy)
-{
-    return gCbtSculpt.Sculpt[CBT_SculptPoolIndexFine(entry, jx, jy)];
-}
-
-// Resolve one virtual texel to its additive height (0 for an unallocated page). On an escalated
-// page the base-ALIGNED fine texel is read. Bit-lock twin of SphereSculptPaging.h.
-float CBT_SculptResolveSurf(uint face, uint vtx, uint vty, CBTSculptGeom g)
-{
-    uint pageX = vtx / CBT_SCULPT_PAGE_DIM;
-    uint pageY = vty / CBT_SCULPT_PAGE_DIM;
-    uint entry = gCbtSculptTable.Table[CBT_SculptTableEntry(face, pageX, pageY, g.Cap)];
-    if (entry == CBT_SCULPT_NO_PAGE)
-        return 0.0;
-    uint level = CBT_SculptEntryLevel(entry);
-    uint localX = vtx - pageX * CBT_SCULPT_PAGE_DIM;
-    uint localY = vty - pageY * CBT_SCULPT_PAGE_DIM;
-    return CBT_SculptFineTexelSurf(entry, localX << level, localY << level);
-}
-
-// S4 seam-stitch primitives (mirror SphereSculptPaging.h SculptEdgeColEval / SculptEdgeRowEval
-// and the cbt_layout.glsl compute twins).
-float CBT_SculptEdgeColEvalSurf(uint entry, uint jx, float tLocal)
-{
-    if (entry == CBT_SCULPT_NO_PAGE)
-        return 0.0;
-    uint lstep = 1u << CBT_SculptEntryLevel(entry);
-    uint jmax = 127u * lstep;
-    float sv = tLocal * float(lstep);
-    uint k0 = min(uint(sv), jmax);
-    uint k1 = min(k0 + 1u, jmax);
-    float a = CBT_SculptFineTexelSurf(entry, jx, k0);
-    float b = CBT_SculptFineTexelSurf(entry, jx, k1);
-    return mix(a, b, sv - float(k0));
-}
-
-float CBT_SculptEdgeRowEvalSurf(uint entry, uint jy, float tLocal)
-{
-    if (entry == CBT_SCULPT_NO_PAGE)
-        return 0.0;
-    uint lstep = 1u << CBT_SculptEntryLevel(entry);
-    uint jmax = 127u * lstep;
-    float su = tLocal * float(lstep);
-    uint k0 = min(uint(su), jmax);
-    uint k1 = min(k0 + 1u, jmax);
-    float a = CBT_SculptFineTexelSurf(entry, k0, jy);
-    float b = CBT_SculptFineTexelSurf(entry, k1, jy);
-    return mix(a, b, su - float(k0));
-}
-
-// Paged bilinear read of the sculpt store for a WORLD DIRECTION (dir need not be unit). Sampling by
-// direction (dominant-face pick + face-local UV) is what makes the sculpt gradient seam-free: two
-// pixels straddling a cube edge sample the SAME directions, and a dab wrote both bands identically
-// along a shared column. Level-aware since S4 — the same four-case structure as the compute twin
-// (cbt_layout.glsl CBT_SampleSphereSculpt) and SphereSculptPaging.h SampleSculptFaceUVWith:
-// level-0 fast path / interior fine bilinear / seam edge-function lerp / corner. Metres.
-float CBT_SampleSculptDirSurf(vec3 dir, CBTSculptGeom g)
-{
-    if (g.PoolPageCount == 0u || g.VirtualDim < 2u)
-        return 0.0;
-    uint face;
-    vec2 uv;
-    CBT_WorldDirToFaceUV(dir, face, uv);
-    float dim = float(g.VirtualDim);
-    vec2 t = clamp(uv, 0.0, 1.0) * (dim - 1.0);
-    uint x0 = uint(floor(t.x));
-    uint y0 = uint(floor(t.y));
-    uint x1 = min(x0 + 1u, g.VirtualDim - 1u);
-    uint y1 = min(y0 + 1u, g.VirtualDim - 1u);
-    float fx = t.x - float(x0);
-    float fy = t.y - float(y0);
-    uint px0 = x0 / CBT_SCULPT_PAGE_DIM;
-    uint py0 = y0 / CBT_SCULPT_PAGE_DIM;
-    uint px1 = x1 / CBT_SCULPT_PAGE_DIM;
-    uint py1 = y1 / CBT_SCULPT_PAGE_DIM;
-    uint e00 = gCbtSculptTable.Table[CBT_SculptTableEntry(face, px0, py0, g.Cap)];
-    uint e10 = gCbtSculptTable.Table[CBT_SculptTableEntry(face, px1, py0, g.Cap)];
-    uint e01 = gCbtSculptTable.Table[CBT_SculptTableEntry(face, px0, py1, g.Cap)];
-    uint e11 = gCbtSculptTable.Table[CBT_SculptTableEntry(face, px1, py1, g.Cap)];
-    uint lv00 = e00 == CBT_SCULPT_NO_PAGE ? 0u : CBT_SculptEntryLevel(e00);
-    uint lv10 = e10 == CBT_SCULPT_NO_PAGE ? 0u : CBT_SculptEntryLevel(e10);
-    uint lv01 = e01 == CBT_SCULPT_NO_PAGE ? 0u : CBT_SculptEntryLevel(e01);
-    uint lv11 = e11 == CBT_SCULPT_NO_PAGE ? 0u : CBT_SculptEntryLevel(e11);
-    if ((lv00 | lv10 | lv01 | lv11) == 0u)
-    {
-        float s00 = e00 == CBT_SCULPT_NO_PAGE
-                        ? 0.0
-                        : CBT_SculptFineTexelSurf(e00, x0 - px0 * CBT_SCULPT_PAGE_DIM,
-                                                  y0 - py0 * CBT_SCULPT_PAGE_DIM);
-        float s10 = e10 == CBT_SCULPT_NO_PAGE
-                        ? 0.0
-                        : CBT_SculptFineTexelSurf(e10, x1 - px1 * CBT_SCULPT_PAGE_DIM,
-                                                  y0 - py0 * CBT_SCULPT_PAGE_DIM);
-        float s01 = e01 == CBT_SCULPT_NO_PAGE
-                        ? 0.0
-                        : CBT_SculptFineTexelSurf(e01, x0 - px0 * CBT_SCULPT_PAGE_DIM,
-                                                  y1 - py1 * CBT_SCULPT_PAGE_DIM);
-        float s11 = e11 == CBT_SCULPT_NO_PAGE
-                        ? 0.0
-                        : CBT_SculptFineTexelSurf(e11, x1 - px1 * CBT_SCULPT_PAGE_DIM,
-                                                  y1 - py1 * CBT_SCULPT_PAGE_DIM);
-        return mix(mix(s00, s10, fx), mix(s01, s11, fx), fy);
-    }
-    if (px0 == px1 && py0 == py1)
-    {
-        uint lstep = 1u << lv00;
-        uint jmax = 127u * lstep;
-        float sx = (t.x - float(px0 * CBT_SCULPT_PAGE_DIM)) * float(lstep);
-        float sy = (t.y - float(py0 * CBT_SCULPT_PAGE_DIM)) * float(lstep);
-        uint jx0 = min(uint(sx), jmax);
-        uint jy0 = min(uint(sy), jmax);
-        uint jx1 = min(jx0 + 1u, jmax);
-        uint jy1 = min(jy0 + 1u, jmax);
-        float gx = sx - float(jx0);
-        float gy = sy - float(jy0);
-        float s00 = CBT_SculptFineTexelSurf(e00, jx0, jy0);
-        float s10 = CBT_SculptFineTexelSurf(e00, jx1, jy0);
-        float s01 = CBT_SculptFineTexelSurf(e00, jx0, jy1);
-        float s11 = CBT_SculptFineTexelSurf(e00, jx1, jy1);
-        return mix(mix(s00, s10, gx), mix(s01, s11, gx), gy);
-    }
-    if (py0 == py1)
-    {
-        float tLoc = t.y - float(py0 * CBT_SCULPT_PAGE_DIM);
-        float colL = CBT_SculptEdgeColEvalSurf(e00, 127u * (1u << lv00), tLoc);
-        float colR = CBT_SculptEdgeColEvalSurf(e10, 0u, tLoc);
-        return mix(colL, colR, fx);
-    }
-    if (px0 == px1)
-    {
-        float tLoc = t.x - float(px0 * CBT_SCULPT_PAGE_DIM);
-        float rowB = CBT_SculptEdgeRowEvalSurf(e00, 127u * (1u << lv00), tLoc);
-        float rowT = CBT_SculptEdgeRowEvalSurf(e01, 0u, tLoc);
-        return mix(rowB, rowT, fy);
-    }
-    float c00 = e00 == CBT_SCULPT_NO_PAGE
-                    ? 0.0
-                    : CBT_SculptFineTexelSurf(e00, 127u * (1u << lv00), 127u * (1u << lv00));
-    float c10 = e10 == CBT_SCULPT_NO_PAGE ? 0.0 : CBT_SculptFineTexelSurf(e10, 0u, 127u * (1u << lv10));
-    float c01 = e01 == CBT_SCULPT_NO_PAGE ? 0.0 : CBT_SculptFineTexelSurf(e01, 127u * (1u << lv01), 0u);
-    float c11 = e11 == CBT_SCULPT_NO_PAGE ? 0.0 : CBT_SculptFineTexelSurf(e11, 0u, 0u);
-    return mix(mix(c00, c10, fx), mix(c01, c11, fx), fy);
-}
-
-// True when the world direction's sculpt page is allocated — the spatial gate for the per-pixel
-// sculpt gradient. Gating on page RESIDENCY (not a height-magnitude threshold) is what removes the
-// crease ring around every dab: a dab's outer shoulder has heights below a centimetre but a non-zero
-// SLOPE, so the old `abs(centerSculpt) > 1cm` gate dropped the gradient exactly where the surface is
-// still tilting and snapped the normal ~5 degrees at that contour. A page covers the whole brush
-// footprint (a 128-texel page vs a ~32-texel brush), so wherever the sculpt height OR its slope is
-// non-zero the page is resident and the gradient runs; on the unsculpted planet no page is resident
-// so the four taps are skipped (the perf gate the height threshold was really standing in for).
-uint CBT_SculptDirEntrySurf(vec3 dir, CBTSculptGeom g)
-{
-    if (g.PoolPageCount == 0u || g.VirtualDim < 2u)
-        return CBT_SCULPT_NO_PAGE;
-    uint face;
-    vec2 uv;
-    CBT_WorldDirToFaceUV(dir, face, uv);
-    float dim = float(g.VirtualDim);
-    vec2 t = clamp(uv, 0.0, 1.0) * (dim - 1.0);
-    uint vtx = uint(floor(t.x));
-    uint vty = uint(floor(t.y));
-    uint pageX = vtx / CBT_SCULPT_PAGE_DIM;
-    uint pageY = vty / CBT_SCULPT_PAGE_DIM;
-    return gCbtSculptTable.Table[CBT_SculptTableEntry(face, pageX, pageY, g.Cap)];
-}
-
-bool CBT_SculptDirHasPage(vec3 dir, CBTSculptGeom g)
-{
-    return CBT_SculptDirEntrySurf(dir, g) != CBT_SCULPT_NO_PAGE;
-}
-
-// ---- Analytic sphere modifiers over the surface params (sculpt shape-accuracy S2/S3) ----
-// The fragment twins of the compute helpers (CBT_SphereAnalyticOffsetMasked / CoversMasked in
-// cbt_layout.glsl), reading the placement set from the surface params tail: flattens at
-// [0, Count), transient brush dabs at [Count, Count+DabCount). Total 0 = no-ops. The fragment
-// path keeps the plain per-placement loop (no cell mask — the S3 mask rides the compute frame
-// params only; the fragment loop was not the measured CBT.Update driver and its flatten/dab
-// evals already open with a one-dot reject).
-
-uint CBT_SphereAnalyticTotalSurf(CBTSurfaceParamsData sp)
-{
-    return min(sp.SphereAnalyticCount + sp.SphereAnalyticDabCount, CBT_MAX_SPHERE_ANALYTIC);
-}
-
-// Sum of the analytic placement offsets at UNIT world direction `dir` (metres). reliefAtDir is
-// the closed-form base relief at that direction (flatten cancels it; dabs are additive).
-float CBT_SphereAnalyticOffsetSurf(CBTSurfaceParamsData sp, vec3 dir, float reliefAtDir)
-{
-    uint count = min(sp.SphereAnalyticCount, CBT_MAX_SPHERE_ANALYTIC);
-    uint total = CBT_SphereAnalyticTotalSurf(sp);
-    float sum = 0.0;
-    for (uint i = 0u; i < count; ++i)
-        sum += CBT_EvalSphereAnalyticFlatten(sp.SphereAnalytic[i], sp.Radius, dir, reliefAtDir);
-    for (uint i = count; i < total; ++i)
-        sum += CBT_EvalSphereAnalyticDab(sp.SphereAnalytic[i], sp.Radius, dir);
-    return sum;
-}
-
-// True when any analytic placement's footprint covers unit `dir` — the sculpt-gradient tap gate's
-// analytic extension (an analytic pad/dab has no resident page, but its rim has a real gradient).
-bool CBT_SphereAnalyticCoversSurf(CBTSurfaceParamsData sp, vec3 dir)
-{
-    uint count = min(sp.SphereAnalyticCount, CBT_MAX_SPHERE_ANALYTIC);
-    uint total = CBT_SphereAnalyticTotalSurf(sp);
-    for (uint i = 0u; i < count; ++i)
-        if (CBT_SphereAnalyticFlattenCovers(sp.SphereAnalytic[i], sp.Radius, dir))
-            return true;
-    for (uint i = count; i < total; ++i)
-        if (CBT_SphereAnalyticDabCovers(sp.SphereAnalytic[i], sp.Radius, dir))
-            return true;
-    return false;
-}
-
-// The base relief at a tap's unit direction `ud`: the closed form, or on the paged arm the fragment's
-// paged relief `base` at `center` carried along its gradient `slope`, so a flatten cancels the gradient
-// the fragment shades with.
-float CBT_SurfTapRelief(CBTSurfaceParamsData sp, vec3 ud, vec3 center, float base, vec3 slope)
-{
-    if (sp.PlanetPaged != 0u)
-        return base + dot(slope, ud - center);
-    return CBT_PlanetRelief(ud, sp.ReliefAmplitude, sp.ReliefFrequency, max(sp.ReliefOctaves, 1u));
-}
-
-// The composed sculpt sample for the gradient stencil taps: the store plus the analytic set, the fragment twin
-// of SampleSphereSculptComposed. The analytic term takes the base relief at the tap direction, so a flatten's
-// offset cancels it and the composed gradient flattens the pad's shading; a store-only planet reads no relief.
-float CBT_SampleSculptComposedSurf(CBTSurfaceParamsData sp, CBTSculptGeom g, vec3 d, vec3 center, float base,
-                                   vec3 slope)
-{
-    float s = CBT_SampleSculptDirSurf(d, g);
-    if (CBT_SphereAnalyticTotalSurf(sp) != 0u)
-    {
-        vec3 ud = normalize(d);
-        s += CBT_SphereAnalyticOffsetSurf(sp, ud, CBT_SurfTapRelief(sp, ud, center, base, slope));
-    }
-    return s;
-}
-
-// A unit tangent to dir (cross with the world axis of smallest component). Any orthonormal
-// tangent basis reconstructs the same tangential gradient, so this need not match the CPU
-// mirror's exact choice. Mirror of AnyTangent (CBTPlanetShading.h).
-vec3 CBT_AnyTangent(vec3 d)
-{
-    vec3 ad = abs(d);
-    vec3 up = (ad.x <= ad.y && ad.x <= ad.z) ? vec3(1.0, 0.0, 0.0)
-              : (ad.y <= ad.z)               ? vec3(0.0, 1.0, 0.0)
-                                             : vec3(0.0, 0.0, 1.0);
-    return normalize(cross(d, up));
-}
-
-// Radial slope + altitude material blend for the sphere (plan §planet-shading). "Up" on a
-// globe is the RADIAL direction (dir), not world Y — so slope is measured against dir, and
-// altitude is metres above the sphere radius R. Weights (grass, rock, dirt, snow) sum to 1
-// and are a continuous function of (normal, dir, altitude) -> seam-free across cube edges.
-// Mirror of PlanetSlopeAltitudeWeights (CBTPlanetShading.h) — lockstep constants.
-const float CBT_SLOPE_ROCK_LO = 0.30;
-const float CBT_SLOPE_ROCK_HI = 0.65;
-const float CBT_SNOW_LO = 0.45;
-const float CBT_SNOW_HI = 0.80;
-const float CBT_DIRT_LO = -0.10;
-const float CBT_DIRT_HI = 0.40;
-vec4 CBT_PlanetSlopeAltitudeWeights(vec3 normalWS, vec3 dir, float altitude, float amplitude)
-{
-    float slope01 = clamp(1.0 - dot(normalWS, dir), 0.0, 1.0);
-    float altNorm = amplitude > 0.0
-                        ? clamp(altitude / (CBT_RELIEF_ENVELOPE * amplitude), -1.0, 1.0)
-                        : 0.0;
-    float rock = smoothstep(CBT_SLOPE_ROCK_LO, CBT_SLOPE_ROCK_HI, slope01);
-    float flatW = 1.0 - rock; // 'flat' is a reserved GLSL interpolation keyword
-    float snow = flatW * smoothstep(CBT_SNOW_LO, CBT_SNOW_HI, altNorm);
-    float belowSnow = flatW - snow;
-    float dirtMix = smoothstep(CBT_DIRT_LO, CBT_DIRT_HI, altNorm);
-    float grass = belowSnow * (1.0 - dirtMix);
-    float dirt = belowSnow * dirtMix;
-    return vec4(grass, rock, dirt, snow);
 }
 
 // --- Material normal + ORM ----------------------------------------------------------------
@@ -1070,18 +670,13 @@ SurfaceOutput EvaluateSurface(SurfaceInput sIn)
     // a normalmap keeps the flat (0,1,0) fallback (correct at any world Y) rather than the
     // planet's outward-from-origin derivative normal (which would invert lighting below Y=0).
     vec3 normalWS;
-    // Total surface height above the planet radius (relief + sculpt) at this pixel, evaluated
-    // ANALYTICALLY in the sphere branch below. The splat's altitude band reads it instead of
-    // length(positionWS) - R (the interpolated chord, blurred to the coarse triangle) so sculpted
-    // mesas/pits get crisp, tessellation-independent rock/snow/grass bands (plan §planet-shading splat).
-    float sphereAltitude = 0.0;
     // World-space pixel footprint (m), evaluated in UNIFORM control flow (the domain branch below is
     // uniform per draw) so the per-layer variation can Nyquist-fade without an fwidth() in the divergent
     // layer loop. Sphere: pixel arc * radius (fwidth(dir) is precision-safe at planetary magnitude,
     // unlike derivatives of the huge world position). 0 => no fade (the pre-slice full-variation look).
     float pixelFootprintWS = 0.0;
     const bool isSphere = sIn.custom0.w < -0.5;
-    // A paged planar surface at this fragment (one locate serves the normal, splat, grass and color).
+    // A paged surface at this fragment, planar or planet (one locate serves the normal, splat, grass and color).
     CBTSurfacePages surfPages = CBT_SurfPagesNone();
 #if defined(GE_COMPAT_PROFILE)
     // BOTH footprints, before the branch. `isSphere` varies per fragment and a static uniformity
@@ -1094,9 +689,9 @@ SurfaceOutput EvaluateSurface(SurfaceInput sIn)
 #endif
     if (isSphere)
     {
-        // Spherical planet: the surface is dir * (R + h(dir)), h the relief plus the sculpt, and its
-        // outward normal is normalize(dir - gradTangential(h) / (R + h)). The relief and its gradient come
-        // from the height pages or the closed form; the sculpt adds a central difference by direction.
+        // Spherical planet: the surface is dir * (R + h(dir)) and its outward normal is
+        // normalize(dir - gradTangential(h) / (R + h)). The height and its gradient come from the height
+        // pages (the relief with the planet's layers) or the closed-form relief.
         CBTSurfaceParamsData sp = gCbtSurf.Params;
         vec3 dir = normalize(sIn.positionWS);
 #if defined(GE_COMPAT_PROFILE)
@@ -1106,84 +701,43 @@ SurfaceOutput EvaluateSurface(SurfaceInput sIn)
         // Angular footprint of this pixel on the unit sphere. dir is unit, so fwidth(dir) is
         // precision-safe at any planet radius (unlike derivatives of the huge world position).
         // Evaluated here in the sphere branch's uniform control flow (every CBT sphere fragment
-        // takes this branch), so the derivative is well-defined before the divergent sculpt gate.
+        // takes this branch), so the derivative is well-defined.
         float pixelArc = length(fwidth(dir));
 #endif
         pixelFootprintWS = pixelArc * sp.Radius; // arc (rad) * radius (m) = surface footprint (m)
-        float h;
-        vec3 gradTangential;
 #if !defined(GE_COMPAT_PROFILE)
-        if (sp.PlanetPaged != 0u)
+        if (sp.PlanetPaged != 0u && sp.SurfacePagedPlanes != 0u)
+            surfPages = CBT_SurfPlanetSurfacePages(sIn, pixelArc, sp);
+        if (surfPages.Resolved)
         {
-            // The relief from the planet's height pages, as VertexEval draws it (planets 3.6).
-            CBTPlanetPageSurface paged = CBT_SurfPlanetPages(sIn, pixelArc, sp);
-            h = paged.Height;
-            gradTangential = paged.Gradient;
+            // The surface pages carry the normal and the splat, so the fragment taps no height.
+            normalWS = CBT_PlanetSurfaceNormal(surfPages.NormalXZ.x, surfPages.NormalXZ.y, dir,
+                                               CBT_PlanetFaceOf(sIn.positionWS));
         }
         else
 #endif
         {
-            // The closed-form relief (the narrow arm, and a planet before its pages are drawn).
-            uint oct = max(sp.ReliefOctaves, 1u);
-            h = CBT_PlanetRelief(dir, sp.ReliefAmplitude, sp.ReliefFrequency, oct);
-            vec3 g3 = CBT_PlanetReliefGradient(dir, sp.ReliefAmplitude, sp.ReliefFrequency, oct);
-            gradTangential = g3 - dot(g3, dir) * dir;
-        }
-        const float reliefBase = h;
-        const vec3 reliefSlope = gradTangential;
-        if (sp.SphereSculptEnabled != 0u)
-        {
-            // Sample the sculpt height at the pixel once (needed for the R+h scale + the splat
-            // altitude). The 4 gradient taps run wherever a sculpt PAGE is resident — the whole
-            // brush footprint including its sub-centimetre shoulder — so the tangential gradient is
-            // continuous across a dab (no crease ring); on the unsculpted planet no page is resident
-            // so the taps are skipped (the perf gate the old height threshold stood in for).
-            CBTSculptGeom sg = CBT_SurfSculptGeom(sp);
-            float centerSculpt = CBT_SampleSculptDirSurf(dir, sg);
-            // Analytic sphere modifiers (S2/S3): compose the closed-form set on the relief h, the pages or
-            // the closed form, as VertexEval composes it on its base height. An empty set adds no float op.
-            if (CBT_SphereAnalyticTotalSurf(sp) != 0u)
-                centerSculpt += CBT_SphereAnalyticOffsetSurf(sp, dir, h);
-            h += centerSculpt;
-            uint centerEntry = CBT_SculptDirEntrySurf(dir, sg);
-            if (centerEntry != CBT_SCULPT_NO_PAGE ||
-                (CBT_SphereAnalyticTotalSurf(sp) != 0u && CBT_SphereAnalyticCoversSurf(sp, dir)))
+            float h;
+            vec3 gradTangential;
+#if !defined(GE_COMPAT_PROFILE)
+            if (sp.PlanetPaged != 0u)
             {
-                vec3 t1 = CBT_AnyTangent(dir);
-                vec3 t2 = cross(dir, t1);
-                // Resolution-appropriate finite-difference step (crease-quality normal fix). One
-                // virtual texel of arc under-resolves a near-vertical wall: many pixels map to few
-                // sculpt texels, so a 1-texel central difference reads the piecewise-constant
-                // bilinear-cell gradient and bands into VERTICAL COLUMNS while under-tilting the wall
-                // (the flat look). Widening the stencil to the pixel's footprint averages the
-                // gradient across the cells the pixel actually covers -> smooth + correctly tilted.
-                // Reduces to one texel where the wall is well-resolved (footprint <= 1 texel).
-                // S4: the texel is the PAGE's texel — an escalated page's fine grid shrinks the
-                // step by 2^level (same physical MAX_STEP arc), otherwise a base-texel stencil
-                // alias-shades sub-base-texel content into a four-dot halo along the tap axes.
-                // Level 0 reduces to the exact pre-S4 arithmetic.
-                uint lvl = centerEntry != CBT_SCULPT_NO_PAGE ? CBT_SculptEntryLevel(centerEntry) : 0u;
-                float texelArc = CBT_SCULPT_HALF_PI / float(max(sg.VirtualDim, 1u) << lvl);
-                float stepTexels = clamp(pixelArc / max(texelArc, 1e-9), 1.0,
-                                         CBT_SCULPT_MAX_STEP_TEXELS * float(1u << lvl));
-                float sculptStep = texelArc * stepTexels;
-                // The taps sample the COMPOSED field (store + analytic, CBT_SampleSculptComposedSurf)
-                // so a flatten's gradient cancels the relief gradient on the pad interior (flat
-                // shading on the flat pad) and tilts the rim exactly where the geometry does. With
-                // no analytic set the composed tap IS the plain store tap — byte-identical.
-                vec3 s1 = t1 * sculptStep;
-                vec3 s2 = t2 * sculptStep;
-                float g1 = (CBT_SampleSculptComposedSurf(sp, sg, dir + s1, dir, reliefBase, reliefSlope) -
-                            CBT_SampleSculptComposedSurf(sp, sg, dir - s1, dir, reliefBase, reliefSlope)) /
-                           (2.0 * sculptStep);
-                float g2 = (CBT_SampleSculptComposedSurf(sp, sg, dir + s2, dir, reliefBase, reliefSlope) -
-                            CBT_SampleSculptComposedSurf(sp, sg, dir - s2, dir, reliefBase, reliefSlope)) /
-                           (2.0 * sculptStep);
-                gradTangential += g1 * t1 + g2 * t2;
+                // The relief from the planet's height pages, as VertexEval draws it (planets 3.6).
+                CBTPlanetPageSurface paged = CBT_SurfPlanetPages(sIn, pixelArc, sp);
+                h = paged.Height;
+                gradTangential = paged.Gradient;
             }
+            else
+#endif
+            {
+                // The closed-form relief (the narrow arm, and a planet before its pages are drawn).
+                uint oct = max(sp.ReliefOctaves, 1u);
+                h = CBT_PlanetRelief(dir, sp.ReliefAmplitude, sp.ReliefFrequency, oct);
+                vec3 g3 = CBT_PlanetReliefGradient(dir, sp.ReliefAmplitude, sp.ReliefFrequency, oct);
+                gradTangential = g3 - dot(g3, dir) * dir;
+            }
+            normalWS = normalize(dir - gradTangential / (sp.Radius + h));
         }
-        sphereAltitude = h; // relief + sculpt, per-pixel analytic — the splat altitude band reads this
-        normalWS = normalize(dir - gradTangential / (sp.Radius + h));
     }
     else
     {
@@ -1324,27 +878,12 @@ SurfaceOutput EvaluateSurface(SurfaceInput sIn)
         }
     }
 
-    // Splat weights. Three cases:
-    //   * SPHERE (plan §planet-shading): a principled RADIAL slope + altitude material blend.
-    //     The old path took a hard world-Y slope fallback that read "up" as world +Y, which
-    //     is wrong on a globe (a whole cube face reads as cliff -> all rock); this measures
-    //     slope against the radial direction and layers grass/dirt/snow by altitude. A planar
-    //     splatmap has no meaning wrapped onto a sphere, so per-face sphere splat painting is
-    //     a documented v2 — this blend is the sane, seam-free default at any planet scale.
+    // Splat weights:
+    //   * PAGED, planar or planet: the surface pages' splat.
     //   * PLANAR painted: sample the shared RGBA8 splatmap at the terrain UV (CDLOD parity).
-    //   * PLANAR unpainted: the world-Y slope fallback (correct for a heightfield terrain).
+    //   * No splat bound (a planet before its pages resolve, an unpainted planar terrain): channel 0.
     vec4 weights = vec4(0.0);
-    if (isSphere)
-    {
-        CBTSurfaceParamsData sp = gCbtSurf.Params;
-        vec3 dir = normalize(sIn.positionWS);
-        // Altitude is the per-pixel analytic height (relief + sculpt) the normal branch evaluated,
-        // NOT length(positionWS) - R: the latter is the interpolated chord, so a coarse triangle
-        // over a relief/sculpt bump blurs the altitude bands to the facet. The analytic height tracks
-        // the true surface between vertices, so rock/snow/grass bands stay crisp on sculpted mesas.
-        weights = CBT_PlanetSlopeAltitudeWeights(normalWS, dir, sphereAltitude, sp.ReliefAmplitude);
-    }
-    else if (surfPages.Resolved)
+    if (surfPages.Resolved)
     {
         weights = surfPages.Splat;
     }
@@ -1382,9 +921,9 @@ SurfaceOutput EvaluateSurface(SurfaceInput sIn)
     }
     else
     {
-        // PLANAR, no splat bound: channel 0, the same answer the wSum guard below
-        // gives an all-zero splat. A terrain whose surface rules have not baked has
-        // no material assigned, and that is what it reads as.
+        // No splat bound, planar or planet: channel 0, the same answer the wSum guard
+        // below gives an all-zero splat. A terrain whose surface rules have not baked
+        // has no material assigned, and that is what it reads as.
         //
         // Do NOT derive weights from slope or altitude here. Authored surface rules own
         // material placement, and a stand-in derived at SHADE time cannot see the rows,
@@ -1484,12 +1023,9 @@ SurfaceOutput EvaluateSurface(SurfaceInput sIn)
 
     // The colour map over the blended ground: its premultiplied colour mixes the ground toward the
     // painted colour by its weight, the same expression the blade root applies
-    // (grass_root_ground_color.glsl). A planet carries no map.
-    if (!isSphere)
-    {
-        vec4 colorMap = surfPages.Resolved ? surfPages.Color : CBT_ColorMapTap(tp, sIn.uv0);
-        baseColor = TerrainApplyColorMap(baseColor, colorMap);
-    }
+    // (grass_root_ground_color.glsl).
+    vec4 colorMap = surfPages.Resolved ? surfPages.Color : CBT_ColorMapTap(tp, sIn.uv0);
+    baseColor = TerrainApplyColorMap(baseColor, colorMap);
 
     // The canopy shade of the grass standing here, the same depth its blade roots take
     // (terrain_grass_surface.glsl): the soil under a field gets less of the sun and the sky than open

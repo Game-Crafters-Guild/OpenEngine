@@ -5,7 +5,7 @@
 <UIElement class="popover-panel prefab-overrides">
   <UIElement class="prefab-overrides-header">
     <Label id="prefab-overrides-title" class="prefab-overrides-title" />
-    <Label id="prefab-overrides-against" class="prefab-overrides-against" />
+    <Label id="prefab-overrides-prefab" class="prefab-overrides-prefab" />
   </UIElement>
   <ScrollView id="prefab-overrides-scroll" class="prefab-overrides-scroll" />
   <Label id="prefab-overrides-empty" class="prefab-overrides-empty hidden" />

@@ -107,6 +107,7 @@ public:
         std::vector<uint32>                  TargetTopo;
         std::vector<Mathematics::Quaternion> TargetBindLocal;     // authored local bind per tgt bone
         std::vector<Mathematics::Vector3>    TargetRestPos;       // rest local translation per tgt bone
+        std::vector<Mathematics::Vector3>    TargetRestScale;     // rest local scale per tgt bone
         // Per-target-bone canonical routing (sized = TargetBoneCount).
         // SourceIdx == ~0u for non-canonical bones; BindCorrection is identity.
         std::vector<uint32>                  TargetSourceIdx;
@@ -254,9 +255,9 @@ private:
     // a chain on both rigs).
     std::vector<ChainDispatch> m_Chains;
 
-    // Body proportions cached for Stage 3 hip scale.
-    float m_SourceHipHeight = 0.0f;
-    float m_TargetHipHeight = 0.0f;
+    // Stage 3 scale of the hip translation: the target hip height over the
+    // source hip height, each in the space of the hips' parent bone.
+    float m_HipTranslationScale = 1.0f;
 };
 
 } // namespace Animation

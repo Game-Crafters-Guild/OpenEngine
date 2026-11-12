@@ -2,6 +2,7 @@
 
 #include "Memory/Arena.h"
 
+#include <algorithm>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
@@ -91,6 +92,13 @@ class ScratchScope
     template <class T>
     std::span<T> CopyArray(std::span<const T> source);
 
+    /// Returns `array`'s values in a span of at least `count` elements in this scope; use only the returned span.
+    /// In place when `array` is this scope's latest take and its block has room; else a copy, and the old storage
+    /// stays taken until its scope closes, so grow by doubling. Added elements are indeterminate.
+    template <class T>
+        requires std::is_trivially_copyable_v<T> && std::is_default_constructible_v<T>
+    std::span<T> GrowArray(std::span<T> array, std::size_t count);
+
     /// A memory resource over this scope for `std::pmr` containers; deallocation does nothing
     /// (the memory returns when the scope closes).
     std::pmr::memory_resource& Resource() { return *m_Resource; }
@@ -100,6 +108,9 @@ class ScratchScope
     /// thread whose scratch state has exited.
     void* AllocateAside(std::size_t bytes, std::size_t alignment);
     void* AllocateArrayBytes(std::size_t count, std::size_t elementBytes, std::size_t alignment);
+    /// Adds `addedBytes` after `[begin, end)` when this scope is the innermost one and the range is
+    /// its own latest take with room after it; false, changing nothing, otherwise.
+    bool TryExtendLatest(const void* begin, const void* end, std::size_t addedBytes);
     /// Every close the destructor does not finish inline: one with a side allocation, a
     /// bookkeeping close, a close that needs the full rewind or reset, a scope on an exited thread.
     void CloseUnsteady();
@@ -178,6 +189,25 @@ std::span<T> ScratchScope::CopyArray(std::span<const T> source)
     T* elements = static_cast<T*>(AllocateArrayBytes(source.size(), sizeof(T), alignof(T)));
     std::uninitialized_copy(source.begin(), source.end(), elements);
     return {elements, source.size()};
+}
+
+template <class T>
+    requires std::is_trivially_copyable_v<T> && std::is_default_constructible_v<T>
+std::span<T> ScratchScope::GrowArray(std::span<T> array, std::size_t count)
+{
+    if (count <= array.size())
+        return array;
+    if (count > std::numeric_limits<std::size_t>::max() / sizeof(T))
+        throw std::bad_array_new_length();
+    if (!array.empty() &&
+        TryExtendLatest(array.data(), array.data() + array.size(), (count - array.size()) * sizeof(T)))
+    {
+        std::uninitialized_default_construct_n(array.data() + array.size(), count - array.size());
+        return {array.data(), count};
+    }
+    const std::span<T> grown = AllocateArrayForOverwrite<T>(count);
+    std::copy(array.begin(), array.end(), grown.begin());
+    return grown;
 }
 
 } // namespace GameEngine::Memory

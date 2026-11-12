@@ -14,7 +14,7 @@ struct PhysicsContactEvent
     uint64 userDataB = 0;
 
     Physics::ContactState state = Physics::ContactState::Persist;
-    Physics::Vector3 point{0.0f, 0.0f, 0.0f};
+    Physics::WorldPosition point{};
     Physics::Vector3 normal{0.0f, 1.0f, 0.0f};
     float32 impulse = 0.0f;
 };

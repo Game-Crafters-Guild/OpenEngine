@@ -58,15 +58,8 @@ void CameraSystem::Update(ECS::World& world, float32 /*deltaTime*/) {
         device->GetSwapchainSize(viewportW, viewportH);
     }
 
-    Matrix4x4 worldM;
-    float* worldData = worldM.Data();
-    for (int i = 0; i < 16; ++i)
-    {
-        worldData[i] = worldTransform.matrix[i];
-    }
-
     Camera activeCamera{};
-    activeCamera.worldTransform = worldM;
+    activeCamera.SetPose(worldTransform.ToMatrix4x4(Mathematics::Vector3{}), worldTransform.GetPosition());
     activeCamera.params = cameraComp;
 
     if (m_CameraId == 0) {

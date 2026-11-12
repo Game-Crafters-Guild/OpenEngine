@@ -62,9 +62,13 @@ struct AtmosphereParametersGPU
     float ozoneCenterHeight;
     Mathematics::Vector3 ozoneAbsorption;
     float ozoneHalfWidth;
+    // The planet's center in world space (SkyPlanet::Center): every per-eye sky pass measures the
+    // eye's up and altitude from it.
+    Mathematics::Vector3 planetCenter;
+    float planetCenterStd140Pad;
 };
 
-static_assert(sizeof(AtmosphereParametersGPU) == 240,
+static_assert(sizeof(AtmosphereParametersGPU) == 256,
               "AtmosphereParametersGPU must match GLSL AtmosphereUBO std140 layout");
 static_assert(offsetof(AtmosphereParametersGPU, groundNightColor) == 64, "AtmosphereUBO groundNightColor offset mismatch");
 static_assert(offsetof(AtmosphereParametersGPU, groundHorizonColor) == 80, "AtmosphereUBO groundHorizonColor offset mismatch");
@@ -85,6 +89,7 @@ static_assert(offsetof(AtmosphereParametersGPU, mieAbsorption) == 208, "Atmosphe
 static_assert(offsetof(AtmosphereParametersGPU, ozoneCenterHeight) == 220, "AtmosphereUBO ozoneCenterHeight offset mismatch");
 static_assert(offsetof(AtmosphereParametersGPU, ozoneAbsorption) == 224, "AtmosphereUBO ozoneAbsorption offset mismatch");
 static_assert(offsetof(AtmosphereParametersGPU, ozoneHalfWidth) == 236, "AtmosphereUBO ozoneHalfWidth offset mismatch");
+static_assert(offsetof(AtmosphereParametersGPU, planetCenter) == 240, "AtmosphereUBO planetCenter offset mismatch");
 
 // Camera + celestial + star upload block. Hand-padded so C++ tight-packing
 // matches the GLSL SkyUBO std140 layout byte-for-byte (272 B). Shared by the
@@ -250,7 +255,9 @@ class SkyRenderer
 
     void Update(const SkySettings& settings, const SkySystemState& state);
 
-    static void FillDefaultAtmosphere(AtmosphereParametersGPU& atmo);
+    /// Earth's atmosphere on `planet`: its radius, center and atmosphere height, with the air's
+    /// scale heights and densities scaled to that height (SkyPlanet::AtmosphereHeight).
+    static void FillDefaultAtmosphere(AtmosphereParametersGPU& atmo, const SkyPlanet& planet);
 
     /// The sky-view LUT's texel format for a device that loads kernels of the given kind.
     ///
@@ -293,11 +300,23 @@ class SkyRenderer
     /// the quarter magnitude over which the vertex shader fades the limit out.
     uint32_t GetStarInstanceCount(float limitingMagnitude) const;
     bool IsTransmittanceComputed() const { return m_TransmittanceComputed; }
-    void MarkTransmittanceComputed() { m_TransmittanceComputed = true; }
+    /// The transmittance LUT is parameterized on the planet's radius and atmosphere height: it is
+    /// current only for the planet it was baked for.
+    bool IsTransmittanceCurrentFor(const SkyPlanet& planet) const
+    {
+        return m_TransmittanceComputed && m_TransmittancePlanetRadius == planet.Radius &&
+               m_TransmittanceAtmosphereHeight == planet.AtmosphereHeight;
+    }
+    void MarkTransmittanceComputed(const SkyPlanet& planet)
+    {
+        m_TransmittanceComputed = true;
+        m_TransmittancePlanetRadius = planet.Radius;
+        m_TransmittanceAtmosphereHeight = planet.AtmosphereHeight;
+    }
 
     // Sky-view LUT dirty tracking. The LUT is a function of SkySettings
-    // (sun direction, atmosphere, etc.) and of the camera's altitude band
-    // (Rendering/Sky/SkyViewLutAltitude.h), never of the raw camera. The pipeline
+    // (sun direction, atmosphere, etc.) and of the LUT's eye (the camera's band and, on
+    // a spherical planet, its ground point: Rendering/Sky/SkyViewLutAltitude.h). The pipeline
     // node computes a digest of those inputs each frame and
     // calls IsSkyViewLutCurrentFor() in its activation predicate; if the
     // digest matches the last-computed value, the dispatch is skipped.
@@ -419,6 +438,8 @@ class SkyRenderer
     BufferHandle m_RenderAtmoUBO[kMaxFramesInFlight] = {};
 
     bool m_TransmittanceComputed = false;
+    float m_TransmittancePlanetRadius = 0.0f;
+    float m_TransmittanceAtmosphereHeight = 0.0f;
     uint64_t m_SkyViewLutInputDigest = 0;
     bool m_SkyViewLutComputedOnce = false;
     uint64_t m_MultiscatterInputDigest = 0;

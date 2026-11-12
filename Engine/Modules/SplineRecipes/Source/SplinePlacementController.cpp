@@ -1,9 +1,9 @@
 #include "SplineRecipes/SplinePlacementController.h"
 
+#include "Components/GeneratedEntity.h"
 #include "Components/Hierarchy.h"
 #include "Components/Rendering/LocalBounds.h"
 #include "Components/Rendering/MeshRenderer.h"
-#include "Components/RuntimeOnlyEntity.h"
 #include "Components/Spline/SplineComponent.h"
 #include "Components/Spline/SplinePoolSelection.h"
 #include "Components/Transform.h"
@@ -52,7 +52,7 @@ SplinePlacementController::Candidate SplinePlacementController::MakeCandidate(EC
     candidate.Recipe = placement;
     candidate.SplineDataIndex = spline.SplineDataIndex;
     candidate.SplineDataGeneration = spline.SplineDataGeneration;
-    candidate.WorldMatrix = Mathematics::Matrix4x4::FromColumnMajor(transform.matrix);
+    candidate.WorldMatrix = transform.ToMatrix4x4(transform.GetPosition() - Mathematics::WorldPosition{});
     return candidate;
 }
 
@@ -65,14 +65,9 @@ void SplinePlacementController::Update(ECS::World& world,
     if (!splineService)
         return;
 
-    // A world reset destroys every generated tile with no per-entity Removed
-    // event and restarts entity versions, so the cached handles now alias
-    // unrelated entities — the retire sweep below would destroy those. The
-    // scene-swap sites release this controller beforehand, but World::Clear is
-    // also reached through World::DeserializeWorld (play-mode exit, undo
-    // snapshot restore), which no swap-site hook can cover. Forgetting the
-    // state is the whole release here: tiles instance already-registered model
-    // meshes, so this controller owns no mesh registrations to hand back.
+    // A world reset removes every generated tile and sends no Removed event: no snapshot or scene file
+    // holds a GeneratedEntity, so each cached handle names an entity that does not exist. Drop the
+    // state here and build again; the tiles use model meshes that this controller does not register.
     const uint64 resetGeneration = world.GetLifecycleResetGeneration();
     if (resetGeneration != m_LastWorldResetGeneration)
     {
@@ -99,7 +94,8 @@ void SplinePlacementController::Update(ECS::World& world,
     const bool anyConforms = std::any_of(
         candidates.begin(), candidates.end(), [](const Candidate& c)
         { return c.Recipe.ConformMode != Components::SplinePlacementConform::None; });
-    const uint64 surfaceRevision = anyConforms ? ConformSurfaceRevision(world, /*conforms by raycast*/ nullptr) : 0u;
+    const uint64 surfaceRevision =
+        anyConforms ? ConformSurfaceRevision(world, /*conforms by raycast*/ nullptr, UnboundedConformRun()) : 0u;
     // One request of the scene TLAS per frame, shared by every candidate that conforms to the scene.
     const bool anyConformsToScene = std::any_of(
         candidates.begin(), candidates.end(), [](const Candidate& c)
@@ -531,7 +527,7 @@ bool SplinePlacementController::Rebuild(ECS::World& world,
         tile.Set(transform);
         tile.Set(piece.Renderer);
         tile.Set(piece.Bounds);
-        tile.Set(Components::RuntimeOnlyEntity{});
+        tile.Set(Components::GeneratedEntity{});
         // Parenting is what keeps the hierarchy readable: the tiles collapse
         // under the placer instead of flooding the scene root.
         tile.Set(Components::Parent{candidate.Entity});

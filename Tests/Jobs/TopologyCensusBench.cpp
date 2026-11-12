@@ -30,6 +30,7 @@
 #include <cstdio>
 #include <functional>
 #include <initializer_list>
+#include <memory>
 #include <span>
 #include <thread>
 #include <vector>
@@ -162,13 +163,14 @@ JobSystem::TaskHandle SubmitInGraph(WorkStealingThreadPool& pool, std::function<
 // Warm the slab pool / queue blocks so census runs measure steady state.
 void Warmup(WorkStealingThreadPool& pool)
 {
-    std::atomic<uint32_t> executed{0};
+    // The jobs share ownership of the count: none writes this frame after Warmup returns.
+    const auto executed = std::make_shared<std::atomic<uint32_t>>(0);
     constexpr uint32_t kWarmupTasks = 2048;
     for (uint32_t i = 0; i < kWarmupTasks; ++i)
     {
-        pool.EnqueueWork([&executed] { executed.fetch_add(1, std::memory_order_relaxed); });
+        pool.EnqueueWork([executed] { executed->fetch_add(1, std::memory_order_relaxed); });
     }
-    ASSERT_TRUE(WaitUntil([&] { return executed.load(std::memory_order_relaxed) == kWarmupTasks; },
+    ASSERT_TRUE(WaitUntil([&] { return executed->load(std::memory_order_relaxed) == kWarmupTasks; },
                           std::chrono::milliseconds(5000)));
 }
 
@@ -215,11 +217,12 @@ TEST(TopologyBench, BENCHMARK_MpmcContentionProfile)
 
     for (const Cell& cell : cells)
     {
+        // Declared before the pool: its jobs can still write it after an ASSERT returns.
+        std::atomic<uint32_t> executed{0};
         WorkStealingThreadPool pool(cell.Workers);
         Warmup(pool);
         const Census before = pool.GetStatistics();
 
-        std::atomic<uint32_t> executed{0};
         const uint32_t bodyUs = cell.BodyUs;
         const uint32_t perProducer = cell.TotalTasks / cell.Producers;
         const uint32_t total = perProducer * cell.Producers;
@@ -345,12 +348,13 @@ TEST(TopologyBench, BENCHMARK_FeedCensus_GraphChainStorm)
 {
     using JobSystem::MakeUnique;
 
+    // Declared before the pool: its jobs can still write them after an ASSERT returns.
+    std::atomic<uint32_t> parentsRan{0};
+    std::atomic<uint32_t> childrenRan{0};
     WorkStealingThreadPool pool(std::max(2u, std::thread::hardware_concurrency()));
     Warmup(pool);
 
     constexpr uint32_t kPairs = 10000;
-    std::atomic<uint32_t> parentsRan{0};
-    std::atomic<uint32_t> childrenRan{0};
 
     const Census before = pool.GetStatistics();
     const auto t0 = SteadyClock::now();
@@ -445,6 +449,9 @@ TEST(TopologyBench, BENCHMARK_StealReality_LocalHeavyFanout)
     LogTimerResolution();
 
     const uint32_t hwc = std::max(2u, std::thread::hardware_concurrency());
+    // Declared before the pool: a wave's gate and children can still use them after an ASSERT returns.
+    std::atomic<uint32_t> childrenRan{0};
+    std::atomic<bool> release{false};
     WorkStealingThreadPool pool(hwc);
     Warmup(pool);
 
@@ -453,8 +460,6 @@ TEST(TopologyBench, BENCHMARK_StealReality_LocalHeavyFanout)
     constexpr uint32_t kChildrenPerParent = 32;
     constexpr uint32_t kChildBodyUs = 20;
     constexpr uint32_t kChildrenPerWave = kParentsPerWave * kChildrenPerParent;
-
-    std::atomic<uint32_t> childrenRan{0};
 
     const Census before = pool.GetStatistics();
     double drainMs = 0.0; // sum of (gate release -> wave drained) windows
@@ -467,8 +472,8 @@ TEST(TopologyBench, BENCHMARK_StealReality_LocalHeavyFanout)
         // gate submitted after its dependents never gates anything), released
         // by this thread after the wave is fully submitted. The gate pins one
         // worker in a yield loop for the submission phase; that is the price
-        // of a genuinely parked wave.
-        std::atomic<bool> release{false};
+        // of a genuinely parked wave. The last wave's gate is done: its children all ran.
+        release.store(false, std::memory_order_relaxed);
         const JobSystem::TaskHandle gate = SubmitInGraph(pool, [&release] {
             while (!release.load(std::memory_order_acquire))
             {

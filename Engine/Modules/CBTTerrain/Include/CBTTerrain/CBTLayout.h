@@ -200,26 +200,6 @@ inline constexpr uint32_t CBTTextureRingSlot(uint32_t frameCounter, uint32_t tex
     return frameCounter % textureRing;
 }
 
-// Analytic sphere modifiers (sculpt shape-accuracy S2): the bounded closed-form placement set
-// uploaded per frame in CBTFrameParams (compute) and CBTSurfaceParams (fragment). Closed-form
-// primitives only (circular flattens today; noise/stamp/zone stay store-baked), so a planet's
-// analytic count stays small; overflow beyond the cap falls back to the store bake. Mirrors
-// CBT_MAX_SPHERE_ANALYTIC in cbt_analytic.glsl (locked by the GLSL parse test). Each entry packs
-// as 3 vec4: [N.xyz | Radius], [E1.xyz | Falloff], [E2.xyz | TargetRadius].
-inline constexpr uint32_t kMaxSphereAnalyticModifiers = 16u;
-inline constexpr uint32_t kSphereAnalyticFloatsPerModifier = 12u;
-
-// Per-cell placement culling (sculpt shape-accuracy S3): each cube face carries an 8x8 cell grid;
-// the CPU publishes a 16-bit mask per cell of which placements (flattens then transient dabs, the
-// shared slot order) have support intersecting that cell. The GPU chokepoints read one mask word
-// for their sample point's cell and loop only the set bits — kills the all-N covers/eval loop per
-// facet (the measured N=1 -> 8 CBT.Update driver). 6 faces x 64 cells x 16 bits, 2 cells/uint32 =
-// 192 words (uvec4[48] std140, 768 B appended to CBTFrameParams). Mirrors CBT_ANALYTIC_CELL_GRID
-// in cbt_layout.glsl (locked by the GLSL parse test).
-inline constexpr uint32_t kSphereAnalyticCellGrid = 8u;
-inline constexpr uint32_t kSphereAnalyticCellCount = 6u * kSphereAnalyticCellGrid * kSphereAnalyticCellGrid;
-inline constexpr uint32_t kSphereAnalyticCellMaskWords = kSphereAnalyticCellCount / 2u;
-
 // ---------------------------------------------------------------------------
 // SoA GPU structs (std430)
 // ---------------------------------------------------------------------------
@@ -261,7 +241,7 @@ struct CBTBisectorData
 // any camera-relative consumption can help — the measured wall the S1 probes
 // pinned. The cure appends a per-corner integer SECTOR anchor on the engine's
 // 1024 m world-sector grid (the same representation instanced meshes use —
-// camera_relative.glsl GE_ClipFromSectorLocal / Components::WorldSectorCoord):
+// camera_relative.glsl GE_ClipFromSectorLocal):
 //   DeepTag[0] == 0 (planar, and the sphere on the narrow arm): Corner*.xyz is the
 //     fp32 WORLD position; the sector tail is written zero and never read.
 //   DeepTag[0] == 1 (the sphere on the wide arm): Corner*.xyz is the fp32
@@ -298,11 +278,14 @@ inline int32_t UnpackSectorHi(uint32_t v) { return static_cast<int32_t>(v) >> 16
 
 inline constexpr uint32_t kCubeFaceCount6 = 6u; // 6 cube faces (matches CBTSphereRoots kCubeFaceCount)
 
+// A surface extent past every terrain uv (planar and face-local uv lie in [0, 1]): nothing is clipped.
+inline constexpr float kCBTSurfaceUnclipped = 2.0f;
+
 // Per-frame camera + terrain params consumed by Classify (screen-space error) and
 // VertexEval (world-space height displacement). std140 mirror of CBTFrameParams in
-// cbt_layout.glsl — mat4 + 13 vec4 + the 16 x 3 vec4 analytic modifier set + the
-// height-chain vec4 = 1056 bytes, then the cell-mask tail, ring-buffered on the GPU. All
-// floats (GPU-upload-ready, column-major matrix).
+// cbt_layout.glsl — mat4 + 12 vec4 + the page vec4 + the height-chain vec4 = 288 bytes, then
+// the face dirty rects and the surface extent (the CBTFrameSlot), ring-buffered on the GPU. All floats
+// (GPU-upload-ready, column-major matrix).
 struct CBTFrameParams
 {
     // Rebased (render-origin-relative) world -> clip (reverse-Z LH). Classify's frustum
@@ -348,9 +331,9 @@ struct CBTFrameParams
     float NearBias[4] = {};
     // Walking-headroom demand shaping (walking-headroom slice — mirror cbt_layout.glsl demandTuning).
     // Consumed by Kernel_Classify only; every field 0 => byte-identical to the pre-slice metric.
-    // x = near-field world facet target (m): bounds the behind-eye/straddle force-split so a facet at
-    //     the eye plane stops at ~target metres instead of the decode cap (cap-depth near-plane detail
-    //     is invisible over-refinement that saturates the walking pose). 0 = off.
+    // x = near-field world facet target (m): the finest split edge of a facet at or behind the eye plane;
+    //     such a facet also stops at the density the screen would give it in front, so only the facets
+    //     near the eye reach it. 0 = off (force-split to the decode cap).
     // y = off-frustum keep-depth occupancy ceiling [0,1]: an off-frustum bisector keeps its depth while
     //     occupancy is below this (no yaw re-refine churn) and coarsens to base only under pool pressure.
     //     0 = off (always coarsen-to-base, the pre-slice frustum gate).
@@ -379,13 +362,9 @@ struct CBTFrameParams
     //       the annulus width AND the rising area floor (deep-off-frustum / small facets still coarsen).
     //       0 = off (the pre-slice frustum gate, coarsen-under-pressure).
     float PriorityParams[4] = {};
-    // Water plane (mirror cbt_layout.glsl waterPlane): the calm water surface a planar terrain sits
-    // under. Seen from a camera above that surface, a bisector whose three corners all lie more than
-    // the margin below it is hidden by the water, so Kernel_Classify scales its split AND merge pixel
-    // thresholds by the coarsen factor (the near-bias mechanism — both thresholds, so the hysteresis
-    // band is preserved) instead of refining the seabed to TargetPixelError. A corner within the
-    // margin refines normally, which keeps the shoreline and the seabed still visible through
-    // shallow water at full detail. Planar only; every field 0 => byte-identical to the metric.
+    // Water plane (mirror cbt_layout.glsl waterPlane), planar only. Seen from a camera above the surface, a
+    // bisector whose corners all lie more than the margin under it is hidden: Kernel_Classify scales its split
+    // threshold and its children's merge threshold by z. Every field 0 => byte-identical to the metric.
     //   x = water surface height (world Y).
     //   y = submerged margin (m): the seabed within this depth of the surface counts as visible.
     //   z = coarsen factor applied to submerged bisectors (> 1 enables; 0 = off).
@@ -393,38 +372,24 @@ struct CBTFrameParams
     //       vector: a facet splits only while its height range projects above it, a pair merges
     //       once its parent's projects below half (cbt_kernels.comp). 0 = off.
     float WaterPlane[4] = {};
-    // Analytic sphere modifiers (sculpt shape-accuracy S2 — mirror cbt_layout.glsl analyticParams /
-    // sphereAnalytic). The bounded closed-form placement set evaluated AT SAMPLE TIME inside the
-    // sculpt-sampling chokepoints, so a flatten renders as an exact circle at any planet radius
-    // instead of the store-texel staircase (design §3.a). x = flatten count, y = transient brush
-    // dab count (S3 — dabs occupy slots [x, x+y); integers as float, x+y <=
-    // kMaxSphereAnalyticModifiers — exact under 2^23); z = the first word of this frame's page-table
-    // ring slot (kCBTPageRingBaseLane, wide arm, exact under 2^24; written by CBTResources::UploadFrameParams,
-    // not by the caller); w reserved 0. Both 0 (the
-    // GE_TERRAIN_ANALYTIC_MODIFIERS-off dark-ship) skips every analytic branch, byte-identical.
-    float AnalyticParams[4] = {};
-    // kMaxSphereAnalyticModifiers entries x 3 vec4 each: flattens packed by
-    // PackSphereAnalyticFlatten ([N.xyz | Radius], [E1.xyz | Falloff], [E2.xyz | TargetRadius]),
-    // transient dabs by PackSphereAnalyticDab ([N.xyz | AngularRadius], [Amplitude, CosThreshold,
-    // 0, 0], zero) in the slots after the flattens. PlanetRadius rides PlanetParams.x.
-    float SphereAnalytic[kMaxSphereAnalyticModifiers * kSphereAnalyticFloatsPerModifier] = {};
+    // The paged height resolve (mirror cbt_layout.glsl pageParams): x = the first word of this
+    // frame's page-table ring slot (kCBTPageRingBaseLane, wide arm, an integer as float, exact under
+    // 2^24; written by CBTResources::UploadFrameParams, not by the caller); yzw = 0.
+    float PageParams[4] = {};
     // The draw's prefiltered height chain, as Classify's frustum cull needs it (planar, wide arm).
     // x = the level scale t / (f x s0) of the draw's level rule lambda = log2(distance x scale)
     // (TerrainECS PageLevelRule: t the split threshold px, f the focal length px, s0 the level-0
     // texel m); 0 = the draw keeps the cached corners and the cull tests them alone. y = the chain's
     // top level (an integer as float). zw = 0.
     Mathematics::Vector4 HeightChain;
-    // S3 per-cell placement culling: 16-bit placement mask per face cell (2 cells per word, low
-    // half = even cell), built by BuildSphereAnalyticCellMasks over the SAME slot order as
-    // SphereAnalytic. On the GLSL side this tail is uvec4[48] in CBTFrameSlot BESIDE the frame
-    // struct (std140-tight; same slot bytes) — NOT a CBTFrameParams member, because CBT_Frame()
-    // copies the params by value per thread and folding the 768 B mask into that copy measured
-    // ~7x on CBT.Update. All-zero when no placements exist (the dark-ship bytes).
-    uint32_t AnalyticCellMask[kSphereAnalyticCellMaskWords] = {};
     // The sphere's dirty rect of each cube face in face-local UV: (minU, minV, maxU, maxV), empty
     // when maxU <= minU. Classify reclassifies the bisectors of every face with a rect. A sibling of
-    // the frame struct on the GLSL side (CBTFrameSlot), like the cell masks. Written by RecordUpdate.
+    // the frame struct on the GLSL side (CBTFrameSlot): CBT_Frame() copies the params by value per
+    // thread, so the rects stay out of that copy. Written by RecordUpdate.
     Mathematics::Vector4 SphereDirty[kCubeFaceCount6];
+    // xy = the terrain's authored size in terrain uv; zw = 0. Planar Classify drops a triangle wholly
+    // past it from the VISIBLE stream. kCBTSurfaceUnclipped keeps every triangle. A CBTFrameSlot sibling.
+    Mathematics::Vector4 SurfaceExtent{kCBTSurfaceUnclipped, kCBTSurfaceUnclipped, 0.0f, 0.0f};
 };
 
 // ---------------------------------------------------------------------------
@@ -481,10 +446,22 @@ inline constexpr uint32_t kWQUnresolvedPageSamples = 17u;
 inline constexpr uint32_t kWQOffFrustumKeepFloor = 18u;
 inline constexpr int32_t kKeepFloorArriving = -1;
 inline constexpr int32_t kKeepFloorProbing = -2;
+// CBTClassifyDesc::Settle (cbt_layout.glsl CBT_SETTLE_LASTED): an input changed at this update, every input matches
+// the previous update's, or they have matched for CBTUpdateRestGate::kKeepProbeSettle.
+inline constexpr uint32_t kSettleMoved = 0u;
+inline constexpr uint32_t kSettleHeld = 1u;
+inline constexpr uint32_t kSettleLasted = 2u;
 // The leaves the planar criterion wants to merge, counted only at rest (cbt_layout.glsl
 // CBT_WQ_MERGE_CANDIDATE_COUNTER): live minus this count is Kernel_Reset's early proof that a keep step does not fit.
 inline constexpr uint32_t kWQMergeCandidateCounter = 19u;
-inline constexpr uint32_t kWQCounterSlots = 20u;
+// The rest search's memory of a failed probe (cbt_layout.glsl CBT_WQ_KEEP_PROBE_BASE and the two after it).
+// Kernel_Reset holds a rest above the failed step while the headroom is under the leaves its probe added plus
+// poolSize / kKeepRetryMarginDivisor.
+inline constexpr uint32_t kWQKeepProbeBase = 20u;
+inline constexpr uint32_t kWQKeepFailedStep = 21u;
+inline constexpr uint32_t kWQKeepFailedAdded = 22u;
+inline constexpr uint32_t kKeepRetryMarginDivisor = 64u;
+inline constexpr uint32_t kWQCounterSlots = 23u;
 
 // Payload lanes — 3 ALIASED physical lanes over the 6 logical queues (slot-diet r2).
 // The six work queues never all hold live data at once: each is written by one kernel
@@ -531,7 +508,14 @@ constexpr uint32_t WQSimplifyQueueOffset(uint32_t p) { return kWQCounterSlots + 
 constexpr uint32_t WQSimplifyClassQueueOffset(uint32_t p) { return kWQCounterSlots + 1u * p; }     // lane 1
 constexpr uint32_t WQPropagateSimplifyQueueOffset(uint32_t p) { return kWQCounterSlots + 1u * p; } // lane 1
 constexpr uint32_t WQAllocateQueueOffset(uint32_t p) { return kWQCounterSlots + 2u * p; }          // lane 2
-constexpr uint32_t WQElementCount(uint32_t p) { return kWQCounterSlots + kWQLaneCount * p; }
+// The pool census (cbt_layout.glsl CBT_WQ_CENSUS_*): after the lanes, per level the live leaves in view and off
+// view, then the off-view leaves by class (CBTCensusClass). Kernel_Reset clears it and Kernel_Classify fills it
+// only on an update recorded with CBTClassifyDesc::Census; every other update leaves it as it is.
+inline constexpr uint32_t kCensusLevels = 64u;
+inline constexpr uint32_t kCensusClassCount = 6u;
+inline constexpr uint32_t kCensusWords = 2u * kCensusLevels + kCensusClassCount;
+constexpr uint32_t WQCensusOffset(uint32_t p) { return kWQCounterSlots + kWQLaneCount * p; }
+constexpr uint32_t WQElementCount(uint32_t p) { return WQCensusOffset(p) + kCensusWords; }
 
 // ---------------------------------------------------------------------------
 // OCBT bitfield + sum tree — u32 leaf-word re-derivation (plan §6)
@@ -668,60 +652,9 @@ inline constexpr uint32_t kCBTBindingCount = static_cast<uint32_t>(CBTBinding::C
 inline constexpr uint32_t kCBTFrameParamsBinding = 14;    // UniformBuffer: CBTFrameParams[ring]
 inline constexpr uint32_t kCBTHeightTextureBinding = 15;  // CombinedImageSampler: terrain heightmap
 
-// Planet-editing v2 — SPARSE VIRTUAL SCULPT PAGE-TABLE. The editable sphere height source decouples
-// VIRTUAL resolution (radius-scaled, sets quality) from PHYSICAL storage (content-scaled,
-// sets memory). A per-face virtual grid of runtime dim Dv = pagesPerAxis * kSculptPageDim
-// (derived from a meters-per-texel budget at the planet radius — DeriveSculptVirtualDim,
-// SphereSculptPaging.h) is addressed through a per-face PAGE TABLE (binding 20) into a fixed
-// PHYSICAL PAGE POOL (binding 16). Pages materialize on first non-zero write; an unallocated
-// page reads additive 0 (the "no edits" fast path). Physical cost is radius-INDEPENDENT: the
-// pool is sized to a working-set budget, not to Dv^2, so a 50 km planet costs the same as a
-// 2 km one. The flat 256^2/face atlas grew linearly with radius (~123 m/texel at 20 km — the
-// sub-texel invisible-brush case) and a fixed-quality flat scale-up needed ~9.25 GB at 50 km.
-// Both SSBOs keep the host-visible write-once-per-frame ring discipline (no staging/barrier —
-// the class of bug that caused the tiled-upload device-losts). Sphere VertexEval samples the
-// pool through the table (paged bilinear) only when SphereSculptEnabled; planar never touches
-// them. Kept OUT of CBTBinding for the same reason as 14/15 (no zero-fill/UAV-barrier).
-
-// A physical page is kSculptPageDim^2 texels (128^2 R32F = 64 KiB). The page table maps up to
-// kSculptMaxPagesPerFaceAxis pages/axis per face (128 -> Dv up to 16384 -> R up to ~83 km at
-// 8 m/texel); a face's table region is a fixed cap*cap grid (row stride = cap) so the shader
-// indexes it without knowing the per-planet pagesPerAxis. kSculptNoPage marks an unallocated
-// virtual page (reads 0). Mirrored in cbt_layout.glsl as CBT_SCULPT_* and locked by
-// CBTLayoutTests.GlslSculptPageConstantsMatchCpp.
-inline constexpr uint32_t kSculptPageDim = 128u;
-inline constexpr uint32_t kSculptPageTexels = kSculptPageDim * kSculptPageDim; // 16384
-// Words per ring slot of the placeholder sculpt rings a planar tree binds (CBTResources): 256 B, a
-// whole minStorageBufferOffsetAlignment step on every supported device, so the per-slot offset bind
-// is valid. Nothing reads them.
-inline constexpr uint32_t kSculptPlaceholderSlotWords = 64u;
-inline constexpr uint32_t kSculptMaxPagesPerFaceAxis = 128u;
-inline constexpr uint32_t kSculptPageTableFaceStride =
-    kSculptMaxPagesPerFaceAxis * kSculptMaxPagesPerFaceAxis; // entries reserved per face (cap^2)
-inline constexpr uint32_t kSculptPageTableEntries = kSculptPageTableFaceStride * kCubeFaceCount6;
-inline constexpr uint32_t kSculptNoPage = 0xFFFFFFFFu;
-
-// Adaptive page LEVELS (sculpt shape-accuracy S4, design §3.b): a virtual page may host its
-// content at 2^level x the base texel density over the SAME angular rect, so a brush whose
-// footprint is sub-representable at the base resolution still commits its shape (the S3
-// release-pop cure). The page-table entry packs the level into its top byte (pool ids stay
-// below 2^24 — ResolveSculptPagePoolCount caps the pool): id = entry & kSculptPageIdMask,
-// level = entry >> kSculptPageLevelShift; kSculptNoPage is tested for FIRST, so its 0xFF top
-// byte never decodes as a level. A level-L page owns 4^L CONTIGUOUS pool slots (base id +
-// followers) holding a (127*2^L + 1)^2 endpoint-aligned fine grid — 255^2 <= 4 slots and
-// 509^2 <= 16 slots, so the block never outgrows its slots. Max level 2 (4x density) is the
-// honest VRAM ceiling: one level-2 page costs 16 of the pool's slots (1 MiB of the default
-// 256-slot budget per page). Mirrored in cbt_sculpt.glsl (CBT_SCULPT_PAGE_ID_MASK et al) and
-// locked by CBTLayoutTests.GlslSculptPageConstantsMatchCpp.
-inline constexpr uint32_t kSculptPageIdMask = 0x00FFFFFFu;
-inline constexpr uint32_t kSculptPageLevelShift = 24u;
-inline constexpr uint32_t kSculptMaxPageLevel = 2u;
-inline constexpr uint32_t kCBTSphereSculptBinding = 16;          // StorageBuffer: float[ring][poolPages][pageTexels]
-inline constexpr uint32_t kCBTSphereSculptPageTableBinding = 20; // StorageBuffer: uint[ring][6*cap^2] page table
-
 // ---------------------------------------------------------------------------
 // Phase E resident-window atlas bindings. Kept OUT of CBTBinding for the
-// same reason as 14/15/16 (no zero-fill / UAV barrier). Both are dark-shipped: a
+// same reason as 14/15 (no zero-fill / UAV barrier). Both are dark-shipped: a
 // planar terrain with atlas disabled (AtlasParams1.z == 0) never touches them, and
 // the driver DCEs the resolve out of every kernel but VertexEval.
 //
@@ -732,11 +665,13 @@ inline constexpr uint32_t kCBTSphereSculptPageTableBinding = 20; // StorageBuffe
 // this frame's GPU work — the SAME write-once-per-frame / ring discipline as the
 // FrameParams UBO, and the reason the shader-side generation check is redundant
 // (each frame reads its own ring slot; an evicted texture slot is quarantined for
-// >= framesInFlight frames — see AtlasSlotPool). One row per tile; sized to a fixed
-// tile-capacity window per ring slot so a huge terrain's small table fits trivially.
-inline constexpr uint32_t kAtlasMaxTiles = 16384u; // 128x128 tile cap (128 km at 1 km tiles); 256 KiB/slot
+// >= framesInFlight frames — see AtlasSlotPool). The rows are a window of at most
+// kAtlasWindowTilesPerAxis tiles a side that wraps over the terrain's tile grid; a row holds the
+// key of the tile that owns it, so the table size does not depend on the terrain size.
+inline constexpr uint32_t kAtlasWindowTilesPerAxis = 128u;
+inline constexpr uint32_t kAtlasWindowRows = kAtlasWindowTilesPerAxis * kAtlasWindowTilesPerAxis; // 256 KiB/slot
 inline constexpr uint32_t kAtlasRowBytes = 16u;    // sizeof(TileAtlasSlot) — asserted at the writer
-inline constexpr uint32_t kCBTAtlasRowsBinding = 17;    // StorageBuffer: TileAtlasSlot[ring * kAtlasMaxTiles]
+inline constexpr uint32_t kCBTAtlasRowsBinding = 17;    // StorageBuffer: TileAtlasSlot[ring * kAtlasWindowRows]
 // Binding 18: the atlas height texture ring (R32_FLOAT, AtlasDim^2). Rebound per
 // frame slot exactly like binding 15, so a mid-session atlas resize / rebind never
 // touches an in-flight ring element. VertexEval samples it with a linear-clamp
@@ -746,9 +681,6 @@ inline constexpr uint32_t kCBTAtlasHeightBinding = 18;  // CombinedImageSampler 
 // tile resolves to — height-continuous with the resident relief at the window edge (Risk 3).
 // Always resident, a few KiB; rebound per frame slot like binding 18.
 inline constexpr uint32_t kCBTAtlasCoarseBinding = 19; // CombinedImageSampler ring: coarse height field
-// Binding 20: the sphere sculpt PAGE TABLE SSBO (planet editing v2). Host-visible ring, same
-// discipline as binding 16; only VertexEval reads it (gated on SphereSculptEnabled). Declared
-// after the atlas bindings so the SoA storage-buffer loops (0..13) never touch it.
 // Binding 21: the height-range pyramid the content-aware split reads (wide arm only; the
 // narrow-heap kernels do not declare it). Device-local; Kernel_HeightRangeBuild writes it from
 // the bound height texture whenever the heights may have changed, Classify reads it.
@@ -763,18 +695,17 @@ inline constexpr uint32_t kCBTHeightRangeBinding = 21; // StorageBuffer: uint[kC
 //   then one arrival fade per cache slot (float bits), then the table's words (TerrainECS PageTable:
 //   the entries level-major and row-major for a dense table; the tiers, the dense levels, the floor
 //   directory and the block pools for a tiered one).
-// The slot's first word rides the frame's own params (CBTFrameParams::AnalyticParams[kCBTPageRingBaseLane],
+// The slot's first word rides the frame's own params (CBTFrameParams::PageParams[kCBTPageRingBaseLane],
 // written by UploadFrameParams), so a frame finds its slot without reading another frame's.
 // Binding 23: the page cache texture ring (R32_FLOAT, one per field shared by every terrain),
-// rebound per frame slot like binding 18. Both are wide-arm only: the narrow arm's VertexEval
-// already binds the WebGPU per-stage storage-buffer limit, so it keeps the unified and atlas
-// heights (the narrow-heap kernels do not declare them).
+// rebound per frame slot like binding 18. Both are wide-arm only: the narrow arm keeps the
+// unified and atlas heights (the narrow-heap kernels do not declare them).
 inline constexpr uint32_t kCBTPageTableBinding = 22; // StorageBuffer: uint[ring * slot words]
 inline constexpr uint32_t kCBTPageCacheBinding = 23; // CombinedImageSampler ring: the height page cache
 inline constexpr uint32_t kCBTPageMaxLevels = 32u;   // mirror PageStreaming::kPageStoreMaxLevels
 inline constexpr uint32_t kCBTPageHeaderWords = 8u;
 inline constexpr uint32_t kCBTPageFadeOffsetWords = kCBTPageHeaderWords + 4u * kCBTPageMaxLevels;
-inline constexpr uint32_t kCBTPageRingBaseLane = 2u; // AnalyticParams lane carrying the slot's first word
+inline constexpr uint32_t kCBTPageRingBaseLane = 0u; // PageParams lane carrying the slot's first word
 // The surface planes a paged planar terrain has (CBTSurfaceParams::SurfacePagedPlanes, mirror cbt_surface.glsl
 // CBT_SURF_PLANE_*). The fragment reads the pages only when both splat and normal are there.
 inline constexpr uint32_t kCBTSurfacePlaneSplat = 1u;
@@ -1054,8 +985,7 @@ constexpr CBTHeightBuildRegion CBTHeightBuildRegionUnion(const CBTHeightBuildReg
 // Planet-shading surface params (plan §planet-shading)
 // ---------------------------------------------------------------------------
 // A small GRAPHICS-only buffer the fragment reads to shade the sphere with per-pixel
-// ANALYTIC normals (the multi-octave relief gradient + a direction-sampled sculpt gradient)
-// and a radial slope+altitude material blend. It rides set 2 via DrawBindings (resolved by
+// ANALYTIC normals (the multi-octave relief gradient, or the height pages' gradient) and a radial slope+altitude material blend. It rides set 2 via DrawBindings (resolved by
 // the reflected instance name gCbtSurf), NOT the compute descriptor set, so the kernel
 // layout is untouched. Host-visible ring: the render feature writes slot (frameIndex % ring)
 // each frame, and the fragment offset-binds that one slot (kCBTSurfaceParamsSlotStride) so it
@@ -1079,14 +1009,6 @@ struct CBTSurfaceParams
     float ReliefAmplitude = 0.0f;
     float ReliefFrequency = 0.0f;
     uint32_t ReliefOctaves = 0u;
-    uint32_t SphereSculptEnabled = 0u; // 1 -> the fragment adds the sculpt gradient to the normal
-    // Paged sculpt geometry (mirror SphereSculptGeometry) — the fragment's page addressing (no
-    // hardcode). VirtualDim is the radius-scaled per-face dim; Cap the fixed page-table row stride;
-    // PoolPageCount the physical pool size (0 -> unconfigured, sample 0).
-    uint32_t SphereSculptVirtualDim = 0u;
-    uint32_t SphereSculptCap = 0u;
-    uint32_t SphereSculptPagesPerAxis = 0u;
-    uint32_t SphereSculptPoolPageCount = 0u;
     uint32_t DebugMode = 0u; // TerrainDebugView: 0 = off (normal shading), 1 = facet tint (CBT triangulation)
     // Phase E: 1 when the planar terrain is resident-window-atlas-backed. Such a terrain has no
     // unified normalmap; the surface resolves splat + normal per-pixel through the atlas below.
@@ -1117,32 +1039,22 @@ struct CBTSurfaceParams
     // none; the ground then reads identity.
     uint32_t AtlasColorBindless = 0u;
     uint32_t AtlasColorCoarseBindless = 0u;
-    // Analytic sphere modifiers (sculpt shape-accuracy S2 — mirror the tail of CBTSurfaceParamsData
-    // in cbt_surface.glsl). The same placement set CBTFrameParams carries, here for the fragment's
-    // per-pixel composed sculpt (centre height + gradient taps + tap gate). DabCount keeps the
-    // vec4-struct array 16-aligned in std430 (104 + 4 + 4 = 112); transient dabs occupy slots
-    // [Count, Count+DabCount). Both 0 = every analytic branch skipped.
-    uint32_t SphereAnalyticCount = 0u;
-    uint32_t SphereAnalyticDabCount = 0u;
-    float SphereAnalytic[kMaxSphereAnalyticModifiers * kSphereAnalyticFloatsPerModifier] = {};
-    // The planet's height pages in the fragment (cbt_planet_page.glsl): one anchor per cube face, the
-    // eye planet-local and relative to the render origin, and PlanetPaged 1 when the fragment shades
-    // from the pages (gPageTable, gPageCache). A planar terrain whose surface is paged: the first word of
-    // its surface table in the page-table slot, and its kCBTSurfacePlane* bits (0: the surface textures).
-    CBTPlanetPageAnchor PageAnchors[kCubeFaceCount6] = {};
-    Mathematics::Vector4 PageEye;
-    Mathematics::Vector4 PageEyeRelative;
+    // The planet's height pages in the fragment (cbt_planet_page.glsl): PlanetPaged 1 when the fragment
+    // shades from the pages (gPageTable, gPageCache), one anchor per cube face, the eye planet-local and
+    // relative to the render origin. A planar terrain whose surface is paged: the first word of its
+    // surface table in the page-table slot, and its kCBTSurfacePlane* bits (0: the surface textures).
     uint32_t PlanetPaged = 0u;
     uint32_t SurfacePageBase = 0u; // scalars, not an array: a std140 array strides 16 B a scalar
     uint32_t SurfacePagedPlanes = 0u;
-    uint32_t PlanetPagePad2 = 0u;
+    CBTPlanetPageAnchor PageAnchors[kCubeFaceCount6] = {};
+    Mathematics::Vector4 PageEye;
+    Mathematics::Vector4 PageEyeRelative;
 };
-static_assert(sizeof(CBTSurfaceParams) == 1024,
-              "CBTSurfaceParams must be 1024B (26 scalars + count/pad + 16 x 3 vec4 analytic set + the "
-              "planet page tail, std430 mirror)");
-static_assert(offsetof(CBTSurfaceParams, SphereAnalyticCount) == 104 &&
-                  offsetof(CBTSurfaceParams, SphereAnalytic) == 112,
-              "analytic tail is appended after the leading 104B block, array 16-aligned (std430)");
+static_assert(sizeof(CBTSurfaceParams) == 224,
+              "CBTSurfaceParams must be 224B (24 scalars + the planet page tail, std140 mirror)");
+static_assert(offsetof(CBTSurfaceParams, PageAnchors) == 96 && offsetof(CBTSurfaceParams, PageEye) == 192 &&
+                  offsetof(CBTSurfaceParams, PageEyeRelative) == 208,
+              "the planet page tail follows the 96B scalar block (vec4-aligned, std140)");
 
 // Per-slot stride, padded well past sizeof so slot * stride satisfies every device's
 // minStorageBufferOffsetAlignment when the fragment offset-binds a single ring slot.
@@ -1166,8 +1078,10 @@ struct CBTDrawLevelParams
     // lattice. y = the normal chain's mips (CBTNormalChainMips), 0 when it is not provisioned: the surface
     // then shades from the level-0 normal map everywhere. zw = 0.
     uint32_t Lattice[4] = {};
+    // xy = CBTFrameParams::SurfaceExtent.xy: the vertex modifier clips the draw there (GE_CLIP_DISTANCE).
+    Mathematics::Vector4 SurfaceExtent{kCBTSurfaceUnclipped, kCBTSurfaceUnclipped, 0.0f, 0.0f};
 };
-static_assert(sizeof(CBTDrawLevelParams) == 48, "CBTDrawLevelParams is three vec4 (std140)");
+static_assert(sizeof(CBTDrawLevelParams) == 64, "CBTDrawLevelParams is four vec4 (std140)");
 inline constexpr uint32_t kCBTDrawLevelParamsSlotStride = 256u;
 static_assert(kCBTDrawLevelParamsSlotStride % 256u == 0u && kCBTDrawLevelParamsSlotStride >= sizeof(CBTDrawLevelParams),
               "draw-level slot stride must be 256-aligned and hold one struct");
@@ -1208,17 +1122,10 @@ struct CBTPushConstants
     float DirtyMaxU = 0.0f;
     float DirtyMaxV = 0.0f;
     // The planar dirty rect above; the sphere's face rects ride CBTFrameParams::SphereDirty.
-    // SphereSculptEnabled gates the VertexEval additive sculpt sample (0 = pure procedural relief).
-    uint32_t SphereSculptEnabled = 0u;
     // Quiescence gate for VertexEval (plan §planet-shading perf). 0 = evaluate the whole live
     // pool (pre-slice behavior; the force pass after init / a param change). 1 = evaluate only
     // bisectors flagged CBT_FLAG_MODIFIED this frame, so a quiescent frame re-evaluates ~0.
     uint32_t GateVertexEval = 0u;
-    // Edit-driven retessellation A/B (round-8b). 1 = Classify carries the geometric-error crease
-    // term (refines a facet straddling a live sculpt cliff the area metric cannot see); 0 = the
-    // pre-slice area-only metric. Default on; GE_CBT_EDIT_RETESS=0 forces it off for an A/B on the
-    // same build. Only Classify reads it, only on the sphere with SphereSculptEnabled.
-    uint32_t EditRetessEnabled = 1u;
     // Near-field force-split occupancy gate (round-8e saturation-deadlock fix). 1 = under pool
     // pressure, stop force-splitting invisible near-plane/behind-eye grazing geometry (the treadmill
     // that pins the pool at 100% and freezes the topology, so a static-camera edit / TargetPixelError
@@ -1240,10 +1147,14 @@ struct CBTPushConstants
     // texels for Kernel_NormalChainBuild and in blocks for Kernel_HeightRangeBuild. Only they read it.
     uint32_t BuildRegionMin = 0u;
     uint32_t BuildRegionExtent = 0u;
-    // The rest rule (Kernel_Classify). 1 = every input matches the previous update's, so the planar
+    // The rest rule (Kernel_Classify). Above 0 = every input matches the previous update's, so the planar
     // split and merge use one threshold; 0 = the camera or another input moved, and they keep the
-    // hysteresis band. Mirrors CBTClassifyDesc::Settle.
+    // hysteresis band. kSettleLasted lets the keep step's rest search step down. Mirrors CBTClassifyDesc::Settle.
     uint32_t Settle = 0u;
+    // 1 = this update counts the pool census (mirrors CBTClassifyDesc::Census).
+    uint32_t Census = 0u;
+    // What the planar area metric keeps of a facet wholly behind the eye (mirrors CBTClassifyDesc::BehindEye).
+    uint32_t BehindEye = 0u;
 };
 
 // ---------------------------------------------------------------------------
@@ -1273,18 +1184,16 @@ static_assert(sizeof(CBTVertexData) == 96,
 static_assert(offsetof(CBTVertexData, Meta) == 48, "corner/meta offsets must not move");
 static_assert(offsetof(CBTVertexData, Sector0) == 64 && offsetof(CBTVertexData, DeepTag) == 88,
               "sector tail is appended after the legacy 64B block (uvec2-aligned)");
-static_assert(sizeof(CBTFrameParams) == 1920,
-              "CBTFrameParams must be mat4 + 13 vec4 + 16 x 3 vec4 analytic set + the height-chain vec4 + "
-              "48 uvec4 cell masks + 6 face dirty rects (1920B std140)");
-static_assert(offsetof(CBTFrameParams, WaterPlane) == 240 &&
-                  offsetof(CBTFrameParams, AnalyticParams) == 256 &&
-                  offsetof(CBTFrameParams, SphereAnalytic) == 272,
-              "analytic tail is appended after the 256B scalar block (vec4-aligned, std140)");
-static_assert(offsetof(CBTFrameParams, HeightChain) == 1040,
-              "the height-chain vec4 follows the analytic set (vec4-aligned, std140)");
-static_assert(offsetof(CBTFrameParams, AnalyticCellMask) == 1056,
-              "the S3 cell-mask tail is appended after the 1056B frame block (uvec4-aligned, std140)");
-static_assert(offsetof(CBTFrameParams, SphereDirty) == 1824, "the face dirty rects follow the cell masks");
+static_assert(sizeof(CBTFrameParams) == 400,
+              "CBTFrameParams must be mat4 + 12 vec4 + the page vec4 + the height-chain vec4 + "
+              "6 face dirty rects + the surface extent (400B std140, one CBTFrameSlot)");
+static_assert(offsetof(CBTFrameParams, WaterPlane) == 240 && offsetof(CBTFrameParams, PageParams) == 256,
+              "the page vec4 follows the 256B scalar block (vec4-aligned, std140)");
+static_assert(offsetof(CBTFrameParams, HeightChain) == 272,
+              "the height-chain vec4 follows the page vec4 (vec4-aligned, std140)");
+static_assert(offsetof(CBTFrameParams, SphereDirty) == 288,
+              "the face dirty rects follow the 288B frame block (vec4-aligned, std140)");
+static_assert(offsetof(CBTFrameParams, SurfaceExtent) == 384, "the surface extent follows the face dirty rects");
 
 static_assert((kDefaultBisectorPoolSize & (kDefaultBisectorPoolSize - 1u)) == 0u,
               "pool size must be a power of two");
@@ -1293,9 +1202,9 @@ static_assert(kDefaultBaseDepth == CBTLog2(kRootHalfedgeCount), "baseDepth = log
 static_assert(kRootHalfedgeCount == 2u, "C2 conforming base = 2 twin triangles");
 static_assert(kDefaultBaseDepth == 1u, "log2(2) = 1");
 static_assert(sizeof(CBTPushConstants) == 92,
-              "push constants must stay 92B (10 u32 + 4 f32 dirty-rect + 1 u32 sphere sculpt enable + "
-              "1 u32 vertex-eval gate + 1 u32 edit-retess enable + 1 u32 near-field gate + 1 u32 "
-              "region-free mask + 1 u32 pool-pressure + 2 u32 height-chain region + 1 u32 settle; "
+              "push constants must stay 92B (10 u32 + 4 f32 dirty-rect + 1 u32 vertex-eval gate + "
+              "1 u32 near-field gate + 1 u32 region-free mask + 1 u32 pool-pressure + "
+              "2 u32 height-chain region + 1 u32 settle + 1 u32 census + 1 u32 behind-eye release; "
               "GLSL mirror; <= 128B policy)");
 
 // u32 sum-tree derivation sanity for the default 2^20 pool (1M pool bump).

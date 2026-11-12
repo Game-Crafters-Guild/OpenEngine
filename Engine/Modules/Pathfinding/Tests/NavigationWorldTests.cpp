@@ -645,9 +645,9 @@ GridPathSolve WideAgentSolve(NavMapHandle handle, uint32 goalX, uint32 goalZ)
 
 } // namespace
 
-// A one-cell gap in the wall at x = 32 keeps one region, but a footprint three cells wide cannot
-// pass it: the search closes every cell the footprint fits on the start's side (x 1 to 30, z 1 to 62)
-// and ends Unreachable. With the gap closed, the goal is in another region and no search runs.
+// A one-cell gap in the wall at x = 32 keeps one region, but a footprint three cells wide cannot pass it.
+// The search closes the cells the footprint fits on the start's side (x 1 to 30, z 1 to 62), and the flood
+// from the goal adds one cell for each after the first 256. With the gap closed, no search runs.
 TEST(NavigationWorldTests, AGoalTheFootprintCannotReachRecordsAnUnreachableSearch)
 {
     constexpr uint32 kSize = 64;
@@ -666,7 +666,9 @@ TEST(NavigationWorldTests, AGoalTheFootprintCannotReachRecordsAnUnreachableSearc
 
     EXPECT_EQ(solves[0].Status, PathStatus::Failed);
     EXPECT_EQ(unreachable.End, GridSolveEnd::Unreachable);
-    EXPECT_EQ(unreachable.Expansions, 30u * 62u);
+    constexpr uint32 kStartSideCells = 30u * 62u;
+    constexpr uint32 kStartSideOnlyExpansions = 256u; // AStarSolver closes these before the goal side starts
+    EXPECT_EQ(unreachable.Expansions, kStartSideCells + (kStartSideCells - kStartSideOnlyExpansions));
     EXPECT_EQ(unreachable.StartX, 5u);
     EXPECT_EQ(unreachable.StartZ, 5u);
     EXPECT_EQ(unreachable.GoalX, 50u);

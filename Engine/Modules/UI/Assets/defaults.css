@@ -13,11 +13,13 @@
  * It covers the control parts that draw nothing without a stylesheet: the
  * slider's track (Slider::OnGeneratePrimitives reads --slider-track-fill, the
  * filled part; --slider-track, the rest of the rail; --slider-tick, the step
- * ticks) and its thumb, the toggle's knob, the checkbox's box and the scrollbar's
- * thumb; the `hidden` class the controls set on parts they are not showing
- * (a slider's second thumb outside range mode, a dock tab bar's scroll buttons);
- * the hover tooltip's bubble, which has no fill or border without one; and
- * MarkdownText, whose words would otherwise stack one per line.
+ * ticks) and its thumb, the toggle's knob, the checkbox's box, the scrollbar's
+ * thumb and the progress bar's track and fill; the `hidden` class the controls
+ * set on parts they are not showing (a slider's second thumb outside range
+ * mode, a dock tab bar's scroll buttons); the hover tooltip's bubble, which
+ * has no fill or border without one; and MarkdownText, whose words would otherwise stack one per line. It also
+ * defines every token the UI module's control sheets read, so a game with no
+ * theme gets working controls.
  * Colours are the variables below; a theme recolours a control by setting the
  * variable.
  */
@@ -31,6 +33,10 @@
     --ui_color_checkbox_box: #202020;
     --ui_color_checkbox_box_border: #777777;
     --ui_color_checkbox_box_checked: #3B85E0;
+    /* A progress bar is a rail, so it takes the slider's rail colors. */
+    --ui_color_progress_track: var(--slider-track);
+    --ui_color_progress_fill: var(--slider-track-fill);
+    --ui_progress_radius: 999px;
     --ui_color_scrollbar_thumb: #808080;
     --ui_color_tooltip: #1E1E1E;
     --ui_color_tooltip_border: #5A5A5A;
@@ -42,6 +48,51 @@
     --ui_color_markdown_code_block: rgba(0, 0, 0, 0.25);
     --ui_color_markdown_line: rgba(128, 128, 128, 0.4);
     --ui_color_markdown_table_header: rgba(128, 128, 128, 0.12);
+
+    /* The tokens the module's control sheets (UI/controls) read without a fallback. */
+    --ui_color_accent: #006FFF;
+    --ui_color_accent_blue: #006FFF;
+    --ui_color_accent_blue_disabled: #2A4360;
+    --ui_color_accent_blue_hover: #4C9AFF;
+    --ui_color_accent_blue_inactive: #3575C9;
+    --ui_color_accent_blue_pressed: #0053BF;
+    --ui_color_accent_highlight: rgba(0, 111, 255, 0.3);
+    --ui_color_accent_pressed: var(--ui_color_accent_blue_pressed);
+    --ui_color_badge_neutral: #808080;
+    --ui_color_badge_neutral_text: #000000;
+    --ui_color_bg_grid: #222222;
+    --ui_color_bg_hover: #2A2A2A;
+    --ui_color_bg_item_hover: #2E2E2E;
+    --ui_color_bg_panel: #272727;
+    --ui_color_bg_selected: #333333;
+    --ui_color_bg_tabbar: #1D1D1C;
+    --ui_color_border: #272727;
+    --ui_color_border_panel: #2F2F2F;
+    --ui_color_border_subtle: #3A3A3A;
+    --ui_color_enable_dot_hover_plate: rgba(255, 255, 255, 0.08);
+    --ui_color_enable_dot_muted: #787878;
+    --ui_color_enable_dot_off: #858585;
+    --ui_color_icon: rgba(200, 200, 200, 1.0);
+    --ui_color_mixed_indicator: #888888;
+    --ui_color_text: #E5E5E5;
+    --ui_color_text_bright: #FFFFFF;
+    --ui_color_text_dim: #B2B2B2;
+    --ui_color_text_disabled: #666666;
+    --ui_color_text_placeholder: #8C8C8C;
+    --ui_color_toggle_knob_disabled: #9A9A9A;
+    --ui_color_warning_text: #E0B050;
+    /* A text field's hint insets (controls/FieldPlaceholder/FieldPlaceholder.css): an unstyled
+       editor has no padding, so its text starts at the field's edge. */
+    --ui_field_placeholder_left: 0px;
+    --ui_field_placeholder_right: 0px;
+    --ui_field_placeholder_lift: 0px;
+    --ui_font_family: "Roboto", sans-serif;
+    --ui_font_size_base: 14px;
+    --ui_font_size_header: 16px;
+    --ui_font_size_list: 13px;
+    --ui_font_size_small: 12px;
+    --ui_radius_md: 6px;
+    --ui_radius_sm: 4px;
 }
 
 .hidden {
@@ -88,6 +139,42 @@
 
 .scrollbar-thumb {
     background-color: var(--ui_color_scrollbar_thumb);
+}
+
+/* ProgressBar: the element is the track and its child is the fill. The control
+ * sets only the fill's length; a host class sets the colors and the radius
+ * through the variables. No `display` here: it would override `.hidden`. */
+.progress-bar {
+    flex-direction: row;
+    width: 160px;
+    height: 6px;
+    border-radius: var(--ui_progress_radius);
+    background-color: var(--ui_color_progress_track);
+    overflow: hidden;
+}
+
+/* The fill is the only child, so `flex-end` puts it at the far edge. */
+.progress-bar-left {
+    justify-content: flex-end;
+}
+
+.progress-bar-up {
+    flex-direction: column;
+    justify-content: flex-end;
+    width: 6px;
+    height: 160px;
+}
+
+.progress-bar-down {
+    flex-direction: column;
+    width: 6px;
+    height: 160px;
+}
+
+.progress-bar-fill {
+    flex-shrink: 0;
+    border-radius: var(--ui_progress_radius);
+    background-color: var(--ui_color_progress_fill);
 }
 
 /* The hover tooltip's bubble (TooltipOverlay). Its arrow takes the bubble's

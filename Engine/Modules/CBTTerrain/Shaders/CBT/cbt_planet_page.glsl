@@ -26,6 +26,20 @@ struct CBTPlanetPageSurface
     vec3 Gradient;
 };
 
+// A fragment's place on its face's level-0 lattice: the anchor's texel plus an fp32 offset, the gnomonic
+// coordinates, and the page point of the center.
+struct CBTPlanetPagePoint
+{
+    uint Face;
+    int OriginX;
+    int OriginZ;
+    float OffsetX;
+    float OffsetZ;
+    float AX;
+    float AZ;
+    CBTPagePoint Center;
+};
+
 // (p(a) - p(b)) / (a - b) of the equal-angle map, exact as a polynomial: p'(a) when b equals a.
 // d_n = (a^n - b^n) / (a - b) = a d_(n-1) + b^(n-1).
 float CBT_EqualAngleDividedDifference(float a, float b)
@@ -127,14 +141,12 @@ CBTPagePoint CBT_PlanetLatticePoint(uint face, int originX, float offsetX, int o
     return point;
 }
 
-// The height and its gradient at planet-local `position`, `fromEye` from the eye at `eye` (the precise
-// difference), on a field of `samples` a face side at level `lambda`. The anchor is the fragment's face's
-// (CBT_PLANET_PAGE_NO_ANCHOR in anchorX: none); the difference steps 2^lambda level-0 texels, one-sided at a face end.
-CBTPlanetPageSurface CBT_PlanetPageSurfaceAt(vec3 position, vec3 fromEye, vec3 eye, int anchorX, int anchorZ,
-                                             float eyeFractionX, float eyeFractionZ, float lambda,
-                                             CBTPageField field)
+// The lattice point of planet-local `position`, `fromEye` from the eye at `eye` (the precise difference),
+// on a field of `samples` a face side. The anchor is the fragment's face's (CBT_PLANET_PAGE_NO_ANCHOR in
+// anchorX: none). It reads no page.
+CBTPlanetPagePoint CBT_PlanetPagePointAt(vec3 position, vec3 fromEye, vec3 eye, int anchorX, int anchorZ,
+                                         float eyeFractionX, float eyeFractionZ, uint samples)
 {
-    uint samples = field.Level0SamplesX;
     float halfSpan = 0.5f * float(samples - 1u);
     uint face = CBT_PlanetFaceOf(position);
     uint xAxis = CBT_PlanetFaceXAxis(face);
@@ -162,8 +174,37 @@ CBTPlanetPageSurface CBT_PlanetPageSurfaceAt(vec3 position, vec3 fromEye, vec3 e
         offsetZ = CBT_PlanetAnchorOffset(CBT_PlanetAxis(eye, zAxis), eyeNormal, CBT_PlanetAxis(fromEye, zAxis),
                                          fromEyeNormal, eyeFractionZ, halfSpan);
     }
-    offsetX = CBT_PlanetClampOffset(originX, offsetX, samples);
-    offsetZ = CBT_PlanetClampOffset(originZ, offsetZ, samples);
+    CBTPlanetPagePoint at;
+    at.Face = face;
+    at.OriginX = originX;
+    at.OriginZ = originZ;
+    at.OffsetX = CBT_PlanetClampOffset(originX, offsetX, samples);
+    at.OffsetZ = CBT_PlanetClampOffset(originZ, offsetZ, samples);
+    at.AX = aX;
+    at.AZ = aZ;
+    at.Center = CBT_PlanetLatticePoint(face, originX, at.OffsetX, originZ, at.OffsetZ, samples);
+    return at;
+}
+
+// The height and its gradient at planet-local `position` (CBT_PlanetPagePointAt's arguments), on `field`
+// at level `lambda`: the difference steps 2^lambda level-0 texels, one-sided at a face end.
+CBTPlanetPageSurface CBT_PlanetPageSurfaceAt(vec3 position, vec3 fromEye, vec3 eye, int anchorX, int anchorZ,
+                                             float eyeFractionX, float eyeFractionZ, float lambda,
+                                             CBTPageField field)
+{
+    uint samples = field.Level0SamplesX;
+    float halfSpan = 0.5f * float(samples - 1u);
+    CBTPlanetPagePoint at =
+        CBT_PlanetPagePointAt(position, fromEye, eye, anchorX, anchorZ, eyeFractionX, eyeFractionZ, samples);
+    uint face = at.Face;
+    uint xAxis = CBT_PlanetFaceXAxis(face);
+    uint zAxis = CBT_PlanetFaceZAxis(face);
+    int originX = at.OriginX;
+    int originZ = at.OriginZ;
+    float offsetX = at.OffsetX;
+    float offsetZ = at.OffsetZ;
+    float aX = at.AX;
+    float aZ = at.AZ;
     float step = exp2(max(lambda, 0.0f));
     float plusX = CBT_PlanetClampOffset(originX, offsetX + step, samples);
     float minusX = CBT_PlanetClampOffset(originX, offsetX - step, samples);
@@ -172,7 +213,7 @@ CBTPlanetPageSurface CBT_PlanetPageSurfaceAt(vec3 position, vec3 fromEye, vec3 e
     // One locate per fragment: the four taps share the center's walk of the table while they lie in its page
     // (CBT_PageSampleCross); a tap past the page's edge takes its own walk.
     CBTPageCross points;
-    points.Center = CBT_PlanetLatticePoint(face, originX, offsetX, originZ, offsetZ, samples);
+    points.Center = at.Center;
     points.PlusX = CBT_PlanetLatticePoint(face, originX, plusX, originZ, offsetZ, samples);
     points.MinusX = CBT_PlanetLatticePoint(face, originX, minusX, originZ, offsetZ, samples);
     points.PlusZ = CBT_PlanetLatticePoint(face, originX, offsetX, originZ, plusZ, samples);
@@ -193,6 +234,18 @@ CBTPlanetPageSurface CBT_PlanetPageSurfaceAt(vec3 position, vec3 fromEye, vec3 e
     surface.Height = heights.Center;
     surface.Gradient = gradient - direction * dot(gradient, direction);
     return surface;
+}
+
+// The world normal of a surface page's normal sample at unit `direction` on `face`: (normalX, normalZ) are
+// its components along the face's tangent frame there (x: the face's X axis made normal to the direction;
+// z: x cross the direction), and the rest lies along the direction (mirror PlanetSurfacePageProvider).
+vec3 CBT_PlanetSurfaceNormal(float normalX, float normalZ, vec3 direction, uint face)
+{
+    vec3 faceX = CBT_PlanetAxisVector(CBT_PlanetFaceXAxis(face));
+    vec3 tangentX = normalize(faceX - direction * dot(faceX, direction));
+    vec3 tangentZ = cross(tangentX, direction);
+    float normalY = sqrt(max(1.0f - normalX * normalX - normalZ * normalZ, 0.0f));
+    return normalize(tangentX * normalX + direction * normalY + tangentZ * normalZ);
 }
 // GE_SHARED_PLANET_PAGE_END
 

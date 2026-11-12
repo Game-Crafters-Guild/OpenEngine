@@ -153,7 +153,6 @@ private:
     UIElement* m_CommunityProjectsView = nullptr;
     UIElement* m_Title = nullptr;
     Label* m_ProjectCountLabel = nullptr;
-    UIElement* m_SearchPlaceholder = nullptr;
     UIElement* m_BottomPanel = nullptr;
     UIElement* m_Footer = nullptr;
     UIElement* m_LoadingLabel = nullptr;

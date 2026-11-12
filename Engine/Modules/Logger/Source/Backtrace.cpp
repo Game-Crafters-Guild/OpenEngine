@@ -5,7 +5,10 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <mutex>
+#include <string>
+#include <vector>
 
 #if defined(__APPLE__) || defined(__linux__)
 #include <cxxabi.h>
@@ -87,6 +90,38 @@ void ParseSymbolLineApple(const char* line, BacktraceFrame& out)
 
 #endif
 
+#if defined(_WIN32)
+
+// Adds the folder of one module to the list when the list does not have it.
+BOOL CALLBACK AppendModuleFolder(PCWSTR modulePath, DWORD64, ULONG, PVOID context)
+{
+    auto& folders = *static_cast<std::vector<std::filesystem::path>*>(context);
+    std::filesystem::path folder = std::filesystem::path(modulePath).parent_path();
+    if (folder.empty())
+        return TRUE;
+    if (std::find(folders.begin(), folders.end(), folder) == folders.end())
+        folders.push_back(std::move(folder));
+    return TRUE;
+}
+
+// The folders of the loaded modules as a DbgHelp search path.
+std::wstring LoadedModuleSearchPath(HANDLE process)
+{
+    std::vector<std::filesystem::path> folders;
+    EnumerateLoadedModulesW64(process, AppendModuleFolder, &folders);
+
+    std::wstring searchPath;
+    for (const std::filesystem::path& folder : folders)
+    {
+        if (!searchPath.empty())
+            searchPath += L';';
+        searchPath += folder.native();
+    }
+    return searchPath;
+}
+
+#endif
+
 } // namespace
 
 std::mutex& DbgHelpMutex()
@@ -94,6 +129,26 @@ std::mutex& DbgHelpMutex()
     static std::mutex s_Mutex;
     return s_Mutex;
 }
+
+#if defined(_WIN32)
+void LoadDbgHelpModules()
+{
+    // Guarded by DbgHelpMutex(), which the caller holds.
+    static bool s_Started = false;
+    HANDLE process = GetCurrentProcess();
+    const std::wstring searchPath = LoadedModuleSearchPath(process);
+    if (!s_Started)
+    {
+        s_Started = true;
+        // SYMOPT_IGNORE_CVREC: a module with no PDB in the search path gets export names only.
+        SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS | SYMOPT_LOAD_LINES | SYMOPT_IGNORE_CVREC);
+        if (SymInitializeW(process, searchPath.c_str(), TRUE))
+            return;
+    }
+    SymSetSearchPathW(process, searchPath.c_str());
+    SymRefreshModuleList(process);
+}
+#endif
 
 std::vector<BacktraceFrame> CaptureBacktrace(int maxFrames, int skipFrames)
 {
@@ -161,10 +216,7 @@ std::vector<BacktraceFrame> CaptureBacktrace(int maxFrames, int skipFrames)
     static std::atomic<bool> s_symInitialized{false};
     HANDLE process = GetCurrentProcess();
     if (!s_symInitialized.exchange(true))
-    {
-        SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS | SYMOPT_LOAD_LINES);
-        SymInitialize(process, nullptr, TRUE);
-    }
+        LoadDbgHelpModules();
 
     void* addrs[128];
     const int alloc = std::min(maxFrames + skipFrames + 1, 128);

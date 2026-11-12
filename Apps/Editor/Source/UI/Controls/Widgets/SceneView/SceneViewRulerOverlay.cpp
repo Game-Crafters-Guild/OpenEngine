@@ -3,7 +3,6 @@
 #include "Editor/Settings/SceneViewSettings.h"
 #include "Logger/Logger.h"
 #include "Mathematics/Interpolation.h"
-#include "SceneView/SceneViewPanel.h"
 #include "Rendering/Text/FontAtlas.h"
 #include "SceneView/SceneViewController.h"
 #include "UI/Registration/ElementRegistration.h"

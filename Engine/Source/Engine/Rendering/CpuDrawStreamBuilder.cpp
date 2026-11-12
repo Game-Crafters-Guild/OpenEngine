@@ -61,8 +61,8 @@ struct CpuDrawStreamBuilder::CullInputs
     const Rendering::MeshGPURegistry* MeshRegistry = nullptr;
     const Rendering::GPUInstance* Instances = nullptr;
     size_t InstanceCount = 0;
-    // Render origin, world space; the planes are already relative to it.
-    Rendering::Vector3 Origin{0.0f, 0.0f, 0.0f};
+    // The view's render origin sector; Planes take points relative to its origin.
+    Mathematics::Vector3Int OriginSector{0, 0, 0};
     Rendering::Vector4 Planes[6];
     // The view is the editor Scene View: its camera and caster sets leave out what the eye hides.
     bool DropEditorHidden = false;
@@ -119,7 +119,6 @@ void CpuDrawStreamBuilder::BuildView(Rendering::ViewId viewId, const WorldDrawBu
         return;
 
     const Rendering::CameraData cam = views.ResolveCameraData(viewId);
-    const Rendering::CameraDerivedData camDerived = Rendering::DeriveCameraData(cam);
     const std::vector<Rendering::GPUInstance>& instances = scene.GetInstances();
 
     CullInputs inputs;
@@ -129,17 +128,11 @@ void CpuDrawStreamBuilder::BuildView(Rendering::ViewId viewId, const WorldDrawBu
     inputs.InstanceCount = instances.size();
     const Rendering::ViewDesc* view = views.FindViewDesc(viewId);
     inputs.DropEditorHidden = view != nullptr && view->DropsEditorHidden();
-    // Cull camera-relative, in the SAME arithmetic the GPU frustum cull uses
-    // (SortedTransparentCull.h documents the equivalence): planes translated by
-    // the view's render origin, centres differenced against it. At origin
-    // (0,0,0) both steps are bit-for-bit no-ops.
-    Rendering::ExtractFrustumPlanes(camDerived.ViewProjMatrix, inputs.Planes);
-    {
-        const auto originSector =
-            ComputeRenderOriginSector(cam.cameraPos.x, cam.cameraPos.y, cam.cameraPos.z);
-        SectorToWorld(originSector, inputs.Origin.x, inputs.Origin.y, inputs.Origin.z);
-    }
-    Rendering::MakeFrustumPlanesCameraRelative(inputs.Planes, inputs.Origin);
+    // Cull relative to the view's render origin, in the arithmetic the GPU frustum
+    // cull uses: planes from the rebased view-projection, each center composed
+    // against the origin sector (SectorLocalPointRelativeTo).
+    Rendering::ExtractFrustumPlanes(cam.viewProjRel, inputs.Planes);
+    inputs.OriginSector = CameraRenderOriginSector(cam);
 
     m_Candidates.resize(submissions.size());
     Candidate* candidates = m_Candidates.data();
@@ -199,9 +192,8 @@ void CpuDrawStreamBuilder::ResolveAndCullRange(CullInputs inputs, Candidate* can
         out.Instance = rec.instanceIndex;
 
         const Rendering::GPUInstance& inst = inputs.Instances[rec.instanceIndex];
-        const Rendering::Vector3 center(inst.boundingCenter.x - inputs.Origin.x,
-                                        inst.boundingCenter.y - inputs.Origin.y,
-                                        inst.boundingCenter.z - inputs.Origin.z);
+        const Rendering::Vector3 center = Rendering::SectorLocalPointRelativeTo(
+            inst.boundingCenter, inst.sectorPacked[0], inst.sectorPacked[1], inputs.OriginSector);
         out.State = kResolvedBit;
         if (Rendering::InstanceInColorPass(rec.flags, inputs.DropEditorHidden) &&
             Rendering::TestSphereFrustum(center, inst.boundingRadius, inputs.Planes))

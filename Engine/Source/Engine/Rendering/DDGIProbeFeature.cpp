@@ -17,6 +17,7 @@
 #include "Engine/Rendering/IEnvironmentSource.h"  // complete type for GetFeature<ImageBasedLightingFeature>
 #include "Engine/Rendering/ImageBasedLightingFeature.h"
 #include "Engine/Rendering/Pipeline/Nodes/PipelineNodeUtils.h"  // Pipeline::Nodes::Detail::BindStorageImageByName
+#include "Engine/Rendering/RenderOrigin.h"
 #include "Engine/Rendering/RenderServices.h"
 #include "Logger/Logger.h"
 #include "Mathematics/Interpolation.h"
@@ -2846,23 +2847,23 @@ bool DDGIProbeFeature::TickHardwareLane(Rendering::RenderGraph::RGFrame& frame, 
             const Rendering::GPUInstance& inst = instances[i];
             if (inst.skinPaletteOffset != 0u)
                 continue;
-            if ((inst.sectorPacked[0] | inst.sectorPacked[1]) != 0u)
-                continue;
             if (!DDGITracesInstance(inst))
                 continue;
             if (!m_SceneAS->IsBlasReady(inst.meshIndex))
                 continue;
-            const float* m = inst.transform.Data();
+            const Mathematics::Matrix4x4 worldMatrix =
+                ComposeWorldModelMatrix(inst.transform, inst.sectorPacked[0], inst.sectorPacked[1]);
+            const float* elements = worldMatrix.Data();
             bool sane = std::isfinite(inst.boundingRadius) && inst.boundingRadius < kMaxSaneWorldUnits;
             for (int f = 0; f < 16 && sane; ++f)
-                sane = std::isfinite(m[f]) && std::fabs(m[f]) < kMaxSaneWorldUnits;
+                sane = std::isfinite(elements[f]) && std::fabs(elements[f]) < kMaxSaneWorldUnits;
             if (!sane)
                 continue;
 
             Rendering::TlasInstanceData dst{};
             for (uint32_t r = 0; r < 3; ++r)
                 for (uint32_t c = 0; c < 4; ++c)
-                    dst.Transform[r * 4 + c] = m[c * 4 + r];
+                    dst.Transform[r * 4 + c] = elements[c * 4 + r];
             dst.CustomIndexAndMask = (i & 0x00FFFFFFu) | (0xFFu << 24);
             dst.SbtOffsetAndFlags = Rendering::kTlasInstanceFlagTriangleFacingCullDisable << 24;
             dst.BlasAddress = m_SceneAS->GetBlasAddress(inst.meshIndex);
@@ -2873,16 +2874,18 @@ bool DDGIProbeFeature::TickHardwareLane(Rendering::RenderGraph::RGFrame& frame, 
             const Rendering::GPUInstance& inst = instances[row.InstanceIndex];
             if (!DDGITracesInstance(inst))
                 continue;
-            const float* m = inst.transform.Data();
+            const Mathematics::Matrix4x4 worldMatrix =
+                ComposeWorldModelMatrix(inst.transform, inst.sectorPacked[0], inst.sectorPacked[1]);
+            const float* elements = worldMatrix.Data();
             bool sane = std::isfinite(inst.boundingRadius) && inst.boundingRadius < kMaxSaneWorldUnits;
             for (int f = 0; f < 16 && sane; ++f)
-                sane = std::isfinite(m[f]) && std::fabs(m[f]) < kMaxSaneWorldUnits;
+                sane = std::isfinite(elements[f]) && std::fabs(elements[f]) < kMaxSaneWorldUnits;
             if (!sane)
                 continue;
             Rendering::TlasInstanceData dst{};
             for (uint32_t r = 0; r < 3; ++r)
                 for (uint32_t c = 0; c < 4; ++c)
-                    dst.Transform[r * 4 + c] = m[c * 4 + r];
+                    dst.Transform[r * 4 + c] = elements[c * 4 + r];
             dst.CustomIndexAndMask = (row.InstanceIndex & 0x00FFFFFFu) | (0xFFu << 24);
             dst.SbtOffsetAndFlags = Rendering::kTlasInstanceFlagTriangleFacingCullDisable << 24;
             dst.BlasAddress = row.BlasAddress;
@@ -3250,7 +3253,9 @@ void DDGIProbeFeature::DeclareProbePasses(Rendering::RenderGraph::RGFrame& frame
             if (!(inst.boundingRadius > 0.0f))
                 continue;
             EmitterProxy proxy{};
-            proxy.CenterWS = inst.boundingCenter;
+            // The DDGI lights are world space: the sector-local center is composed against sector (0,0,0).
+            proxy.CenterWS = Rendering::SectorLocalPointRelativeTo(inst.boundingCenter, inst.sectorPacked[0],
+                                                                   inst.sectorPacked[1], Mathematics::Vector3Int{});
             proxy.Radius = inst.boundingRadius;
             // Weight the proxy by the mesh's mean projected area (A/4, or A/2
             // when both faces emit), not the bounding sphere's area: thin
@@ -3303,9 +3308,10 @@ void DDGIProbeFeature::DeclareProbePasses(Rendering::RenderGraph::RGFrame& frame
         const float outer = std::clamp(in.outerAngle, 0.0f, 3.1415926f);
         p.spotCosInner = std::cos(std::min(inner, outer));
         p.spotCosOuter = std::cos(std::max(inner, outer));
-        p.positionWS[0] = in.positionWS[0];
-        p.positionWS[1] = in.positionWS[1];
-        p.positionWS[2] = in.positionWS[2];
+        const Mathematics::Vector3 position = in.positionWS - Mathematics::WorldPosition{};
+        p.positionWS[0] = position.x;
+        p.positionWS[1] = position.y;
+        p.positionWS[2] = position.z;
         p.range = in.range;
         p.directionWS[0] = in.directionWS[0];
         p.directionWS[1] = in.directionWS[1];

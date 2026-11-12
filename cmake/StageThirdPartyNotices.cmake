@@ -129,6 +129,9 @@ _ge_notice_copy(
 _ge_notice_copy(
     "${GE_SOURCE_DIR}/Packages/fidelityfx-dof/LICENSE.txt"
     "${GE_NOTICES_DEST}/AMD-FidelityFX-DoF/LICENSE.txt")
+_ge_notice_copy(
+    "${GE_SOURCE_DIR}/Packages/film-simulation/LICENSE.txt"
+    "${GE_NOTICES_DEST}/AMD-FidelityFX-Lens-Film-Grain/LICENSE.txt")
 
 _ge_notice_copy(
     "${GE_SOURCE_DIR}/ThirdParty/SENaturalBloomDirtyLens/LICENSE.txt"
@@ -168,6 +171,13 @@ _ge_notice_copy(
 _ge_notice_copy(
     "${GE_SOURCE_DIR}/ThirdParty/RunevisionErosionFilter/UPSTREAM.md"
     "${GE_NOTICES_DEST}/Runevision-Erosion-Filter/UPSTREAM.md")
+# MPL-2.0 section 3.2(a): every notice set carries the source of the two covered files.
+_ge_notice_copy(
+    "${GE_SOURCE_DIR}/Engine/Modules/TerrainECS/Include/TerrainECS/Erosion/ErosionFilter.h"
+    "${GE_NOTICES_DEST}/Runevision-Erosion-Filter/ErosionFilter.h")
+_ge_notice_copy(
+    "${GE_SOURCE_DIR}/Engine/Modules/TerrainECS/Source/Erosion/ErosionFilter.cpp"
+    "${GE_NOTICES_DEST}/Runevision-Erosion-Filter/ErosionFilter.cpp")
 
 _ge_notice_copy(
     "${GE_SOURCE_DIR}/ThirdParty/BendScreenSpaceShadows/LICENSE.txt"
@@ -219,6 +229,21 @@ _ge_notice_copy(
 _ge_notice_copy(
     "${GE_SOURCE_DIR}/ThirdParty/GTAO/UPSTREAM.md"
     "${GE_NOTICES_DEST}/GTAO/UPSTREAM.md")
+_ge_notice_copy(
+    "${GE_SOURCE_DIR}/ThirdParty/fdlibm/LICENSE.txt"
+    "${GE_NOTICES_DEST}/fdlibm/LICENSE.txt")
+_ge_notice_copy(
+    "${GE_SOURCE_DIR}/ThirdParty/fdlibm/UPSTREAM.md"
+    "${GE_NOTICES_DEST}/fdlibm/UPSTREAM.md")
+_ge_notice_copy(
+    "${GE_SOURCE_DIR}/ThirdParty/Slug/LICENSE-MIT"
+    "${GE_NOTICES_DEST}/Slug/LICENSE-MIT")
+_ge_notice_copy(
+    "${GE_SOURCE_DIR}/ThirdParty/Slug/NOTICE"
+    "${GE_NOTICES_DEST}/Slug/NOTICE")
+_ge_notice_copy(
+    "${GE_SOURCE_DIR}/ThirdParty/Slug/UPSTREAM.md"
+    "${GE_NOTICES_DEST}/Slug/UPSTREAM.md")
 
 # The aggregate is plain text: NUL and the other C0 control bytes except tab, LF and
 # CR are dropped, and an RTF notice is reduced to the text it displays.

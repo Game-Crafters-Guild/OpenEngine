@@ -199,7 +199,9 @@ void ExpectOneSeam(float32 mouthRadius, const char* shape)
         for (const SG::SplineVertex& vertex : mesh->Vertices)
         {
             if (std::abs(vertex.Position.x - mouth.ThroatX) <= kTolerance)
+            {
                 EXPECT_LT(std::abs(vertex.Normal.x), 0.99f) << "an end face on the throat";
+            }
         }
     }
 

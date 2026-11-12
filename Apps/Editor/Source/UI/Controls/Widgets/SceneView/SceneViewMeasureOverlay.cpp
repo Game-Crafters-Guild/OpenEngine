@@ -3,7 +3,6 @@
 #include "Components/Hierarchy.h"
 #include "Components/Measure/MeasureComponent.h"
 #include "Components/Transform.h"
-#include "Core/Engine.h"
 #include "ECS/Components.h"
 #include "ECS/ECS.h"
 #include "ECS/ECSTemplates.h"
@@ -449,7 +448,7 @@ bool GetEntityWorldMatrix(ECS::World& world,
 
     if (const auto* transform = world.GetComponent<Components::Transform>(entity))
     {
-        Mathematics::Matrix4x4 local = Mathematics::Matrix4x4::FromColumnMajor(transform->matrix);
+        Mathematics::Matrix4x4 local = transform->ToMatrix4x4(transform->GetPosition() - Mathematics::WorldPosition{});
         if (const auto* parent = world.GetComponent<Components::Parent>(entity);
             parent && parent->Entity.IsValid())
         {
@@ -467,7 +466,7 @@ bool GetEntityWorldMatrix(ECS::World& world,
 
     if (const auto* worldTransform = world.GetComponent<Components::WorldTransform>(entity))
     {
-        out = Mathematics::Matrix4x4::FromColumnMajor(worldTransform->matrix);
+        out = worldTransform->ToMatrix4x4(worldTransform->GetPosition() - Mathematics::WorldPosition{});
         return true;
     }
 
@@ -575,7 +574,7 @@ void SceneViewMeasureOverlay::SetTwoDMode(TwoDMode mode)
 
 void SceneViewMeasureOverlay::BeginMeasure(float viewX,
                                            float viewY,
-                                           const std::array<float, 3>& world,
+                                           const Mathematics::Vector3& world,
                                            bool is2D,
                                            bool showComponents)
 {
@@ -586,15 +585,15 @@ void SceneViewMeasureOverlay::BeginMeasure(float viewX,
     m_StartViewY = viewY;
     m_EndViewX = viewX;
     m_EndViewY = viewY;
-    m_StartWorld = world;
-    m_EndWorld = world;
+    m_StartWorld = {world.x, world.y, world.z};
+    m_EndWorld = m_StartWorld;
     RemoveClass("hidden");
     MarkDirty(VisualDirty);
 }
 
 void SceneViewMeasureOverlay::UpdateMeasure(float viewX,
                                             float viewY,
-                                            const std::array<float, 3>& world,
+                                            const Mathematics::Vector3& world,
                                             bool showComponents)
 {
     if (!m_Active)
@@ -602,7 +601,7 @@ void SceneViewMeasureOverlay::UpdateMeasure(float viewX,
 
     m_EndViewX = viewX;
     m_EndViewY = viewY;
-    m_EndWorld = world;
+    m_EndWorld = {world.x, world.y, world.z};
     m_ShowComponents = showComponents;
     MarkDirty(VisualDirty);
 }
@@ -644,7 +643,7 @@ uint64_t SceneViewMeasureOverlay::ComputeEmitKey() const
     // camera-dependent inputs must not churn re-emits — return the basis
     // untouched and the key holds still through any camera motion.
     bool anyMeasure = false;
-    if (ECS::World* world = EngineCore::GetInstance().GetPrimaryWorld())
+    if (ECS::World* world = m_Controller ? &m_Controller->GetWorld() : nullptr)
     {
         world->Query<ECS::Read<Components::MeasureComponent>>()
             .Each([&](ECS::EntityHandle entity, const Components::MeasureComponent& measure)
@@ -715,20 +714,18 @@ void SceneViewMeasureOverlay::RenderPersistentMeasurePills(UI::PrimitiveEmitCont
     if (!m_Controller || w <= 1.0f || h <= 1.0f)
         return;
 
-    ECS::World* world = EngineCore::GetInstance().GetPrimaryWorld();
-    if (!world)
-        return;
+    ECS::World& world = m_Controller->GetWorld();
 
     constexpr float fontSize = 13.0f;
     char buf[96];
 
-    world->Query<ECS::Read<Components::MeasureComponent>>()
+    world.Query<ECS::Read<Components::MeasureComponent>>()
         .Each([&](ECS::EntityHandle entity, const Components::MeasureComponent& measure)
         {
             std::array<float, 3> start{};
             std::array<float, 3> end{};
-            if (!GetEntityWorldPosition(*world, measure.StartEntity, start) ||
-                !GetEntityWorldPosition(*world, measure.EndEntity, end))
+            if (!GetEntityWorldPosition(world, measure.StartEntity, start) ||
+                !GetEntityWorldPosition(world, measure.EndEntity, end))
             {
                 return;
             }

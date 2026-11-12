@@ -158,7 +158,7 @@ TileSample LoadTileSample(int index)
     s.Confidence = ba.y;
     s.NormalVS = GE_OctDecode(oct);
     s.Roughness = roughDepth.x;
-    s.LinearZ = LinearizeReverseZ(roughDepth.y, ge_nearFar.xy);
+    s.LinearZ = LinearizeReverseZ(roughDepth.y, ge_depthTerms);
     return s;
 }
 
@@ -260,7 +260,7 @@ void main()
     TileSample center = LoadTileSample(centerIndex);
     float centerRoughness = GE_Roughness(centerNR);
     vec3 centerNormal = GE_DecodeNormalVS(centerNR);
-    float centerLinZ = LinearizeReverseZ(centerRawZ, ge_nearFar.xy);
+    float centerLinZ = LinearizeReverseZ(centerRawZ, ge_depthTerms);
 
     // Block reference for the firefly gate. Sampling at
     // (pixel + 0.5) / (block * blocks) puts the bilinear tap between this block's

@@ -7,12 +7,19 @@
 // re-declaring the block.
 //
 // Fields come from the shared list (Includes/view_params_fields.glsl); this is
-// the full 480 B block. ViewParamsUBO in Rendering/Core/ViewParamsLayout.h
+// the full 720 B block. ViewParamsUBO in Rendering/Core/ViewParamsLayout.h
 // mirrors the same list on the C++ side.
+//
+// The block is at binding 7. A pass whose own layout uses binding 7 defines GE_VIEW_PARAMS_BINDING
+// before the include.
 #ifndef GE_VIEW_PARAMS_DECLARED
 #define GE_VIEW_PARAMS_DECLARED 1
 
-layout(set = 0, binding = 7, std140) uniform ViewParams
+#ifndef GE_VIEW_PARAMS_BINDING
+#define GE_VIEW_PARAMS_BINDING 7
+#endif
+
+layout(set = 0, binding = GE_VIEW_PARAMS_BINDING, std140) uniform ViewParams
 {
 #define GE_VP_MAT4(name) mat4 name;
 #define GE_VP_VEC4(name) vec4 name;

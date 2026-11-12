@@ -28,6 +28,7 @@
 #include "Mathematics/Vector3.h"
 #include "Rendering/Core/CommandList.h"
 #include "Rendering/Core/Device.h"
+#include "Rendering/Core/PassPhase.h"
 #include "Rendering/Core/RenderGraph/RGFrame.h"
 #include "Rendering/Sky/SkySettings.h"
 #include "Rendering/Sky/SkySystem.h"
@@ -349,10 +350,43 @@ TEST_F(IrradianceReadbackTest, ACopyAfterAnAsyncComputeBakeReadsTheFaceInItsGrap
         ctx.Device = m_Device.get();
         ctx.Feature = &Ibl();
         source.ScheduleBake(ctx);
-        ASSERT_NE(FindPass(frame.Graph(), kConvolvePass), RenderGraph::kInvalidId)
-            << "the first frame with a sky must bake; the check is void";
-        ASSERT_NE(FindPass(frame.Graph(), kCopyPass), RenderGraph::kInvalidId)
+        const RenderGraph::RGGraph& graph = frame.Graph();
+        const RenderGraph::RGPassId convolve = FindPass(graph, kConvolvePass);
+        const RenderGraph::RGPassId copy = FindPass(graph, kCopyPass);
+        ASSERT_NE(convolve, RenderGraph::kInvalidId) << "the first frame with a sky must bake; the check is void";
+        ASSERT_NE(copy, RenderGraph::kInvalidId)
             << "a bake with the readback present must declare the copy; the check is void";
+        const RenderGraph::RGResourceId envCube = FindResource(graph, "IBL_EnvCapture");
+        RenderGraph::RGPassId cubeCapture = RenderGraph::kInvalidId;
+        for (RenderGraph::RGPassId p = 0; p < convolve; ++p)
+            if (graph.HasWriteAccess(p, envCube) && graph.PassQueue(p) == RenderGraph::RGQueue::Graphics)
+                cubeCapture = p;
+        ASSERT_NE(cubeCapture, RenderGraph::kInvalidId) << "the convolve reads the captured cube";
+
+        // A compute run keeps its queue only when a graphics pass that none of its passes feeds runs
+        // beside it: this one runs after the cube's capture and before the copy.
+        TextureDesc besideDesc{};
+        besideDesc.width = 4;
+        besideDesc.height = 4;
+        besideDesc.depth = 1;
+        besideDesc.mipLevels = 1;
+        besideDesc.arrayLayers = 1;
+        besideDesc.sampleCount = 1;
+        besideDesc.format = static_cast<uint32_t>(TextureFormat::RGBA8_UNORM);
+        besideDesc.usage = static_cast<uint32_t>(TextureUsage::RenderTarget);
+        const RenderGraph::RGTexture besideTarget = frame.CreateTexture("IrradianceReadbackTest.Beside", besideDesc);
+        const RenderGraph::RGPass beside = frame.AddPass(
+            "IrradianceReadbackTest.Beside", PassPhase::kEarlySetup,
+            [&](RenderGraph::RGPassBuilder& p)
+            {
+                RenderGraph::RGAttachmentOps ops{};
+                ops.Load = RenderGraph::RGLoadOp::Clear;
+                p.AttachColor(0, besideTarget, ops);
+            },
+            [](RenderGraph::RGContext&) {});
+        frame.MarkOutput(besideTarget);
+        frame.AddOrderingEdge(RenderGraph::RGPass{cubeCapture}, beside);
+        frame.AddOrderingEdge(beside, RenderGraph::RGPass{copy});
         frame.Execute();
         readback.OnFrameSubmittedRG(frame, frame.SubmissionToken());
         m_Device->WaitForIdle();
@@ -423,8 +457,8 @@ TEST_F(IrradianceReadbackTest, AReflectionProbeHandsEachBoxVectorToItsOwnLocalRe
     Engine::Renderer::SceneReflectionProbeEnvironmentDesc desc{};
     desc.SourceKey = 1;
     desc.BoxProjection = true;
-    desc.Position = Vector3(1.0f, 2.0f, 3.0f);
-    desc.BoxCenter = Vector3(4.0f, 5.0f, 6.0f);
+    desc.Position = Mathematics::WorldPosition{1.0, 2.0, 3.0};
+    desc.BoxCenter = Mathematics::WorldPosition{4.0, 5.0, 6.0};
     desc.BoxHalfExtents = Vector3(7.0f, 8.0f, 9.0f);
     desc.BoxAxisX = Vector3(0.0f, 1.0f, 0.0f);
     desc.BoxAxisY = Vector3(0.0f, 0.0f, 1.0f);
@@ -433,8 +467,8 @@ TEST_F(IrradianceReadbackTest, AReflectionProbeHandsEachBoxVectorToItsOwnLocalRe
 
     const Engine::Renderer::EnvironmentLocalReflectionData local = probe.LocalReflectionData();
     ASSERT_TRUE(local.BoxProjection);
-    ExpectSameVector(local.ProbePositionWS, desc.Position, "ProbePositionWS");
-    ExpectSameVector(local.BoxCenterWS, desc.BoxCenter, "BoxCenterWS");
+    ExpectSameVector(local.ProbePositionWS, Vector3(1.0f, 2.0f, 3.0f), "ProbePositionWS");
+    ExpectSameVector(local.BoxCenterWS, Vector3(4.0f, 5.0f, 6.0f), "BoxCenterWS");
     ExpectSameVector(local.BoxHalfExtentsWS, desc.BoxHalfExtents, "BoxHalfExtentsWS");
     ExpectSameVector(local.BoxAxisXWS, desc.BoxAxisX, "BoxAxisXWS");
     ExpectSameVector(local.BoxAxisYWS, desc.BoxAxisY, "BoxAxisYWS");

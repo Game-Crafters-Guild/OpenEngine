@@ -2,6 +2,7 @@
 
 #include "Engine/Rendering/Pipeline/RenderPipeline.h"
 #include "Engine/Rendering/Pipeline/RenderPipelineNodes.h"
+#include "Engine/Rendering/RenderOrigin.h"
 #include "Engine/Rendering/RenderServices.h"
 #include "Mathematics/Matrix4x4.h"
 #include "Ocean/OceanFrameStamp.h"
@@ -67,11 +68,15 @@ RenderPipelineBlueprint::Pass MakeOceanPass(const char* id, const char* json)
     return pass;
 }
 
+// The near and culling range of ForwardCamera().
+constexpr CameraRanges kForwardCameraRanges{0.5f, 600.0f};
+
 // Looks along +Z from cameraX on the x axis, kCameraHeight above sea level.
-CameraData ForwardCamera(float cameraX)
+CameraData ForwardCamera(double cameraX)
 {
+    const float eyeX = static_cast<float>(cameraX);
     const Mathematics::Matrix4x4 view = Mathematics::Matrix4x4::LookAt(
-        Mathematics::Vector3(cameraX, kCameraHeight, 0.0f), Mathematics::Vector3(cameraX, kCameraHeight, 1.0f),
+        Mathematics::Vector3(eyeX, kCameraHeight, 0.0f), Mathematics::Vector3(eyeX, kCameraHeight, 1.0f),
         Mathematics::Vector3(0.0f, 1.0f, 0.0f));
     const Mathematics::Matrix4x4 projection =
         Mathematics::Matrix4x4::PerspectiveReverseZ(1.0471976f, 16.0f / 9.0f, 0.5f, 600.0f);
@@ -80,16 +85,15 @@ CameraData ForwardCamera(float cameraX)
     camera.view = view;
     camera.proj = projection;
     camera.viewProj = viewProj;
-    camera.cameraPos.x = cameraX;
-    camera.cameraPos.y = kCameraHeight;
+    SetCameraEye(camera, Mathematics::WorldPosition{cameraX, kCameraHeight, 0.0});
     return camera;
 }
 
 // A view of the default layers with a ForwardCamera at cameraX.
-ViewId AddForwardView(RenderServices& rs, const char* name, float cameraX)
+ViewId AddForwardView(RenderServices& rs, const char* name, double cameraX)
 {
     const CameraId cameraId = rs.Views().AllocateCamera(name);
-    rs.Views().SetCameraData(cameraId, ForwardCamera(cameraX));
+    rs.Views().SetCameraData(cameraId, ForwardCamera(cameraX), kForwardCameraRanges);
     const ViewId viewId = rs.Views().AllocateView(name, cameraId);
     rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
     ViewClearConfig clear{};
@@ -140,7 +144,7 @@ std::vector<std::string> DeclareOceanFrame(IDevice* device, float waterCenterZ, 
     RenderServices rs;
     EXPECT_TRUE(rs.Initialize(device));
     const CameraId cameraId = rs.Views().AllocateCamera("OceanInViewCamera");
-    rs.Views().SetCameraData(cameraId, ForwardCamera(0.0f));
+    rs.Views().SetCameraData(cameraId, ForwardCamera(0.0f), kForwardCameraRanges);
     const ViewId viewId = rs.Views().AllocateView("OceanInViewView", cameraId);
     rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
     ViewClearConfig clear{};
@@ -318,7 +322,7 @@ TEST(OceanWaterInViewTest, FixedOceanTimeOrNoWaterInViewClaimsNoDynamicDepth)
         RenderServices rs;
         EXPECT_TRUE(rs.Initialize(device.get()));
         const CameraId cameraId = rs.Views().AllocateCamera("OceanClaimCamera");
-        rs.Views().SetCameraData(cameraId, ForwardCamera(0.0f));
+            rs.Views().SetCameraData(cameraId, ForwardCamera(0.0f), kForwardCameraRanges);
         const ViewId viewId = rs.Views().AllocateView("OceanClaimView", cameraId);
         rs.Views().SetViewRenderLayerMask(viewId, GameEngine::Rendering::RenderLayerMask::Default());
         ViewClearConfig clear{};
@@ -455,6 +459,87 @@ TEST(OceanWaterInViewTest, OnlyAViewThatSeesDisplacingWaterReportsADepthChange)
     device->Shutdown();
 }
 
+// A world with no ocean declares the ocean's nodes with the feature uninitialized: no FFT, no
+// simulation cascades and no caustics texture exist until an ocean does.
+TEST(OceanWaterInViewTest, AWorldWithNoOceanLeavesTheFeatureUninitialized)
+{
+    auto device = CreateVulkanDeviceFast();
+    if (!device)
+        GTEST_SKIP() << "No Vulkan device available";
+    {
+        RenderServices rs;
+        EXPECT_TRUE(rs.Initialize(device.get()));
+        const ViewId views[] = {AddForwardView(rs, "OceanAbsentView", 0.0f)};
+        RenderPipelineNodeRegistry registry;
+        EXPECT_TRUE(registry.Register(
+            "OceanRender", [] { return std::make_unique<OceanRenderNode>(); }, true));
+        RenderPipelineBlueprint blueprint;
+        blueprint.pipelineName = "OceanAbsentTest";
+        blueprint.passes.push_back(MakeOceanPass("Ocean", R"({"id":"Ocean","type":"OceanRender"})"));
+        blueprint.passes.push_back(MakeOceanPass(
+            "OceanUnderwater", R"({"id":"OceanUnderwater","type":"OceanRender","mode":"underwater"})"));
+        RenderPipelineInstance instance(rs, registry);
+        instance.SetBlueprint(blueprint);
+
+        DeclareOceanViewsAtTime(rs, instance, device.get(), 0u, views, 1.0f);
+        DeclareOceanViewsAtTime(rs, instance, device.get(), 1u, views, 1.5f);
+
+        const auto* feature = rs.GetFeature<OceanRenderFeature>();
+        ASSERT_NE(feature, nullptr);
+        EXPECT_FALSE(feature->IsInitialized());
+        EXPECT_FALSE(feature->IsFFTReady());
+        EXPECT_FALSE(feature->IsFoamReady());
+        EXPECT_FALSE(feature->IsDynWavesReady());
+        EXPECT_FALSE(feature->IsCausticsReady());
+        EXPECT_FALSE(feature->GetCausticsTexture().IsValid());
+
+        device->WaitForIdle();
+        rs.Shutdown();
+    }
+    device->Shutdown();
+}
+
+// An ocean that appears after the first frame initializes the feature on the next declare.
+TEST(OceanWaterInViewTest, AnOceanAddedAfterTheFirstFrameInitializesTheFeature)
+{
+    auto device = CreateVulkanDeviceFast();
+    if (!device)
+        GTEST_SKIP() << "No Vulkan device available";
+    {
+        RenderServices rs;
+        EXPECT_TRUE(rs.Initialize(device.get()));
+        const ViewId views[] = {AddForwardView(rs, "OceanAddedView", 0.0f)};
+        RenderPipelineNodeRegistry registry;
+        EXPECT_TRUE(registry.Register(
+            "OceanRender", [] { return std::make_unique<OceanRenderNode>(); }, true));
+        RenderPipelineBlueprint blueprint;
+        blueprint.pipelineName = "OceanAddedTest";
+        blueprint.passes.push_back(MakeOceanPass("Ocean", R"({"id":"Ocean","type":"OceanRender"})"));
+        RenderPipelineInstance instance(rs, registry);
+        instance.SetBlueprint(blueprint);
+
+        DeclareOceanViewsAtTime(rs, instance, device.get(), 0u, views, 1.0f);
+
+        auto& feature = rs.EnsureFeature<OceanRenderFeature>();
+        feature.SetHasOcean(true);
+        OceanRenderFeature::WaterBodyBox water{};
+        water.CenterZ = kWaterDistance;
+        water.HalfX = kWaterHalfExtent;
+        water.HalfZ = kWaterHalfExtent;
+        feature.SetWaterBodies({water}, true);
+        DeclareOceanViewsAtTime(rs, instance, device.get(), 1u, views, 1.5f);
+
+        EXPECT_TRUE(feature.IsInitialized());
+        EXPECT_TRUE(feature.IsFFTReady());
+        EXPECT_TRUE(feature.IsCausticsReady());
+        EXPECT_TRUE(feature.GetCausticsTexture().IsValid());
+
+        device->WaitForIdle();
+        rs.Shutdown();
+    }
+    device->Shutdown();
+}
+
 // Each view that sees water renders its own planar reflection: its own hidden
 // mirror view and camera, and a target sized to that view. Moving one view's
 // camera moves only that view's mirror.
@@ -469,8 +554,8 @@ TEST(OceanWaterInViewTest, EachViewThatSeesWaterHasItsOwnPlanarReflection)
         constexpr uint32_t kSmallExtent = kTargetExtent / 2u;
         const CameraId cameraA = rs.Views().AllocateCamera("OceanMirrorCameraA");
         const CameraId cameraB = rs.Views().AllocateCamera("OceanMirrorCameraB");
-        rs.Views().SetCameraData(cameraA, ForwardCamera(0.0f));
-        rs.Views().SetCameraData(cameraB, ForwardCamera(10.0f));
+        rs.Views().SetCameraData(cameraA, ForwardCamera(0.0f), kForwardCameraRanges);
+        rs.Views().SetCameraData(cameraB, ForwardCamera(10.0f), kForwardCameraRanges);
         const ViewId viewA = rs.Views().AllocateView("OceanMirrorViewA", cameraA);
         const ViewId viewB = rs.Views().AllocateView("OceanMirrorViewB", cameraB);
         ViewClearConfig clear{};
@@ -529,12 +614,70 @@ TEST(OceanWaterInViewTest, EachViewThatSeesWaterHasItsOwnPlanarReflection)
         EXPECT_FLOAT_EQ(MirrorCamera(rs, *mirrorA).cameraPos.y, -kCameraHeight);
 
         const CameraData mirrorBBefore = MirrorCamera(rs, *mirrorB);
-        rs.Views().SetCameraData(cameraA, ForwardCamera(-20.0f));
+        rs.Views().SetCameraData(cameraA, ForwardCamera(-20.0f), kForwardCameraRanges);
         DeclareTwoViewFrame(rs, instance, frame, frameIndex++, views);
         EXPECT_FLOAT_EQ(MirrorCamera(rs, *mirrorA).cameraPos.x, -20.0f);
         const CameraData mirrorBAfter = MirrorCamera(rs, *mirrorB);
         EXPECT_EQ(std::memcmp(mirrorBBefore.viewProj.Data(), mirrorBAfter.viewProj.Data(), sizeof(mirrorBAfter.viewProj)), 0)
             << "moving view A's camera changed view B's reflection camera";
+        device->WaitForIdle();
+        rs.Shutdown();
+    }
+    device->Shutdown();
+}
+
+// At 125 km the fp32 step is 7.8 mm. The mirror camera draws from the main camera's double eye
+// reflected below the sea, not from an fp32 eye.
+TEST(OceanWaterInViewTest, TheMirrorCameraDrawsFromTheMainCamerasDoubleEye)
+{
+    auto device = CreateVulkanDeviceFast();
+    if (!device)
+        GTEST_SKIP() << "No Vulkan device available";
+    {
+        constexpr double kFarX = 125000.0037;
+        RenderServices rs;
+        EXPECT_TRUE(rs.Initialize(device.get()));
+        const ViewId viewA = AddForwardView(rs, "OceanFarMirrorViewA", kFarX);
+        const ViewId viewB = AddForwardView(rs, "OceanFarMirrorViewB", kFarX + 10.0);
+
+        auto& feature = rs.EnsureFeature<OceanRenderFeature>();
+        EXPECT_TRUE(feature.Initialize(device.get()));
+        feature.SetHasOcean(true);
+        OceanRenderFeature::WaterBodyBox water{};
+        water.CenterX = static_cast<float>(kFarX);
+        water.CenterZ = kWaterDistance;
+        water.HalfX = kWaterHalfExtent;
+        water.HalfZ = kWaterHalfExtent;
+        feature.SetWaterBodies({water}, true);
+        OceanParamsGPU params = feature.GetParams();
+        params.PlanarReflections = 1u;
+        feature.SetParams(params);
+
+        RenderPipelineNodeRegistry registry;
+        EXPECT_TRUE(registry.Register(
+            "OceanRender", [] { return std::make_unique<OceanRenderNode>(); }, true));
+        RenderPipelineBlueprint blueprint;
+        blueprint.pipelineName = "OceanFarMirrorTest";
+        blueprint.passes.push_back(MakeOceanPass("Ocean", R"({"id":"Ocean","type":"OceanRender"})"));
+        RenderPipelineInstance instance(rs, registry);
+        instance.SetBlueprint(blueprint);
+
+        FramePools pools(device.get());
+        RenderGraph::RGFrame frame(device.get(), &pools.Persistent, &pools.Transient, &pools.Ring);
+        DeclareTwoViewFrame(rs, instance, frame, 0, TwoViews{viewA, viewB, kTargetExtent});
+        const OceanPlanarReflection::Mirror* mirror = feature.GetPlanarReflection().Find(viewA);
+        ASSERT_NE(mirror, nullptr) << "the view sees water and has no planar reflection";
+
+        const CameraData mirrorCamera = MirrorCamera(rs, *mirror);
+        ASSERT_NE(mirrorCamera.renderOriginSector[3], 0) << "the mirror camera has no eye";
+        CameraData expected = mirrorCamera;
+        SetCameraEye(expected, Mathematics::WorldPosition{kFarX, -kCameraHeight, 0.0});
+        for (int32_t axis = 0; axis < 3; ++axis)
+            EXPECT_EQ(mirrorCamera.renderOriginSector[axis], expected.renderOriginSector[axis]);
+        // A 3.7 mm eye error moves the translation terms by about 3e-3; the recovered eye is
+        // within 1e-4 m.
+        for (int32_t i = 0; i < 16; ++i)
+            EXPECT_NEAR(mirrorCamera.viewProjRel.Data()[i], expected.viewProjRel.Data()[i], 2.0e-4) << "element " << i;
         device->WaitForIdle();
         rs.Shutdown();
     }
@@ -555,8 +698,8 @@ TEST(OceanWaterInViewTest, AMirrorIdlePastTheTimeoutIsReleased)
         EXPECT_TRUE(rs.Initialize(device.get()));
         const CameraId cameraA = rs.Views().AllocateCamera("OceanIdleCameraA");
         const CameraId cameraB = rs.Views().AllocateCamera("OceanIdleCameraB");
-        rs.Views().SetCameraData(cameraA, ForwardCamera(0.0f));
-        rs.Views().SetCameraData(cameraB, ForwardCamera(10.0f));
+        rs.Views().SetCameraData(cameraA, ForwardCamera(0.0f), kForwardCameraRanges);
+        rs.Views().SetCameraData(cameraB, ForwardCamera(10.0f), kForwardCameraRanges);
         const ViewId viewA = rs.Views().AllocateView("OceanIdleViewA", cameraA);
         const ViewId viewB = rs.Views().AllocateView("OceanIdleViewB", cameraB);
         ViewClearConfig clear{};
@@ -640,7 +783,7 @@ TEST(OceanWaterInViewTest, TheIdleSweepKeepsTheDeclaringViewsCamera)
         clear.clearColor = true;
         clear.clearDepth = true;
         const CameraId cameraA = rs.Views().AllocateCamera("OceanSweepCameraA");
-        rs.Views().SetCameraData(cameraA, ForwardCamera(0.0f));
+        rs.Views().SetCameraData(cameraA, ForwardCamera(0.0f), kForwardCameraRanges);
         const ViewId viewA = rs.Views().AllocateView("OceanSweepViewA", cameraA);
         rs.Views().SetViewRenderLayerMask(viewA, GameEngine::Rendering::RenderLayerMask::Default());
         rs.Views().SetViewTargets(viewA, 0, 0, 0, clear);
@@ -658,7 +801,7 @@ TEST(OceanWaterInViewTest, TheIdleSweepKeepsTheDeclaringViewsCamera)
         DeclareMirrorFromLiveView(rs, feature, frame, 0, viewA, start); // registry: A, mirror A
 
         const CameraId cameraB = rs.Views().AllocateCamera("OceanSweepCameraB");
-        rs.Views().SetCameraData(cameraB, ForwardCamera(10.0f));
+        rs.Views().SetCameraData(cameraB, ForwardCamera(10.0f), kForwardCameraRanges);
         const ViewId viewB = rs.Views().AllocateView("OceanSweepViewB", cameraB);
         rs.Views().SetViewRenderLayerMask(viewB, GameEngine::Rendering::RenderLayerMask::Default());
         rs.Views().SetViewTargets(viewB, 0, 0, 0, clear);
@@ -704,8 +847,8 @@ TEST(OceanWaterInViewTest, AFrameLongerThanTheIdleTimeoutKeepsEveryMirror)
         clear.clearDepth = true;
         const CameraId cameraA = rs.Views().AllocateCamera("OceanLongFrameCameraA");
         const CameraId cameraB = rs.Views().AllocateCamera("OceanLongFrameCameraB");
-        rs.Views().SetCameraData(cameraA, ForwardCamera(0.0f));
-        rs.Views().SetCameraData(cameraB, ForwardCamera(10.0f));
+        rs.Views().SetCameraData(cameraA, ForwardCamera(0.0f), kForwardCameraRanges);
+        rs.Views().SetCameraData(cameraB, ForwardCamera(10.0f), kForwardCameraRanges);
         const ViewId viewA = rs.Views().AllocateView("OceanLongFrameViewA", cameraA);
         const ViewId viewB = rs.Views().AllocateView("OceanLongFrameViewB", cameraB);
         for (const ViewId view : {viewA, viewB})
@@ -792,7 +935,8 @@ protected:
         {
             const std::string name = "OceanMirrorIdleView" + std::to_string(index);
             const CameraId camera = m_Services->Views().AllocateCamera((name + "Camera").c_str());
-            m_Services->Views().SetCameraData(camera, ForwardCamera(10.0f * static_cast<float>(index)));
+            m_Services->Views().SetCameraData(camera, ForwardCamera(10.0f * static_cast<float>(index)),
+                                                kForwardCameraRanges);
             const ViewId view = m_Services->Views().AllocateView(name.c_str(), camera);
             m_Services->Views().SetViewRenderLayerMask(view, GameEngine::Rendering::RenderLayerMask::Default());
             m_Services->Views().SetViewTargets(view, 0, 0, 0, clear);

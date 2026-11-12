@@ -1,6 +1,5 @@
 #include "Platform/Platform.h"
 #include "Logger/Logger.h"
-#include <thread>
 
 namespace GameEngine {
 
@@ -13,7 +12,6 @@ bool Platform::Initialize() {
 
     Logger::Log::Info("Initializing Platform systems");
     Logger::Log::Info("Platform: {}", GetPlatformName());
-    Logger::Log::Info("CPU cores: {}", GetCPUCoreCount());
     
     // TODO: Initialize platform-specific systems
     
@@ -37,10 +35,6 @@ void Platform::Shutdown() {
 
 String Platform::GetPlatformName() {
     return PLATFORM_NAME;
-}
-
-uint32 Platform::GetCPUCoreCount() {
-    return std::thread::hardware_concurrency();
 }
 
 uint64 Platform::GetTotalSystemMemory() {

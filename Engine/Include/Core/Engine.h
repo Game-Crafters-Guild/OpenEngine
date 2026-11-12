@@ -23,6 +23,7 @@ class WorkStealingThreadPool;
 // Forward declare ECS World to avoid heavy includes in header
 namespace GameEngine
 {
+class SceneLoader;
 class SceneLoadTracker;
 
 namespace Input
@@ -378,6 +379,9 @@ class EngineCore
     /// The owners of loading work report it here; a game asks it if the scene is ready to
     /// show (docs/scripting/scene-ready-to-show.mdx). Lives as long as the engine instance.
     SceneLoadTracker& GetSceneLoadTracker() { return *m_SceneLoadTracker; }
+    /// The one way to replace the scene a game shows (docs/scripting/scene-loader.mdx).
+    /// Lives as long as the engine instance.
+    SceneLoader& GetSceneLoader() { return *m_SceneLoader; }
     // Control whether Engine::Update automatically steps the rendering loop.
     // Default is true; tools like the Editor can disable this and drive the
     // rendering loop explicitly at a more appropriate point in their frame.
@@ -413,10 +417,10 @@ class EngineCore
     void DisableRenderingHotReload();
 
   private:
-    // Points the terrain service's bake cache at this run's location (packaged
-    // staged copy, the project workspace's .Cache, or off). Called when the world
-    // services start and whenever the workspace root changes.
-    void ApplyTerrainBakeCacheLocation();
+    // Points the terrain service's height page stores at this run's location (the
+    // build's terrain containers, the project workspace's .Cache, or none). Called when
+    // the world services start and whenever the workspace root changes.
+    void ApplyTerrainPageStoreLocation();
 
     // Scopes one Initialize(): Commit() publishes Initialized; destruction without a
     // commit rolls the engine back to Uninitialized with nothing outstanding.
@@ -478,6 +482,7 @@ class EngineCore
     // Built after the AssetManager and destroyed before it: it listens for changed files.
     UniquePtr<Scene::PrefabLibrary> m_PrefabLibrary;
     UniquePtr<SceneLoadTracker> m_SceneLoadTracker;
+    UniquePtr<SceneLoader> m_SceneLoader; // reports to m_SceneLoadTracker
     // Engine-managed rendering loop state
     UniquePtr<Engine::Renderer::RenderingLoop> m_RenderingLoop;
     bool m_RenderingLoopEnabled = false;

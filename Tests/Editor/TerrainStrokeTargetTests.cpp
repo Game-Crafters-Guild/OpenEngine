@@ -2,14 +2,21 @@
 
 #include "DebugServer/Terrain/TerrainStrokeTarget.h"
 
+#include "AssetCore/GUID.h"
+#include "Components/Terrain/Terrain.h"
+#include "PageStreaming/PageStore/PageStoreFormat.h"
+#include "TerrainECS/TerrainService.h"
+
 #include <nlohmann/json.hpp>
 
 #include <cmath>
 #include <limits>
 #include <string>
+#include <vector>
 
 namespace
 {
+using GameEngine::Editor::DescribePlanetDabRefusal;
 using GameEngine::Editor::ResolveStrokeTarget;
 using GameEngine::Editor::SlerpDir;
 using GameEngine::Mathematics::Vector3;
@@ -215,5 +222,32 @@ TEST(TerrainStrokeTargetTests, SlerpOfAZeroEndpointIsNonFinite)
         << "SlerpDir cannot rescue a non-finite input — the rejection belongs upstream";
     EXPECT_FALSE(mid.Length() < 1e-6f)
         << "and a non-finite result passes the downstream length guards, which is the whole trap";
+}
+
+// A planet that holds a sculpt saved for another radius refuses a dab: `terrain_sculpt_dab` replies with
+// this text and no dab applied. At one sample a meter, a 1025-sample face fits a radius of 647 m to 651 m.
+TEST(TerrainStrokeTargetTests, APlanetDabIsRefusedWhileTheHeldSculptIsOfAnotherRadius)
+{
+    using namespace GameEngine;
+    using TerrainECS::TerrainService;
+    if (TerrainService::IsInitialized())
+        TerrainService::Shutdown();
+    TerrainService::Initialize();
+    TerrainService& service = TerrainService::Get();
+    constexpr uint32 kPlanet = 7u;
+    constexpr uint32 kSavedFaceSamples = 1025u;
+    service.WritePlanetPageLayer(kPlanet, PageStreaming::BuildPageStoreLevels(kSavedFaceSamples, kSavedFaceSamples), 0u,
+                                 PageStreaming::PageSampleRect{10u, 10u, 11u, 11u}, std::vector<float32>(4u, 1.0f));
+    service.MarkPlanetHeightLayerSaved(kPlanet, GUID::Generate(), service.FindPlanetPageOverlay(kPlanet)->SculptVersion);
+    Components::Terrain terrain{};
+    terrain.Domain = Components::TerrainDomain::Spherical;
+    terrain.SamplesPerMeter = 1.0f;
+
+    terrain.PlanetRadius = 649.0f;
+    EXPECT_EQ(DescribePlanetDabRefusal(service, kPlanet, terrain), "");
+    terrain.PlanetRadius = 1300.0f;
+    EXPECT_NE(DescribePlanetDabRefusal(service, kPlanet, terrain).find("Planet Radius from 647\xC2\xA0m to 651\xC2\xA0m"),
+              std::string::npos);
+    TerrainService::Shutdown();
 }
 } // namespace

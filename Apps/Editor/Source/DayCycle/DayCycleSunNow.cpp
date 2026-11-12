@@ -10,8 +10,7 @@
 #include "ECSModules/Rendering/Systems/SkyEnvironmentSystem.h"
 #include "Engine/Rendering/RenderServices.h"
 #include "Engine/Rendering/SkyRenderFeature.h"
-
-#include <numbers>
+#include "Mathematics/Angle.h"
 
 namespace GameEngine::Editor
 {
@@ -41,7 +40,7 @@ DayCycleSunNow ReadDayCycleSunNow(ECS::World& world, const Engine::Renderer::Ren
     if (now.HasSky && feature && feature->HasActiveSettings())
     {
         const Rendering::SkySunState& state = feature->GetSunState();
-        now.ElevationDegrees = state.SunApparentElevation * (180.0f / std::numbers::pi_v<float>);
+        now.ElevationDegrees = Mathematics::ToDegrees(state.SunApparentElevation);
         now.DuskHalf = IsDuskHalf(state);
         return now;
     }

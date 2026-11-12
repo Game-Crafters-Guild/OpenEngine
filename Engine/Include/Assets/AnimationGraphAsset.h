@@ -30,7 +30,7 @@ public:
         return ParseJson(ss.str());
     }
 
-    bool LoadFromData(const Vector<uint8>& data) override
+    bool LoadFromData(std::span<const uint8> data) override
     {
         return ParseJson(std::string(reinterpret_cast<const char*>(data.data()), data.size()));
     }

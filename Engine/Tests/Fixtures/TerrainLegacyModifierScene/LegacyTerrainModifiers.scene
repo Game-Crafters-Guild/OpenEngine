@@ -23,6 +23,7 @@
 HierarchyOrder.order = 0
 Name.value = "Terrain"
 Terrain.enabled = true
+Terrain.baseSource = 2
 Terrain.sizeX = 512
 Terrain.sizeZ = 512
 Terrain.heightScale = 100

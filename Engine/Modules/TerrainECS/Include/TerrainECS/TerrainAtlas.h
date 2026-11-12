@@ -72,9 +72,8 @@ inline constexpr uint32 kAtlasNoAssignBudget = 0xFFFFFFFFu;
 uint32 DeriveAtlasSlotCount(uint32 tilesPerAxisX, uint32 tilesPerAxisZ, uint32 tileRes,
                             uint64 vramBudgetBytes, uint32 bytesPerTexel = kAtlasSlotBytesPerTexel);
 
-// One indirection-table row (design §3.2). std430, 16 B — bound as an SSBO
-// indexed by tileIndex = tileZ * tilesPerAxisX + tileX. Mirror TileAtlasSlot in
-// cbt_atlas.glsl exactly.
+// One indirection-table row (design §3.2). std430, 16 B — bound as an SSBO indexed by
+// AtlasGeometry::RowIndex. Mirror CBTTileAtlasSlot in cbt_atlas.glsl exactly.
 struct TileAtlasSlot
 {
     uint32 Slot = kAtlasNoSlot;   // atlas slot index, or kAtlasNoSlot (not resident)
@@ -86,7 +85,7 @@ struct TileAtlasSlot
     // so no shader-side generation check is needed (proof at cbt_layout.glsl binding 17). Kept in
     // the row only so the SSBO layout is final if a future multi-queue path ever needs it.
     uint32 Generation = 0;
-    float32 LodBias = 0.0f;       // coarse tile: kAtlasLodBiasCoarse; Full tile: 0 (hint only)
+    uint32 TileKey = 0;           // (tz << 16) | tx of the tile that owns the row
     // Coarse->slot upgrade crossfade factor in [0,1]: 0 = render the out-of-window coarse field, 1 =
     // render the resident slot at full detail. Ramped by AtlasResidencyController when a tile assigns
     // (the residency-frontier pop killer — the surface mixes coarse<->slot normal/splat by this so a
@@ -96,13 +95,6 @@ struct TileAtlasSlot
     float32 Fade = 1.0f;
 };
 static_assert(sizeof(TileAtlasSlot) == 16, "TileAtlasSlot must be std430 16 B");
-
-// LodBias values (design §8 Risk 3, "Define LodBias"): a hint, never a
-// correctness input to the height sample. A coarse-resident tile sets Coarse so
-// the surface can soften shading / a debug view can tint coarse vs Full; a Full
-// tile sets 0.
-inline constexpr float32 kAtlasLodBiasFull = 0.0f;
-inline constexpr float32 kAtlasLodBiasCoarse = 1.0f;
 
 // Coarse->slot upgrade crossfade window (TileAtlasSlot::Fade ramp 0->1). CDLOD hides the same
 // LOD-swap pop with distance-driven morph bands; the resident-window atlas has no continuous LOD
@@ -137,11 +129,16 @@ struct AtlasGeometry
     uint32 SlotInteriorTexelX(uint32 slot) const { return SlotOriginTexelX(slot) + kAtlasApron; }
     uint32 SlotInteriorTexelY(uint32 slot) const { return SlotOriginTexelY(slot) + kAtlasApron; }
 
-    uint32 TileIndex(int32 tx, int32 tz) const
-    {
-        return static_cast<uint32>(tz) * TilesPerAxisX + static_cast<uint32>(tx);
-    }
+    // The indirection rows are a window of at most CBTTerrain::kAtlasWindowTilesPerAxis tiles a
+    // side that wraps over the tile grid (mirror CBT_AtlasRowIndex). For a grid of at most that
+    // many tiles a side, RowIndex is tz * TilesPerAxisX + tx.
+    uint32 RowCount() const;
+    uint32 RowIndex(int32 tx, int32 tz) const;
 };
+
+// The row of `rows` for tile (tx, tz), or an empty row when the tile does not own its window
+// row. The CPU mirror of the GPU's row read plus CBT_AtlasResolve's key check.
+TileAtlasSlot AtlasRowAt(const TileAtlasSlot* rows, const AtlasGeometry& geo, int32 tx, int32 tz);
 
 // Build the atlas geometry for a tile resolution and slot budget. slotsPerRow is
 // ceil(sqrt(slotCount)) so the square atlas holds every slot. tileRes is the
@@ -149,13 +146,13 @@ struct AtlasGeometry
 AtlasGeometry MakeAtlasGeometry(uint32 tileRes, uint32 slotCount,
                                 uint32 tilesPerAxisX, uint32 tilesPerAxisZ);
 
-// The per-tile indirection table (design §3.2). One row per tile in the WHOLE
-// terrain (tile counts are small even for 50 km worlds). Rows are rewritten each
-// frame from the slot pool's state; a non-resident tile keeps kAtlasNoSlot.
+// The tile indirection table (design §3.2): the window rows of AtlasGeometry::RowIndex, so its
+// size does not depend on the terrain size. Rows are rewritten each frame from the slot pool's
+// state; a non-resident tile reads kAtlasNoSlot.
 struct AtlasIndirectionTable
 {
     AtlasGeometry Geometry;
-    std::vector<TileAtlasSlot> Rows; // TilesPerAxisX * TilesPerAxisZ
+    std::vector<TileAtlasSlot> Rows; // Geometry.RowCount()
 
     void Resize(const AtlasGeometry& geo);
     void Clear(); // every row -> kAtlasNoSlot
@@ -166,8 +163,10 @@ struct AtlasIndirectionTable
                tx < static_cast<int32>(Geometry.TilesPerAxisX) &&
                tz < static_cast<int32>(Geometry.TilesPerAxisZ);
     }
-    const TileAtlasSlot& Row(int32 tx, int32 tz) const { return Rows[Geometry.TileIndex(tx, tz)]; }
-    TileAtlasSlot& Row(int32 tx, int32 tz) { return Rows[Geometry.TileIndex(tx, tz)]; }
+    // The tile's row, or an empty row (kAtlasNoSlot) when another tile owns its window row.
+    TileAtlasSlot Row(int32 tx, int32 tz) const { return AtlasRowAt(Rows.data(), Geometry, tx, tz); }
+    // The tile's window row stamped with its key, or nullptr when another resident tile holds it.
+    TileAtlasSlot* Claim(int32 tx, int32 tz);
 };
 
 // ---- Risk 1: mixed-LOD shared edges across disjoint slots ----

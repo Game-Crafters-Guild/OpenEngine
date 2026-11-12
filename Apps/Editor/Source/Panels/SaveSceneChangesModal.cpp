@@ -27,7 +27,7 @@ constexpr std::array<std::string_view, 5> kRequiredIds = {
 };
 } // namespace
 
-SaveSceneChangesModal::SaveSceneChangesModal()
+SaveSceneChangesModal::SaveSceneChangesModal(std::string_view idPrefix)
 {
     AddClass("modal-overlay");
     SetOverlayLayer(OverlayLayer::BlockingDialog);
@@ -42,6 +42,9 @@ SaveSceneChangesModal::SaveSceneChangesModal()
     m_CancelButton = m_Backdrop->FindById("save-changes-cancel"_sid);
     m_DontSaveButton = m_Backdrop->FindById("save-changes-dont-save"_sid);
     m_SaveButton = m_Backdrop->FindById("save-changes-save"_sid);
+    for (UIElement* element : {m_Title, m_Message, m_CancelButton, m_DontSaveButton, m_SaveButton})
+        if (element)
+            element->SetId(std::string(idPrefix) + "-" + element->GetId());
     if (m_CancelButton)
         m_CancelButton->RegisterEventHandler(kEventButtonClick, [this](UIEvent&) { OnCancelClicked(); });
     if (m_DontSaveButton)
@@ -87,10 +90,14 @@ void SaveSceneChangesModal::Show(const std::string& title, const std::string& me
     if (auto* b = dynamic_cast<Button*>(m_CancelButton))
         b->SetText(labels.Cancel);
     AddClass("visible");
-    if (auto* manager = GetOwnerManager())
+    if (GetOwnerManager())
     {
         UIElement* backdrop = m_Backdrop;
-        manager->PostToUI([manager, backdrop]() { manager->FocusElement(backdrop); });
+        backdrop->PostSafeAction([backdrop]()
+        {
+            if (UIManager* manager = backdrop->GetOwnerManager())
+                manager->FocusElement(backdrop);
+        });
     }
 }
 

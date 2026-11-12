@@ -3,6 +3,9 @@
 #include "Types/StringUtils.h"
 #include "Types/Types.h"
 
+#include <algorithm>
+#include <cstddef>
+#include <cstring>
 #include <string_view>
 
 namespace GameEngine {
@@ -22,6 +25,16 @@ struct Name {
     // The name up to its first null byte, or all of value when there is none.
     [[nodiscard]] std::string_view View() const { return FixedStringView(value); }
 };
+
+/// A Name that holds `text`, cut to the first 63 bytes, null-terminated.
+[[nodiscard]] inline Name MakeName(std::string_view text)
+{
+    Name name{};
+    const std::size_t length = std::min(text.size(), sizeof(name.value) - 1);
+    std::memcpy(name.value, text.data(), length);
+    name.value[length] = 0;
+    return name;
+}
 
 } // namespace Components
 } // namespace GameEngine

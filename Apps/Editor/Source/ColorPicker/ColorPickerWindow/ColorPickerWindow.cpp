@@ -23,7 +23,7 @@
 #include "Engine/Rendering/RenderDeviceContext.h"
 #include "Engine/Rendering/RenderServices.h"
 #include "Engine/Rendering/VkValidationRequest.h"
-#include "GameViewController.h"
+#include "GameView/GameViewController.h"
 #include "SceneView/SceneViewController.h"
 
 #include <atomic>

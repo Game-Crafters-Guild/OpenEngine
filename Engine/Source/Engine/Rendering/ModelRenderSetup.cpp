@@ -23,12 +23,14 @@
 #include "Engine/Rendering/RenderWorldHooks.h"
 #include "Engine/Rendering/SceneResolveService.h"
 #include "Engine/Rendering/SkeletonResolveState.h"
+#include "JobSystem/TaskHandle.h"
 #include "Logger/Logger.h"
 
 #include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <optional>
+#include <span>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -68,7 +70,8 @@ ModelAsset* ConvertLoadedModel(RenderServices& rs, const GUID& modelGuid, Asset*
     out.modelGuid = modelGuid;
     out.modelAsset = modelAsset;
     out.meshHandles = rs.GetMeshGPURegistry().RegisterModelMeshes(modelGuid, *modelAsset);
-    out.materials = ModelMaterialBridge::ConvertAll(modelGuid, modelAsset->GetMaterials());
+    out.materials = std::make_shared<const std::vector<ConvertedModelMaterial>>(
+        ModelMaterialBridge::ConvertAll(modelGuid, modelAsset->GetMaterials()));
     return modelAsset;
 }
 
@@ -90,7 +93,7 @@ ModelAsset* LoadAndConvertResources(RenderServices& rs, const GUID& modelGuid,
 void RegisterModelMaterials(RenderServices& rs, const ModelAsset& modelAsset, const ModelRenderResources& resources)
 {
     const auto& embeddedImages = modelAsset.GetEmbeddedImages();
-    for (const auto& cm : resources.materials)
+    for (const auto& cm : *resources.materials)
     {
         Material* mat = rs.RegisterAndPrewarmMaterial(cm.derivedGuid, cm.document);
         rs.Textures().ResolveEmbeddedTextures(mat, cm.document, resources.modelGuid, embeddedImages);
@@ -244,6 +247,32 @@ std::optional<ModelRenderResources> RegisterLoadedModelRenderResources(
     return result;
 }
 
+JobSystem::TaskHandle ParseModelSurfacesOffThread(RenderServices& rs, const Asset& loadedAsset)
+{
+    const auto* modelAsset = dynamic_cast<const ModelAsset*>(&loadedAsset);
+    if (!modelAsset || !modelAsset->IsLoaded())
+        return {};
+    // A model names at most two surfaces, so list each name once: the material system resolves the path of each.
+    // The bridge sets no vertex modifier and no asset path, so the surface is all a document carries here.
+    std::vector<MaterialDocument> surfaces;
+    for (const ImportedMaterialData& material : modelAsset->GetMaterials())
+    {
+        const std::string_view surfaceShader = ModelMaterialBridge::SurfaceShaderOf(material);
+        const auto named = [surfaceShader](const MaterialDocument& surface) { return surface.surfaceShader == surfaceShader; };
+        if (std::none_of(surfaces.begin(), surfaces.end(), named))
+            surfaces.emplace_back().surfaceShader = surfaceShader;
+    }
+    return rs.Materials().ParseSurfacesOffThread(surfaces, {});
+}
+
+JobSystem::TaskHandle ParseMaterialSurfacesOffThread(RenderServices& rs, const Asset& loadedAsset)
+{
+    const auto* materialAsset = dynamic_cast<const MaterialAsset*>(&loadedAsset);
+    if (!materialAsset)
+        return {};
+    return rs.Materials().ParseSurfacesOffThread(std::span(&materialAsset->GetDocument(), 1), materialAsset->GetPath());
+}
+
 std::optional<ModelRenderResources> RegisterModelRenderResourcesForSubmesh(
     RenderServices& rs, const GUID& modelGuid, uint32 submeshIndex)
 {
@@ -256,10 +285,10 @@ std::optional<ModelRenderResources> RegisterModelRenderResourcesForSubmesh(
         return result;
 
     const uint32 matIdx = modelAsset->GetMesh(submeshIndex).MaterialIndex;
-    if (matIdx >= result.materials.size())
+    if (matIdx >= result.materials->size())
         return result;
 
-    const auto& cm = result.materials[matIdx];
+    const auto& cm = (*result.materials)[matIdx];
     const auto& embeddedImages = modelAsset->GetEmbeddedImages();
     Material* mat = rs.RegisterAndPrewarmMaterial(cm.derivedGuid, cm.document);
     rs.Textures().ResolveEmbeddedTextures(mat, cm.document, modelGuid, embeddedImages);
@@ -298,9 +327,9 @@ void PopulateMeshRenderer(Components::MeshRenderer& mr,
         if (submeshIndex < resources.modelAsset->GetMeshCount())
             materialIndex = resources.modelAsset->GetMesh(submeshIndex).MaterialIndex;
 
-        if (materialIndex < resources.materials.size())
+        if (resources.materials && materialIndex < resources.materials->size())
         {
-            const GUID& matGuid = resources.materials[materialIndex].derivedGuid;
+            const GUID& matGuid = (*resources.materials)[materialIndex].derivedGuid;
             mr.materialAssetGuid.Set(matGuid);
         }
     }

@@ -1,8 +1,8 @@
 #include "CBTTerrain/CBTInstance.h"
 
 #include "CBTTerrain/CBTKernelSet.h"
+#include "CBTTerrain/CBTPoolCensus.h"
 #include "CBTTerrain/CBTSphereRoots.h"
-#include "CBTTerrain/SphereSculptLayer.h" // ResolveSculptPagePoolCount
 
 #include "Rendering/Core/CommandList.h"
 #include "Logger/Logger.h"
@@ -124,16 +124,10 @@ bool CBTInstance::InitializeRoots(uint32_t domainMode)
 
     const bool firstDrawResourceInit = !m_DrawResourcesInitialized;
 
-    // A live re-seed can replace sculpt-ring descriptors as well as topology. Retire their
-    // graphics users before rebinding; unrelated compute/transfer work does not need a drain.
+    // A live re-seed replaces persistent topology behind its previous users. Retire their
+    // graphics users first; unrelated compute/transfer work does not need a drain.
     if (!firstDrawResourceInit)
         m_Device->WaitGpuSyncToken(m_Device->LastGraphicsSubmissionToken());
-
-    // The sculpt rings follow the domain: full rings for a sphere, placeholders for a planar tree.
-    // Before the domain fields change: a refused allocation leaves the instance on its previous
-    // domain, tree and rings.
-    if (!m_Resources.ProvisionSculptRings(domainMode == kDomainSpherical, ResolveSculptPagePoolCount()))
-        return false;
 
     m_DomainMode = domainMode;
     m_BaseDepth = (domainMode == kDomainSpherical) ? kSphereBaseDepth : kDefaultBaseDepth;
@@ -544,16 +538,16 @@ void CBTInstance::RecordUpdate(CommandList& cl, const CBTClassifyDesc& classify,
     pc.DirtyMinV = classify.DirtyMinV;
     pc.DirtyMaxU = classify.DirtyMaxU;
     pc.DirtyMaxV = classify.DirtyMaxV;
-    pc.SphereSculptEnabled = classify.SphereSculptEnabled;
-    // The narrow-heap kernels (no 64-bit integers: WebGPU) cannot bind the
-    // modified index stream — it would be the 11th storage buffer against a
-    // per-stage limit of 10 — so VertexEval always walks the full live stream there.
+    // The narrow-heap kernels (no 64-bit integers: WebGPU) do not read the modified
+    // index stream (their VertexEval reads 8 storage buffers, the WebGPU default limit
+    // per stage), so VertexEval always walks the full live stream there.
     const bool vertexEvalGateSupported = m_Device->GetCapabilities().supportsShaderInt64;
     pc.GateVertexEval = vertexEvalGateSupported ? classify.GateVertexEval : 0u;
-    pc.EditRetessEnabled = classify.EditRetessEnabled;
     pc.NearFieldGate = classify.NearFieldGate;
     pc.PoolPressure = classify.PoolPressure;
     pc.Settle = classify.Settle;
+    pc.Census = classify.Census;
+    pc.BehindEye = static_cast<uint32_t>(classify.BehindEye);
 
     // Indexation and Validate still scan the whole pool (Indexation IS the pointer-cache
     // that rebuilds the live compact stream every frame; Validate's zombie check must see the
@@ -1076,6 +1070,25 @@ CBTTessellationStats CBTInstance::ReadTessellationStats()
     if (rootWord < sumTree.size())
         st.LiveCount = sumTree[rootWord];
     return st;
+}
+
+CBTPoolCensus CBTInstance::ReadPoolCensus()
+{
+    CBTPoolCensus census;
+    if (!m_Ready || m_Device == nullptr)
+        return census;
+    const std::vector<uint32_t> words =
+        DebugReadWords(CBTBinding::WorkQueue, kCensusWords, WQCensusOffset(m_PoolSize));
+    if (words.size() != kCensusWords)
+        return census;
+    for (uint32_t level = 0; level < kCensusLevels; ++level)
+    {
+        census.InViewByLevel[level] = words[2u * level];
+        census.OffViewByLevel[level] = words[2u * level + 1u];
+    }
+    for (uint32_t classIndex = 0; classIndex < kCensusClassCount; ++classIndex)
+        census.OffViewByClass[classIndex] = words[2u * kCensusLevels + classIndex];
+    return census;
 }
 
 } // namespace GameEngine::CBTTerrain

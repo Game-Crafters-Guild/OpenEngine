@@ -56,6 +56,29 @@ TEST(MarkupNotesEditCommand, ACommentAndAStatusChangeUndoAndRedoAsOneStepEach)
     MarkupService::Shutdown();
 }
 
+// The edit announces its Markup commit inside its own step, so a record the commit writes joins that step.
+TEST(MarkupNotesEditCommand, TheCommitIsAnnouncedInsideTheEditStep)
+{
+    MarkupService::Initialize();
+    ECS::World world;
+    Editor::EditorChangeNotifications notifications;
+    Editor::UndoRedoService undo;
+    const ECS::EntityHandle lake = world.CreateEntity();
+    world.AddComponentImmediate(lake, Markup{});
+    ASSERT_TRUE(MarkupService::Get().BeginMarkup(world, lake, MarkupAuthor::User, 10));
+    bool announcedInStep = false;
+    (void)notifications.SubscribeComponentChanged([&undo, &announcedInStep](const auto&) {
+        announcedInStep = undo.HasOpenCompound();
+    });
+
+    ASSERT_TRUE(Editor::CommitMarkupNotesEdit(world, lake, &undo, &notifications, "Add Mark-up Comment", [&]() {
+        return MarkupService::Get().AddComment(world, lake, MarkupAuthor::User, 20, "Keep the shore");
+    }, {}));
+    EXPECT_TRUE(announcedInStep);
+    EXPECT_EQ(undo.GetUndoCount(), 1u);
+    MarkupService::Shutdown();
+}
+
 // A new tag name the edit added leaves the vocabulary on undo and returns on redo, and the
 // vocabulary is saved each time.
 TEST(MarkupNotesEditCommand, ATagNameTheEditAddedLeavesTheVocabularyOnUndo)

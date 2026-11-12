@@ -2,7 +2,8 @@
 // tests. The test picks the behavior through FAKE_AGENT_CLI_MODE, which the provider
 // passes through (it removes only the key variables):
 //
-//   `--version`        "2.1.290 (Claude Code)", or "2.1.200 (Claude Code)" in mode old-version;
+//   any command        in mode silent: prints nothing and exits 0
+//   `--version`        "2.1.290 (Claude Code)", or "<x> (Claude Code)" in mode `version <x>`;
 //                      in mode slow-version a 60 s sleep first
 //   `auth status`      Claude's login JSON (with an email and organization the row must not
 //                      show); authMethod "api_key" when ANTHROPIC_API_KEY is set; in mode
@@ -203,12 +204,18 @@ int main(int argc, char** argv)
     const std::string first = argc > 1 ? argv[1] : "";
     const std::string second = argc > 2 ? argv[2] : "";
     const bool loggedOut = Mode() == "logged-out";
+    // A program that is not a CLI at all: the desktop app, or any other picked by mistake.
+    if (Mode() == "silent")
+        return 0;
 
     if (first == "--version")
     {
         if (Mode() == "slow-version")
             std::this_thread::sleep_for(std::chrono::seconds(60));
-        PrintLine(Mode() == "old-version" ? "2.1.200 (Claude Code)" : "2.1.290 (Claude Code)");
+        constexpr std::string_view kVersionMode = "version ";
+        const std::string mode = Mode();
+        const std::string version = mode.starts_with(kVersionMode) ? mode.substr(kVersionMode.size()) : "2.1.290";
+        PrintLine(version + " (Claude Code)");
         return 0;
     }
     if (first == "-p" && second == "process.versions.node")

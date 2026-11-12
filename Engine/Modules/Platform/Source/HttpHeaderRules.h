@@ -29,4 +29,12 @@ namespace GameEngine
 /// value may be a key.
 std::string ValidateHeaders(std::string_view url, const std::unordered_map<std::string, std::string>& headers);
 
+/// True when `name` is a credential header (the list ValidateHeaders checks), compared without case.
+bool IsCredentialHeader(std::string_view name);
+
+/// True when both URLs have one origin: the same scheme (http or https, the two the backends
+/// speak) and the same host and port as written, compared without case. "http://a" and
+/// "http://a:80" are two origins, so a credential is dropped between them.
+bool IsSameOrigin(std::string_view firstUrl, std::string_view secondUrl);
+
 } // namespace GameEngine

@@ -44,6 +44,35 @@ Rendering::MaterialKeyword ParseWorldPassKeywords(const std::string& passJson)
     return keywords;
 }
 
+Rendering::MaterialKeyword WorldPassViewKeywords(Engine::Renderer::RenderServices& services,
+                                                 const Rendering::ViewDesc& view,
+                                                 Rendering::MaterialKeyword passKeywords,
+                                                 bool heightFogParamsPublished)
+{
+    // kWorldPassViewStateKeywords must hold each keyword that this function sets from the view's state.
+    Rendering::MaterialKeyword keywords = passKeywords;
+    const PostProcessSettings& pp = services.GetEffectivePostProcessSettings(view.id, view.worldId);
+    // GTAO is consumed only when an AO PostProcessVolume is active for this view; mirror
+    // AONode's gate so the StandardPBR variant (and the ge_gtao bind) match the producer.
+    if (pp.IsAOActive())
+        keywords |= Rendering::MaterialKeyword::GTAO;
+    // The height fog is evaluated in every surface's own shader (forward_fog.glsl).
+    keywords |= HeightFogKeyword(pp, heightFogParamsPublished);
+    // DDGI replaces the IBL diffuse term (ibl.glsl), so only an IBL pass takes it, and only while a
+    // converged volume lights this view's world.
+    if (HasKeyword(passKeywords, Rendering::MaterialKeyword::IBL))
+    {
+        auto* ddgi = services.GetFeature<Engine::Renderer::DDGIProbeFeature>();
+        if (ddgi && ddgi->HasConvergedVolume() && ddgi->GetActiveVolume().WorldId == view.worldId)
+            keywords |= Rendering::MaterialKeyword::DDGI;
+    }
+    // The Parallax steps debug view, per view. The variant cache keeps it off every material that
+    // does not march (NarrowColorPassKeywords).
+    if (services.Views().GetViewParallaxStepsView(view.id))
+        keywords |= Rendering::MaterialKeyword::ParallaxStepsView;
+    return keywords;
+}
+
 bool WorldRenderNode::Initialize(std::string nodeId, std::string nodeJson, std::string* /*outError*/)
 {
     m_Id = std::move(nodeId);
@@ -98,27 +127,15 @@ void WorldRenderNode::DeclareForView(ViewDeclare& d)
     const auto scope = (d.Services.HasTransmissionInView(d.View.id) && d.PipelineHasTransmissivePass)
                            ? Engine::Renderer::RenderServices::WorldPassDrawScope::OpaqueOnly
                            : Engine::Renderer::RenderServices::WorldPassDrawScope::All;
-    // GTAO is consumed only when an AO PostProcessVolume is active for this view; mirror
-    // AONode's gate so the StandardPBR variant (and the ge_gtao bind) match the producer.
-    Rendering::MaterialKeyword effectiveKeywords = m_PassKeywords;
-    if (d.Services.GetEffectivePostProcessSettings(d.View.id, d.View.worldId).IsAOActive())
-        effectiveKeywords |= Rendering::MaterialKeyword::GTAO;
-    // The height fog is evaluated in every surface's own shader (forward_fog.glsl).
-    effectiveKeywords |= HeightFogPassKeyword(d);
-    // DDGI is consumed only when a DDGIVolume resolved and converged for
-    // THIS view's world — mirrors the GTAO gate above. Requires IBL too
-    // (DDGI replaces the IBL diffuse term, see ibl.glsl); a pipeline without
-    // the "IBL" pass keyword never grows the DDGI binding regardless of a
-    // converged volume, matching ibl.glsl's include guard.
+    Rendering::MaterialKeyword effectiveKeywords = WorldPassViewKeywords(
+        d.Services, d.View, m_PassKeywords, d.ResolveBuffer(Names::Res::HeightFogParams).IsValid());
     // The DDGI resolve's shading-normal history for this frame's world pass to
     // write (valid only on frames the resolve pass was declared).
     Rendering::RenderGraph::RGTexture shadingNormal{};
-    if (HasKeyword(m_PassKeywords, Rendering::MaterialKeyword::IBL))
+    if (HasKeyword(effectiveKeywords, Rendering::MaterialKeyword::DDGI))
     {
-        if (auto* ddgi = d.Services.GetFeature<Engine::Renderer::DDGIProbeFeature>();
-            ddgi && ddgi->HasConvergedVolume() && ddgi->GetActiveVolume().WorldId == d.View.worldId)
+        if (auto* ddgi = d.Services.GetFeature<Engine::Renderer::DDGIProbeFeature>())
         {
-            effectiveKeywords |= Rendering::MaterialKeyword::DDGI;
             // Probe resolve: one compute pass per view, after the depth
             // prepass (it samples the 1-sample view depth), before this world
             // pass (which Reads its outputs). It carries the diffuse
@@ -164,10 +181,6 @@ void WorldRenderNode::DeclareForView(ViewDeclare& d)
     const Rendering::MaterialKeyword reflectionKeywords =
         ReflectionsProvider::ContributeWorldPassTargets(d, t, shadingNormal);
     effectiveKeywords |= reflectionKeywords;
-    // The Parallax steps debug view, per view. The variant cache keeps it off every material that
-    // does not march (NarrowColorPassKeywords).
-    if (d.Services.Views().GetViewParallaxStepsView(d.View.id))
-        effectiveKeywords |= Rendering::MaterialKeyword::ParallaxStepsView;
     if (shadingNormal.IsValid() &&
         HasKeyword(reflectionKeywords, Rendering::MaterialKeyword::SSSRNormalRoughness))
     {
@@ -191,6 +204,16 @@ void WorldRenderNode::DeclareForView(ViewDeclare& d)
     // test transparents against the current-frame opaque HZB. The set is still
     // BUILT above (BuildSortedTransparentForView) so the opaque peel drops those
     // batches; the relocated node reads it back and issues the draw.
+}
+
+void WorldRenderNode::RequestPausedViewPipelines(const PausedViewPrewarm& prewarm)
+{
+    // RecordPausedViewWarmKeys sets the view's keywords first. The screen-space shadow keyword
+    // tells that the world pass of the live frame takes the mask, and the mask passes use their pipelines.
+    const std::optional<MaterialKeyword> keywords =
+        prewarm.Services.Views().GetViewDeclaredWorldPassKeywords(prewarm.View.id);
+    if (keywords && HasKeyword(*keywords, MaterialKeyword::ScreenSpaceShadows))
+        prewarm.Services.RequestScreenSpaceShadowPipelines();
 }
 
 } // namespace GameEngine::Engine::Renderer::Pipeline::Nodes

@@ -1,15 +1,19 @@
 #include "CBTTerrainECS/TerrainShadowBake.h"
 
+#include "CBTTerrain/CBTLayout.h"
 #include "Engine/Rendering/Pipeline/Nodes/PipelineNodeUtils.h"
 #include "Engine/Rendering/RenderServices.h"
 #include "Engine/Rendering/ShadowMapRenderFeature.h"
 #include "Engine/Rendering/TerrainShadowMap.h"
 #include "Logger/Logger.h"
+#include "Mathematics/Vector4.h"
 #include "Rendering/Core/NamedDescriptorWriter.h"
 #include "Rendering/Core/PassPhase.h"
 #include "Rendering/Materials/MaterialHelper.h"
 #include "Rendering/ShaderCache/ShaderPackageIO.h"
 
+#include <algorithm>
+#include <cstddef>
 #include <string>
 
 namespace GameEngine::CBTTerrainECS
@@ -30,7 +34,9 @@ struct BakeParamsUBO
     float Range[4];         // u of sample 0; v of line 0; samples per line; lines
     float Bake[4];          // first line of this dispatch; metres per normalized height; tan of the
                             // sun disc's lower edge's elevation
+    Mathematics::Vector4 Casters; // the extent X, Z that casts (the authored size); zw = 0
 };
+static_assert(sizeof(BakeParamsUBO) == 80 && offsetof(BakeParamsUBO, Casters) == 64, "five vec4 (std140)");
 
 CBTTerrain::TerrainShadowExtent ExtentOf(const TerrainShadowBakeInputs& inputs, uint32_t heightWidth,
                                          uint32_t heightHeight)
@@ -61,6 +67,21 @@ bool SunTowardLight(Engine::Renderer::RenderServices& rs, uint64_t worldId, floa
 
 TerrainShadowBake::TerrainShadowBake() = default;
 TerrainShadowBake::~TerrainShadowBake() = default;
+
+TerrainShadowBakeInputs TerrainShadowBake::GeometryOf(const CBTTerrain::CBTFrameParams& params)
+{
+    TerrainShadowBakeInputs inputs;
+    inputs.TerrainX = params.TerrainOrigin[0];
+    inputs.TerrainZ = params.TerrainOrigin[1];
+    inputs.BaseY = params.TerrainSize[3];
+    inputs.SizeX = params.TerrainSize[0];
+    inputs.SizeZ = params.TerrainSize[1];
+    inputs.CasterSizeX = inputs.SizeX * std::min(params.SurfaceExtent.x, 1.0f);
+    inputs.CasterSizeZ = inputs.SizeZ * std::min(params.SurfaceExtent.y, 1.0f);
+    inputs.HeightScale = params.TerrainSize[2];
+    inputs.DrawLevelScale = params.HeightChain[0];
+    return inputs;
+}
 
 void TerrainShadowBake::DeclareForView(Engine::Renderer::RenderServices& rs, RG::RGFrame& frame,
                                        Rendering::ViewId viewId, uint64_t worldId,
@@ -254,6 +275,7 @@ void TerrainShadowBake::DeclareBakePass(RG::RGFrame& frame, RG::RGTexture map,
     params.Bake[0] = static_cast<float>(lines.First);
     params.Bake[1] = inputs.HeightScale;
     params.Bake[2] = grid.TanLowerEdge;
+    params.Casters = Mathematics::Vector4(inputs.CasterSizeX, inputs.CasterSizeZ, 0.0f, 0.0f);
     *ub.Ptr = params;
 
     const RG::RGTexture height = frame.ImportExternalTexture("CBT.HeightSource", inputs.Source.HeightTexture,
@@ -325,9 +347,11 @@ void TerrainShadowBake::Publish(Engine::Renderer::RenderServices& rs, RG::RGFram
     published.TerrainX = inputs.TerrainX;
     published.TerrainZ = inputs.TerrainZ;
     published.BaseY = inputs.BaseY;
-    published.TerrainSizeX = inputs.SizeX;
-    published.TerrainSizeZ = inputs.SizeZ;
     published.HeightScale = inputs.HeightScale;
+    published.ExtentX = inputs.CasterSizeX;
+    published.ExtentZ = inputs.CasterSizeZ;
+    published.HeightSpanX = inputs.SizeX;
+    published.HeightSpanZ = inputs.SizeZ;
     published.SunX = m_Frame.Grid.SunX;
     published.SunZ = m_Frame.Grid.SunZ;
     published.TanElevation = m_Frame.Grid.TanElevation;

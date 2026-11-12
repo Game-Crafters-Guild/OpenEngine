@@ -270,3 +270,168 @@ TEST(SceneLoadTracker, ASteadyTickAllocatesNothing)
     EXPECT_EQ(count, 0u) << count << " allocations in " << kTicks << " Ticks";
     EXPECT_FALSE(tracker.IsReadyToShow());
 }
+
+namespace
+{
+Clock::time_point At(Clock::time_point start, double seconds)
+{
+    return start + std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(seconds));
+}
+} // namespace
+
+TEST(SceneLoadTracker, TheEstimateIsTheSlowestCategoryAndUnreportedWorkStopsAtNinetyPercent)
+{
+    SceneLoadTracker tracker;
+    SceneLoadTracker::Category reads =
+        tracker.RegisterCategory({.Id = "test.read", .Label = "Reading", .DefaultSecondsPerUnit = 0.5});
+    SceneLoadTracker::Category bake =
+        tracker.RegisterCategory({.Id = "test.bake", .Label = "Baking", .DefaultSecondsPerUnit = 3.0});
+    SceneLoadTracker::Category models = tracker.RegisterCategory({.Id = "test.models", .Label = "Loading models"});
+    SceneLoadTracker::WorkTicket read = reads.BeginWork(tracker.Intern("Scenes/A.scene"), 4.0);
+    SceneLoadTracker::WorkTicket band = bake.BeginWork(tracker.Intern("Terrain"), 1.0);
+    band.Start();
+    std::size_t modelsPending = 3;
+    SceneLoadTracker::Gate gate = models.RegisterGate([&modelsPending] { return WaitingFor(modelsPending); });
+
+    const Clock::time_point start = Clock::now();
+    SceneLoadTrackerTestAccess::Tick(tracker, start);
+    EXPECT_DOUBLE_EQ(tracker.GetStatus().SecondsRemaining, 3.0) << "the started band at its seed";
+    EXPECT_DOUBLE_EQ(FindRow(tracker, "test.read")->SecondsRemaining, 2.0) << "4 queued units at 0.5 s";
+
+    SceneLoadTrackerTestAccess::Tick(tracker, At(start, 1.0));
+    EXPECT_DOUBLE_EQ(FindRow(tracker, "test.bake")->SecondsRemaining, 2.0) << "the band advanced by elapsed";
+    EXPECT_DOUBLE_EQ(tracker.GetStatus().SecondsRemaining, 2.0);
+
+    SceneLoadTrackerTestAccess::Tick(tracker, At(start, 10.0));
+    EXPECT_NEAR(FindRow(tracker, "test.bake")->SecondsRemaining, 0.3, 1e-9) << "an unreported band stops at 90 %";
+    EXPECT_NEAR(FindRow(tracker, "test.models")->SecondsRemaining, 0.1, 1e-9) << "a waiting gate stops at 90 %";
+    EXPECT_DOUBLE_EQ(FindRow(tracker, "test.read")->SecondsRemaining, 2.0) << "queued work advances only on Complete";
+
+    modelsPending = 0;
+    SceneLoadTrackerTestAccess::Tick(tracker, At(start, 11.0));
+    modelsPending = 3;
+    SceneLoadTrackerTestAccess::Tick(tracker, At(start, 12.0));
+    EXPECT_DOUBLE_EQ(FindRow(tracker, "test.models")->SecondsRemaining, 1.0) << "a new wait starts its estimate again";
+}
+
+TEST(SceneLoadTracker, AWarmLoadAfterAColdOneCountsOnlyItsOwnWork)
+{
+    SceneLoadTracker tracker;
+    SceneLoadTracker::Category decodes =
+        tracker.RegisterCategory({.Id = "test.decode", .Label = "Decoding", .DefaultSecondsPerUnit = 1.0});
+    const StringId name = tracker.Intern("Textures/Grass.png");
+
+    // The cold load: 16 units and one that is dropped. They take 0.8 s of frames, so the
+    // measured rate, 0.05 s per unit, replaces the seed.
+    std::vector<SceneLoadTracker::WorkTicket> cold;
+    for (int unit = 0; unit < 16; ++unit)
+        cold.push_back(decodes.BeginWork(name, 1.0));
+    std::optional<SceneLoadTracker::WorkTicket> dropped = decodes.BeginWork(name, 1.0);
+    const Clock::time_point start = Clock::now();
+    SceneLoadTrackerTestAccess::Tick(tracker, start);
+    EXPECT_DOUBLE_EQ(tracker.GetStatus().SecondsRemaining, 17.0);
+    {
+        std::vector<std::string> lines;
+        TestLog::ScopedLogCapture capture(&lines);
+        dropped.reset();
+    }
+    for (int unit = 0; unit < 16; ++unit)
+    {
+        cold[unit].Complete();
+        SceneLoadTrackerTestAccess::Tick(tracker, At(start, 0.05 * (unit + 1)));
+    }
+    ASSERT_TRUE(tracker.IsReadyToShow());
+    EXPECT_EQ(tracker.GetStatus().SecondsRemaining, 0.0);
+
+    // The menu runs 10 s with no work; then the warm load opens 2 units.
+    for (int second = 1; second <= 10; ++second)
+        SceneLoadTrackerTestAccess::Tick(tracker, At(start, 0.8 + second));
+    SceneLoadTracker::WorkTicket first = decodes.BeginWork(name, 1.0);
+    SceneLoadTracker::WorkTicket second = decodes.BeginWork(name, 1.0);
+    SceneLoadTrackerTestAccess::Tick(tracker, At(start, 11.0));
+    EXPECT_NEAR(tracker.GetStatus().SecondsRemaining, 0.1, 1e-9)
+        << "only the warm load's 2 units, at the rate the cold load measured";
+}
+
+TEST(SceneLoadTracker, TheMeasuredRateCountsTheTimeATicketRunsNotTheTimeItWaitsQueued)
+{
+    SceneLoadTracker tracker;
+    SceneLoadTracker::Category reads =
+        tracker.RegisterCategory({.Id = "test.read", .Label = "Reading", .DefaultSecondsPerUnit = 0.2});
+    const StringId name = tracker.Intern("Scenes/A.scene");
+
+    // The first read waits 5 s in the queue, as behind the project's startup scan, then runs 0.6 s.
+    SceneLoadTracker::WorkTicket first = reads.BeginWork(name, 1.0);
+    const Clock::time_point start = Clock::now();
+    for (int second = 0; second < 5; ++second)
+        SceneLoadTrackerTestAccess::Tick(tracker, At(start, second));
+    first.Start();
+    SceneLoadTrackerTestAccess::Tick(tracker, At(start, 5.0));
+    SceneLoadTrackerTestAccess::Tick(tracker, At(start, 5.3));
+    first.Complete();
+    SceneLoadTrackerTestAccess::Tick(tracker, At(start, 5.6));
+    ASSERT_TRUE(tracker.IsReadyToShow());
+
+    SceneLoadTracker::WorkTicket next = reads.BeginWork(name, 1.0);
+    SceneLoadTrackerTestAccess::Tick(tracker, At(start, 6.0));
+    EXPECT_NEAR(tracker.GetStatus().SecondsRemaining, 0.6, 1e-6)
+        << "the next read at the 0.6 s the first one ran, not the 5.6 s since it was queued";
+}
+
+TEST(SceneLoadTracker, ATicketDroppedAfterItRanAddsNoTimeToTheMeasuredRate)
+{
+    SceneLoadTracker tracker;
+    SceneLoadTracker::Category reads =
+        tracker.RegisterCategory({.Id = "test.read", .Label = "Reading", .DefaultSecondsPerUnit = 0.2});
+    const StringId name = tracker.Intern("Scenes/A.scene");
+
+    // A read runs 5 s and fails: the loader drops its ticket. The next read runs 0.6 s and completes.
+    std::optional<SceneLoadTracker::WorkTicket> failed = reads.BeginWork(name, 1.0);
+    failed->Start();
+    const Clock::time_point start = Clock::now();
+    for (int second = 0; second <= 5; ++second)
+        SceneLoadTrackerTestAccess::Tick(tracker, At(start, second));
+    {
+        std::vector<std::string> lines;
+        TestLog::ScopedLogCapture capture(&lines);
+        failed.reset();
+    }
+    SceneLoadTracker::WorkTicket read = reads.BeginWork(name, 1.0);
+    read.Start();
+    SceneLoadTrackerTestAccess::Tick(tracker, At(start, 5.5));
+    SceneLoadTrackerTestAccess::Tick(tracker, At(start, 5.8));
+    read.Complete();
+    SceneLoadTrackerTestAccess::Tick(tracker, At(start, 6.1));
+    ASSERT_TRUE(tracker.IsReadyToShow());
+
+    SceneLoadTracker::WorkTicket next = reads.BeginWork(name, 1.0);
+    SceneLoadTrackerTestAccess::Tick(tracker, At(start, 6.5));
+    EXPECT_NEAR(tracker.GetStatus().SecondsRemaining, 0.6, 1e-6)
+        << "the next read at the 0.6 s the completed read ran, not with the 5.5 s of the failed one";
+}
+
+TEST(SceneLoadTracker, TicketsThatRunTogetherCountTheirTimeOnce)
+{
+    SceneLoadTracker tracker;
+    SceneLoadTracker::Category decodes =
+        tracker.RegisterCategory({.Id = "test.decode", .Label = "Decoding", .DefaultSecondsPerUnit = 0.1});
+    const StringId name = tracker.Intern("Textures/Grass.png");
+
+    // Two decodes run together for 2 s: the category does 2 units in 2 s of frames.
+    SceneLoadTracker::WorkTicket first = decodes.BeginWork(name, 1.0);
+    SceneLoadTracker::WorkTicket second = decodes.BeginWork(name, 1.0);
+    first.Start();
+    second.Start();
+    const Clock::time_point start = Clock::now();
+    SceneLoadTrackerTestAccess::Tick(tracker, start);
+    SceneLoadTrackerTestAccess::Tick(tracker, At(start, 1.0));
+    first.Complete();
+    second.Complete();
+    SceneLoadTrackerTestAccess::Tick(tracker, At(start, 2.0));
+    ASSERT_TRUE(tracker.IsReadyToShow());
+
+    SceneLoadTracker::WorkTicket next = decodes.BeginWork(name, 1.0);
+    SceneLoadTrackerTestAccess::Tick(tracker, At(start, 2.5));
+    EXPECT_NEAR(tracker.GetStatus().SecondsRemaining, 1.0, 1e-6)
+        << "1 s per unit: the 2 s of frames over the 2 units, not 2 s for each ticket";
+}

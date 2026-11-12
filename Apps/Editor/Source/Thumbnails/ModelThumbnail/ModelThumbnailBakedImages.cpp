@@ -78,7 +78,7 @@ void ModelThumbnailHandler::RequestBakedImages(WindowState& ws)
                 std::error_code sourceError, pngError;
                 const auto sourceTime = std::filesystem::last_write_time(sourcePath, sourceError);
                 const auto pngTime = std::filesystem::last_write_time(pngPath, pngError);
-                Vector<uint8> bytes;
+                ByteBuffer bytes;
                 if (!sourceError && !pngError && pngTime >= sourceTime &&
                     ReadFileBytesShared(pngPath, bytes))
                 {

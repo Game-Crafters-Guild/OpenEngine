@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Scene/SceneDocumentManager.h"
 #include "Scene/SceneIO.h"
 #include "Scene/SceneLoadFailure.h"
 #include "Types/ScopedSubscription.h"
@@ -180,10 +181,10 @@ class SceneEditorController
     bool RespondToActiveModal(const std::string& choice, std::string* outError);
 
     void SetHierarchyUiCaptureForSave(std::function<Scene::SceneHierarchyUi()> capture);
-    std::optional<Scene::SceneHierarchyUiFromFile> ConsumeHierarchyUiFromLastDocumentLoad();
+    std::optional<SceneHierarchyUiFromFile> ConsumeHierarchyUiFromLastDocumentLoad();
 
     void SetEditorCameraCaptureForSave(std::function<Scene::SceneEditorCamera()> capture);
-    std::optional<Scene::SceneEditorCameraFromFile> ConsumeEditorCameraFromLastDocumentLoad();
+    std::optional<SceneEditorCameraFromFile> ConsumeEditorCameraFromLastDocumentLoad();
 
     // Releases the generated entities of the outgoing world on
     // every scene swap (SceneDocumentManager::SetSceneScopedGeneratorRelease).

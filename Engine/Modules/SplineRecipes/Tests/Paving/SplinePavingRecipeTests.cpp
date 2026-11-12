@@ -24,6 +24,18 @@ TEST(SplinePavingRecipeTests, ANonFiniteBorderFallsBackSoTheRecipeEqualsItself)
     EXPECT_EQ(clean, SanitizePavingRecipe(authored));
 }
 
+TEST(SplinePavingRecipeTests, AnUnknownSeamTakesBlendAndANonFiniteBandTakesTwoTiles)
+{
+    SplinePaving authored;
+    authored.Seam = static_cast<Components::SplinePavingSeam>(9);
+    authored.SeamBandTiles = std::numeric_limits<float32>::quiet_NaN();
+    authored.SeamCourseWidth = 40.0f;
+    const SplinePaving clean = SanitizePavingRecipe(authored);
+    EXPECT_EQ(clean.Seam, Components::SplinePavingSeam::Blend);
+    EXPECT_EQ(clean.SeamBandTiles, 2.0f);
+    EXPECT_EQ(clean.SeamCourseWidth, 2.0f);
+}
+
 TEST(SplinePavingRecipeTests, MembersPastTheCountAreClearedAndTheCountIsBounded)
 {
     SplinePaving authored;

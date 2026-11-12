@@ -12,6 +12,7 @@
 #include "Logger/Logger.h"
 
 #include <algorithm>
+#include <cassert>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -1719,10 +1720,13 @@ void TerrainRenderFeature::WarnIfUploadPassMissing()
         m_TexturesAwaitingGpuInit.size(), m_FramesAwaitingUploadPass);
 }
 
-void TerrainRenderFeature::UploadTerrainParamsArray(const Terrain::TerrainGPUParams* params, uint32 count,
-                                                    const Terrain::TerrainMaterialRecord* materials,
-                                                    uint32 materialCount, uint32 deviceFrameIndex)
+void TerrainRenderFeature::UploadTerrainParamsArray(std::span<const Terrain::TerrainGPUParams> params,
+                                                    std::span<const TerrainInstanceInfo> infos,
+                                                    std::span<const Terrain::TerrainMaterialRecord> materials,
+                                                    uint32 deviceFrameIndex)
 {
+    assert(infos.size() == params.size() && "one info row per params row");
+    const uint32 count = static_cast<uint32>(params.size());
     std::lock_guard<std::mutex> lock(m_Mutex);
 
     // The extraction system's once-per-frame tick, and the only one that still runs when the
@@ -1742,70 +1746,74 @@ void TerrainRenderFeature::UploadTerrainParamsArray(const Terrain::TerrainGPUPar
     // or not anything in it changed, so the slot index says nothing about whether a consumer's
     // answer would differ.
     {
-        const size_t paramsBytes =
-            params ? static_cast<size_t>(count) * sizeof(Terrain::TerrainGPUParams) : 0u;
+        const size_t paramsBytes = params.size_bytes();
         m_LastTerrainParamsBytes.resize(paramsBytes);
         if (paramsBytes != 0)
-            std::memcpy(m_LastTerrainParamsBytes.data(), params, paramsBytes);
+            std::memcpy(m_LastTerrainParamsBytes.data(), params.data(), paramsBytes);
     }
     // Published from the ARGUMENTS, ahead of the upload: it says a table was offered for this
     // frame's params, not that its bytes reached the buffer. A params entry addresses its
     // materials by absolute table index, so the guard that matters here is that params and
-    // materials arrived together — a count without params would name a table nothing indexes.
+    // materials arrived together — a table without params would name records nothing indexes.
     // The upload can still fail afterwards (no device, or an unmappable buffer), and the frame's
     // records then stay whatever the element last held; the buffer is zero-filled on creation so
     // that reads as the definite black material rather than as reinterpreted memory.
-    m_TerrainMaterialCount[fi] = (params && count != 0 && materials) ? materialCount : 0u;
+    m_TerrainMaterialCount[fi] = params.empty() ? 0u : static_cast<uint32>(materials.size());
     {
         const size_t materialBytes =
             static_cast<size_t>(m_TerrainMaterialCount[fi]) * sizeof(Terrain::TerrainMaterialRecord);
         m_LastTerrainMaterialBytes.resize(materialBytes);
         if (materialBytes != 0)
-            std::memcpy(m_LastTerrainMaterialBytes.data(), materials, materialBytes);
+            std::memcpy(m_LastTerrainMaterialBytes.data(), materials.data(), materialBytes);
     }
     uint32 activeGrassCount = 0;
     uint32 maxBladeSegments = 5u;
     GrassPlacementSummary placement{};
     bool firstGrassRow = true;
-    if (params)
+    for (uint32 i = 0; i < count; ++i)
     {
-        for (uint32 i = 0; i < count; ++i)
+        const auto& p = params[i];
+        const TerrainInstanceInfo& info = infos[i];
+        // The placement compute selects the MODE's density — cards/m² for a texture-card
+        // terrain, blades/m² otherwise (terrain_grass_place.comp) — so the gate and the budget
+        // fit have to reason about the same number. Charging a card terrain for a blade
+        // density it never places over-states demand and shortens its range for grass that was
+        // never going to be spawned; gating on the blade density alone would also drop a card
+        // terrain whose blade density happens to be zero.
+        const float32 nearDensity = Terrain::TerrainGrassNearDensity(p);
+        // The same predicate extraction cleared bit 0 with, so this reduction and the GPU
+        // classify cover the identical set of rows and the bound below binds every cell.
+        if (Terrain::TerrainGrassRowPlaces(p))
         {
-            const auto& p = params[i];
-            // The placement compute selects the MODE's density — cards/m² for a texture-card
-            // terrain, blades/m² otherwise (terrain_grass_place.comp) — so the gate and the budget
-            // fit have to reason about the same number. Charging a card terrain for a blade
-            // density it never places over-states demand and shortens its range for grass that was
-            // never going to be spawned; gating on the blade density alone would also drop a card
-            // terrain whose blade density happens to be zero.
-            const float32 nearDensity = Terrain::TerrainGrassNearDensity(p);
-            // The same predicate extraction cleared bit 0 with, so this reduction and the GPU
-            // classify cover the identical set of rows and the bound below binds every cell.
-            if (Terrain::TerrainGrassRowPlaces(p))
-            {
-                ++activeGrassCount;
-                maxBladeSegments = std::max(maxBladeSegments, p.GrassBladeSegments);
+            ++activeGrassCount;
+            maxBladeSegments = std::max(maxBladeSegments, p.GrassBladeSegments);
 
-                placement.MaxNearDensity = std::max(placement.MaxNearDensity, nearDensity);
-                placement.MaxRange = std::max(placement.MaxRange, p.GrassRange);
-                placement.MaxBladeHeight = std::max(placement.MaxBladeHeight, p.GrassBladeHeight);
-                placement.MinFalloff = firstGrassRow
-                    ? p.GrassDensityFalloff
-                    : std::min(placement.MinFalloff, p.GrassDensityFalloff);
-                placement.WorldMinY = firstGrassRow
-                    ? p.WorldOriginY
-                    : std::min(placement.WorldMinY, p.WorldOriginY);
-                placement.WorldMaxY = firstGrassRow
-                    ? p.WorldOriginY + p.HeightScale
-                    : std::max(placement.WorldMaxY, p.WorldOriginY + p.HeightScale);
-                const bool rowBlendMode =
-                    (p.GrassEnabled & Terrain::kTerrainGrassBitBlendMode) != 0u;
-                placement.AllBlendMode =
-                    rowBlendMode && (firstGrassRow || placement.AllBlendMode);
-                placement.AnyAlphaNeeded = placement.AnyAlphaNeeded ||
-                    (p.GrassEnabled & Terrain::kTerrainGrassBitAlphaNeeded) != 0u;
-                firstGrassRow = false;
-            }
+            placement.MaxNearDensity = std::max(placement.MaxNearDensity, nearDensity);
+            placement.MaxRange = std::max(placement.MaxRange, p.GrassRange);
+            placement.MaxBladeHeight = std::max(placement.MaxBladeHeight, p.GrassBladeHeight);
+            placement.MaxBladeReach = std::max(placement.MaxBladeReach, Terrain::TerrainGrassBladeReach(p));
+            placement.MinFalloff = firstGrassRow
+                ? p.GrassDensityFalloff
+                : std::min(placement.MinFalloff, p.GrassDensityFalloff);
+            const bool rowTextureCards = (p.GrassEnabled & Terrain::kTerrainGrassBitTextureCard) != 0u;
+            const float32 rowBladeWidth = rowTextureCards ? 0.0f : p.GrassBladeWidth;
+            placement.MinBladeWidth =
+                firstGrassRow ? rowBladeWidth : std::min(placement.MinBladeWidth, rowBladeWidth);
+            placement.MinBladeHeight =
+                firstGrassRow ? p.GrassBladeHeight : std::min(placement.MinBladeHeight, p.GrassBladeHeight);
+            placement.MaxBladeWidth =
+                firstGrassRow ? rowBladeWidth : std::max(placement.MaxBladeWidth, rowBladeWidth);
+            placement.MinFarThinning = firstGrassRow ? info.GrassFarThinning
+                                                     : std::min(placement.MinFarThinning, info.GrassFarThinning);
+            placement.WorldMinY = firstGrassRow ? info.WorldMinY : std::min(placement.WorldMinY, info.WorldMinY);
+            placement.WorldMaxY = firstGrassRow ? info.WorldMaxY : std::max(placement.WorldMaxY, info.WorldMaxY);
+            const bool rowBlendMode =
+                (p.GrassEnabled & Terrain::kTerrainGrassBitBlendMode) != 0u;
+            placement.AllBlendMode =
+                rowBlendMode && (firstGrassRow || placement.AllBlendMode);
+            placement.AnyAlphaNeeded = placement.AnyAlphaNeeded ||
+                (p.GrassEnabled & Terrain::kTerrainGrassBitAlphaNeeded) != 0u;
+            firstGrassRow = false;
         }
     }
     m_TerrainGrassActiveCount[fi] = activeGrassCount;
@@ -1829,7 +1837,7 @@ void TerrainRenderFeature::UploadTerrainParamsArray(const Terrain::TerrainGPUPar
                           fi, count, activeGrassCount);
     }
 
-    if (!m_Device || count == 0 || !params)
+    if (!m_Device || count == 0)
         return;
 
     const uint32 requiredSize = count * sizeof(Terrain::TerrainGPUParams);
@@ -1853,17 +1861,16 @@ void TerrainRenderFeature::UploadTerrainParamsArray(const Terrain::TerrainGPUPar
     void* mapped = m_Device->MapBuffer(m_TerrainParamsSSBO[fi]);
     if (mapped)
     {
-        std::memcpy(mapped, params, requiredSize);
+        std::memcpy(mapped, params.data(), requiredSize);
         m_Device->UnmapBuffer(m_TerrainParamsSSBO[fi]);
     }
 
-    if (materials && materialCount != 0)
+    if (!materials.empty())
     {
-        EnsureMaterialTableBuffer(fi, materialCount);
+        EnsureMaterialTableBuffer(fi, static_cast<uint32>(materials.size()));
         if (void* mappedMaterials = m_Device->MapBuffer(m_TerrainMaterialTableSSBO[fi]))
         {
-            std::memcpy(mappedMaterials, materials,
-                        static_cast<size_t>(materialCount) * sizeof(Terrain::TerrainMaterialRecord));
+            std::memcpy(mappedMaterials, materials.data(), materials.size_bytes());
             m_Device->UnmapBuffer(m_TerrainMaterialTableSSBO[fi]);
         }
     }
@@ -2019,7 +2026,7 @@ bool TerrainRenderFeature::EnsureGpuBakePipeline()
 
 void TerrainRenderFeature::QueueGpuHeightBake(TerrainHandle handle, std::vector<ModifierGpu> modifiers,
                                               std::vector<GpuHeightBakeDispatch> dispatches, bool settle,
-                                              float splatMinH, float splatMaxH, bool splatEligible,
+                                              bool splatEligible,
                                               std::vector<SurfaceRuleGpu> surfaceRules,
                                               std::vector<SurfaceRuleConditionGpu> surfaceRuleConditions)
 {
@@ -2031,7 +2038,7 @@ void TerrainRenderFeature::QueueGpuHeightBake(TerrainHandle handle, std::vector<
     // the work is QUEUED so a reader consulting it during this frame's declare already sees it.
     m_GrassContentEpoch.fetch_add(1, std::memory_order_release);
     m_PendingBakes.push_back({handle, std::move(modifiers), std::move(dispatches), settle,
-                              splatMinH, splatMaxH, splatEligible, std::move(surfaceRules),
+                              splatEligible, std::move(surfaceRules),
                               std::move(surfaceRuleConditions)});
 }
 
@@ -2274,12 +2281,9 @@ void TerrainRenderFeature::FlushPendingBakes(Rendering::CommandList* cl)
                 cl->BindDescriptorSet(0, sset, m_GpuSplatPipeline);
                 for (const auto& disp : bake.Dispatches)
                 {
-                    // The splat kernel needs the committed global range (altitude classification)
-                    // and the rule row count; the rest of the push (rect + slot + geometry) is
-                    // shared with the height/normal passes.
+                    // The splat kernel needs the rule row count; the rest of the push (rect + slot
+                    // + geometry) is shared with the height/normal passes.
                     TerrainHeightBakePush sp = disp.Push;
-                    sp.SplatMinH = bake.SplatMinH;
-                    sp.SplatMaxH = bake.SplatMaxH;
                     // The AUTHORED count, never the padded element count — see
                     // SurfaceRuleBindingSizes for why those must not be conflated.
                     sp.SurfaceRuleCount = sizes.KernelRuleCount;

@@ -211,11 +211,14 @@ void AtlasResidencyController::RebuildTable(const std::vector<AtlasResidentTile>
         const AtlasSlotRef ref = m_Pool.Find(t.Coord);
         if (!ref.IsResident())
             continue; // stays kAtlasNoSlot -> the sampler uses the coarse fallback
-        TileAtlasSlot& row = m_Table.Row(t.Coord.X, t.Coord.Z);
-        row.Slot = ref.Slot;
-        row.Generation = ref.Generation;
-        row.LodBias = t.IsFull ? kAtlasLodBiasFull : kAtlasLodBiasCoarse;
-        row.Fade = FadeOf(t.Coord); // 0 (just assigned) .. 1 (settled) — the surface's coarse<->slot mix
+        // The input is nearest-first, so a nearer tile keeps a shared window row; the other tile
+        // reads the coarse field.
+        TileAtlasSlot* row = m_Table.Claim(t.Coord.X, t.Coord.Z);
+        if (row == nullptr)
+            continue;
+        row->Slot = ref.Slot;
+        row->Generation = ref.Generation;
+        row->Fade = FadeOf(t.Coord); // 0 (just assigned) .. 1 (settled) — the surface's coarse<->slot mix
     }
 }
 

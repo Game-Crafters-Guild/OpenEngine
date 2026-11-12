@@ -6,6 +6,7 @@
 
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -343,7 +344,7 @@ TEST_F(CBTUpdateNodeTest, AStillViewSettlesAndStopsUpdating)
             gate.OnActivityRead(sequence, activity);
         std::vector<uint8_t> inputs(sizeof(refine));
         std::memcpy(inputs.data(), &refine, sizeof(refine));
-        const bool skip = gate.CanSkip(inputs);
+        const bool skip = gate.CanSkip(inputs, std::chrono::steady_clock::now());
         if (!skip)
             CBTUpdateNode::DeclareUpdatePass(frame, instance, refine, CBTIdentityFrameParams(), f,
                                              TextureHandle{},

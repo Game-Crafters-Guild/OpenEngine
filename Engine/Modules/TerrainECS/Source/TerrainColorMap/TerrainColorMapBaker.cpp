@@ -203,8 +203,9 @@ void TerrainColorMapBaker::Update(ECS::World& world, TerrainService& service, st
             if (terrain.Domain != Components::TerrainDomain::Planar)
                 return;
             const TerrainColorGroundWrite write = ResolveGroundWrite(world, entity);
-            const float32 ox = xf.matrix[12] - terrain.SizeX * 0.5f;
-            const float32 oz = xf.matrix[14] - terrain.SizeZ * 0.5f;
+            const Mathematics::Vector3 position = xf.GetPosition() - Mathematics::WorldPosition{};
+            const float32 ox = position.x - terrain.SizeX * 0.5f;
+            const float32 oz = position.z - terrain.SizeZ * 0.5f;
 
             if (terrain.TiledTerrainHandle == 0 && terrain.TiledTerrainGeneration == 0)
             {

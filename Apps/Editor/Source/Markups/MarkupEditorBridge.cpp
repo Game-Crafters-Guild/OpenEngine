@@ -315,7 +315,8 @@ MarkupEditorBridge::EditBaseline MarkupEditorBridge::ReadBaseline(const ECS::Wor
 {
     EditBaseline baseline;
     if (const auto* transform = world.GetComponent<Components::Transform>(entity))
-        std::copy(std::begin(transform->matrix), std::end(transform->matrix), baseline.Matrix);
+        std::copy_n(transform->ToMatrix4x4(transform->GetPosition() - Mathematics::WorldPosition{}).Data(), 16,
+                    baseline.Matrix);
     if (const auto* name = world.GetComponent<Components::Name>(entity))
         baseline.Name = name->View();
     if (const auto* volume = world.GetComponent<Components::MarkupVolume>(entity))

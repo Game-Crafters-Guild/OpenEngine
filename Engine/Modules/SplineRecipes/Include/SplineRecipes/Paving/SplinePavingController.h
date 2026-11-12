@@ -5,6 +5,8 @@
 #include "Components/Spline/SplineExtrude.h"
 #include "Components/Spline/SplinePaving.h"
 #include "ECS/ECS.h"
+#include "Mathematics/Vector2.h"
+#include "SplineRecipes/ConformGroundWatch.h"
 #include "SplineRecipes/Paving/PavingApproach.h"
 #include "SplineRecipes/Paving/PavingSources.h"
 #include "SplineRecipes/Paving/PavingRoadTrim.h"
@@ -23,6 +25,10 @@
 #include <utility>
 #include <vector>
 
+namespace GameEngine
+{
+enum class MaterialPatternSymmetry : uint8_t;
+}
 namespace GameEngine::ECS
 {
 class World;
@@ -66,11 +72,14 @@ public:
     void PrefillVergeMaterial(const ECS::World& world, ECS::EntityHandle road, Components::SplineExtrude& recipe) const;
 
 private:
-    // One paving as a rebuild depends on it: its entity and its recipe's geometry key.
+    // One paving as a rebuild depends on it: its entity, its recipe's geometry key, and what the seams
+    // read of its material (the pattern's symmetry tag and the albedo tiling).
     struct ObservedRecipe
     {
         uint32 Entity = 0;
         Components::SplinePaving Geometry{};
+        MaterialPatternSymmetry PatternSymmetry{};
+        Mathematics::Vector2 PatternTilesPerUV{1.0f, 1.0f};
 
         bool operator==(const ObservedRecipe&) const = default;
     };
@@ -96,27 +105,52 @@ private:
         bool operator==(const OwnerLook&) const = default;
     };
 
-    // The chunks of the regions one paving owns: one lid and one border slot per region.
+    // The courses of one material along the seams of an owner's regions, one slot per region.
+    struct CourseChunks
+    {
+        Components::MaterialRef Material;
+        SplineChunkCommit Chunks;
+    };
+
+    // The chunks of the regions one paving owns: one lid, one border and one crossfade band slot per
+    // region, and the courses per course material.
     struct OwnerState
     {
         SplineChunkCommit Lid;
         SplineChunkCommit Border;
+        SplineChunkCommit Band;
+        std::vector<CourseChunks> Courses;
         OwnerLook Look;
         bool Built = false;
+    };
+
+    // The meshes of an owner's regions in region order, one per slot.
+    struct OwnerMeshes
+    {
+        std::vector<Mesh> Lids;
+        std::vector<Mesh> Borders;
+        std::vector<Mesh> Bands;
+        std::vector<std::pair<Components::MaterialRef, std::vector<Mesh>>> Courses;
     };
 
     bool Rebuild(ECS::World& world, Engine::Renderer::RenderServices& renderServices, const PavingWorld& paved,
                  RecipeBuildStates& states);
     bool CommitOwner(ECS::World& world, Engine::Renderer::RenderServices& renderServices,
-                     const PavingCandidate& owner, OwnerState& state, std::span<const Mesh> lids,
-                     std::span<const Mesh> borders);
+                     const PavingCandidate& owner, OwnerState& state, OwnerMeshes& meshes);
     void Rebind(ECS::World& world, Engine::Renderer::RenderServices& renderServices, const PavingWorld& paved);
     Components::MeshRenderer RendererFor(Engine::Renderer::RenderServices& renderServices,
                                          const Components::MaterialRef& material, const OwnerLook& look);
+    // The renderer of a seam band: `material` with the UV1 crossfade on, registered under a GUID derived
+    // from the material it binds.
+    Components::MeshRenderer BandRendererFor(Engine::Renderer::RenderServices& renderServices,
+                                             const Components::MaterialRef& material, const OwnerLook& look);
+    static bool RetireOwner(ECS::World& world, OwnerState& owner, Rendering::MeshGPURegistry* registry);
     bool RetireAll(ECS::World& world, Rendering::MeshGPURegistry* registry);
 
     SplineRebuildGate<ObservedState> m_Gate;
     ConformHold m_Hold;
+    // The ground under all pavings' runs and the reach they read.
+    ConformGroundWatch m_Ground;
     uint32 m_LoggedConformMisses = 0;
     // Key: the owning paving's entity id.
     FlatMap<uint32, OwnerState> m_Owners;

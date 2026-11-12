@@ -41,4 +41,10 @@ std::string MakeRelocatableIncludeSpelling(const std::filesystem::path& resolved
                                            const std::vector<std::filesystem::path>& roots,
                                            std::filesystem::path* outShadowedBy = nullptr);
 
+// The files that the #include directives of the shader source at `source` name. Each directive
+// resolves as the compiler's includer resolves it: next to `source` first, then `roots` in order.
+// A directive that resolves nowhere is left out with a Debug line. Empty when `source` cannot be read.
+std::vector<std::filesystem::path> ResolveShaderIncludes(const std::filesystem::path& source,
+                                                         const std::vector<std::filesystem::path>& roots);
+
 }} // namespace GameEngine::Rendering

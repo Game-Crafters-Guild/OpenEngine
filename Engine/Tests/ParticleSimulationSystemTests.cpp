@@ -8,6 +8,7 @@
 #include "ECS/ECSTemplates.h"
 #include "ECS/ModuleRegistration.h"
 #include "ECS/SystemScheduling.h"
+#include "ECS/Systems.h"
 #include "ECSModules/Rendering/Systems/RegisterRenderingSystems.h"
 #include "Particles/Assets/ParticleStackAsset.h"
 #include "Particles/ParticleStack/ParticleStackAuthoring.h"
@@ -297,6 +298,24 @@ TEST_F(ParticleSimulationSystemTest, PauseStepRestartAndShrinkingWorldBudget)
     EXPECT_EQ(world.GetComponent<ParticlePlayback>(first)->SimulatedTime, 0.0);
 }
 
+TEST_F(ParticleSimulationSystemTest, PausedClockHoldsTheParticlesAndResumes)
+{
+    ECS::World world;
+    const auto emitter = AddEmitter(world, 12, 10.0f);
+    ECS::SystemManager systems;
+    systems.AddSystem<ParticleSimulationSystem>(NewState());
+    systems.Update(world, 0.1f);
+    const auto time = world.GetComponent<ParticlePlayback>(emitter)->SimulatedTime;
+    world.GetSimulationClock().SetTimeScale(0.0);
+    for (int frame = 0; frame < 10; ++frame)
+        systems.Update(world, 0.1f);
+    EXPECT_EQ(world.GetComponent<ParticlePlayback>(emitter)->SimulatedTime, time)
+        << "a paused clock stops the particles";
+    world.GetSimulationClock().SetTimeScale(1.0);
+    systems.Update(world, 0.1f);
+    EXPECT_GT(world.GetComponent<ParticlePlayback>(emitter)->SimulatedTime, time);
+}
+
 TEST_F(ParticleSimulationSystemTest, PendingSeekCannotOverdrawShrinkingWorldBudget)
 {
     ECS::World world;
@@ -408,7 +427,7 @@ TEST_F(ParticleSimulationSystemTest, SubEmitterUsesWorldPositionAndWaitsForNextU
 {
     ECS::World world;
     const auto parent = AddEmitter(world, 1, 1.0f, SpawnInChild(3));
-    world.GetComponentForWrite<WorldTransform>(parent)->matrix[12] = 7.0f;
+    world.GetComponentForWrite<WorldTransform>(parent)->Position.X = 7.0;
     const auto child = AddChild(world, parent);
     ParticleSimulationSystem system(NewState());
     system.Update(world, kFrame);
@@ -490,7 +509,7 @@ TEST_F(ParticleSimulationSystemTest, ChangingSimulationSpaceRestartsInsteadOfRei
 {
     ECS::World world;
     const auto entity = AddEmitter(world, 1);
-    world.GetComponentForWrite<WorldTransform>(entity)->matrix[12] = 100;
+    world.GetComponentForWrite<WorldTransform>(entity)->Position.X = 100.0;
     ParticleSimulationSystem system(NewState());
     system.Update(world, kFrame);
     ASSERT_EQ(Emitter(system, entity).Simulation.Count(), 1u);

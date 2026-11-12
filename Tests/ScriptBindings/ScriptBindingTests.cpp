@@ -184,7 +184,7 @@ TEST_F(ScriptBindings, MissingSystemAnswersNotInitializedWithDefaults)
 TEST_F(ScriptBindings, OutEntityOfAMissingSystemIsTheInvalidEntity)
 {
     ProbeSystem::Current() = nullptr;
-    const Mathematics::Vector3 point{};
+    const Mathematics::WorldPosition point{};
     std::uint32_t nearest = 0;
     std::uint8_t found = 1;
 
@@ -210,12 +210,24 @@ TEST_F(ScriptBindings, EntityCrossesAsItsPackedId)
     EXPECT_EQ(speed, 4.5f);
 
     m_Probe.Nearest = ECS::EntityHandle(9, 1);
-    const Mathematics::Vector3 point{};
+    const Mathematics::WorldPosition point{};
     std::uint32_t nearest = 0;
     std::uint8_t found = 0;
     ASSERT_EQ(table.TryNearest(&point, &nearest, &found), GE_Result_Ok);
     EXPECT_EQ(found, 1u);
     EXPECT_EQ(nearest, m_Probe.Nearest.id);
+}
+
+// A world position crosses by pointer as its three doubles: 0.1 mm at 300 km arrives exact.
+TEST_F(ScriptBindings, WorldPositionCrossesAsItsThreeDoubles)
+{
+    const Mathematics::WorldPosition point{300000.0001, -2.5, 1.0e9};
+    std::uint32_t nearest = 0;
+    std::uint8_t found = 0;
+
+    ASSERT_EQ(Table().TryNearest(&point, &nearest, &found), GE_Result_Ok);
+
+    EXPECT_EQ(m_Probe.LastPoint, point);
 }
 
 // Text crosses as UTF-8 with a length both ways: ASCII, a multi-byte name and the empty text arrive

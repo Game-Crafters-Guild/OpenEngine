@@ -1,15 +1,17 @@
 #version 450
 
 #include "Includes/storage_access.glsl"
+#include "Includes/instance_sector.glsl"
 // Sorted transparent drain (transparency-scale S2): the fused
 // gather → key-build → sort → scatter dispatch that turns the CPU-staged
 // record list into per-run DrawIndexedIndirectCount streams, ordered
 // back-to-front on the GPU.
 //
 // One single-workgroup dispatch does all four phases over shared memory:
-//  1. GATHER: for each live record, fetch its GPUScene bounding centre and
-//     compute viewDepth = dot(centre - cameraPos, cameraForward). No CPU
-//     centre pass, no readback.
+//  1. GATHER: for each live record, fetch its GPUScene bounding center, compose
+//     it against the view's origin sector and compute
+//     viewDepth = dot(center - cameraPos, cameraForward). No CPU
+//     center pass, no readback.
 //  2. KEY: pack the 64-bit sort key runSlot(16) ▸ ~sortableDepth(32) ▸
 //     recordIndex(16) — the exact GLSL mirror of SortedTransparentKey.h's
 //     MakeSortedTransparentKey (change both in the same commit; the drain
@@ -89,11 +91,11 @@ layout(std430, set = 0, binding = 5) readonly buffer RunCountsBuffer
 
 layout(push_constant) uniform DrainPC
 {
-    vec3 uCameraPos;     // world-space camera position (full precision source
-                         // is GPUInstance.boundingCenter, also world space)
+    vec3 uCameraPos;     // the eye relative to the origin of uOriginSector
     uint uLiveCount;     // staged record count, <= kCapacity (clamped again below)
     vec3 uCameraForward; // normalized view forward
     uint uRunCount;      // number of runs (contiguous slot regions)
+    ivec3 uOriginSector; // the view's render origin sector; each center is composed against it
 };
 
 shared uvec2 sKeys[kCapacity];
@@ -132,7 +134,10 @@ void main()
         if (i < live)
         {
             const SortedTransparentRecord rec = records[i];
-            const vec3 center = instances[rec.instanceIndex].boundingCenter;
+            const uint instanceIndex = rec.instanceIndex;
+            const vec3 center = ge_SectorRelativePoint(instances[instanceIndex].boundingCenter,
+                                                       instances[instanceIndex].sectorPacked0,
+                                                       instances[instanceIndex].sectorPacked1, uOriginSector);
             const float viewDepth = dot(center - uCameraPos, uCameraForward);
             sKeys[i] = MakeSortedTransparentKey(viewDepth, rec.runSlot, i);
             sVals[i] = i;

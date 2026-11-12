@@ -20,11 +20,12 @@ static_assert(std::is_same_v<std::underlying_type_t<GameEngine::Probe::Speakers>
 static_assert(static_cast<long long>(GameEngine::Probe::Speakers::None) == 0ll, "Probe.Speakers::None: the value differs from the description");
 static_assert(static_cast<long long>(GameEngine::Probe::Speakers::Left) == 1ll, "Probe.Speakers::Left: the value differs from the description");
 static_assert(static_cast<long long>(GameEngine::Probe::Speakers::Right) == 2ll, "Probe.Speakers::Right: the value differs from the description");
-static_assert(sizeof(GameEngine::Probe::Hit) == 32, "Probe.Hit: the size differs from the description");
-static_assert(alignof(GameEngine::Probe::Hit) == 4, "Probe.Hit: the alignment differs from the description");
+static_assert(sizeof(GameEngine::Probe::Hit) == 56, "Probe.Hit: the size differs from the description");
+static_assert(alignof(GameEngine::Probe::Hit) == 8, "Probe.Hit: the alignment differs from the description");
 static_assert(offsetof(GameEngine::Probe::Hit, point) == 0, "Probe.Hit.point: the offset differs from the description");
 static_assert(offsetof(GameEngine::Probe::Hit, distance) == 12, "Probe.Hit.distance: the offset differs from the description");
 static_assert(offsetof(GameEngine::Probe::Hit, facing) == 16, "Probe.Hit.facing: the offset differs from the description");
+static_assert(offsetof(GameEngine::Probe::Hit, at) == 32, "Probe.Hit.at: the offset differs from the description");
 static_assert(sizeof(GameEngine::Probe::SoundOptions) == 24, "Probe.SoundOptions: the size differs from the description");
 static_assert(alignof(GameEngine::Probe::SoundOptions) == 8, "Probe.SoundOptions: the alignment differs from the description");
 static_assert(offsetof(GameEngine::Probe::SoundOptions, loop) == 0, "Probe.SoundOptions.loop: the offset differs from the description");
@@ -468,7 +469,7 @@ GE_Result GE_CDECL TryCastThunk(const GameEngine::Mathematics::Vector3* origin, 
     }
 }
 
-GE_Result GE_CDECL TryNearestThunk(const GameEngine::Mathematics::Vector3* point, std::uint32_t* outEntity, std::uint8_t* outResult)
+GE_Result GE_CDECL TryNearestThunk(const GameEngine::Mathematics::WorldPosition* point, std::uint32_t* outEntity, std::uint8_t* outResult)
 {
     constexpr const char* kFunction = "Probe.TryNearest";
     if (point == nullptr)
@@ -652,7 +653,7 @@ EMSCRIPTEN_KEEPALIVE GE_Result ge_probe_try_cast(const GameEngine::Mathematics::
 {
     return GameEngine::Probe::Script::TryCastThunk(origin, direction, outHit, maxDistance, outResult);
 }
-EMSCRIPTEN_KEEPALIVE GE_Result ge_probe_try_nearest(const GameEngine::Mathematics::Vector3* point, std::uint32_t* outEntity, std::uint8_t* outResult)
+EMSCRIPTEN_KEEPALIVE GE_Result ge_probe_try_nearest(const GameEngine::Mathematics::WorldPosition* point, std::uint32_t* outEntity, std::uint8_t* outResult)
 {
     return GameEngine::Probe::Script::TryNearestThunk(point, outEntity, outResult);
 }

@@ -106,7 +106,7 @@ bool IsPointShadowCacheEnabled()
 // mask — never a camera-relative value (that would re-hash every camera move
 // and defeat the cache). FNV-1a over the raw float bits so an unmoved light
 // produces a byte-stable key frame to frame.
-uint64_t HashPointShadowContent(const float positionWS[3], float range, uint8_t faceMask, uint32_t renderLayerMask)
+uint64_t HashPointShadowContent(const Mathematics::Vector3& positionWS, float range, uint8_t faceMask, uint32_t renderLayerMask)
 {
     constexpr uint64_t kFnvOffset = 14695981039346656037ull;
     constexpr uint64_t kFnvPrime = 1099511628211ull;
@@ -119,9 +119,9 @@ uint64_t HashPointShadowContent(const float positionWS[3], float range, uint8_t 
             h *= kFnvPrime;
         }
     };
-    mix32(std::bit_cast<uint32_t>(positionWS[0]));
-    mix32(std::bit_cast<uint32_t>(positionWS[1]));
-    mix32(std::bit_cast<uint32_t>(positionWS[2]));
+    mix32(std::bit_cast<uint32_t>(positionWS.x));
+    mix32(std::bit_cast<uint32_t>(positionWS.y));
+    mix32(std::bit_cast<uint32_t>(positionWS.z));
     mix32(std::bit_cast<uint32_t>(range));
     mix32(renderLayerMask);
     h ^= faceMask;
@@ -325,9 +325,9 @@ Rendering::RenderGraph::RGTexture RenderServices::ImportShadowMapArrayRG(
     // `initialState`: the pool + import-state write-back own lifetime and
     // state truth (a desc change = pool realloc + fresh Undefined physical,
     // which replaces the feature's recreate block structurally).
-    // ACCEPTED EDGES (slice-4 decisions): (1) on the config-change frame the
-    // world samples the fresh Undefined-cleared array for ONE frame (matches
-    // the old recreate hiccup); (2) pool idle-eviction of a view's array frees
+    // ACCEPTED EDGES (slice-4 decisions): (1) a desc change or an idle eviction gives
+    // the next import a fresh Undefined array; every cascade renders into it on that
+    // frame, before the world samples it; (2) pool idle-eviction of a view's array frees
     // the image while the PCSS bindless slots still hold single-layer views of
     // it — the pool releases pooled physicals without notifying the consumers
     // that registered views on them, so the views outlive their image until the
@@ -509,7 +509,7 @@ const RenderServices::PointShadowAssignment& RenderServices::EnsurePointShadowAs
         return entry;
 
     const auto lights = GetWorldLights(worldId);
-    const auto pointCull = MakePointShadowCullInputs(camData);
+    const auto pointCull = MakePointShadowCullInputs(camData, m_ViewRegistry.ResolveCameraRanges(viewId));
     const PointShadowCameraCull* cull = pointCull ? &*pointCull : nullptr;
 
     // Enumerate shadow-casting point candidates (clusterable index matches the
@@ -532,10 +532,9 @@ const RenderServices::PointShadowAssignment& RenderServices::EnsurePointShadowAs
             light.castsShadows == 0)
             continue;
 
-        const Mathematics::Vector3 pos{light.positionWS[0], light.positionWS[1],
-                                       light.positionWS[2]};
+        const Mathematics::Vector3 pos = light.positionWS - Mathematics::WorldPosition{};
         Candidate c{};
-        PopulatePointShadowGeometry(c.Geometry, pos, light.range, light.shadowResolutionTier, cluster,
+        PopulatePointShadowGeometry(c.Geometry, light.positionWS, light.range, light.shadowResolutionTier, cluster,
                                     cull);
         if (!c.Geometry.valid)
             continue; // off-screen (S1 light-level reject) or every face culled
@@ -551,13 +550,13 @@ const RenderServices::PointShadowAssignment& RenderServices::EnsurePointShadowAs
         // L1a: the camera face mask is part of the cached key — a face becoming
         // visible must re-render the light (its layer was culled/never drawn).
         c.Plan.ContentHash =
-            HashPointShadowContent(light.positionWS, light.range, c.Geometry.faceMask,
+            HashPointShadowContent(pos, light.range, c.Geometry.faceMask,
                                    renderLayerMask.Bits);
         // L1b: world-space influence sphere for caster-proximity keying (same
         // world-space source as the content hash — never camera-relative).
-        c.Plan.InfluenceSphere[0] = light.positionWS[0];
-        c.Plan.InfluenceSphere[1] = light.positionWS[1];
-        c.Plan.InfluenceSphere[2] = light.positionWS[2];
+        c.Plan.InfluenceSphere[0] = pos.x;
+        c.Plan.InfluenceSphere[1] = pos.y;
+        c.Plan.InfluenceSphere[2] = pos.z;
         c.Plan.InfluenceSphere[3] = light.range;
         candidates.push_back(std::move(c));
     }

@@ -33,6 +33,7 @@ bool Emitted(ApiKind kind)
     case ApiKind::Vec4:
     case ApiKind::Quat:
     case ApiKind::Mat4:
+    case ApiKind::WorldPosition:
     case ApiKind::StringId:
     case ApiKind::Record:
     case ApiKind::Enum:
@@ -108,8 +109,8 @@ std::string CSharpInteger(ApiKind kind)
     }
 }
 
-// The float-component value kinds (the Mathematics types and the linear color), which cross by
-// pointer and take their defaults one component each.
+// The value kinds of the Mathematics types and the linear color, which cross by pointer. The float
+// kinds take their defaults one component each; a world position takes the origin only.
 std::string_view CSharpMath(ApiKind kind)
 {
     switch (kind)
@@ -119,6 +120,7 @@ std::string_view CSharpMath(ApiKind kind)
     case ApiKind::Vec4: return "Vector4";
     case ApiKind::Quat: return "Quaternion";
     case ApiKind::Mat4: return "Matrix4x4";
+    case ApiKind::WorldPosition: return "WorldPosition";
     case ApiKind::ColorLinear: return "ColorLinear";
     default: return {};
     }
@@ -133,6 +135,7 @@ std::string_view NativeMath(ApiKind kind)
     case ApiKind::Vec4: return "GameEngine::Mathematics::Vector4";
     case ApiKind::Quat: return "GameEngine::Mathematics::Quaternion";
     case ApiKind::Mat4: return "GameEngine::Mathematics::Matrix4x4";
+    case ApiKind::WorldPosition: return "GameEngine::Mathematics::WorldPosition";
     case ApiKind::ColorLinear: return "GameEngine::ColorLinear";
     default: return {};
     }

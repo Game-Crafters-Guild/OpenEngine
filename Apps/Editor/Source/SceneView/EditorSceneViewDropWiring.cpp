@@ -2,24 +2,17 @@
 
 #include "Panels/HierarchyPanel.h"
 #include "SceneView/SceneViewPanel.h"
-#include "EditorChangeNotifications.h"
-#include "UndoRedo/SceneViewDropUndoCommand.h"
-#include "UndoRedo/UndoRedoService.h"
+#include "SceneView/SceneViewport/SceneViewportEdits.h"
 
 #include "ECS/Entity.h"
-#include "ECS/World.h"
 
-#include <memory>
 #include <utility>
 #include <vector>
 
 namespace GameEngine::Editor
 {
 
-void WireSceneViewAssetDropUndo(SceneViewPanel* sceneViewPanel,
-                                HierarchyPanel* hierarchyPanel,
-                                UndoRedoService* undoRedo,
-                                EditorChangeNotifications* notifications)
+void WireSceneViewAssetDropUndo(SceneViewPanel* sceneViewPanel, HierarchyPanel* hierarchyPanel)
 {
     if (!sceneViewPanel || !hierarchyPanel)
         return;
@@ -31,44 +24,25 @@ void WireSceneViewAssetDropUndo(SceneViewPanel* sceneViewPanel,
         });
 
     sceneViewPanel->SetOnSceneAssetDropComplete(
-        [hierarchyPanel, undoRedo, notifications](ECS::World* world,
-                                                  const std::vector<ECS::EntityHandle>& droppedRoots,
-                                                  const std::vector<UI::Interaction::ItemId>& selBefore,
-                                                  UI::Interaction::ItemId anchorBefore)
+        [hierarchyPanel](SceneViewportEdits& edits,
+                         const std::vector<ECS::EntityHandle>& droppedRoots,
+                         const std::vector<UI::Interaction::ItemId>& selBefore,
+                         UI::Interaction::ItemId anchorBefore)
         {
-            if (!hierarchyPanel || !world || droppedRoots.empty())
-            {
+            if (droppedRoots.empty())
                 return;
-            }
 
             hierarchyPanel->Refresh();
             hierarchyPanel->SelectEntities(droppedRoots);
 
-            if (!undoRedo)
-            {
-                return;
-            }
-
-            const std::vector<UI::Interaction::ItemId> selAfter = hierarchyPanel->GetSelectionItemIds();
-            const UI::Interaction::ItemId anchorAfter = hierarchyPanel->GetSelectionAnchor();
-
-            auto applySelection =
-                [hierarchyPanel](const std::vector<UI::Interaction::ItemId>& ids, UI::Interaction::ItemId anchor)
-            {
-                hierarchyPanel->ApplySelectionProgrammatic(ids, anchor);
-            };
-
-            std::vector<ECS::EntityHandle> rootsCopy = droppedRoots;
-            undoRedo->CommitAlreadyApplied(std::make_unique<SceneViewDropUndoCommand>(
-                SceneViewDropUndoCommand::NameFor(*world, droppedRoots),
-                world,
-                notifications,
-                std::move(rootsCopy),
-                selBefore,
-                anchorBefore,
-                selAfter,
-                anchorAfter,
-                std::move(applySelection)));
+            const SceneViewportEdits::DropSelection before{selBefore, anchorBefore};
+            const SceneViewportEdits::DropSelection after{hierarchyPanel->GetSelectionItemIds(),
+                                                          hierarchyPanel->GetSelectionAnchor()};
+            edits.RecordDrop(droppedRoots,
+                             before,
+                             after,
+                             [hierarchyPanel](const std::vector<UI::Interaction::ItemId>& ids, UI::Interaction::ItemId anchor)
+                             { hierarchyPanel->ApplySelectionProgrammatic(ids, anchor); });
         });
 }
 

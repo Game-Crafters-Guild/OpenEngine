@@ -22,14 +22,6 @@
 // to within fp32 (the projection is a division by the dominant component, which cancels
 // under the inverse). The GLSL mirror is CBT_FaceUVFromCube / CBT_FaceOfRoot in
 // cbt_domain.glsl — edited in lockstep, like CBTSphereRoots.h <-> CBT_SphereRootCorners.
-//
-// Storage layout (the "single wrapped source" design decision, plan §planet-editing):
-// the six faces' sculpt payloads are packed into ONE vertically-stacked atlas (width W,
-// height 6*H): face f owns rows [f*H, (f+1)*H). The atlas lives in its OWN host-visible
-// SSBO ring (binding 16, kSphereSculptBinding) — the smallest correct GPU step given the
-// sphere samples it additively (per-band clamped bilinear, no cross-band bleed), written
-// once per frame like the params UBO. Per-face rects map to atlas texel bands; a cross-
-// face edit produces regions in two (or three) bands.
 
 #include <array>
 #include <cmath>

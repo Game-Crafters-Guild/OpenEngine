@@ -6,6 +6,7 @@ add_library(Terrain OBJECT
     Source/Heightfield.cpp
     Source/CDLODQuadtree.cpp
     Source/CDLODSelection.cpp
+    Source/TerrainNoiseStack.cpp
 )
 
 target_compile_features(Terrain PUBLIC cxx_std_20)

@@ -2,7 +2,7 @@
 
 #include "InspectorRegistry.h"
 #include "Inspectors/ComponentIconClass.h"
-#include "Inspectors/DefaultComponentInspector.h"
+#include "Inspectors/InspectorOverrideRows.h"
 #include "UI/InspectorSection.h"
 
 #include "Scene/SceneSchemaRegistry.h"

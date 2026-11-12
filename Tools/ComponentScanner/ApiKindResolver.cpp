@@ -44,6 +44,7 @@ constexpr std::pair<std::string_view, ApiKind> kBuiltIns[] = {
     {"GameEngine::Mathematics::Vector4", ApiKind::Vec4},
     {"GameEngine::Mathematics::Quaternion", ApiKind::Quat},
     {"GameEngine::Mathematics::Matrix4x4", ApiKind::Mat4},
+    {"GameEngine::Mathematics::WorldPosition", ApiKind::WorldPosition},
     {"GameEngine::ColorLinear", ApiKind::ColorLinear},
     {"GameEngine::ECS::EntityHandle", ApiKind::Entity},
     {"GameEngine::Rendering::RenderLayerMask", ApiKind::RenderLayerMask},
@@ -405,6 +406,7 @@ std::uint32_t SizeOf(ApiKind kind)
     case ApiKind::Vec4:
     case ApiKind::Quat:
     case ApiKind::ColorLinear: return 16;
+    case ApiKind::WorldPosition: return 24;
     case ApiKind::Mat4: return 64;
     default: return 0;
     }
@@ -420,6 +422,7 @@ std::uint32_t AlignOf(ApiKind kind)
     case ApiKind::Quat:
     case ApiKind::Mat4:
     case ApiKind::ColorLinear: return 4;
+    case ApiKind::WorldPosition: return 8;
     default: return SizeOf(kind);
     }
 }

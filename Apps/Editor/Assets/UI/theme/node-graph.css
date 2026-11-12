@@ -658,9 +658,7 @@
 	pointer-events: none;
 }
 
-.node-graph-inline-search-clear,
-button.node-graph-inline-search-clear,
-.button.node-graph-inline-search-clear {
+.node-graph-inline-search-clear {
 	position: absolute;
 	right: 6px;
 	top: 50%;
@@ -695,9 +693,7 @@ button.node-graph-inline-search-clear,
 	opacity: 1.0;
 }
 
-.node-graph-inline-search-clear:hover,
-button.node-graph-inline-search-clear:hover,
-.button.node-graph-inline-search-clear:hover {
+.node-graph-inline-search-clear:hover {
 	background-color: rgba(255, 255, 255, 0.192);
 	opacity: 1.0;
 }
@@ -746,8 +742,6 @@ button.node-graph-inline-search-clear:hover,
 	line-height: 16px;
 }
 
-.node-graph-palette button.node-graph-palette-node-button,
-.node-graph-palette .button.node-graph-palette-node-button,
 .node-graph-palette .node-graph-palette-node-button {
 	display: flex;
 	align-items: center;
@@ -771,15 +765,11 @@ button.node-graph-inline-search-clear:hover,
 	cursor: pointer;
 }
 
-.node-graph-palette button.node-graph-palette-node-button:hover,
-.node-graph-palette .button.node-graph-palette-node-button:hover,
 .node-graph-palette .node-graph-palette-node-button:hover {
 	background-color: #505050;
 	color: #ffffff;
 }
 
-.node-graph-palette button.node-graph-palette-node-button:active,
-.node-graph-palette .button.node-graph-palette-node-button:active,
 .node-graph-palette .node-graph-palette-node-button:active {
 	background-color: #2d2d30;
 }
@@ -801,8 +791,7 @@ button.node-graph-inline-search-clear:hover,
 	background-image-tint: var(--ui_icon_tint_hover);
 }
 
-.node-graph-palette .node-graph-palette-node-button-colored,
-.node-graph-palette .button.node-graph-palette-node-button-colored {
+.node-graph-palette .node-graph-palette-node-button-colored {
 	color: #ffffff;
 }
 
@@ -897,9 +886,7 @@ button.node-graph-inline-search-clear:hover,
 	border-color: var(--ui_color_accent);
 }
 
-.node-graph-variables-add,
-button.node-graph-variables-add,
-.button.node-graph-variables-add {
+.node-graph-variables-add {
 	display: flex;
 	align-items: center;
 	justify-content: center;
@@ -924,17 +911,13 @@ button.node-graph-variables-add,
 	cursor: pointer;
 }
 
-.node-graph-variables-add:hover,
-button.node-graph-variables-add:hover,
-.button.node-graph-variables-add:hover {
+.node-graph-variables-add:hover {
 	background-color: transparent;
 	color: #ffffff;
 	opacity: 1.0;
 }
 
-.node-graph-variables-add:active,
-button.node-graph-variables-add:active,
-.button.node-graph-variables-add:active {
+.node-graph-variables-add:active {
 	background-color: transparent;
 	color: #b9d7ff;
 	opacity: 1.0;

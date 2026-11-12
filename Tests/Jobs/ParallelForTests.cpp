@@ -5,14 +5,16 @@
 // on a helper is woken by every way the helper can leave, a Background body's
 // forks publish no Normal work, back-to-back forks on a busy pool keep the
 // helpers they leave queued bounded in each lane and get their helper budget
-// back as the helpers start, and forks take no heap allocation once the pool
-// exists. The chunked overload stops, returns and rethrows like the unit form
-// on the parallel and the inline path, calls a void body with no Stop directly
-// on the inline path, and allocates nothing on the calling thread on its
-// default path.
+// back as the helpers start, the helpers kept queued in an Awaited body run
+// as Awaited, and forks take no heap allocation once the pool exists. The
+// chunked overload stops, returns and rethrows like the unit form on the
+// parallel and the inline path, calls a void body with no Stop directly on
+// the inline path, and allocates nothing on the calling thread on its default
+// path.
 
 #include "HeldSlabFreelist.h"
 #include "HeldWorkers.h"
+#include "JoinOnScopeExit.h"
 
 #include "JobSystem/ParallelAlgorithms.h"
 #include "JobSystem/TaskSlabPool.h"
@@ -29,6 +31,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -46,9 +49,10 @@ namespace
 // a 1-worker pool).
 void DrainBehind(WorkStealingThreadPool& pool)
 {
-    std::atomic<bool> done{false};
-    pool.EnqueueWork([&done] { done.store(true); });
-    EXPECT_TRUE(WaitUntil([&done] { return done.load(); }, std::chrono::seconds(10)));
+    // The job shares ownership of the flag: it writes no part of this frame after a failed wait.
+    const auto done = std::make_shared<std::atomic<bool>>(false);
+    pool.EnqueueWork([done] { done->store(true); });
+    EXPECT_TRUE(WaitUntil([&done] { return done->load(); }, std::chrono::seconds(10)));
 }
 
 TEST(ParallelFor, EveryUnitRunsOnceAcrossTheCallerAndHelpers)
@@ -538,24 +542,25 @@ TEST(ParallelFor, AHelperAdmittedPastTheEndReleasesItsAdmission)
 void ForkFromBackgroundBodies(WorkStealingThreadPool& pool, int rounds)
 {
     const auto before = pool.GetStatistics();
-    std::atomic<int> finished{0};
+    // The jobs share ownership of the count: none writes this frame after an early ASSERT.
+    const auto finished = std::make_shared<std::atomic<int>>(0);
     for (int round = 0; round < rounds; ++round)
     {
         // Let the workers go idle (and arm their spin windows) between rounds.
         std::this_thread::sleep_for(std::chrono::microseconds(300));
         pool.EnqueueWork(
-            [&pool, &finished] {
+            [&pool, finished] {
                 JobCounter counter;
                 std::atomic<int> sink{0};
                 for (int i = 0; i < 4; ++i)
                     pool.Run([&sink] { sink.fetch_add(1); }, counter);
                 pool.Wait(counter);
                 ParallelFor(&pool, 64, [&sink](size_t, size_t) { sink.fetch_add(1); }, 1);
-                finished.fetch_add(1);
+                finished->fetch_add(1);
             },
             JobPriority::Background);
     }
-    ASSERT_TRUE(WaitUntil([&] { return finished.load() == rounds; }, std::chrono::seconds(20)));
+    ASSERT_TRUE(WaitUntil([&] { return finished->load() == rounds; }, std::chrono::seconds(20)));
     ASSERT_TRUE(WaitUntil([&] { return pool.GetPendingTasksApprox() == 0 && pool.GetBackgroundQueuedForTests() == 0; },
                           std::chrono::seconds(10)));
     const auto after = pool.GetStatistics();
@@ -658,6 +663,27 @@ TEST(ParallelFor, TheHelperBudgetComesBackAsHelpersStart)
     EXPECT_EQ(HelpersPublishedByAForkOnAHeldPool(pool), pool.GetWorkerCount());
 }
 
+// HelpersToKeepQueued tops the run's queued helpers up to its count before
+// each unit the caller claims, and no further: with every worker held, the
+// caller runs every unit and leaves that count queued, not a batch per claim.
+TEST(ParallelFor, HelpersToKeepQueuedKeepsThatManyQueued)
+{
+    WorkStealingThreadPool pool(4);
+    HeldWorkers held(pool);
+    constexpr size_t kKeepQueued = 2;
+    const std::function<size_t()> keepQueued = [] { return kKeepQueued; };
+    ParallelForOptions options;
+    options.Helpers = 0;
+    options.HelpersToKeepQueued = &keepQueued;
+    std::atomic<size_t> ran{0};
+    EXPECT_TRUE(ParallelFor(&pool, 50, [&ran](size_t) { ran.fetch_add(1); return true; }, options));
+    EXPECT_EQ(ran.load(), 50u);
+    EXPECT_EQ(pool.GetApproximateQueueSize(), kKeepQueued);
+
+    held.Release();
+    EXPECT_TRUE(WaitUntil([&pool] { return pool.GetPendingTasksApprox() == 0; }, std::chrono::seconds(10)));
+}
+
 // A helper gives its count back before it runs a unit, not when it ends: with
 // every worker inside a long unit of one run, the whole budget is still open
 // to the helpers of other forks, which queue behind the busy workers.
@@ -679,6 +705,7 @@ TEST(ParallelFor, AHelperInsideAUnitNoLongerHoldsItsCount)
                 return true;
             }, options);
     });
+    JoinOnScopeExit openAndJoin({&longRunCaller, 1}, [&gate] { gate.store(true); });
     // The long run's caller and one helper per worker are each inside a unit.
     ASSERT_TRUE(WaitUntil([&] { return entered.load() == workers + 1; }, std::chrono::seconds(10)));
 
@@ -720,15 +747,6 @@ TEST(ParallelFor, QueuedBackgroundHelpersLeaveANormalForkItsHelpers)
                           std::chrono::seconds(10)));
 }
 
-// A pool provisions the slabs its ParallelFor helpers can hold, so forks on it
-// take no heap allocation however many are issued and however busy the pool
-// is: 1,000 forks into each lane from a thread that is no worker, every worker
-// held, the freelist emptied before the pool was built. Each fork asks for one
-// helper, so every queued helper holds a run block of its own, and both lanes
-// fill to their bound of 16: the 4 held workers' envelopes plus 2 lanes x 16
-// queued helpers x (an envelope + a run block) make 68 slabs, under the pool's
-// 73 (2 x (2 x 4 + 1) x 4 + 1) and over what provisioning one lane (41) or the
-// envelopes without their run blocks (37) would give.
 TEST(ParallelFor, DefaultOptionsPublishOneHelperPerWorker)
 {
     WorkStealingThreadPool pool(4);
@@ -744,35 +762,110 @@ TEST(ParallelFor, DefaultOptionsPublishOneHelperPerWorker)
     EXPECT_TRUE(WaitUntil([&pool] { return pool.GetPendingTasksApprox() == 0; }, std::chrono::seconds(10)));
 }
 
+// A pool provisions the slabs its ParallelFor helpers can hold, so forks on it
+// take no heap allocation however many are issued and however busy the pool
+// is: 1,000 one-helper forks into each lane, the freelist emptied before the
+// pool was built. Three workers are held; the fourth runs the Awaited body that
+// forks into the Awaited lane and then holds. The test thread, which is no
+// worker, forks into the Normal and Background lanes. Each lane fills to its
+// bound of 16: the 4 held envelopes plus 3 lanes x 16 queued helpers x (an
+// envelope + a run block) make 100 slabs, under the pool's 105
+// (2 x (3 x 4 + 1) x 4 + 1) and over what provisioning two lanes (73) gives.
 TEST(ParallelFor, ForksTakeNoHeapAllocationOnceThePoolExists)
 {
     const HeldSlabFreelist emptied;
-    WorkStealingThreadPool pool(4);
-    const uint64_t heapAllocsAfterConstruction = JobSystem::Detail::GetTaskSlabStatsForTests().HeapAllocs;
-    HeldWorkers held(pool);
-    const size_t bound = WorkStealingThreadPool::kMaxUnstartedForkTasksPerWorker * pool.GetWorkerCount();
-
-    ParallelForOptions normal;
-    normal.Helpers = 1;
-    ParallelForOptions background;
-    background.Helpers = 1;
-    background.HelperPriority = JobPriority::Background;
+    // Declared before the pool: the Awaited body can still use them after an ASSERT returns.
     constexpr size_t kForks = 1000;
     std::atomic<size_t> covered{0};
     const auto cover = [&covered](size_t) { covered.fetch_add(1); };
+    ParallelForOptions oneHelper;
+    oneHelper.Helpers = 1;
+    std::atomic<bool> awaitedForksDone{false};
+    std::atomic<bool> releaseAwaitedBody{false};
+    WorkStealingThreadPool pool(4);
+    const uint64_t heapAllocsAfterConstruction = JobSystem::Detail::GetTaskSlabStatsForTests().HeapAllocs;
+    HeldWorkers held(pool, pool.GetWorkerCount() - 1);
+    const size_t bound = WorkStealingThreadPool::kMaxUnstartedForkTasksPerWorker * pool.GetWorkerCount();
+
+    pool.EnqueueWork(
+        [&] {
+            // Helpers take the Awaited body's class.
+            for (size_t fork = 0; fork < kForks; ++fork)
+                ParallelFor(&pool, 8, cover, oneHelper);
+            awaitedForksDone.store(true);
+            while (!releaseAwaitedBody.load() && !pool.IsShuttingDown())
+                std::this_thread::yield();
+        },
+        JobPriority::Awaited);
+    ASSERT_TRUE(WaitUntil([&] { return awaitedForksDone.load(); }, std::chrono::seconds(30)));
+
+    ParallelForOptions background = oneHelper;
+    background.HelperPriority = JobPriority::Background;
     for (size_t fork = 0; fork < kForks; ++fork)
     {
-        ParallelFor(&pool, 8, cover, normal);
+        ParallelFor(&pool, 8, cover, oneHelper);
         ParallelFor(&pool, 8, cover, background);
     }
-    EXPECT_EQ(covered.load(), 2 * kForks * 8);
-    EXPECT_EQ(pool.GetApproximateQueueSize(), bound) << "the Normal lane did not fill to its bound";
+    EXPECT_EQ(covered.load(), 3 * kForks * 8);
+    // GetApproximateQueueSize counts the Normal and the Awaited lanes.
+    EXPECT_EQ(pool.GetStatistics().Awaited.Queued, bound) << "the Awaited lane did not fill to its bound";
+    EXPECT_EQ(pool.GetApproximateQueueSize(), 2 * bound) << "the Normal lane did not fill to its bound";
     EXPECT_EQ(pool.GetBackgroundQueuedForTests(), bound) << "the Background lane did not fill to its bound";
     EXPECT_EQ(JobSystem::Detail::GetTaskSlabStatsForTests().HeapAllocs - heapAllocsAfterConstruction, 0u);
 
+    releaseAwaitedBody.store(true);
     held.Release();
-    EXPECT_TRUE(WaitUntil([&pool] { return pool.GetPendingTasksApprox() == 0 && pool.GetBackgroundQueuedForTests() == 0; },
-                          std::chrono::seconds(10)));
+    EXPECT_TRUE(WaitUntil(
+        [&pool] {
+            return pool.GetPendingTasksApprox() == 0 && pool.GetBackgroundQueuedForTests() == 0 &&
+                   pool.GetStatistics().Awaited.Queued == 0;
+        },
+        std::chrono::seconds(10)));
+}
+
+// The helpers that HelpersToKeepQueued keeps queued take the class of the
+// forking body, as the start batch does. With no start helper, every helper of
+// a run in an Awaited body is a kept one, and each unit it runs reports Awaited.
+TEST(ParallelFor, HelpersKeptQueuedInAnAwaitedBodyRunAsAwaited)
+{
+    // Declared before the pool: the Awaited body can still use them after an ASSERT returns.
+    constexpr size_t kUnits = 8;
+    constexpr size_t kKeepQueued = 2;
+    const std::function<size_t()> keepQueued = [] { return kKeepQueued; };
+    ParallelForOptions options;
+    options.Helpers = 0;
+    options.HelpersToKeepQueued = &keepQueued;
+    std::atomic<size_t> helperUnits{0};
+    std::atomic<size_t> helperUnitsNotAwaited{0};
+    std::atomic<bool> done{false};
+    WorkStealingThreadPool pool(4);
+
+    pool.EnqueueWork(
+        [&] {
+            const std::thread::id caller = std::this_thread::get_id();
+            ParallelFor(&pool, kUnits, [&](size_t) {
+                    if (std::this_thread::get_id() == caller)
+                    {
+                        // Hold the caller's unit until a kept helper has run one.
+                        WaitUntil([&] { return helperUnits.load() > 0; }, std::chrono::seconds(10));
+                        return true;
+                    }
+                    const char* job = WorkStealingThreadPool::GetCurrentJobForTests();
+                    if (job == nullptr || std::string_view(job) != "Awaited")
+                        helperUnitsNotAwaited.fetch_add(1);
+                    helperUnits.fetch_add(1);
+                    return true;
+                }, options);
+            done.store(true);
+        },
+        JobPriority::Awaited);
+
+    ASSERT_TRUE(WaitUntil([&] { return done.load(); }, std::chrono::seconds(30)));
+    EXPECT_GT(helperUnits.load(), 0u) << "no kept helper ran a unit";
+    EXPECT_EQ(helperUnitsNotAwaited.load(), 0u) << "a helper kept queued by an Awaited body ran in another class";
+    EXPECT_TRUE(WaitUntil(
+        [&pool] { return pool.GetPendingTasksApprox() == 0 && pool.GetStatistics().Awaited.Queued == 0; },
+        std::chrono::seconds(10)));
 }
 
 // An admission that refuses ends the helper; the caller runs every unit.

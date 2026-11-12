@@ -15,13 +15,9 @@ namespace GameEngine::Components
 // conditions' — a slope band and a height band overlap where both are open, and
 // their soft edges compound into one soft corner rather than a stair.
 //
-// The vocabulary is deliberately three condition KINDS (slope, height, noise)
-// with two unit kinds each for the two that have them. METRES and DEGREES are
-// what authoring wants and what the shipped defaults use. The NORMALIZED kinds
-// chase the terrain's own live range instead of naming an absolute, which is the
-// right choice for a band that must read correctly at any HeightScale (the
-// default snow line) and the wrong one everywhere else — a threshold in
-// `1 - N.y` means a different real angle on every terrain.
+// Three condition kinds: slope (degrees or normalized), height (meters above the
+// terrain's base, the only height unit) and noise. The default snow line is in
+// meters, placed from the terrain's height range when the rules are provisioned.
 //
 // Shore distance is NOT here: no shore-distance field exists in the engine, and
 // the "height above sea level" proxy reads a cliff one metre from the water as
@@ -51,20 +47,16 @@ enum class TerrainRuleConditionKind : uint8
     // so this quantity is flattened by the terrain's HeightScale. A band
     // authored here means nothing in degrees, and vice versa.
     SlopeNormalized = 1,
-    // METRES ABOVE THE TERRAIN'S BASE — not world-space Y. The terrain entity's
-    // own Y translation is not part of it, which is the convention the other
-    // modifier effects already use (Flatten takes a world-space target and
-    // divides it by HeightScale, treating the result as terrain-local too).
-    // Predictable to author and stable under sculpting: a snow line at 400 m
-    // stays at 400 m when the mountain grows under it.
-    HeightMetres = 2,
-    // `(h - minH) / heightRange` over [0, 1], against the terrain's live global
-    // height range — so the band CHASES the heightfield, which is what a band
-    // that must read correctly at any HeightScale wants (the default snow line).
-    HeightNormalized = 3,
+    // Meters above the terrain's base, not world-space Y: the terrain entity's
+    // own Y translation is not part of it. The only height unit: a snow line at
+    // 400 m stays at 400 m on every source and at every Height Scale.
+    HeightMeters = 2,
     // fBM value noise over world XZ, remapped to [0, 1]. Breaks up the banding
-    // the other kinds produce.
+    // the other kinds produce. Value 3 is not a kind.
     Noise = 4,
+    // Absolute latitude in DEGREES over [0, 90] about the planet's +Y: 0 at the
+    // equator, 90 at a pole. A planet measure: a flat terrain reads 0.
+    LatitudeDegrees = 5,
 };
 
 // The shape of a condition's edge ramp.
@@ -91,7 +83,10 @@ struct TerrainRuleCondition
 {
     TerrainRuleConditionKind Kind = TerrainRuleConditionKind::SlopeDegrees;
     TerrainRuleFalloffCurve FalloffCurve = TerrainRuleFalloffCurve::ClampedLinear;
-    uint8 _Pad0[2] = {};
+    // The kind number a scene load refused for this condition (255 for any number
+    // above it); 0 when the kind loaded. The Inspector marks the row; a kind pick clears it.
+    uint8 RefusedKind = 0;
+    uint8 _Pad0 = 0;
 
     // The band, in the unit Kind names. Min > Max is an empty band: no texel is
     // inside it and only the ramps can contribute.

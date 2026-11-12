@@ -244,13 +244,8 @@ public:
 
     void Clear();
 
-    // Override the per-instance sector size (default Components::kWorldSectorSize
-    // = 1024m, the same scale the camera-relative render path uses). Test
-    // fixtures call this with a smaller value (e.g. 50m or 100m) to exercise
-    // multi-sector replication without spreading test entities thousands of
-    // meters apart. Production code leaves the default. Calling this on a
-    // non-empty TLAS is a logic error (existing replica sets become stale);
-    // call after construction or after Clear().
+    // Sets the sector size (default Mathematics::kWorldSectorSize). Tests set a small size to reach
+    // several sectors with near entities. Call it only on an empty TLAS: after construction or Clear().
     void SetSectorSizeForTesting(float32 sectorSize);
     float32 GetSectorSize() const;
 

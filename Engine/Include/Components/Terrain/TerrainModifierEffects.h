@@ -191,14 +191,34 @@ static_assert(std::is_standard_layout_v<TerrainHeightOffsetEffect>);
 // path's kMaxReliefOctaves.
 inline constexpr uint32 kMaxNoiseOctaves = 8u;
 
-// Adds procedural fBM noise displacement.
-// Common use: terrain detail, roughness, erosion-like effects.
+// What a TerrainNoiseEffect evaluates. Values are serialized: append, never reorder.
+enum class TerrainNoiseMode : uint8
+{
+    Displace = 0,  // the fBM rows below, added through the modifier stack inside the volume
+    Generated = 1, // the base noise of Terrain/TerrainNoiseStack.h at Preset, evaluated per page
+};
+
+// The octave stack of a Generated noise (Terrain/TerrainNoiseStack.h). The largest features grow
+// with the terrain's size; the preset sets how fast the height falls from 250 m to the finest octave.
+// Values are serialized: append, never reorder.
+enum class TerrainNoisePreset : uint8
+{
+    Rolling = 0, // gain 0.574 (H 0.8): hills at every scale
+    Smooth = 1,  // gain 0.5 (H 1.0): soft ground with little fine relief
+    Rugged = 2,  // gain 0.660 (H 0.6): broken ground: the fine octaves keep more of their height
+};
+
+// Adds procedural noise. Displace mode: fBM displacement inside the volume (terrain detail,
+// roughness, erosion-like effects). Generated mode: the base relief of a Flat terrain, read only
+// on a Global volume (TerrainECS::ResolveGeneratedNoiseRelief); the fBM rows are not read.
 struct TerrainNoiseEffect
 {
     GE_TERRAIN_EFFECT_COMMON_FIELDS
 
     TerrainModifierBlend Blend = TerrainModifierBlend::Add;
-    uint8 _BlendPad[3] = {};
+    TerrainNoiseMode Mode = TerrainNoiseMode::Displace;
+    TerrainNoisePreset Preset = TerrainNoisePreset::Rolling; // Generated only
+    uint8 _BlendPad[1] = {};
     float32 Frequency = 8.0f;       // Noise frequency (higher = more detail)
     float32 Amplitude = 5.0f;       // Height displacement in world units
     uint32 Octaves = 4;             // fBM octave count, clamped to kMaxNoiseOctaves
@@ -323,6 +343,12 @@ struct TerrainSurfaceRulesEffect
     // packer refuses the batch rather than painting through claimed ground on
     // one arm and stopping at it on the other.
     GE_TERRAIN_EFFECT_CLAIM_FIELDS
+
+    // True while the rows are the untouched set terrain creation provisioned. While it is
+    // true, the rows are placed again from the terrains' height range when that range
+    // changes (a new heightmap or source). Any edit of a row sets it to false.
+    bool ProvisionedDefaults = false;
+    uint8 _ProvisionedPad[3] = {};
 
     TerrainSurfaceRule Rules[kMaxTerrainSurfaceRules] = {};
 };

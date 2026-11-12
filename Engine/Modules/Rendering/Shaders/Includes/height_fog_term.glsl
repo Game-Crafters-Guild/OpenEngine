@@ -351,7 +351,7 @@ float GE_HeightFogSkyAmount(vec3 viewDirWS)
 /// The fog over the sky in a direction: the sky fill as an in-scatter and a transmittance.
 /// @param originWS      the camera position, world space.
 /// @param viewDirWS     the unit view direction, world space.
-/// @param farPlane      the view's far-plane distance, meters. The sky stands at
+/// @param farPlane      the view's culling range, meters. The sky stands at
 ///                      max(farPlane, maxDistance): the distance and the height color gradients
 ///                      read that length.
 /// @param uv            the screen position in [0, 1]; read only by the screen-space gradient mode.

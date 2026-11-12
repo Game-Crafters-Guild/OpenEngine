@@ -672,3 +672,76 @@ TEST(RetargetNodeTests, Stage3_TranslationScales_HipHeightRatio)
     EXPECT_NEAR(out.Positions[1].y, 0.0f, 1e-5f);
     EXPECT_NEAR(out.Positions[1].z, 0.0f, 1e-5f);
 }
+
+// Each rig is root -> hips -> spine -> chest. The rig's hip height is in model space, so it
+// includes the root's rest scale. The hips' translation scales by the ratio of the heights in
+// the hips' parent space (1.5 in every case), so the root's scale applies once.
+TEST(RetargetNodeTests, Stage3_ScaledRoots_HipTranslationScalesOnce)
+{
+    struct RootCase
+    {
+        float SourceRootScale;
+        Vector3 TargetRootScale;
+        Quaternion TargetRootRotation;
+        float TargetRootUpScale; // The target root's scale on the axis that model up maps to.
+    };
+    const RootCase cases[] = {
+        {1.0f, {2.0f, 2.0f, 2.0f}, Quaternion::Identity(), 2.0f},
+        {1.0f, {100.0f, 100.0f, 100.0f}, AxisAngleDeg({1, 0, 0}, -90.0f), 100.0f},
+        {100.0f, {1.0f, 1.0f, 1.0f}, Quaternion::Identity(), 1.0f},
+        {100.0f, {100.0f, 100.0f, 100.0f}, AxisAngleDeg({1, 0, 0}, -90.0f), 100.0f},
+        {1.0f, {1.0f, 1.0f, 100.0f}, AxisAngleDeg({1, 0, 0}, -90.0f), 100.0f},
+    };
+    constexpr float kSourceHipLocalHeight = 1.0f;
+    constexpr float kTargetHipLocalHeight = 1.5f;
+
+    HumanoidChain chain;
+    chain.Kind = ChainKind::Spine;
+    chain.IncludeBones = {HumanBone::Hips, HumanBone::Spine, HumanBone::Chest};
+    const std::vector<HumanBone> canon = {HumanBone::None, HumanBone::Hips, HumanBone::Spine, HumanBone::Chest};
+    const std::vector<Quaternion> retargetQ(4, Quaternion::Identity());
+    RetargetMap map(GUID(), std::filesystem::path("test://map.retargetmap.json"));
+    ChainPairing p; p.Kind = ChainKind::Spine; p.FK.RotationMode = FKRotationMode::OneToOne;
+    map.ChainMapMutable().push_back(p);
+
+    for (const RootCase& rootCase : cases)
+    {
+        SCOPED_TRACE(testing::Message() << "source root scale " << rootCase.SourceRootScale
+                                        << ", target root scale (" << rootCase.TargetRootScale.x << ", "
+                                        << rootCase.TargetRootScale.y << ", " << rootCase.TargetRootScale.z << ")");
+        SkeletonData srcSkel = MakeChain(std::vector<Quaternion>(4, Quaternion::Identity()));
+        SkeletonData tgtSkel = MakeChain({rootCase.TargetRootRotation, Quaternion::Identity(),
+                                          Quaternion::Identity(), Quaternion::Identity()});
+        for (uint32_t axis = 0; axis < 3; ++axis)
+            srcSkel.RestScale[axis] = rootCase.SourceRootScale;
+        tgtSkel.RestScale[0] = rootCase.TargetRootScale.x;
+        tgtSkel.RestScale[1] = rootCase.TargetRootScale.y;
+        tgtSkel.RestScale[2] = rootCase.TargetRootScale.z;
+
+        HumanoidRig srcRig(GUID(), std::filesystem::path("test://srcRig.humanoidrig.json"));
+        PopulateRig(srcRig, canon, retargetQ, {chain}, HumanBone::Hips,
+                    kSourceHipLocalHeight * rootCase.SourceRootScale);
+        HumanoidRig tgtRig(GUID(), std::filesystem::path("test://tgtRig.humanoidrig.json"));
+        PopulateRig(tgtRig, canon, retargetQ, {chain}, HumanBone::Hips,
+                    kTargetHipLocalHeight * rootCase.TargetRootUpScale);
+
+        StaticPoseNode source;
+        source.Pose.Resize(4);
+        source.Pose.Positions[1] = Vector3(0.2f, 1.1f, 0.3f);
+
+        RetargetNode node;
+        node.Configure(&source, &srcRig, &tgtRig, &map);
+        ASSERT_TRUE(node.Build(srcSkel, tgtSkel));
+
+        PoseStack stack; stack.Reserve(8);
+        EvaluationContext ctx = MakeCtx(stack);
+        AnimationPose out;
+        node.Evaluate(ctx, out);
+
+        ASSERT_EQ(out.BoneCount, 4u);
+        constexpr float kHeightRatio = kTargetHipLocalHeight / kSourceHipLocalHeight;
+        EXPECT_NEAR(out.Positions[1].x, 0.2f * kHeightRatio, 1e-5f);
+        EXPECT_NEAR(out.Positions[1].y, 1.1f * kHeightRatio, 1e-5f);
+        EXPECT_NEAR(out.Positions[1].z, 0.3f * kHeightRatio, 1e-5f);
+    }
+}

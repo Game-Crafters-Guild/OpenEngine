@@ -41,12 +41,7 @@ constexpr float32 kDeltaSeconds = 1.0f / 60.0f;
 Components::WorldTransform At(float32 x, float32 y, float32 z)
 {
     Components::WorldTransform transform{};
-    transform.matrix[0] = 1.0f;
-    transform.matrix[5] = 1.0f;
-    transform.matrix[10] = 1.0f;
-    transform.matrix[12] = x;
-    transform.matrix[13] = y;
-    transform.matrix[14] = z;
+    transform.Position = Mathematics::WorldPosition{x, y, z};
     transform.Version = 1u;
     return transform;
 }

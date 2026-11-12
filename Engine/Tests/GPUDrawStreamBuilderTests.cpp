@@ -964,13 +964,14 @@ TEST(GPUDrawStreamScatterLayout, HasFourteenStorageBufferBindings)
     }
 }
 
-static_assert(sizeof(GPUDrawStreamBuilder::ScatterPushConstants) == 100,
-              "the PC block is 100 B: 13 arena/LOD/routing words + the P0 shadow-arc "
+static_assert(sizeof(GPUDrawStreamBuilder::ScatterPushConstants) == 112,
+              "the PC block is 112 B: 13 arena/LOD/routing words + the P0 shadow-arc "
               "statsBase + the consolidation meshGroupMode + the small-object cull "
               "threshold + the two per-view SSE coverage scales + the five LOD "
               "crossfade words (clock, 1/duration, tail-active, tail cursor base, "
               "tail record base) + the LOD dwell band + the rendered level and phase "
-              "history gate; must match draw_command_scatter.comp's push_constant block");
+              "history gate + the three origin sector words; must match "
+              "draw_command_scatter.comp's push_constant block");
 static_assert(GPUDrawStreamBuilder::kClassModeOff == 0u
                   && GPUDrawStreamBuilder::kClassModeShadow == 1u
                   && GPUDrawStreamBuilder::kClassModeColor == 2u,

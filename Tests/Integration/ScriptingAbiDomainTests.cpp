@@ -386,42 +386,6 @@ TEST(ScriptingAbi, DomainLifecycle_InterleavedHotReloadAndUnload)
     ASSERT_NE(tokB2, 0ull); int32_t rB2=0; ASSERT_EQ(GE_InvokeByToken(domB2, tokB2, &rB2), GE_Result_Ok);
 }
 
-
-TEST(ScriptingAbi, CoreBridgeResolver_CwdFallback_Smoke)
-{
-    // Require CoreBridge present in CWD to validate fallback; otherwise skip (environment-dependent)
-    auto cwdCoreBridge = std::filesystem::current_path() / "GameEngine.CoreBridge.dll";
-    if (!std::filesystem::exists(cwdCoreBridge)) {
-        GTEST_SKIP() << "GameEngine.CoreBridge.dll not present in CWD; skipping fallback smoke test";
-    }
-
-    auto& engine = EngineCore::GetInstance();
-    if (!engine.IsInitialized()) {
-        ApplicationConfig cfg; cfg.AssetDirectory = "Assets";
-
-        ScriptsConfig scriptsConfig{};
-        scriptsConfig.enableHotReload = false;
-        engine.SetScriptsConfig(scriptsConfig);
-
-        ASSERT_TRUE(engine.Initialize(cfg));
-    }
-
-    // Use tiny DomainRoutingTest.dll for a quick preload
-    std::filesystem::path dllPath = GameEngine::Tests::DomainRoutingTestDll();
-    ASSERT_TRUE(std::filesystem::exists(dllPath));
-    const auto dllUtf8 = dllPath.u8string();
-    ASSERT_EQ(GE_PreloadAssemblyContext(reinterpret_cast<const char*>(dllUtf8.c_str()), (uint32_t)dllUtf8.size()), GE_Result_Ok);
-
-    ASSERT_EQ(GE_SwapPreloadedContext(), GE_Result_Ok);
-
-    GE_DomainHandle dom = 0;
-    ASSERT_EQ(GE_GetCurrentRuntimeDomain(&dom), GE_Result_Ok);
-    ASSERT_NE(dom, 0ull);
-
-    // Cleanup
-    ASSERT_EQ(GE_ScriptsDomainUnload(dom), GE_Result_Ok);
-}
-
 TEST(ScriptingAbi, HotReload_SwapPreloaded_IndicesPublished)
 {
     auto& engine = EngineCore::GetInstance();

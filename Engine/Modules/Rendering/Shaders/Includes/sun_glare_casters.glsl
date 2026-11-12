@@ -36,7 +36,7 @@ int GE_SunGlareCastersLaneCascade()
 // cascade that does not cover the eye reads clear and drops out of the minimum harmlessly.
 // Every lane returns the same value.
 float GE_SunGlareCastersVisibility(sampler2DArrayShadow shadowArray, mat4 laneCascadeVP,
-                                   int cascadeCount, vec3 eyeWS, vec3 sunDirWS, float discRadius,
+                                   int cascadeCount, vec3 eyeRel, vec3 sunDirWS, float discRadius,
                                    float depthBias)
 {
     int lane = int(gl_LocalInvocationIndex);
@@ -50,7 +50,7 @@ float GE_SunGlareCastersVisibility(sampler2DArrayShadow shadowArray, mat4 laneCa
     if (cascade < cascadeCount)
     {
         GE_SunGlareCascadeFrame frame = GE_SunGlareCascadeFrameAt(
-            shadowArray, laneCascadeVP, cascade, eyeWS, sunDirWS, discRadius, depthBias);
+            shadowArray, laneCascadeVP, cascade, eyeRel, sunDirWS, discRadius, depthBias);
         beam = GE_SunGlareCascadeTapBeam(shadowArray, cascade, frame, tap, depthBias);
     }
     gSunGlareTapVisible[lane] = beam * weight;

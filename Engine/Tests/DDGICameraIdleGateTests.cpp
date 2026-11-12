@@ -16,6 +16,7 @@
 
 #include "Engine/Rendering/DDGICameraIdleGate.h"
 #include "Engine/Rendering/ViewRegistry.h"
+#include "TestCameraEye.h"
 
 #include <cmath>
 
@@ -27,6 +28,9 @@ using GameEngine::Rendering::ViewPurpose;
 
 namespace
 {
+
+// The poses carry no projection, so the cameras carry no ranges.
+constexpr GameEngine::Rendering::CameraRanges kNoRanges{};
 
 // Identity view matrix at a given world position. The gate reads cameraPos for
 // translation and the view matrix's 3x3 basis for orientation.
@@ -67,7 +71,7 @@ struct GateFixture
     {
         Camera = Registry.AllocateCamera("Test.Camera");
         Registry.AllocateView("Test.View", Camera, purpose);
-        Registry.SetCameraData(Camera, PoseAt(0.0f, 0.0f, 0.0f));
+        Registry.SetCameraData(Camera, ::GameEngine::Tests::TestCameraWithEye(PoseAt(0.0f, 0.0f, 0.0f)), kNoRanges);
     }
 
     bool Tick(float deltaSeconds) { return Gate.UpdateAndIsMoving(Registry, /*worldId*/ 0, deltaSeconds); }
@@ -89,7 +93,7 @@ TEST(DDGICameraIdleGateTests, TranslationArmsTheGateOnTheSameTick)
 {
     GateFixture f;
     f.Settle();
-    f.Registry.SetCameraData(f.Camera, PoseAt(0.0f, 0.0f, 5.0f));
+    f.Registry.SetCameraData(f.Camera, ::GameEngine::Tests::TestCameraWithEye(PoseAt(0.0f, 0.0f, 5.0f)), kNoRanges);
     EXPECT_TRUE(f.Tick(0.016f));
 }
 
@@ -98,7 +102,7 @@ TEST(DDGICameraIdleGateTests, RotationAloneArmsTheGate)
     GateFixture f;
     f.Settle();
     // Well past the ~6e-4 rad the reference's quaternion-dot threshold admits.
-    f.Registry.SetCameraData(f.Camera, PoseYawed(0.05f));
+    f.Registry.SetCameraData(f.Camera, ::GameEngine::Tests::TestCameraWithEye(PoseYawed(0.05f)), kNoRanges);
     EXPECT_TRUE(f.Tick(0.016f));
 }
 
@@ -108,7 +112,7 @@ TEST(DDGICameraIdleGateTests, SubEpsilonDriftIsNotMotion)
     f.Settle();
     // 1e-5 units of translation: below the reference's 1e-7 squared-distance
     // threshold, so float noise in a static pose must not hold the solve.
-    f.Registry.SetCameraData(f.Camera, PoseAt(1.0e-5f, 0.0f, 0.0f));
+    f.Registry.SetCameraData(f.Camera, ::GameEngine::Tests::TestCameraWithEye(PoseAt(1.0e-5f, 0.0f, 0.0f)), kNoRanges);
     EXPECT_FALSE(f.Tick(0.016f));
 }
 
@@ -116,7 +120,7 @@ TEST(DDGICameraIdleGateTests, ReleaseWaitsOutTheQuietWindowButResumesAfterIt)
 {
     GateFixture f;
     f.Settle();
-    f.Registry.SetCameraData(f.Camera, PoseAt(0.0f, 0.0f, 5.0f));
+    f.Registry.SetCameraData(f.Camera, ::GameEngine::Tests::TestCameraWithEye(PoseAt(0.0f, 0.0f, 5.0f)), kNoRanges);
     EXPECT_TRUE(f.Tick(0.016f));
     // Still: the pose stops changing, but the debounce has not elapsed.
     EXPECT_TRUE(f.Tick(0.016f));
@@ -131,7 +135,7 @@ TEST(DDGICameraIdleGateTests, CaptureAndPreviewViewsAreIgnored)
         f.Settle();
         // A capture view re-points its camera every frame; counting it would
         // wedge the gate at "moving" and the field would never solve.
-        f.Registry.SetCameraData(f.Camera, PoseAt(0.0f, 0.0f, 50.0f));
+        f.Registry.SetCameraData(f.Camera, ::GameEngine::Tests::TestCameraWithEye(PoseAt(0.0f, 0.0f, 50.0f)), kNoRanges);
         EXPECT_FALSE(f.Tick(0.016f)) << "purpose " << static_cast<int>(purpose);
     }
 }
@@ -141,12 +145,12 @@ TEST(DDGICameraIdleGateTests, AnyEligibleViewMovingHoldsTheField)
     GateFixture f;  // EditorScene view
     const CameraId gameCamera = f.Registry.AllocateCamera("Test.GameCamera");
     f.Registry.AllocateView("Test.GameView", gameCamera, ViewPurpose::Game);
-    f.Registry.SetCameraData(gameCamera, PoseAt(0.0f, 0.0f, 0.0f));
+    f.Registry.SetCameraData(gameCamera, ::GameEngine::Tests::TestCameraWithEye(PoseAt(0.0f, 0.0f, 0.0f)), kNoRanges);
     f.Settle();
 
     // The scene view is still; the game view is not. The field is world-space
     // and shared by both, so either one moving holds it.
-    f.Registry.SetCameraData(gameCamera, PoseAt(0.0f, 0.0f, 5.0f));
+    f.Registry.SetCameraData(gameCamera, ::GameEngine::Tests::TestCameraWithEye(PoseAt(0.0f, 0.0f, 5.0f)), kNoRanges);
     EXPECT_TRUE(f.Tick(0.016f));
 }
 
@@ -156,12 +160,12 @@ TEST(DDGICameraIdleGateTests, VolumeWorldScopesWhichViewsCount)
     DDGICameraIdleGate gate;
     const CameraId camera = registry.AllocateCamera("Test.OtherWorldCamera");
     const auto viewId = registry.AllocateView("Test.OtherWorldView", camera, ViewPurpose::EditorScene);
-    registry.SetCameraData(camera, PoseAt(0.0f, 0.0f, 0.0f));
+    registry.SetCameraData(camera, ::GameEngine::Tests::TestCameraWithEye(PoseAt(0.0f, 0.0f, 0.0f)), kNoRanges);
     constexpr GameEngine::uint64 kOtherWorld = 7;
     registry.SetViewWorldId(viewId, kOtherWorld);
 
     constexpr GameEngine::uint64 kVolumeWorld = 42;
     gate.UpdateAndIsMoving(registry, kVolumeWorld, kWellPastDebounceSeconds);
-    registry.SetCameraData(camera, PoseAt(0.0f, 0.0f, 5.0f));
+    registry.SetCameraData(camera, ::GameEngine::Tests::TestCameraWithEye(PoseAt(0.0f, 0.0f, 5.0f)), kNoRanges);
     EXPECT_FALSE(gate.UpdateAndIsMoving(registry, kVolumeWorld, 0.016f));
 }

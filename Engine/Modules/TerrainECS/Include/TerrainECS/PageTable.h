@@ -29,6 +29,21 @@
 namespace GameEngine::TerrainECS
 {
 
+/// A run of words: [First, First + Count).
+struct PageWordRange
+{
+    uint32 First = 0;
+    uint32 Count = 0;
+};
+
+/// What changed in a page table since its last ClearChanges.
+struct PageTableChanges
+{
+    bool All = false;                 ///< a reset, or more writes than the table records: every word changed
+    bool Fades = false;               ///< a slot fade changed
+    std::vector<PageWordRange> Words; ///< the written runs of Words(), in write order; runs may overlap
+};
+
 /// What one field's page table may spend.
 struct PageTableBudget
 {
@@ -49,7 +64,15 @@ public:
     /// Sets the entry of a page. A resident page below the floor whose pool is full waits, reading
     /// kNoPage (its first resident ancestor answers), until a block frees.
     void SetEntry(const PageStreaming::PageAddress& page, uint32 entry);
-    void SetSlotFade(uint32 slot, float32 fade) { m_SlotFade[slot] = fade; }
+    void SetSlotFade(uint32 slot, float32 fade)
+    {
+        m_SlotFade[slot] = fade;
+        m_Changes.Fades = true;
+    }
+
+    /// The words and fades written since the last ClearChanges (PackedPageTable patches them).
+    const PageTableChanges& Changes() const { return m_Changes; }
+    void ClearChanges();
 
     /// Appends every page with an entry.
     void AppendResident(std::vector<PageStreaming::PageAddress>& out) const;
@@ -107,6 +130,8 @@ private:
     void Remove(const PageStreaming::PageAddress& page);
     void Release(uint32 tier, uint32 block);
     void RetryWaiting();
+    /// Records a write of `count` words from `first`.
+    void MarkChanged(uint32 first, uint32 count);
 
     std::vector<PageStreaming::PageStoreLevel> m_Levels;
     uint32 m_Faces = 1;
@@ -119,6 +144,7 @@ private:
     std::vector<Pool> m_Pools;
     std::vector<Waiting> m_Waiting;
     std::vector<PageStreaming::PageAddress> m_LateEntries;
+    PageTableChanges m_Changes;
 };
 
 } // namespace GameEngine::TerrainECS

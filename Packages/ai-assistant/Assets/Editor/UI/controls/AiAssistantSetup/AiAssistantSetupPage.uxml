@@ -1,0 +1,58 @@
+<!-- Settings > AI Assistant (AiAssistantSetupPage): the assistant, its sign-in method, the
+     connection's checklist, then its Model and options. The ids are the contract with
+     AiAssistantSetupPage.cpp, which fills the choice tiles, the step list and the row values. -->
+<UIElement class="ai-setup-page">
+  <Label class="settings-section-header" text="AI Assistant" />
+
+  <Label class="settings-subsection-header ai-setup-step-title" text="Which assistant?" />
+  <UIElement id="AiSetupAssistantHost" class="ai-setup-block" />
+
+  <Label class="settings-subsection-header ai-setup-step-title" text="How do you sign in?" />
+  <UIElement id="AiSetupMethodHost" class="ai-setup-block" />
+  <Label id="AiSetupMethodNeeds" class="ai-setup-block ai-setup-method-needs" />
+
+  <Label id="AiSetupHeader" class="settings-subsection-header ai-setup-step-title" />
+  <UIElement id="AiSetupExecutableRow" class="settings-row">
+    <Label id="AiSetupExecutableLabel" class="settings-row-label" />
+    <TextField id="AiSetupExecutableField" class="settings-row-field" />
+    <Button id="AiSetupExecutableBrowse" class="small secondary" text="Browse..." />
+  </UIElement>
+  <UIElement id="AiSetupApiKeyHost" />
+  <UIElement id="AiSetupStepsHost" class="ai-setup-block" />
+
+  <Foldout id="AiSetupOptions" class="ai-setup-options" title="Model and options" expanded="false">
+    <UIElement id="AiSetupModelRow" class="settings-row">
+      <Label class="settings-row-label" text="Model" />
+      <Dropdown id="AiSetupModel" class="settings-row-field" />
+    </UIElement>
+    <UIElement id="AiSetupEffortRow" class="settings-row">
+      <Label class="settings-row-label" text="Effort" />
+      <Dropdown id="AiSetupEffort" class="settings-row-field" />
+    </UIElement>
+    <UIElement id="AiSetupCodexModelRow" class="settings-row">
+      <Label class="settings-row-label" text="Model" />
+      <TextField id="AiSetupCodexModel" class="settings-row-field" />
+    </UIElement>
+    <UIElement class="settings-row">
+      <Label id="AiSetupModeLabel" class="settings-row-label" text="Mode for new conversations" />
+      <Dropdown id="AiSetupMode" class="settings-row-field" />
+    </UIElement>
+    <UIElement id="AiSetupNodeRow" class="settings-row">
+      <Label id="AiSetupNodeLabel" class="settings-row-label" text="Node executable" />
+      <TextField id="AiSetupNode" class="settings-row-field" />
+      <Button id="AiSetupNodeBrowse" class="small secondary" text="Browse..." />
+    </UIElement>
+    <UIElement id="AiSetupDictationRows">
+      <UIElement class="settings-row">
+        <Label id="AiSetupHoldToSpeakLabel" class="settings-row-label" text="Hold the microphone to speak" />
+        <Toggle id="AiSetupHoldToSpeak" />
+      </UIElement>
+      <UIElement class="settings-row">
+        <Label id="AiSetupSendWhenMicStopsLabel" class="settings-row-label" text="Send when the microphone stops" />
+        <Toggle id="AiSetupSendWhenMicStops" />
+      </UIElement>
+    </UIElement>
+  </Foldout>
+
+  <CollapsibleInfoCard class="ai-setup-info" text="Your login stays yours: the editor never stores, copies or sends it, and removes API keys from the environment of the programs it starts. An API key you save is kept in the system's credential store and is sent only to the Claude API." />
+</UIElement>

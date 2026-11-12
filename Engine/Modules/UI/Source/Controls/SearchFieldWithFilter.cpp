@@ -1,7 +1,6 @@
 #include "UI/Controls/SearchFieldWithFilter.h"
 
 #include "UI/Controls/Button.h"
-#include "UI/Controls/Label.h"
 #include "UI/Controls/TextField.h"
 #include "UI/UIManager.h"
 
@@ -43,11 +42,6 @@ SearchFieldWithFilter::SearchFieldWithFilter()
         }
     });
     AddChild(std::move(field));
-
-    auto placeholder = std::make_unique<Label>();
-    m_Placeholder = placeholder.get();
-    m_Placeholder->AddClass("search-field-with-filter-placeholder");
-    AddChild(std::move(placeholder));
 
     auto icon = std::make_unique<UIElement>();
     m_SearchIcon = icon.get();
@@ -107,8 +101,8 @@ void SearchFieldWithFilter::SetFieldId(const std::string& id)
 
 void SearchFieldWithFilter::SetPlaceholder(const std::string& text)
 {
-    if (m_Placeholder)
-        m_Placeholder->SetText(text);
+    if (m_Field)
+        m_Field->SetPlaceholder(text);
 }
 
 void SearchFieldWithFilter::SetFilterOptions(const std::vector<Dropdown::Option>& options, int selectedIndex)
@@ -179,13 +173,6 @@ void SearchFieldWithFilter::ApplyQueryVisualState(const std::string& value)
             m_ClearButton->RemoveClass("hidden");
         else
             m_ClearButton->AddClass("hidden");
-    }
-    if (m_Placeholder)
-    {
-        if (hasQuery)
-            m_Placeholder->AddClass("hidden");
-        else
-            m_Placeholder->RemoveClass("hidden");
     }
 }
 

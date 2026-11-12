@@ -5,7 +5,7 @@
 namespace GameEngine::ECS
 {
 
-// What a component type says about its own on/off state, recorded by the registry at
+// What a component type says about itself, recorded by the registry at
 // registration (ComponentRegistry::ComponentInfo::Flags). A type declares a flag beside its
 // fields with a static constexpr bool of the flag's name, so the header that defines the
 // component needs nothing from the ECS:
@@ -26,6 +26,9 @@ enum class ComponentFlags : uint8
     // (ComponentInfo::EnabledFieldOffset); the editor's dot edits that field, and the scene
     // file saves it among the component's own values.
     KeepsOwnEnabledField = 1u << 1,
+    // The entity is data that its owner system makes again after a world reset. World::SerializeWorld
+    // writes an entity that holds this type as a free slot, so a snapshot restore does not bring it back.
+    NotInWorldSnapshot = 1u << 2,
 };
 
 constexpr ComponentFlags operator|(ComponentFlags a, ComponentFlags b)
@@ -47,6 +50,8 @@ consteval ComponentFlags ComponentFlagsOf()
         flags = flags | ComponentFlags::NotToggleable;
     if constexpr (requires { requires T::KeepsOwnEnabledField == true; })
         flags = flags | ComponentFlags::KeepsOwnEnabledField;
+    if constexpr (requires { requires T::NotInWorldSnapshot == true; })
+        flags = flags | ComponentFlags::NotInWorldSnapshot;
     return flags;
 }
 

@@ -197,10 +197,10 @@ TEST(SkyPathGizmo, TheOverlayFollowsTheFieldsNotTheEntitysRotation)
     const std::vector<float> earth = DrawnVertices(world, entity);
 
     Components::WorldTransform turned{};
-    turned.matrix[0] = 0.0f;
-    turned.matrix[2] = -1.0f;
-    turned.matrix[8] = 1.0f;
-    turned.matrix[10] = 0.0f;
+    turned.Basis[0].x = 0.0f;
+    turned.Basis[0].z = -1.0f;
+    turned.Basis[2].x = 1.0f;
+    turned.Basis[2].z = 0.0f;
     world.AddComponentImmediate(entity, turned);
     EXPECT_EQ(DrawnVertices(world, entity), earth) << "the entity's rotation does not move the overlay";
 

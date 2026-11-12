@@ -442,7 +442,9 @@ void InspectorSection::BuildUI()
         // Header options icon (right side) used to open the component options popup.
         auto options = std::make_unique<UIElement>();
         m_Options = options.get();
+        // A Button's look without a Button's input handling: the element requests the Button sheet.
         options->AddClass("button");
+        options->RequestSubtreeStyleAssetPath("UI/controls/Button.css", "editor");
         options->AddClass("icon-button");
         options->AddClass("inspector-section-header-options");
         headerRow->AddChild(std::move(options));

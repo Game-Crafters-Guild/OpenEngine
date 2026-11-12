@@ -9,8 +9,11 @@
 #include <vector>
 
 #include "Mathematics/Matrix4x4.h"
+#include "PagedTiledTerrain.h"
+#include "SplineRecipes/ConformGroundWatch.h"
 #include "SplineRecipes/SplineFillRebuild.h"
 #include "SplineRecipes/SplineSurfaceConform.h"
+#include "SplineSurfaceConformInternal.h"
 
 #include "Components/Spline/SplineExtrude.h"
 #include "Components/Terrain/Terrain.h"
@@ -32,6 +35,8 @@ using GameEngine::Mathematics::Vector3;
 using GameEngine::TerrainECS::TerrainService;
 
 using GameEngine::SplineRecipes::BuildWaterFillRun;
+using GameEngine::SplineRecipes::ConformSurfaceRevision;
+using GameEngine::SplineRecipes::UnboundedConformRun;
 using GameEngine::SplineRecipes::WaterFillOutcome;
 using GameEngine::SplineRecipes::WaterFillRun;
 
@@ -524,8 +529,7 @@ class TiledFillProbe : public SplineFillRebuildTests
         m_World.AddComponentImmediate(e, fx);
 
         Components::WorldTransform xf{};
-        xf.matrix[12] = centerX;
-        xf.matrix[14] = centerZ;
+        xf.Position = GameEngine::Mathematics::WorldPosition{centerX, 0.0, centerZ};
         m_World.AddComponentImmediate(e, xf);
         return e;
     }
@@ -595,6 +599,42 @@ class TiledFillProbe : public SplineFillRebuildTests
         }
         const GameEngine::Mathematics::Matrix4x4 matrix = GameEngine::Mathematics::Matrix4x4::Identity();
         return BuildWaterFillRun(m_World, stations, WaterRecipe(), matrix, &m_ModifierSystem);
+    }
+
+    // The box the fill BuildAtBorder lays reads the ground in, for a run at `runX`.
+    GameEngine::Mathematics::AABB ReachAtBorder(const Components::SplineExtrude& recipe, float runX) const
+    {
+        const GameEngine::Mathematics::AABB run{Vector3(runX, 0.0f, m_CenterZ - 15.0f),
+                                                Vector3(runX, 0.0f, m_CenterZ + 15.0f)};
+        return GameEngine::SplineRecipes::GroundReach(run, GameEngine::SplineRecipes::ExtrudeGroundReach(recipe));
+    }
+
+    // The half extent of a square bake over more cells than one bake records cell by cell, in meters.
+    static float WideBakeHalfExtent()
+    {
+        using GameEngine::TerrainECS::TerrainModifierSystem;
+        constexpr float kCell = TerrainModifierSystem::GetAppliedGroundCellMetresForTests();
+        return 0.5f * kCell *
+                   std::sqrt(static_cast<float>(TerrainModifierSystem::GetMaxAppliedGroundCellsPerBakeForTests())) +
+               kCell;
+    }
+
+    // The conform surface revision of the run BuildAtBorder lays.
+    uint64_t RevisionAtBorder() { return RevisionAt(WaterRecipe(), m_BorderX); }
+
+    // The conform surface revision of a run of `recipe` at `runX`.
+    uint64_t RevisionAt(const Components::SplineExtrude& recipe, float runX)
+    {
+        return GameEngine::SplineRecipes::ConformSurfaceRevision(m_World, &m_ModifierSystem,
+                                                                 ReachAtBorder(recipe, runX));
+    }
+
+    // One frame of `watch` over the run BuildAtBorder lays: this frame's ground stamp, then the read.
+    uint64_t ReadAtBorder(GameEngine::SplineRecipes::ConformGroundWatch& watch)
+    {
+        const uint64_t stamp = GameEngine::SplineRecipes::ConformSurfaceRevision(
+            m_World, &m_ModifierSystem, GameEngine::SplineRecipes::UnboundedConformRun());
+        return watch.Revision(m_World, &m_ModifierSystem, ReachAtBorder(WaterRecipe(), m_BorderX), stamp);
     }
 };
 
@@ -672,8 +712,7 @@ TEST_F(TiledFillProbe, T4_AnOffCameraBedEditMovesTheSurfaceRevision)
     ASSERT_TRUE(m_Tiled->Tiles.empty())
         << "no tile may be resident, or the digest has another way to notice";
 
-    const uint64_t before =
-        GameEngine::SplineRecipes::ConformSurfaceRevision(m_World, &m_ModifierSystem);
+    const uint64_t before = RevisionAtBorder();
     const std::vector<unsigned char> waterBefore = Bytes(BuildAtBorder());
     ASSERT_FALSE(waterBefore.empty());
 
@@ -683,13 +722,362 @@ TEST_F(TiledFillProbe, T4_AnOffCameraBedEditMovesTheSurfaceRevision)
     fx->TargetHeight = kFloorY - 1.5f;
     m_ModifierSystem.Update(m_World, 1.0f / 60.0f);
 
-    EXPECT_NE(GameEngine::SplineRecipes::ConformSurfaceRevision(m_World, &m_ModifierSystem), before)
-        << "the digest did not notice a bed edit outside the streamed set";
+    EXPECT_NE(RevisionAtBorder(), before) << "the digest did not notice a bed edit outside the streamed set";
 
     // Control: the edit really did move the water, so the digest above had
     // something to notice rather than being bumped by an edit that changed nothing.
     EXPECT_NE(waterBefore, Bytes(BuildAtBorder()))
         << "the deepened channel produced identical water — the edit never reached the fill";
+}
+
+// A tile that streams in away from the run is not ground the run can stand on.
+TEST_F(TiledFillProbe, T4b_ATileThatArrivesAwayFromTheRunLeavesTheSurfaceRevision)
+{
+    CreateTiledChannel(/*tilesToLoad*/ 2);
+    ASSERT_GE(m_Tiled->Config.TilesPerAxisZ, 2u);
+    ASSERT_GT(m_Tiled->Config.TileWorldSize * 0.5f, 15.0f + GameEngine::SplineRecipes::ExtrudeGroundReach(WaterRecipe()))
+        << "the next tile row must lie past the run's reach";
+    const uint64_t before = RevisionAtBorder();
+
+    auto* tile = TerrainService::Get().LoadTile(m_Handle, GameEngine::TerrainECS::TileCoord{0, 1});
+    ASSERT_NE(tile, nullptr);
+    tile->LodState = GameEngine::TerrainECS::TileLodState::Full;
+
+    EXPECT_EQ(RevisionAtBorder(), before) << "a tile away from the run re-armed its rebuild";
+}
+
+// A conform ray reads the height pages, not the tiles: a tile that streams in under the run is not new ground.
+TEST_F(TiledFillProbe, T4c_ATileThatArrivesUnderTheRunLeavesTheSurfaceRevision)
+{
+    CreateTiledChannel(/*tilesToLoad*/ 1);
+    const uint64_t before = RevisionAtBorder();
+
+    auto* tile = TerrainService::Get().LoadTile(m_Handle, GameEngine::TerrainECS::TileCoord{1, 0});
+    ASSERT_NE(tile, nullptr);
+    tile->LodState = GameEngine::TerrainECS::TileLodState::Full;
+
+    EXPECT_EQ(RevisionAtBorder(), before) << "a tile under the run re-armed its rebuild";
+}
+
+// The bake before the one measured also misses the run: the revision counts only the bakes that
+// meet the run's reach.
+TEST_F(TiledFillProbe, T4d_ABakeAwayFromTheRunLeavesTheSurfaceRevision)
+{
+    CreateTiledChannel(/*tilesToLoad*/ 0);
+    const float tileSize = m_Tiled->Config.TileWorldSize;
+    ASSERT_GT(tileSize * 0.5f, 15.0f + GameEngine::SplineRecipes::ExtrudeGroundReach(WaterRecipe()) + 5.0f);
+    const auto far = AddFlatten(m_Tiled->WorldOriginX + tileSize * 0.5f, m_Tiled->WorldOriginZ + tileSize * 1.5f,
+                                Components::TerrainVolumeShape::Rectangle, 5.0f, /*halfZ*/ 5.0f, /*falloff*/ 1.0f,
+                                kFloorY, /*priority*/ 2.0f);
+    m_ModifierSystem.Update(m_World, 1.0f / 60.0f);
+    const uint64_t before = RevisionAtBorder();
+    const uint64_t bakesBefore = m_ModifierSystem.GetAppliedGroundRevision();
+
+    m_World.GetComponentForWrite<Components::TerrainFlattenEffect>(far)->TargetHeight = kFloorY - 1.5f;
+    m_ModifierSystem.Update(m_World, 1.0f / 60.0f);
+
+    ASSERT_GT(m_ModifierSystem.GetAppliedGroundRevision(), bakesBefore) << "the far edit did not bake";
+    EXPECT_EQ(RevisionAtBorder(), before) << "a bake away from the run re-armed its rebuild";
+}
+
+// A bake under the run changes the revision once; the far bakes after it do not change it again.
+TEST_F(TiledFillProbe, T4e_AFarBakeAfterANearBakeLeavesTheSurfaceRevision)
+{
+    CreateTiledChannel(/*tilesToLoad*/ 0);
+    const float tileSize = m_Tiled->Config.TileWorldSize;
+    const auto far = AddFlatten(m_Tiled->WorldOriginX + tileSize * 0.5f, m_Tiled->WorldOriginZ + tileSize * 1.5f,
+                                Components::TerrainVolumeShape::Rectangle, 5.0f, /*halfZ*/ 5.0f, /*falloff*/ 1.0f,
+                                kFloorY, /*priority*/ 2.0f);
+    m_ModifierSystem.Update(m_World, 1.0f / 60.0f);
+    const uint64_t before = RevisionAtBorder();
+
+    m_World.GetComponentForWrite<Components::TerrainFlattenEffect>(m_ChannelModifier)->TargetHeight = kFloorY - 1.5f;
+    m_ModifierSystem.Update(m_World, 1.0f / 60.0f);
+    const uint64_t afterNear = RevisionAtBorder();
+    ASSERT_NE(afterNear, before) << "the bake under the run did not change the revision";
+
+    m_World.GetComponentForWrite<Components::TerrainFlattenEffect>(far)->TargetHeight = kFloorY - 1.5f;
+    m_ModifierSystem.Update(m_World, 1.0f / 60.0f);
+    EXPECT_EQ(RevisionAtBorder(), afterNear) << "a far bake after a near bake re-armed the rebuild";
+}
+
+// A tile that streams in away from the run and takes its bake does not change the run's revision.
+TEST_F(TiledFillProbe, T4f_AFarTileThatArrivesAfterAFullBakeLeavesTheSurfaceRevision)
+{
+    CreateTiledChannel(/*tilesToLoad*/ 1);
+    m_ModifierSystem.Update(m_World, 1.0f / 60.0f);
+    const uint64_t before = RevisionAtBorder();
+
+    auto* tile = TerrainService::Get().LoadTile(m_Handle, GameEngine::TerrainECS::TileCoord{0, 1});
+    ASSERT_NE(tile, nullptr);
+    tile->LodState = GameEngine::TerrainECS::TileLodState::Full;
+    m_ModifierSystem.Update(m_World, 1.0f / 60.0f);
+
+    EXPECT_EQ(RevisionAtBorder(), before) << "a far tile's arrival re-armed the rebuild";
+}
+
+// The caller's reach decides which bakes count: a fill that searches 80 m for its banks notices a
+// bank edit 60 m from its centerline.
+TEST_F(TiledFillProbe, T4g_ABankEditInsideAWideFillsReachMovesItsSurfaceRevision)
+{
+    CreateTiledChannel(/*tilesToLoad*/ 0);
+    using GameEngine::TerrainECS::TerrainModifierSystem;
+    constexpr float kCell = TerrainModifierSystem::GetAppliedGroundCellMetresForTests();
+    // A run 20 m inside a cell and an edit 60 m out in the cell before it: a narrow reach misses it.
+    const float runX = std::floor(m_BorderX / kCell) * kCell + 20.0f;
+    const float editX = runX - 60.0f;
+    Components::SplineExtrude wide = WaterRecipe();
+    wide.MaxHalfWidth = 80.0f;
+    const auto bank = AddFlatten(editX, m_CenterZ, Components::TerrainVolumeShape::Rectangle, 2.0f, /*halfZ*/ 2.0f,
+                                 /*falloff*/ 0.5f, kBankY, /*priority*/ 2.0f);
+    m_ModifierSystem.Update(m_World, 1.0f / 60.0f);
+    const uint64_t before = RevisionAt(wide, runX);
+
+    m_World.GetComponentForWrite<Components::TerrainFlattenEffect>(bank)->TargetHeight = kBankY + 2.0f;
+    m_ModifierSystem.Update(m_World, 1.0f / 60.0f);
+
+    EXPECT_NE(RevisionAt(wide, runX), before) << "a bank edit inside the fill's reach did not change its revision";
+}
+
+// A bake wider than the per-bake cell budget, away from the run, leaves the revision; one that meets the run moves it.
+TEST_F(TiledFillProbe, T4j_AWideBakeChangesTheRevisionOnlyOfTheRunsItMeets)
+{
+    CreateTiledChannel(/*tilesToLoad*/ 0);
+    using GameEngine::TerrainECS::TerrainModifierSystem;
+    constexpr float kCell = TerrainModifierSystem::GetAppliedGroundCellMetresForTests();
+    const float halfExtent = WideBakeHalfExtent();
+    const GameEngine::Mathematics::AABB reach = ReachAtBorder(WaterRecipe(), m_BorderX);
+    // The near edge of the wide bake lies two cells past the reach, so no cell of it meets the reach.
+    const float wideMinZ = reach.max.z + 2.0f * kCell;
+    const auto wide = AddFlatten(m_BorderX, wideMinZ + halfExtent, Components::TerrainVolumeShape::Rectangle,
+                                 halfExtent, halfExtent, /*falloff*/ 1.0f, kFloorY, /*priority*/ 2.0f);
+    m_ModifierSystem.Update(m_World, 1.0f / 60.0f);
+    const uint64_t before = RevisionAtBorder();
+    const uint64_t bakesBefore = m_ModifierSystem.GetAppliedGroundRevision();
+
+    m_World.GetComponentForWrite<Components::TerrainFlattenEffect>(wide)->TargetHeight = kFloorY - 1.5f;
+    m_ModifierSystem.Update(m_World, 1.0f / 60.0f);
+    ASSERT_GT(m_ModifierSystem.GetAppliedGroundRevision(), bakesBefore) << "the wide far edit did not bake";
+    EXPECT_EQ(RevisionAtBorder(), before) << "a wide bake away from the run re-armed its rebuild";
+
+    AddFlatten(m_BorderX, m_CenterZ, Components::TerrainVolumeShape::Rectangle, halfExtent, halfExtent,
+               /*falloff*/ 1.0f, kBankY, /*priority*/ 0.5f);
+    m_ModifierSystem.Update(m_World, 1.0f / 60.0f);
+    EXPECT_NE(RevisionAtBorder(), before) << "a wide bake that covers the run left its revision";
+}
+
+// More wide bakes of one flatten away from the run than the spans kept leave the revision: the bakes share cells.
+TEST_F(TiledFillProbe, T4k_RepeatedWideBakesAwayFromTheRunLeaveTheSurfaceRevision)
+{
+    CreateTiledChannel(/*tilesToLoad*/ 0);
+    using GameEngine::TerrainECS::TerrainModifierSystem;
+    constexpr float kCell = TerrainModifierSystem::GetAppliedGroundCellMetresForTests();
+    const float halfExtent = WideBakeHalfExtent();
+    const float wideMinZ = ReachAtBorder(WaterRecipe(), m_BorderX).max.z + 2.0f * kCell;
+    const auto wide = AddFlatten(m_BorderX, wideMinZ + halfExtent, Components::TerrainVolumeShape::Rectangle,
+                                 halfExtent, halfExtent, /*falloff*/ 1.0f, kFloorY, /*priority*/ 2.0f);
+    m_ModifierSystem.Update(m_World, 1.0f / 60.0f);
+    const uint64_t before = RevisionAtBorder();
+    const uint64_t bakesBefore = m_ModifierSystem.GetAppliedGroundRevision();
+
+    constexpr size_t kBakes = TerrainModifierSystem::GetMaxAppliedGroundSpansForTests() + 1;
+    for (size_t bake = 0; bake < kBakes; ++bake)
+    {
+        m_World.GetComponentForWrite<Components::TerrainFlattenEffect>(wide)->TargetHeight =
+            kFloorY - 1.0f - static_cast<float>(bake % 2);
+        m_ModifierSystem.Update(m_World, 1.0f / 60.0f);
+    }
+
+    ASSERT_GE(m_ModifierSystem.GetAppliedGroundRevision(), bakesBefore + kBakes) << "a wide far edit did not bake";
+    EXPECT_EQ(RevisionAtBorder(), before) << "the wide bakes away from the run re-armed its rebuild";
+}
+
+// A wide bake that lies in the reach's first cell but not in the reach moves the revision: the read is by cell.
+TEST_F(TiledFillProbe, T4l_AWideBakeInTheReachsEdgeCellMovesTheSurfaceRevision)
+{
+    CreateTiledChannel(/*tilesToLoad*/ 0);
+    using GameEngine::TerrainECS::TerrainModifierSystem;
+    constexpr float kCell = TerrainModifierSystem::GetAppliedGroundCellMetresForTests();
+    constexpr float kFalloff = 1.0f;
+    const float halfExtent = WideBakeHalfExtent();
+    const float reachMinX = ReachAtBorder(WaterRecipe(), m_BorderX).min.x;
+    const float edgeCellStart = std::floor(reachMinX / kCell) * kCell;
+    // The bake's bounds end halfway between the start of the reach's first cell and the reach.
+    const float wideMaxX = 0.5f * (edgeCellStart + reachMinX);
+    ASSERT_LT(wideMaxX, reachMinX - kFalloff) << "the reach starts too close to its cell's edge";
+    const auto wide = AddFlatten(wideMaxX - halfExtent - kFalloff, m_CenterZ, Components::TerrainVolumeShape::Rectangle,
+                                 halfExtent, halfExtent, kFalloff, kFloorY, /*priority*/ 2.0f);
+    m_ModifierSystem.Update(m_World, 1.0f / 60.0f);
+    const uint64_t before = RevisionAtBorder();
+    const uint64_t bakesBefore = m_ModifierSystem.GetAppliedGroundRevision();
+
+    m_World.GetComponentForWrite<Components::TerrainFlattenEffect>(wide)->TargetHeight = kFloorY - 1.5f;
+    m_ModifierSystem.Update(m_World, 1.0f / 60.0f);
+
+    ASSERT_GT(m_ModifierSystem.GetAppliedGroundRevision(), bakesBefore) << "the wide edit did not bake";
+    EXPECT_NE(RevisionAtBorder(), before) << "a wide bake in the reach's edge cell left its revision";
+}
+
+// Two wide bakes on both sides of the run, apart from each other, stay apart: a bake of each leaves the revision.
+TEST_F(TiledFillProbe, T4m_TwoWideBakesApartFromEachOtherAndTheRunLeaveTheSurfaceRevision)
+{
+    CreateTiledChannel(/*tilesToLoad*/ 0);
+    using GameEngine::TerrainECS::TerrainModifierSystem;
+    constexpr float kCell = TerrainModifierSystem::GetAppliedGroundCellMetresForTests();
+    const float halfExtent = WideBakeHalfExtent();
+    const GameEngine::Mathematics::AABB reach = ReachAtBorder(WaterRecipe(), m_BorderX);
+    const auto north = AddFlatten(m_BorderX, reach.max.z + 2.0f * kCell + halfExtent,
+                                  Components::TerrainVolumeShape::Rectangle, halfExtent, halfExtent, /*falloff*/ 1.0f,
+                                  kFloorY, /*priority*/ 2.0f);
+    // One bake per flatten: one bake of both would record one span over the run.
+    m_ModifierSystem.Update(m_World, 1.0f / 60.0f);
+    const auto south = AddFlatten(m_BorderX, reach.min.z - 2.0f * kCell - halfExtent,
+                                  Components::TerrainVolumeShape::Rectangle, halfExtent, halfExtent, /*falloff*/ 1.0f,
+                                  kFloorY, /*priority*/ 2.0f);
+    m_ModifierSystem.Update(m_World, 1.0f / 60.0f);
+    const uint64_t before = RevisionAtBorder();
+
+    for (const float target : {kFloorY - 1.0f, kFloorY - 2.0f})
+    {
+        m_World.GetComponentForWrite<Components::TerrainFlattenEffect>(north)->TargetHeight = target;
+        m_ModifierSystem.Update(m_World, 1.0f / 60.0f);
+        m_World.GetComponentForWrite<Components::TerrainFlattenEffect>(south)->TargetHeight = target;
+        m_ModifierSystem.Update(m_World, 1.0f / 60.0f);
+    }
+
+    EXPECT_EQ(RevisionAtBorder(), before) << "a wide bake away from the run re-armed its rebuild";
+}
+
+// A steady frame folds nothing; a changed ground stamp folds once, and a far bake leaves the revision.
+TEST_F(TiledFillProbe, T4h_ASteadyFrameRunsNoBoundedFold)
+{
+    CreateTiledChannel(/*tilesToLoad*/ 1);
+    const float tileSize = m_Tiled->Config.TileWorldSize;
+    const auto far = AddFlatten(m_Tiled->WorldOriginX + tileSize * 0.5f, m_Tiled->WorldOriginZ + tileSize * 1.5f,
+                                Components::TerrainVolumeShape::Rectangle, 5.0f, /*halfZ*/ 5.0f, /*falloff*/ 1.0f,
+                                kFloorY, /*priority*/ 2.0f);
+    m_ModifierSystem.Update(m_World, 1.0f / 60.0f);
+    GameEngine::SplineRecipes::ConformGroundWatch watch;
+    const uint64_t first = ReadAtBorder(watch);
+    const uint64_t folds = watch.GetFoldCountForTests();
+
+    EXPECT_EQ(ReadAtBorder(watch), first);
+    EXPECT_EQ(watch.GetFoldCountForTests(), folds) << "a steady frame ran the bounded fold";
+
+    m_World.GetComponentForWrite<Components::TerrainFlattenEffect>(far)->TargetHeight = kFloorY - 1.5f;
+    m_ModifierSystem.Update(m_World, 1.0f / 60.0f);
+    EXPECT_EQ(ReadAtBorder(watch), first) << "a far bake changed the run's revision";
+    EXPECT_EQ(watch.GetFoldCountForTests(), folds + 1u) << "a changed ground stamp did not fold once";
+}
+
+// A build that read only finest pages stops following page changes, but a bed edit under its run still moves it.
+TEST_F(TiledFillProbe, T4i_ABedEditUnderARunBuiltOnFinestGroundMovesItsRevision)
+{
+    CreateTiledChannel(/*tilesToLoad*/ 1);
+    GameEngine::SplineRecipes::ConformGroundWatch watch;
+    ReadAtBorder(watch);
+    watch.RecordBuild(GameEngine::SplineRecipes::ConformMissTally{});
+    const uint64_t built = ReadAtBorder(watch);
+
+    m_World.GetComponentForWrite<Components::TerrainFlattenEffect>(m_ChannelModifier)->TargetHeight = kFloorY - 1.5f;
+    m_ModifierSystem.Update(m_World, 1.0f / 60.0f);
+    EXPECT_NE(ReadAtBorder(watch), built) << "a bed edit under a run built on finest ground left its revision";
+}
+
+// A tiled terrain whose height pages stream as the test moves its camera. The run's reach lies around kProbe:
+// with the camera far away, the pages there are coarse; with the camera over it, its finest pages land.
+class PagedGroundWatch : public SplineFillRebuildTests
+{
+  protected:
+    static constexpr float kProbeX = 1500.0f;
+    static constexpr float kProbeZ = 300.0f;
+
+    GameEngine::TerrainECS::Test::PagedTiledTerrain m_Paged;
+
+    void CreatePagedTerrain()
+    {
+        m_Paged = GameEngine::TerrainECS::Test::CreatePagedTiledTerrain(TerrainService::Get(), 2048.0f, 1024.0f,
+                                                                        /*heightScale*/ 4.0f);
+        m_Paged.Request.GpuPages = false; // only the CPU windows want level 0
+        const auto entity = m_World.CreateEntity();
+        m_World.AddComponentImmediate(entity, m_Paged.Component);
+        m_World.AddComponentImmediate(entity, TerrainTransform());
+    }
+
+    Components::WorldTransform TerrainTransform() const
+    {
+        Components::WorldTransform transform{};
+        transform.Position.X = m_Paged.Component.SizeX * 0.5f;
+        transform.Position.Z = m_Paged.Component.SizeZ * 0.5f;
+        return transform;
+    }
+
+    // Streams the pages with the camera `offsetX` meters from the probe, until the page under the camera lands.
+    bool StreamWithCameraAt(float offsetX)
+    {
+        return GameEngine::TerrainECS::Test::StreamPagesUntilTheCameraPageLands(
+            TerrainService::Get(), m_Paged, Vector3(kProbeX + offsetX, 50.0f, kProbeZ));
+    }
+
+    GameEngine::Mathematics::AABB Reach() const
+    {
+        return GameEngine::Mathematics::AABB{Vector3(kProbeX - 10.0f, -50.0f, kProbeZ - 10.0f),
+                                             Vector3(kProbeX + 10.0f, 50.0f, kProbeZ + 10.0f)};
+    }
+
+    uint64_t Read(GameEngine::SplineRecipes::ConformGroundWatch& watch)
+    {
+        return watch.Revision(m_World, &m_ModifierSystem, Reach(),
+                              ConformSurfaceRevision(m_World, &m_ModifierSystem, UnboundedConformRun()));
+    }
+};
+
+// A tiled terrain holds the first build until its height pages have a source: a conform ray reads the pages.
+TEST_F(PagedGroundWatch, ATiledTerrainWithNoPageSourceHoldsTheFirstBuild)
+{
+    using GameEngine::SplineRecipes::ConformSurfaceReadiness;
+    CreatePagedTerrain();
+    EXPECT_EQ(GameEngine::SplineRecipes::ConformSurfaceState(m_World, Reach()), ConformSurfaceReadiness::Provisioning);
+
+    ASSERT_TRUE(StreamWithCameraAt(-1000.0f));
+    EXPECT_EQ(GameEngine::SplineRecipes::ConformSurfaceState(m_World, Reach()), ConformSurfaceReadiness::Ready)
+        << "the page source arrived and the first build still waits";
+}
+
+// After a build that read a coarse page, the finest pages that land in the reach move the revision. After a build
+// that read finest pages everywhere, they do not: a built run keeps the best ground it has seen.
+TEST_F(PagedGroundWatch, APageThatLandsInTheReachMovesTheRevisionOnlyAfterACoarseBuild)
+{
+    CreatePagedTerrain();
+    ASSERT_TRUE(StreamWithCameraAt(-1000.0f));
+    GameEngine::SplineRecipes::ConformGroundWatch coarseBuild;
+    GameEngine::SplineRecipes::ConformGroundWatch finestBuild;
+    const uint64_t coarseBefore = Read(coarseBuild);
+    const uint64_t finestBefore = Read(finestBuild);
+    GameEngine::SplineRecipes::ConformMissTally coarse;
+    coarse.CoarseHeights = 1u;
+    coarseBuild.RecordBuild(coarse);
+    finestBuild.RecordBuild(GameEngine::SplineRecipes::ConformMissTally{});
+
+    ASSERT_TRUE(StreamWithCameraAt(0.0f));
+    EXPECT_NE(Read(coarseBuild), coarseBefore) << "the finest pages landed under a coarse build and it stays";
+    EXPECT_EQ(Read(finestBuild), finestBefore) << "a page arrival re-armed a build that read finest pages";
+}
+
+// The pages a build fetches land before the controller reads the revision it marks built: a build that read finest
+// pages leaves the revision where it was, so the next frame does not rebuild.
+TEST_F(PagedGroundWatch, ABuildThatOnlyClearsTheCoarseReadLeavesTheRevision)
+{
+    CreatePagedTerrain();
+    ASSERT_TRUE(StreamWithCameraAt(-1000.0f));
+    GameEngine::SplineRecipes::ConformGroundWatch watch;
+    const uint64_t before = Read(watch);
+
+    ASSERT_TRUE(StreamWithCameraAt(0.0f));
+    watch.RecordBuild(GameEngine::SplineRecipes::ConformMissTally{});
+    const uint64_t built = Read(watch);
+    EXPECT_EQ(built, before) << "the pages the build read moved the revision it is marked built at";
+    EXPECT_EQ(Read(watch), built);
 }
 
 // The fill composes the ground of the terrain the height query answers for, the first one placed

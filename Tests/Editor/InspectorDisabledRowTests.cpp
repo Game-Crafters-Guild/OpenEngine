@@ -43,7 +43,7 @@ TEST(InspectorDisabledRow, AnEnumRowDisabledThroughItsControlDrawsTheDisabledDro
     GameEngine::InspectorUI::DisableRowOfControl(field, "Read-only here");
 
     InspectorLayoutFixture fixture;
-    fixture.ExtraSheets = {"Assets/UI/controls/Dropdown.css"};
+    fixture.ExtraSheets = {GE_UI_MODULE_SOURCE_DIR "/Assets/UI/controls/Dropdown.css"};
     if (!fixture.Build(std::move(root)))
         GTEST_SKIP() << fixture.Diagnostic;
 

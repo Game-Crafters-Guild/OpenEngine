@@ -31,6 +31,20 @@ enum class SplinePavingMouth : uint8
     Flared = 1,
 };
 
+// How a road's paving meets the paving it yields to at a junction: the road that runs through, a road
+// that ranks higher, or a square's own pattern.
+enum class SplinePavingSeam : uint8
+{
+    // The two patterns meet on a bare line.
+    HardCut = 0,
+    // The road's pattern turns into the other pattern over a band of SeamBandTiles on the road's side.
+    Blend = 1,
+    // A thin joint of SeamCourseMaterial runs along the seam.
+    JointLine = 2,
+    // A course of stones of SeamCourseMaterial runs along the seam.
+    StoneCourse = 3,
+};
+
 // One spline a paving excludes or ignores.
 struct SplinePavingMember
 {
@@ -83,6 +97,19 @@ struct SplinePaving
     // @ge-label Shape
     // @ge-tooltip How the paving meets a road that enters it: its edge curves into the road (Flared) or meets the road's sides at a square corner (Straight).
     SplinePavingMouth Mouth = SplinePavingMouth::Flared;
+    // @ge-tooltip The seam is the line where two pavings meet at a junction: this road's paving and the paving it gives way to, a road that runs through, a wider road or a square. This sets how they meet there. Hard Cut stops the pattern on a bare line. Blend turns this road's pattern into the other pattern over a band. Joint Line draws a thin joint along the seam. Stone Course draws a row of stones along the seam. A road with no Spline Paving of its own takes the setting of the paving that paves the junction.
+    SplinePavingSeam Seam = SplinePavingSeam::Blend;
+    // @ge-label Blend Width (tiles)
+    // @ge-tooltip How far into this road the Blend reaches, in tiles of its pattern. Where the patterns line up, the tile lines bend over the whole band, and a wider band bends them more gently. Elsewhere the pattern fades over half of the band.
+    // @ge-range 0.5 8
+    float32 SeamBandTiles = 2.0f;
+    // @ge-label Course Width (m)
+    // @ge-tooltip How wide the course is: the joint of a Joint Line or the row of stones of a Stone Course. 0 uses 3 cm for a Joint Line and half a tile of the other pattern for a Stone Course.
+    // @ge-range 0 2
+    float32 SeamCourseWidth = 0.0f;
+    // @ge-label Course Material
+    // @ge-tooltip The surface drawn on the course: the joint of a Joint Line or the row of stones of a Stone Course. One texture tile is as wide as the course and repeats along the seam. Empty draws the paving's Material at the paving's tile size: darker for a Joint Line; for a Stone Course, the paving's stones turned across the seam and a little brighter.
+    MaterialRef SeamCourseMaterial;
     // @ge-tooltip Whether the paving and the curb cast shadows onto the scene.
     bool CastShadows = true;
     // @ge-tooltip Whether shadows fall on the paving and the curb.

@@ -5,8 +5,14 @@
 #include "SplineRecipes/Paving/PavingPlan.h"
 #include "Types/Types.h"
 
+#include <optional>
 #include <string>
 #include <vector>
+
+namespace GameEngine
+{
+enum class MaterialPatternSymmetry : uint8_t;
+}
 
 namespace GameEngine::SplineRecipes
 {
@@ -43,6 +49,9 @@ struct PavingJunctionStatus
     ECS::EntityHandle PavedBy{};
     // When State is HeightsDiffer: the meters the road lies above this spline; negative below.
     float32 RoadAboveMeters = 0.0f;
+    // The Blend seam between the road and this paving draws as a hard cut: the road's strip ends near
+    // that seam, so the band has no depth.
+    bool SeamDrawsHardCut = false;
 
     bool operator==(const PavingJunctionStatus&) const = default;
 };
@@ -57,6 +66,15 @@ struct PavingStatus
     ECS::EntityHandle PavedBy{};
     std::vector<PavingJunctionStatus> Junctions;
     std::vector<std::string> Notices;
+    // The pattern symmetry of the material that draws this paving's Seam at its last rebuild: the
+    // material of the paving that owns the lid. It selects the Blend form (MaterialDocument.h). Empty
+    // when no seam takes this paving's Seam, or when SeamPatternMixed is set.
+    std::optional<MaterialPatternSymmetry> SeamPatternSymmetry;
+    // The seams that take this paving's Seam read materials with different pattern symmetries.
+    bool SeamPatternMixed = false;
+    // The paving whose Material draws every seam that takes this paving's Seam; invalid when no seam
+    // takes it or when the seams lie in the lids of more than one paving.
+    ECS::EntityHandle SeamMaterialPaving{};
 
     bool operator==(const PavingStatus&) const = default;
 };

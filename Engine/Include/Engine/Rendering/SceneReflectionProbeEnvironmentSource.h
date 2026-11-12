@@ -4,6 +4,7 @@
 #include "Engine/Rendering/SceneProbeRecaptureSchedule.h"
 #include "Engine/Rendering/SkyEnvironmentSource.h"
 #include "Mathematics/Vector3.h"
+#include "Mathematics/WorldPosition.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/Pipeline/PipelineIdentifiers.h"
 #include "Rendering/Camera/CameraTypes.h"
@@ -32,10 +33,10 @@ enum class SceneReflectionProbeUpdateMode : uint32_t
 
 struct SceneReflectionProbeEnvironmentDesc
 {
-    Mathematics::Vector3 Position{0.0f, 0.0f, 0.0f};
+    Mathematics::WorldPosition Position{};
     float InfluenceRadius = 12.0f;
     bool BoxProjection = true;
-    Mathematics::Vector3 BoxCenter{0.0f, 0.0f, 0.0f};
+    Mathematics::WorldPosition BoxCenter{};
     Mathematics::Vector3 BoxHalfExtents{0.0f, 0.0f, 0.0f};
     Mathematics::Vector3 BoxAxisX{1.0f, 0.0f, 0.0f};
     Mathematics::Vector3 BoxAxisY{0.0f, 1.0f, 0.0f};
@@ -143,6 +144,7 @@ class SceneReflectionProbeEnvironmentSource final : public IEnvironmentSource
     bool EnsurePipelines(GameEngine::Rendering::IDevice& device,
                          const ImageBasedLightingFeature& feature);
     GameEngine::Rendering::CameraData MakeFaceCamera(uint32_t face) const;
+    GameEngine::Rendering::CameraRanges MakeFaceRanges() const;
     uint64_t BaseDigest() const;
     SceneProbeWorldEpochs WorldEpochs() const;
     // The schedule's interval argument: < 0 for a Once probe.

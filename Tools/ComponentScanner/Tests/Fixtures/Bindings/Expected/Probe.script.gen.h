@@ -28,7 +28,7 @@ struct GE_Probe_Table_v1
     GE_Result(GE_CDECL* SwapTint)(const GameEngine::ColorLinear*, GameEngine::ColorLinear*);
     GE_Result(GE_CDECL* Throw)();
     GE_Result(GE_CDECL* TryCast)(const GameEngine::Mathematics::Vector3*, const GameEngine::Mathematics::Vector3*, GameEngine::Probe::Hit*, float, std::uint8_t*);
-    GE_Result(GE_CDECL* TryNearest)(const GameEngine::Mathematics::Vector3*, std::uint32_t*, std::uint8_t*);
+    GE_Result(GE_CDECL* TryNearest)(const GameEngine::Mathematics::WorldPosition*, std::uint32_t*, std::uint8_t*);
     GE_Result(GE_CDECL* SubscribeTouched)(std::uint32_t, const GameEngine::ScriptCallback<GameEngine::Probe::Touch>*, std::uint64_t*);
     GE_Result(GE_CDECL* UnsubscribeTouched)(std::uint64_t);
 };
@@ -44,7 +44,7 @@ struct GE_Probe_Table_v1
 // caller frees.
 
 // The FNV-1a 64 of the Probe description's canonical form: the one version of the table.
-inline constexpr uint64_t GE_Probe_Hash = 0x3ce903c383382cfbull;
+inline constexpr uint64_t GE_Probe_Hash = 0xb58e708290e36253ull;
 
 // Serves the table to a caller whose hash is GE_Probe_Hash. Any other hash is refused with
 // GE_Result_InvalidArg and a last error that names both hashes; the table is never served to a caller built

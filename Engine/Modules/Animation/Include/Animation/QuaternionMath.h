@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Mathematics/Angle.h"
 #include "Mathematics/Interpolation.h"
 #include "Mathematics/Quaternion.h"
 
@@ -89,8 +90,7 @@ inline float AngleBetweenRadians(const Mathematics::Quaternion& a,
 inline float AngleBetweenDegrees(const Mathematics::Quaternion& a,
                                  const Mathematics::Quaternion& b)
 {
-    constexpr float kRadToDeg = 57.29577951308232f;
-    return AngleBetweenRadians(a, b) * kRadToDeg;
+    return Mathematics::ToDegrees(AngleBetweenRadians(a, b));
 }
 
 } // namespace Animation

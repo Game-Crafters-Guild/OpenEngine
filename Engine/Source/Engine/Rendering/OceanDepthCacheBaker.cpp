@@ -95,7 +95,7 @@ void CollectSceneMeshCandidates(ECS::World& world,
             candidate.MeshId = renderer.meshId;
             candidate.RenderLayers = renderer.RenderLayers;
             candidate.IsSkinnedRenderer = isSkinned;
-            candidate.WorldTransform = Mathematics::Matrix4x4::FromColumnMajor(worldTransform.matrix);
+            candidate.WorldTransform = worldTransform.ToMatrix4x4(worldTransform.GetPosition() - Mathematics::WorldPosition{});
             outCandidates.push_back(candidate);
             ++stats.CandidateRenderers;
         });

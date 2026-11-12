@@ -11,7 +11,7 @@ using json = nlohmann::json;
 
 // Read an [x,y,z] number array. Absent -> false with err untouched; present but malformed
 // -> false with err set (the caller distinguishes the two via err).
-bool TryReadVec3(const json& params, const char* key, Physics::Vector3& out, std::string& err)
+bool TryReadPosition(const json& params, const char* key, Physics::WorldPosition& out, std::string& err)
 {
     if (!params.contains(key))
         return false;
@@ -21,10 +21,26 @@ bool TryReadVec3(const json& params, const char* key, Physics::Vector3& out, std
         err = std::string(key) + " must be a [x,y,z] number array";
         return false;
     }
-    const Physics::Vector3 v{a[0].get<float32>(), a[1].get<float32>(), a[2].get<float32>()};
-    // A JSON number outside float range parses as a number and narrows to inf. The backend
+    const Physics::WorldPosition p{a[0].get<double>(), a[1].get<double>(), a[2].get<double>()};
+    // A JSON number outside double range parses as a number and becomes inf. The backend
     // casts against `origin + direction * maxDistance`, so one non-finite component makes
     // the whole segment NaN math that no downstream comparison catches.
+    if (!std::isfinite(p.X) || !std::isfinite(p.Y) || !std::isfinite(p.Z))
+    {
+        err = std::string(key) + " is not finite — it cannot form a ray";
+        return false;
+    }
+    out = p;
+    return true;
+}
+
+// As TryReadPosition, rounded to 32 bits. A number outside float range rounds to inf and is refused.
+bool TryReadVec3(const json& params, const char* key, Physics::Vector3& out, std::string& err)
+{
+    Physics::WorldPosition p;
+    if (!TryReadPosition(params, key, p, err))
+        return false;
+    const Physics::Vector3 v = p - Physics::WorldPosition{};
     if (!std::isfinite(v.x) || !std::isfinite(v.y) || !std::isfinite(v.z))
     {
         err = std::string(key) + " is not finite — it cannot form a ray";
@@ -39,13 +55,13 @@ bool TryReadVec3(const json& params, const char* key, Physics::Vector3& out, std
 bool ReadRayCastQuery(const json& params, Physics::RayCastQuery& out, std::string& err)
 {
     Physics::RayCastQuery query{};
-    if (!TryReadVec3(params, "origin", query.ray.origin, err))
+    if (!TryReadPosition(params, "origin", query.origin, err))
     {
         if (err.empty())
             err = "Provide 'origin' as a [x,y,z] array";
         return false;
     }
-    if (!TryReadVec3(params, "direction", query.ray.direction, err))
+    if (!TryReadVec3(params, "direction", query.direction, err))
     {
         if (err.empty())
             err = "Provide 'direction' as a [x,y,z] array";

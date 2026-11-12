@@ -15,9 +15,9 @@ namespace GameEngine.Scripting
     {
         SlopeDegrees = 0,
         SlopeNormalized = 1,
-        HeightMetres = 2,
-        HeightNormalized = 3,
+        HeightMeters = 2,
         Noise = 4,
+        LatitudeDegrees = 5,
     }
 
     public enum TerrainRuleFalloffCurve : byte
@@ -43,9 +43,9 @@ namespace GameEngine.Scripting
         public TerrainRuleConditionKind Kind
         {
             readonly get => m_Kind;
-            set => m_Kind = (byte)value <= 4
+            set => m_Kind = value is TerrainRuleConditionKind.SlopeDegrees or TerrainRuleConditionKind.SlopeNormalized or TerrainRuleConditionKind.HeightMeters or TerrainRuleConditionKind.Noise or TerrainRuleConditionKind.LatitudeDegrees
                 ? value
-                : throw new ArgumentOutOfRangeException(nameof(value), value, "TerrainRuleCondition.Kind is SlopeDegrees, SlopeNormalized, HeightMetres, HeightNormalized or Noise.");
+                : throw new ArgumentOutOfRangeException(nameof(value), value, "TerrainRuleCondition.Kind is SlopeDegrees, SlopeNormalized, HeightMeters, Noise or LatitudeDegrees.");
         }
 
         [FieldOffset(1)]
@@ -58,14 +58,11 @@ namespace GameEngine.Scripting
                 : throw new ArgumentOutOfRangeException(nameof(value), value, "TerrainRuleCondition.FalloffCurve is ClampedLinear or Smoothstep.");
         }
 
-        [InlineArray(2)]
-        public struct _Pad0Array
-        {
-            private byte m_Element;
-        }
-
         [FieldOffset(2)]
-        public _Pad0Array _Pad0;
+        public byte RefusedKind;
+
+        [FieldOffset(3)]
+        public byte _Pad0;
 
         [FieldOffset(4)]
         public float Min;

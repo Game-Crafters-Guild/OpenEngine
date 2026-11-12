@@ -430,6 +430,7 @@ void AppendSceneRow(UIElement* rowsContainer, const std::string& platformName,
 
     auto remove = std::make_unique<Button>();
     remove->SetText("×");
+    remove->AddClass("icon-button");
     remove->AddClass("bookmark-remove");
     remove->RegisterEventHandler(kEventButtonClick, [rowsContainer, platformName](UIEvent& e)
     {
@@ -727,6 +728,7 @@ std::unique_ptr<UIElement> CreateIconEditorBlock(const std::string& iconPrefKey,
 
     auto clear = std::make_unique<Button>();
     clear->SetText("×");
+    clear->AddClass("icon-button");
     clear->AddClass("bookmark-remove");
     clear->SetTooltip("Clear icon override (use Editor default icon).");
     clear->RegisterEventHandler(kEventButtonClick, [commitIcon, pathFieldPtr](UIEvent&)
@@ -1036,9 +1038,9 @@ void AppendWebExportFields(SettingsCategoryDescriptor& platform, const std::stri
     SettingsFieldDescriptor templateDir = MakeStorePathField(
         "Player template", SettingsFieldDescriptor::PathField::Kind::Directory,
         BuildPlatformPrefKey(platformName, "playerTemplate"), {},
-        "Directory holding WebPlayer.html, WebPlayer.js and WebPlayer.wasm from a wasm Player "
-        "build (cmake --build --preset wasm-debug --target WebPlayer). Leave empty to use the "
-        "engine tree's build/wasm-release/bin or build/wasm-debug/bin.",
+        "Directory holding WebPlayer.html, WebPlayer.js, WebPlayer.wasm and "
+        "THIRD_PARTY_NOTICES.md from a wasm Player build (cmake --build --preset wasm-debug "
+        "--target WebPlayer). Leave empty to use the engine tree's build/wasm-release/bin or build/wasm-debug/bin.",
         "build web export player template wasm emscripten browser");
     templateDir.SectionHeader = "Web export";
     platform.Fields.push_back(std::move(templateDir));

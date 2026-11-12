@@ -24,6 +24,7 @@
 #include "ECSModules/Rendering/Systems/RenderExtractionSystem.h"
 #include "Mathematics/Geometry.h"
 #include "Mathematics/Vector3.h"
+#include "Mathematics/WorldPosition.h"
 #include "Scene/SceneTlas.h"
 
 namespace
@@ -46,14 +47,7 @@ RenderExtractionSystem::WorldRenderableRecord MakeRecord(
     RenderExtractionSystem::WorldRenderableRecord rec{};
     rec.entity = entity;
     // Identity rotation + unit scale; translate to worldPos.
-    for (int i = 0; i < 16; ++i) rec.worldTransform.matrix[i] = 0.0f;
-    rec.worldTransform.matrix[0]  = 1.0f;
-    rec.worldTransform.matrix[5]  = 1.0f;
-    rec.worldTransform.matrix[10] = 1.0f;
-    rec.worldTransform.matrix[15] = 1.0f;
-    rec.worldTransform.matrix[12] = worldPos.x;
-    rec.worldTransform.matrix[13] = worldPos.y;
-    rec.worldTransform.matrix[14] = worldPos.z;
+    rec.worldTransform.Position = Mathematics::WorldPosition::FromVector3(worldPos);
     rec.worldTransform.Version = version;
 
     rec.meshRenderer.RenderLayers = GameEngine::Rendering::RenderLayerMask{layerMask};
@@ -568,7 +562,7 @@ TEST_F(SceneTlasFixture, ConcurrentTraverseIsSafe)
 
 // ---- E.5.1: multi-sector replication & traversal ----------------------------
 //
-// At the default sectorSize (Components::kWorldSectorSize = 1024m), all of the
+// At the default sectorSize (Mathematics::kWorldSectorSize = 1024m), all of the
 // existing tests above sit inside sector (0,0,0). The cases below shrink sectorSize to exercise sector
 // routing, replication, and cross-sector traversal with per-query EntityId
 // dedup.
@@ -1013,83 +1007,16 @@ TEST_F(SceneTlasFixture, SphereAabbPreCullSkipsNonOverlappingSectors)
     EXPECT_EQ(hits[0], near.id);
 }
 
-TEST_F(SceneTlasFixture, WorldSectorCoordPresentComposesWorldMatrix)
-{
-    // E.5.2: When a record has hasSectorCoord=true, the worldTransform is
-    // interpreted as sector-local. Composed world position = sector*sectorSize
-    // + localTranslation. Verify a ray in the COMPOSED world position picks
-    // it up, while the sector-local origin doesn't.
-    ECS::World world;
-    SceneTlas tlas;
-    tlas.SetSectorSizeForTesting(50.0f);
-
-    auto e = MakeHandle(77);
-    auto rec = MakeRecord(e, {0.0f, 0.0f, 0.0f}, {0.5f, 0.5f, 0.5f});
-    rec.hasSectorCoord     = true;
-    rec.sectorCoord.x      = 2;  // composed world x = 100
-    rec.sectorCoord.y      = 0;
-    rec.sectorCoord.z      = 0;
-    tlas.SyncFromRecords(std::vector{rec});
-
-    EXPECT_EQ(tlas.InstanceCount(), 1u);
-
-    // Ray at the COMPOSED position should hit.
-    Mathematics::Ray3D rayWorld;
-    rayWorld.origin    = {100.0f, -10.0f, 0.0f};
-    rayWorld.direction = {0.0f,    1.0f,  0.0f};
-    int hits = 0;
-    tlas.TraverseRay(rayWorld, {}, [&](const TlasInstance&, float32, float32) {
-        ++hits; return true;
-    });
-    EXPECT_EQ(hits, 1);
-
-    // Ray at the SECTOR-LOCAL origin should miss (entity is no longer there).
-    Mathematics::Ray3D rayLocal;
-    rayLocal.origin    = {0.0f, -10.0f, 0.0f};
-    rayLocal.direction = {0.0f,  1.0f,  0.0f};
-    hits = 0;
-    tlas.TraverseRay(rayLocal, {}, [&](const TlasInstance&, float32, float32) {
-        ++hits; return true;
-    });
-    EXPECT_EQ(hits, 0);
-}
-
-TEST_F(SceneTlasFixture, WorldSectorCoordZeroIsNoOp)
-{
-    // hasSectorCoord=true with sector (0,0,0) is equivalent to no
-    // composition (the offset is zero).
-    ECS::World world;
-    SceneTlas tlas;
-    tlas.SetSectorSizeForTesting(50.0f);
-
-    auto e = MakeHandle(78);
-    auto rec = MakeRecord(e, {10.0f, 0.0f, 0.0f});
-    rec.hasSectorCoord = true;
-    // sectorCoord is default-constructed to (0,0,0)
-    tlas.SyncFromRecords(std::vector{rec});
-
-    EXPECT_EQ(tlas.InstanceCount(), 1u);
-
-    Mathematics::Ray3D ray;
-    ray.origin    = {10.0f, -10.0f, 0.0f};
-    ray.direction = { 0.0f,  1.0f,  0.0f};
-    int hits = 0;
-    tlas.TraverseRay(ray, {}, [&](const TlasInstance&, float32, float32) {
-        ++hits; return true;
-    });
-    EXPECT_EQ(hits, 1);
-}
-
 TEST_F(SceneTlasFixture, BackCompatDefaultSectorSizeKeepsAllInPrimary)
 {
-    // The default sectorSize (Components::kWorldSectorSize = 1024m, the ONE
+    // The default sectorSize (Mathematics::kWorldSectorSize = 1024m, the ONE
     // constant shared with the render path) means typical scenes (entities
     // within a sector of origin) all live in PrimarySector — the no-op single-
     // sector path. Verify the parity test passes with default settings: a ray
     // hitting an entity at world position (100,0,0) still reports it.
     ECS::World world;
     SceneTlas tlas;  // no SetSectorSizeForTesting — keep the default
-    EXPECT_FLOAT_EQ(tlas.GetSectorSize(), Components::kWorldSectorSize);
+    EXPECT_FLOAT_EQ(tlas.GetSectorSize(), static_cast<float32>(Mathematics::kWorldSectorSize));
 
     auto e = MakeHandle(1);
     tlas.SyncFromRecords(std::vector{ MakeRecord(e, {100.0f, 0.0f, 0.0f}) });
@@ -1410,44 +1337,6 @@ TEST_F(MeshPickingIntegrationFixture, PickerFollowsEntityAcrossSectorMigrations)
     }
 }
 
-// 4. WorldSectorCoord-aware pick: an entity with sectorCoord=(2,0,0) and
-//    sector-local origin (0,0,0) should be picked at world position
-//    (sectorCoord * sectorSize) — not at the local origin.
-TEST_F(MeshPickingIntegrationFixture, PickerHonorsWorldSectorCoordTeleport)
-{
-    ECS::World world;
-    SceneTlas tlas;
-    tlas.SetSectorSizeForTesting(50.0f);
-
-    auto e = MakeHandle(7);
-    auto rec = MakeRecord(e, {0.0f, 0.0f, 0.0f}, {0.5f, 0.5f, 0.5f});
-    rec.hasSectorCoord = true;
-    rec.sectorCoord    = {2, 0, 0};  // composed world x = 100
-    tlas.SyncFromRecords(std::vector{rec});
-
-    // Ray at the COMPOSED world position should hit.
-    Mathematics::Ray3D rayWorld;
-    rayWorld.origin    = {100.0f, -10.0f, 0.0f};
-    rayWorld.direction = {  0.0f,   1.0f, 0.0f};
-    bool composedHit = false;
-    tlas.TraverseRay(rayWorld, {}, [&](const TlasInstance& inst, float32, float32) {
-        composedHit = (inst.Entity.id == e.id);
-        return false;
-    });
-    EXPECT_TRUE(composedHit);
-
-    // Ray at the SECTOR-LOCAL origin should miss (entity isn't there in
-    // world space).
-    Mathematics::Ray3D rayLocal;
-    rayLocal.origin    = {0.0f, -10.0f, 0.0f};
-    rayLocal.direction = {0.0f,  1.0f,  0.0f};
-    bool localHit = false;
-    tlas.TraverseRay(rayLocal, {}, [&](const TlasInstance& inst, float32, float32) {
-        localHit = (inst.Entity.id == e.id);
-        return false;
-    });
-    EXPECT_FALSE(localHit);
-}
 
 // 5. Two ECS Worlds each have their own SceneTlas. A pick query in one
 //    world must not see entities in the other.
@@ -1684,10 +1573,8 @@ ECS::EntityHandle MakeRealEntity(ECS::World& world,
     // frame sync point, which these tests never reach).
     ECS::EntityHandle e = world.CreateEntity();
 
-    Components::WorldTransform wt{};  // matrix defaults to identity
-    wt.matrix[12] = pos.x;
-    wt.matrix[13] = pos.y;
-    wt.matrix[14] = pos.z;
+    Components::WorldTransform wt{};  // the basis defaults to identity
+    wt.Position = Mathematics::WorldPosition::FromVector3(pos);
     wt.Version = 1u;
     world.AddComponentImmediate<Components::WorldTransform>(e, wt);
 
@@ -1712,9 +1599,7 @@ void MoveEntity(ECS::World& world, ECS::EntityHandle e, const Mathematics::Vecto
 {
     auto* wt = world.GetComponentForWrite<Components::WorldTransform>(e);
     ASSERT_NE(wt, nullptr);
-    wt->matrix[12] = pos.x;
-    wt->matrix[13] = pos.y;
-    wt->matrix[14] = pos.z;
+    wt->Position = Mathematics::WorldPosition::FromVector3(pos);
     Components::BumpWorldTransform(world, e, *wt);
 }
 
@@ -2166,8 +2051,9 @@ TEST_F(SceneTlasRequestFixture, OnDemandAnswersMatchAReferenceReconciledEveryFra
             const ECS::EntityHandle e = entities[pick(rng)];
             if (!world.IsValid(e))
                 continue;
-            const float32* at = world.GetComponent<Components::WorldTransform>(e)->matrix;
-            MoveEntity(world, e, {at[12] + jitter(rng), 0.0f, at[14] + jitter(rng)});
+            const Mathematics::Vector3 at =
+                world.GetComponent<Components::WorldTransform>(e)->GetPosition() - Mathematics::WorldPosition{};
+            MoveEntity(world, e, {at.x + jitter(rng), 0.0f, at.z + jitter(rng)});
         }
         if (frame == 7)
         {
@@ -2184,8 +2070,8 @@ TEST_F(SceneTlasRequestFixture, OnDemandAnswersMatchAReferenceReconciledEveryFra
         {
             if (!world.IsValid(e))
                 continue;
-            const float32* m = world.GetComponent<Components::WorldTransform>(e)->matrix;
-            const Mathematics::Vector3 at{m[12], m[13], m[14]};
+            const Mathematics::Vector3 at =
+                world.GetComponent<Components::WorldTransform>(e)->GetPosition() - Mathematics::WorldPosition{};
             ASSERT_EQ(SphereHitCount(onDemand, at, 0.25f, e) > 0, SphereHitCount(reference, at, 0.25f, e) > 0)
                 << "frame " << frame << " entity " << e.id << " at its current position";
         }
@@ -2253,7 +2139,7 @@ TEST_F(SceneTlasRequestFixture, ValidatorReconcilesAWriteWithoutAGrant)
     ASSERT_EQ(tlas.RequestCurrent(world), SceneTlas::Readiness::Ready);
 
     auto* silent = const_cast<Components::WorldTransform*>(world.GetComponent<Components::WorldTransform>(e));
-    silent->matrix[12] = 30.0f;
+    silent->Position.X = 30.0;
     ++silent->Version;
     for (int i = 0; i < 64; ++i)
         ASSERT_EQ(tlas.RequestCurrent(world), SceneTlas::Readiness::Ready);
@@ -2413,7 +2299,7 @@ TEST_F(SceneTlasFeedFixture, CountStaleLeavesDetectsSilentBump)
     {
         auto* wt = world.GetComponentForWrite<Components::WorldTransform>(e);
         ASSERT_NE(wt, nullptr);
-        wt->matrix[12] = 9.0f;
+        wt->Position.X = 9.0;
         ++wt->Version;
     }
     // Stale count is per replica LEAF: an entity whose bounds straddle
@@ -2452,8 +2338,8 @@ void NudgeEntity(ECS::World& world, ECS::EntityHandle e,
 {
     auto* wt = world.GetComponentForWrite<Components::WorldTransform>(e);
     ASSERT_NE(wt, nullptr);
-    wt->matrix[12] += dx;
-    wt->matrix[14] += dz;
+    wt->Position.X += dx;
+    wt->Position.Z += dz;
     ++wt->Version;
 }
 
@@ -2702,10 +2588,11 @@ TEST_F(SceneTlasParallelFixture, UnwiredWorldStaysSerialAndNeverTouchesEngineCor
         // workload grid sits far from the ±1-unit nudges), so every request
         // takes the refit, not the reconcile.
         for (std::size_t i = 0; i < entities.size(); i += 5)
-            MoveEntity(world, entities[i],
-                       {world.GetComponent<Components::WorldTransform>(entities[i])->matrix[12],
-                        0.25f + 0.1f * static_cast<float32>(frame),
-                        world.GetComponent<Components::WorldTransform>(entities[i])->matrix[14]});
+        {
+            const Mathematics::Vector3 at =
+                world.GetComponent<Components::WorldTransform>(entities[i])->GetPosition() - Mathematics::WorldPosition{};
+            MoveEntity(world, entities[i], {at.x, 0.25f + 0.1f * static_cast<float32>(frame), at.z});
+        }
         EXPECT_EQ(tlas.RequestCurrent(world), SceneTlas::Readiness::Ready) << "an unwired world runs inline";
         EXPECT_EQ(tlas.CountStaleLeavesForValidation(world), 0u);
     }

@@ -78,18 +78,18 @@ class DayCycleProfile final : public Asset
     DayCycleProfile(const GUID& guid, const std::filesystem::path& path);
 
     bool Load() override;
-    bool LoadFromData(const Vector<uint8>& data) override;
+    bool LoadFromData(std::span<const uint8> data) override;
     void Unload() override;
 
     /// The published profile; null until loaded.
     std::shared_ptr<const DayCycleProfileData> GetData() const;
 
   protected:
-    bool ReloadFromData(const Vector<uint8>& data) override;
+    bool ReloadFromData(std::span<const uint8> data) override;
 
   private:
     // The parsed text, or null with the reason logged.
-    std::shared_ptr<const DayCycleProfileData> ParseBytes(const Vector<uint8>& data) const;
+    std::shared_ptr<const DayCycleProfileData> ParseBytes(std::span<const uint8> data) const;
     void Publish(std::shared_ptr<const DayCycleProfileData> data);
 
     // Guards m_Data: each critical section is one shared_ptr copy or swap.

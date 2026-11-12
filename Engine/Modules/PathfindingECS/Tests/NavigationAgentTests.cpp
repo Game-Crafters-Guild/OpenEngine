@@ -17,6 +17,7 @@
 #include "Components/Transform.h"
 #include "ECS/Component/ComponentRegistry.h"
 #include "ECS/ECSTemplates.h"
+#include "ECS/Systems.h"
 #include "ECS/World.h"
 #include "EngineLogCapture.h"
 #include "Pathfinding/GridMap.h"
@@ -66,12 +67,10 @@ protected:
         agent.ReplanInterval = 0.0f;
         entity.Set(agent);
         Components::Transform transform{};
-        transform.matrix[12] = x;
-        transform.matrix[14] = z;
+        transform.Position = Mathematics::WorldPosition{x, 0.0, z};
         entity.Set(transform);
         Components::WorldTransform worldTransform{};
-        worldTransform.matrix[12] = x;
-        worldTransform.matrix[14] = z;
+        worldTransform.Position = transform.Position;
         entity.Set(worldTransform);
         world->ProcessCommands();
         return entity;
@@ -129,6 +128,16 @@ protected:
             if (Navigation::GetStatus(*world, agent.GetHandle()).State == AgentState::Arrived)
                 ++arrived;
         return arrived;
+    }
+
+    // Runs `frames` frames of the scheduler at kDt.
+    void RunScheduled(ECS::SystemManager& systems, uint32 frames)
+    {
+        for (uint32 i = 0; i < frames; ++i)
+        {
+            systems.Update(*world, kDt);
+            world->ProcessCommands();
+        }
     }
 
     const Components::NavigationAgentState& StateOf(ECS::Entity& agent)
@@ -249,7 +258,9 @@ TEST_F(NavigationAgentTest, ARequestWaitsWhileItsSurfaceBakesAndCompletesOnceBak
         const Navigation::AgentStatus waiting = Navigation::GetStatus(*world, agent.GetHandle());
         EXPECT_EQ(waiting.State, AgentState::Waiting);
         if (frame > 0)
+        {
             EXPECT_EQ(waiting.Reason, StatusReason::SurfaceNotBaked);
+        }
         mostPendingTiles = std::max(mostPendingTiles, waiting.PendingTiles);
         surfaces.Update(*world, kDt);
         world->ProcessCommands();
@@ -309,8 +320,8 @@ TEST_F(NavigationAgentTest, AMeshAgentArrivesAndASecondOrderWalksItAgain)
     Walk(600);
     EXPECT_EQ(Navigation::GetStatus(*world, agent.GetHandle()).State, AgentState::Arrived);
     // A lone agent arrives within its Stopping Distance.
-    const float32 dx = agent.Get<Components::Transform>()->matrix[12] - 6.0f;
-    const float32 dz = agent.Get<Components::Transform>()->matrix[14];
+    const float64 dx = agent.Get<Components::Transform>()->GetPosition().X - 6.0;
+    const float64 dz = agent.Get<Components::Transform>()->GetPosition().Z;
     EXPECT_LE(std::sqrt(dx * dx + dz * dz), agent.Get<Components::NavigationAgent>()->StoppingDistance);
 
     ASSERT_TRUE(Navigation::SetDestination(*world, agent.GetHandle(), {-6.0f, 0.0f, 0.0f}));
@@ -318,7 +329,7 @@ TEST_F(NavigationAgentTest, AMeshAgentArrivesAndASecondOrderWalksItAgain)
     EXPECT_EQ(Navigation::GetStatus(*world, agent.GetHandle()).State, AgentState::Walking);
     Walk(600);
     EXPECT_EQ(Navigation::GetStatus(*world, agent.GetHandle()).State, AgentState::Arrived);
-    EXPECT_NEAR(agent.Get<Components::Transform>()->matrix[12], -6.0f, 0.2f) << "the second order did not move the agent";
+    EXPECT_NEAR(agent.Get<Components::Transform>()->GetPosition().X, -6.0f, 0.2f) << "the second order did not move the agent";
 }
 
 
@@ -334,7 +345,7 @@ TEST_F(NavigationAgentTest, AMeshAgentTakesANewOrderWhileItWalks)
     ASSERT_TRUE(Navigation::SetDestination(*world, agent.GetHandle(), {0.0f, 0.0f, 8.0f}));
     Walk(600);
     EXPECT_EQ(Navigation::GetStatus(*world, agent.GetHandle()).State, AgentState::Arrived);
-    EXPECT_NEAR(agent.Get<Components::Transform>()->matrix[14], 8.0f, 0.2f) << "the new order did not turn the agent";
+    EXPECT_NEAR(agent.Get<Components::Transform>()->GetPosition().Z, 8.0f, 0.2f) << "the new order did not turn the agent";
 }
 
 TEST_F(NavigationAgentTest, AWalkingAgentKeepsItsPathWhileItsSurfaceBakesAgainAndReplansAfter)
@@ -450,8 +461,27 @@ TEST_F(NavigationAgentTest, OnlyAMovingAgentWritesItsWorldTransform)
     ASSERT_TRUE(Navigation::SetDestination(*world, agent.GetHandle(), {14.5f, 0.0f, 1.5f}));
     Walk(10);
     EXPECT_GT(world->GetEntityColumnVersion(agent.GetHandle(), worldTransform), atRest);
-    EXPECT_GT(agent.Get<Components::Transform>()->matrix[12], 1.5f);
-    EXPECT_EQ(agent.Get<Components::Transform>()->matrix[12], agent.Get<Components::WorldTransform>()->matrix[12]);
+    EXPECT_GT(agent.Get<Components::Transform>()->GetPosition().X, 1.5f);
+    EXPECT_EQ(agent.Get<Components::Transform>()->GetPosition().X, agent.Get<Components::WorldTransform>()->GetPosition().X);
+}
+
+// The scheduler hands the agent systems a delta of 0 while the world clock is paused, so an agent
+// on its path holds where it is.
+TEST_F(NavigationAgentTest, APausedClockHoldsAnAgentOnItsPath)
+{
+    Testing::CreateFlatGridSurface(*world, 16, 16, 1.0f);
+    auto agent = CreateAgent(1.5f, 1.5f);
+    ECS::SystemManager systems;
+    systems.AddSystem<NavigationPathfindingSystem>();
+    systems.AddSystem<NavigationMovementSystem>();
+    ASSERT_TRUE(Navigation::SetDestination(*world, agent.GetHandle(), {14.5f, 0.0f, 1.5f}));
+    RunScheduled(systems, 10);
+    const float64 held = agent.Get<Components::Transform>()->GetPosition().X;
+    ASSERT_GT(held, 1.5f);
+
+    world->GetSimulationClock().SetTimeScale(0.0);
+    RunScheduled(systems, 30);
+    EXPECT_EQ(agent.Get<Components::Transform>()->GetPosition().X, held) << "a paused clock holds the agent";
 }
 
 TEST_F(NavigationAgentTest, AnAgentStandingOffTheSurfaceFailsWithStartOffSurface)
@@ -529,16 +559,17 @@ TEST_F(NavigationAgentTest, AnArrivedMeshAgentYieldsToAPush)
     ASSERT_TRUE(Navigation::SetDestination(*world, first.GetHandle(), {6.0f, 0.0f, 0.0f}));
     Walk(600);
     ASSERT_EQ(Navigation::GetStatus(*world, first.GetHandle()).State, AgentState::Arrived);
-    const float32 restX = first.Get<Components::Transform>()->matrix[12];
-    const float32 restZ = first.Get<Components::Transform>()->matrix[14];
+    const Mathematics::Vector3 rest = first.Get<Components::Transform>()->GetPosition() - Mathematics::WorldPosition{};
+    const float32 restX = rest.x;
+    const float32 restZ = rest.z;
 
     // A late agent ordered to the same point, which steps in 0.6 m from the arrived one (their
     // radii sum to 1 m), pushes it aside.
     auto late = CreateAgent(restX - 0.6f, restZ);
     ASSERT_TRUE(Navigation::SetDestination(*world, late.GetHandle(), {6.0f, 0.0f, 0.0f}));
     Walk(120);
-    const float32 dx = first.Get<Components::Transform>()->matrix[12] - restX;
-    const float32 dz = first.Get<Components::Transform>()->matrix[14] - restZ;
+    const float64 dx = first.Get<Components::Transform>()->GetPosition().X - restX;
+    const float64 dz = first.Get<Components::Transform>()->GetPosition().Z - restZ;
     EXPECT_GT(std::sqrt(dx * dx + dz * dz), 0.05f) << "the arrived agent did not yield to the push";
     EXPECT_EQ(Navigation::GetStatus(*world, first.GetHandle()).State, AgentState::Arrived);
     EXPECT_EQ(Navigation::GetStatus(*world, late.GetHandle()).State, AgentState::Arrived);
@@ -559,10 +590,10 @@ TEST_F(NavigationAgentTest, AStalledAgentThatIsNotHeldOffByOthersKeepsItsOrder)
     box.halfExtentsZ = 6.0f;
     wall.Set(box);
     Components::Transform wallTransform{};
-    wallTransform.matrix[13] = 2.0f;
+    wallTransform.Position.Y = 2.0;
     wall.Set(wallTransform);
     Components::WorldTransform wallWorld{};
-    wallWorld.matrix[13] = 2.0f;
+    wallWorld.Position.Y = 2.0;
     wall.Set(wallWorld);
     world->ProcessCommands();
     auto surface = world->Create();
@@ -636,8 +667,8 @@ TEST_F(NavigationAgentTest, AnArrivedMeshAgentKeepsItsPlaceWhenTheCrowdStartsAga
     ASSERT_TRUE(Navigation::SetDestination(*world, second.GetHandle(), {-6.0f, 0.0f, 6.0f}));
     Walk(120);
 
-    EXPECT_NEAR(first.Get<Components::Transform>()->matrix[12], 6.0f, 0.5f) << "the arrived agent left its place";
-    EXPECT_NEAR(first.Get<Components::Transform>()->matrix[14], 0.0f, 0.5f) << "the arrived agent left its place";
+    EXPECT_NEAR(first.Get<Components::Transform>()->GetPosition().X, 6.0f, 0.5f) << "the arrived agent left its place";
+    EXPECT_NEAR(first.Get<Components::Transform>()->GetPosition().Z, 0.0f, 0.5f) << "the arrived agent left its place";
     EXPECT_EQ(Navigation::GetStatus(*world, first.GetHandle()).State, AgentState::Arrived);
     EXPECT_NE(StateOf(first).CrowdAgentHandle, StateOf(second).CrowdAgentHandle);
 }

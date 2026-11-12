@@ -555,15 +555,15 @@ TEST(ArchetypeChunkTest, AppendAndSwapRemove) {
     col[1] = 20.0f;
     col[2] = 30.0f;
 
-    // SwapRemove middle element (index 1)
-    EntityHandle moved = chunk.SwapRemove(1);
-    EXPECT_EQ(moved, e3); // e3 was swapped into index 1
+    // Move the last row into the middle row (index 1)
+    EntityHandle moved = chunk.MoveLastRowTo(chunk, 1);
+    EXPECT_EQ(moved, e3); // e3 was moved into index 1
     EXPECT_EQ(chunk.GetCount(), 2u);
     EXPECT_FLOAT_EQ(col[0], 10.0f);  // unchanged
     EXPECT_FLOAT_EQ(col[1], 30.0f);  // e3's data moved here
 
-    // SwapRemove last element (no swap needed)
-    EntityHandle movedLast = chunk.SwapRemove(1);
+    // Remove the last row (index 1): no row moves
+    EntityHandle movedLast = chunk.MoveLastRowTo(chunk, 1);
     EXPECT_EQ(movedLast, EntityHandle::Invalid()); // was the last element
     EXPECT_EQ(chunk.GetCount(), 1u);
 }

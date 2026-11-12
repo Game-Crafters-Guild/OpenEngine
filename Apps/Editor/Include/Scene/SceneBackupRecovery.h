@@ -10,7 +10,8 @@ namespace GameEngine::Editor
 //
 // The autosave timer never touches the files an explicit Save owns. It writes
 // the scene snapshot to `<stem>.backup<ext>` beside the scene, and stages dirty
-// terrain zone payloads to `<live>.tzone.backup` siblings. On a clean close all
+// terrain zone payloads and the planet's height layer to `<live>.backup` siblings
+// (`.tzone.backup`, `.gepage.backup`). On a clean close all
 // of that staging is deleted; only a crash leaves it behind. The next open of
 // that scene detects the leftovers and offers to restore or discard them.
 //
@@ -23,7 +24,7 @@ std::filesystem::path SceneBackupPathFor(const std::filesystem::path& scenePath)
 // The scene's companion payload folder `<stem>_Zones` (matches TerrainZonePayloadSaver).
 std::filesystem::path SceneZonesFolderFor(const std::filesystem::path& scenePath);
 
-// Staged autosave sibling for a live .tzone payload: `<livePath>.backup`.
+// Staged autosave sibling for a live .tzone or .gepage payload: `<livePath>.backup`.
 std::filesystem::path StagedZonePayloadPathFor(const std::filesystem::path& livePayloadPath);
 
 // What a relaunch (or scene open) found on disk for `scenePath`.
@@ -37,7 +38,7 @@ struct SceneRecoveryScan
     // explicit Save) is stale and never offered.
     bool BackupSceneUsable = false;
 
-    // Staged `*.tzone.backup` files under the scene's companion zones folder.
+    // Staged `*.tzone.backup` and `*.gepage.backup` files under the scene's companion zones folder.
     // Staging is deleted on clean close, so any survivor implies a crash.
     std::vector<std::filesystem::path> StagedPayloads;
 
@@ -47,7 +48,7 @@ struct SceneRecoveryScan
 // Detect leftover autosave staging for `scenePath`. Pure read — changes nothing.
 SceneRecoveryScan ScanForSceneRecovery(const std::filesystem::path& scenePath);
 
-// ACCEPT: atomically rename each staged payload over its live .tzone (strip the
+// ACCEPT: atomically rename each staged payload over its live file (strip the
 // `.backup` suffix). Returns false if any promotion failed; successfully promoted
 // files stay promoted (per-file rename is the atomic unit).
 bool PromoteStagedZonePayloads(const std::vector<std::filesystem::path>& stagedPayloads);

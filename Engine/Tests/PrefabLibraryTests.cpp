@@ -27,6 +27,7 @@
 #include "Engine/Rendering/PrimitiveGenerator.h"
 #include "JobSystem/WorkStealingThreadPool.h"
 #include "Scene/AssetManagerSceneResolver.h"
+#include "Scene/KeptComponentResolver.h"
 #include "Scene/PrefabAuthoring.h"
 #include "Scene/PrefabLibrary.h"
 #include "Scene/PrefabSpawn.h"
@@ -68,6 +69,20 @@ struct PrefabLinkProbe
 };
 GE_REFLECT(PrefabLinkProbe, Target);
 
+// Components of a module that registers after a scene loads: no test registers them before their test.
+// The tests that register them run once per process, because a type registration is process-wide.
+struct LateSpawnerProbe
+{
+    GameEngine::Components::PrefabRef Prefab;
+};
+GE_REFLECT(LateSpawnerProbe, Prefab);
+
+struct LateMarkerProbe
+{
+    std::int32_t Value = 0;
+};
+GE_REFLECT(LateMarkerProbe, Value);
+
 namespace GameEngine
 {
 namespace
@@ -102,6 +117,15 @@ void EnsureProbeRegistered()
         return true;
     }();
     ASSERT_TRUE(registered);
+}
+
+// Registers `Probe` as a module that loads after a scene does: the registries and the component handler.
+template <typename Probe>
+void RegisterLateProbe(const char* schemaName)
+{
+    RegisterProbe<Probe>(schemaName);
+    ECS::World registration;
+    registration.AddComponentImmediate(registration.CreateEntity(), Probe{});
 }
 
 class PrefabLibraryTests : public ::testing::Test
@@ -157,11 +181,11 @@ class PrefabLibraryTests : public ::testing::Test
         return result.IsOk() ? result.Value() : GUID::Null();
     }
 
-    bool Load(ECS::World& world, const std::string& file, std::string_view text)
+    Scene::SceneInstantiateResult Load(ECS::World& world, const std::string& file, std::string_view text)
     {
         Scene::SceneReadOptions options{};
-        options.assetResolver = &*m_Resolver;
-        options.assetRootOverride = m_Resolver->GetAssetRoot();
+        options.AssetResolver = &*m_Resolver;
+        options.AssetRootOverride = m_Resolver->GetAssetRoot();
         return Scene::ReadSceneInto(world, Write(file, text), options);
     }
 
@@ -201,16 +225,17 @@ TEST_F(PrefabLibraryTests, SpawnOfAnUnreferencedPrefabFailsWithTheFixAndSucceeds
     EXPECT_EQ(CountLines(kNotResidentMessage), 1u) << "logged once per prefab\n" << Log();
     EXPECT_EQ(world.GetEntityCount(), 0u);
 
-    ASSERT_TRUE(Load(world, "Barracks.scene",
+    const auto readResult = Load(world, "Barracks.scene",
                      "[scene name=\"Barracks\" version=1]\n"
                      "[entity id=\"spawner\"]\n"
-                     "PrefabSpawnerProbe.Prefab = [path=\"Soldier.prefab\" guid=\"" + soldier.ToString() + "\"]\n"))
-        << Scene::GetLastSceneIOError().message;
+                     "PrefabSpawnerProbe.Prefab = [path=\"Soldier.prefab\" guid=\"" + soldier.ToString() + "\"]\n");
+    ASSERT_TRUE(readResult)
+        << readResult.Error->message;
     ASSERT_EQ(m_Library->GetResidentCount(), 1u) << Log();
 
     const std::size_t before = world.GetEntityCount();
     const Components::Transform at = Components::Transform::FromTRS(
-        Mathematics::Vector3{3.0f, 0.0f, 0.0f}, Mathematics::Quaternion{}, Mathematics::Vector3{1.0f, 1.0f, 1.0f});
+        Mathematics::WorldPosition{3.0, 0.0, 0.0}, Mathematics::Quaternion{}, Mathematics::Vector3{1.0f, 1.0f, 1.0f});
     const ECS::EntityHandle root = Scene::SpawnPrefab(world, soldier, at, {});
     ASSERT_TRUE(root.IsValid());
     EXPECT_EQ(world.GetEntityCount(), before + 2u);
@@ -219,7 +244,7 @@ TEST_F(PrefabLibraryTests, SpawnOfAnUnreferencedPrefabFailsWithTheFixAndSucceeds
     EXPECT_EQ(marker->Source, soldier);
     const auto* transform = world.GetComponent<Components::Transform>(root);
     ASSERT_NE(transform, nullptr);
-    EXPECT_EQ(transform->GetPosition().x, 3.0f);
+    EXPECT_EQ(transform->GetPosition().X, 3.0);
 }
 
 // The editor's Place: a prefab no scene places yet is read from its file, held for the world, and
@@ -253,7 +278,8 @@ TEST_F(PrefabLibraryTests, PlaceReadsAnUnreferencedPrefabAndTheSaveWritesTheInst
     Scene::SceneWriteOptions options;
     options.assetResolver = &*m_Resolver;
     const std::filesystem::path scenePath = EngineCore::GetInstance().GetResolvedAssetRoot() / "Placed.scene";
-    ASSERT_TRUE(Scene::WriteSceneFile(world, scenePath, options)) << Scene::GetLastSceneIOError().message;
+    const auto writeResult = Scene::WriteSceneFile(world, scenePath, options);
+    ASSERT_TRUE(writeResult) << writeResult.Error->message;
     std::ifstream file(scenePath, std::ios::binary);
     const std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
     EXPECT_NE(text.find("[prefab id=\"soldier\""), std::string::npos) << text;
@@ -314,7 +340,7 @@ TEST_F(PrefabLibraryTests, DescribePrefabInstanceReportsOverridesAndAddedEntitie
     const GUID crate = Register(Write("Crate.prefab", kCratePrefab));
     ECS::World world;
     const Components::Transform at =
-        Components::Transform::FromTRS(Vector3(4.0f, 0.0f, 2.0f), Quaternion::Identity(), Vector3(1.0f, 1.0f, 1.0f));
+        Components::Transform::FromTRS(Mathematics::WorldPosition{4.0, 0.0, 2.0}, Quaternion::Identity(), Vector3(1.0f, 1.0f, 1.0f));
     const ECS::EntityHandle root = Scene::PlacePrefab(world, crate, at, {});
     ASSERT_TRUE(root.IsValid()) << Log();
     const ECS::EntityHandle lid = FindChild(world, root);
@@ -613,7 +639,7 @@ TEST_F(PrefabLibraryTests, CreatePrefabWritesTheSubtreeAndMakesItAnInstanceInPla
     ECS::World world;
     const ECS::EntityHandle gate = CreateNamed(world, "Gate", {});
     const ECS::EntityHandle crate = CreateNamed(world, "Crate", {});
-    world.AddComponentImmediate(crate, Components::Transform::FromTRS(Mathematics::Vector3{5.0f, 0.0f, 0.0f},
+    world.AddComponentImmediate(crate, Components::Transform::FromTRS(Mathematics::WorldPosition{5.0, 0.0, 0.0},
                                                                       Mathematics::Quaternion{},
                                                                       Mathematics::Vector3{1.0f, 1.0f, 1.0f}));
     const ECS::EntityHandle lid = CreateNamed(world, "Lid", crate);
@@ -677,7 +703,8 @@ TEST_F(PrefabLibraryTests, CreatePrefabWritesTheSubtreeAndMakesItAnInstanceInPla
     Scene::SceneWriteOptions options;
     options.assetResolver = &*m_Resolver;
     const std::filesystem::path scenePath = EngineCore::GetInstance().GetResolvedAssetRoot() / "Yard.scene";
-    ASSERT_TRUE(Scene::WriteSceneFile(world, scenePath, options)) << Scene::GetLastSceneIOError().message;
+    const auto writeResult = Scene::WriteSceneFile(world, scenePath, options);
+    ASSERT_TRUE(writeResult) << writeResult.Error->message;
     const std::string sceneText = ReadText(scenePath);
     EXPECT_NE(sceneText.find("[prefab id=\"crate\""), std::string::npos) << sceneText;
     EXPECT_EQ(sceneText.find("[entity id=\"lid"), std::string::npos) << "a member is not an entity\n" << sceneText;
@@ -686,8 +713,9 @@ TEST_F(PrefabLibraryTests, CreatePrefabWritesTheSubtreeAndMakesItAnInstanceInPla
 
     ECS::World reloaded;
     Scene::SceneReadOptions loadOptions{};
-    loadOptions.assetResolver = &*m_Resolver;
-    ASSERT_TRUE(Scene::ReadSceneInto(reloaded, scenePath, loadOptions)) << Scene::GetLastSceneIOError().message;
+    loadOptions.AssetResolver = &*m_Resolver;
+    const auto readResult = Scene::ReadSceneInto(reloaded, scenePath, loadOptions);
+    ASSERT_TRUE(readResult) << readResult.Error->message;
     EXPECT_EQ(reloaded.GetEntityCount(), entityCount);
 }
 
@@ -756,7 +784,7 @@ TEST_F(PrefabLibraryTests, UnpackGivesEveryMemberANewIdentityAndKeepsTheValues)
     const ECS::EntityHandle handle = FindChild(world, lid);
     ASSERT_TRUE(handle.IsValid());
     const Components::Transform moved =
-        Components::Transform::FromTRS(Vector3(0.0f, 3.0f, 0.0f), Quaternion::Identity(), Vector3(1.0f, 1.0f, 1.0f));
+        Components::Transform::FromTRS(Mathematics::WorldPosition{0.0, 3.0, 0.0}, Quaternion::Identity(), Vector3(1.0f, 1.0f, 1.0f));
     world.AddComponentImmediate(lid, moved);
     const std::string lidTag = TagOf(world, lid);
     const std::string handleTag = TagOf(world, handle);
@@ -773,14 +801,15 @@ TEST_F(PrefabLibraryTests, UnpackGivesEveryMemberANewIdentityAndKeepsTheValues)
     EXPECT_EQ(TagOf(world, lid), "lid");
     EXPECT_EQ(TagOf(world, handle), "handle");
     EXPECT_EQ(world.GetEntityCount(), entityCount);
-    EXPECT_FLOAT_EQ(world.GetComponent<Components::Transform>(lid)->GetPosition().y, 3.0f) << "the values stay";
+    EXPECT_DOUBLE_EQ(world.GetComponent<Components::Transform>(lid)->GetPosition().Y, 3.0) << "the values stay";
     EXPECT_EQ(world.GetComponent<Components::Name>(handle)->View(), "Handle");
     EXPECT_EQ(world.GetComponent<Components::Parent>(handle)->Entity, lid);
 
     Scene::SceneWriteOptions options;
     options.assetResolver = &*m_Resolver;
     const std::filesystem::path scenePath = EngineCore::GetInstance().GetResolvedAssetRoot() / "Unpacked.scene";
-    ASSERT_TRUE(Scene::WriteSceneFile(world, scenePath, options)) << Scene::GetLastSceneIOError().message;
+    const auto writeResult = Scene::WriteSceneFile(world, scenePath, options);
+    ASSERT_TRUE(writeResult) << writeResult.Error->message;
     const std::string sceneText = ReadText(scenePath);
     EXPECT_EQ(sceneText.find("[prefab id="), std::string::npos) << sceneText;
     EXPECT_NE(sceneText.find("[entity id=\"handle\" parent=\"lid\""), std::string::npos) << sceneText;
@@ -835,7 +864,8 @@ TEST_F(PrefabLibraryTests, UnpackKeepsANestedInstanceAndUnpackCompletelyMakesItP
     Scene::SceneWriteOptions options;
     options.assetResolver = &*m_Resolver;
     const std::filesystem::path scenePath = EngineCore::GetInstance().GetResolvedAssetRoot() / "Cart.scene";
-    ASSERT_TRUE(Scene::WriteSceneFile(world, scenePath, options)) << Scene::GetLastSceneIOError().message;
+    const auto writeResult = Scene::WriteSceneFile(world, scenePath, options);
+    ASSERT_TRUE(writeResult) << writeResult.Error->message;
     const std::string sceneText = ReadText(scenePath);
     EXPECT_NE(sceneText.find("[prefab id=\"crate\""), std::string::npos) << sceneText;
     EXPECT_NE(sceneText.find("[entity id=\"axle\""), std::string::npos) << sceneText;
@@ -895,15 +925,17 @@ TEST_F(PrefabLibraryTests, ACopyOfAnInstanceIsAnInstanceWithItsOverridesAndIdent
     Scene::SceneWriteOptions options;
     options.assetResolver = &*m_Resolver;
     const std::filesystem::path scenePath = EngineCore::GetInstance().GetResolvedAssetRoot() / "Copies.scene";
-    ASSERT_TRUE(Scene::WriteSceneFile(world, scenePath, options)) << Scene::GetLastSceneIOError().message;
+    const auto writeResult = Scene::WriteSceneFile(world, scenePath, options);
+    ASSERT_TRUE(writeResult) << writeResult.Error->message;
     const std::string sceneText = ReadText(scenePath);
     EXPECT_NE(sceneText.find("[prefab id=\"" + copyId + "\""), std::string::npos) << sceneText;
     EXPECT_EQ(sceneText.find("[entity"), std::string::npos) << "no member is written as an entity\n" << sceneText;
 
     ECS::World reloaded;
     Scene::SceneReadOptions loadOptions{};
-    loadOptions.assetResolver = &*m_Resolver;
-    ASSERT_TRUE(Scene::ReadSceneInto(reloaded, scenePath, loadOptions)) << Scene::GetLastSceneIOError().message;
+    loadOptions.AssetResolver = &*m_Resolver;
+    const auto readResult = Scene::ReadSceneInto(reloaded, scenePath, loadOptions);
+    ASSERT_TRUE(readResult) << readResult.Error->message;
     EXPECT_EQ(reloaded.GetEntityCount(), 2 * entityCount);
 }
 
@@ -953,11 +985,13 @@ TEST_F(PrefabLibraryTests, AReplaceOfAPlacedFileKeepsOneTemplateAndTheReloadPlac
     Scene::SceneWriteOptions options;
     options.assetResolver = &*m_Resolver;
     const std::filesystem::path scenePath = EngineCore::GetInstance().GetResolvedAssetRoot() / "Replaced.scene";
-    ASSERT_TRUE(Scene::WriteSceneFile(world, scenePath, options)) << Scene::GetLastSceneIOError().message;
+    const auto writeResult = Scene::WriteSceneFile(world, scenePath, options);
+    ASSERT_TRUE(writeResult) << writeResult.Error->message;
     ECS::World reloaded;
     Scene::SceneReadOptions loadOptions{};
-    loadOptions.assetResolver = &*m_Resolver;
-    ASSERT_TRUE(Scene::ReadSceneInto(reloaded, scenePath, loadOptions)) << Scene::GetLastSceneIOError().message;
+    loadOptions.AssetResolver = &*m_Resolver;
+    const auto readResult = Scene::ReadSceneInto(reloaded, scenePath, loadOptions);
+    ASSERT_TRUE(readResult) << readResult.Error->message;
     EXPECT_EQ(reloaded.GetEntityCount(), world.GetEntityCount());
     std::size_t hoops = 0;
     reloaded.Query<ECS::Read<Components::Name>>().Each(
@@ -984,6 +1018,60 @@ TEST_F(PrefabLibraryTests, CreatePrefabOfASpawnerKeepsThePrefabItNamesSoASpawnSu
     EXPECT_TRUE(Scene::SpawnPrefab(world, soldier, Components::Transform{}, {}).IsValid()) << Log();
     EXPECT_EQ(world.GetEntityCount(), before + 2u);
     EXPECT_EQ(CountLines(kNotResidentMessage), 0u) << Log();
+}
+
+// A component type that registers after the scene loads: the apply of its kept component holds the
+// prefab that its PrefabRef field names, as the load does, so a spawn succeeds.
+TEST_F(PrefabLibraryTests, AKeptSpawnerAppliedAfterItsTypeRegistersHoldsThePrefabItNames)
+{
+    const GUID soldier = Register(Write("Soldier.prefab", kSoldierPrefab));
+    ECS::World world;
+    const auto readResult = Load(world, "LateBarracks.scene",
+                                 "[scene name=\"LateBarracks\" version=1]\n"
+                                 "[entity id=\"spawner\"]\n"
+                                 "LateSpawnerProbe.Prefab = [path=\"Soldier.prefab\" guid=\"" +
+                                     soldier.ToString() + "\"]\n");
+    ASSERT_TRUE(readResult) << readResult.Error->message;
+    ASSERT_EQ(m_Library->FindByGuid(soldier), nullptr) << "the load keeps the component of an unknown type";
+
+    RegisterLateProbe<LateSpawnerProbe>("LateSpawnerProbe");
+    EXPECT_EQ(Scene::ResolveKeptComponents(world), 1u) << Log();
+    EXPECT_NE(m_Library->FindByGuid(soldier), nullptr) << Log();
+    const std::size_t before = world.GetEntityCount();
+    EXPECT_TRUE(Scene::SpawnPrefab(world, soldier, Components::Transform{}, {}).IsValid()) << Log();
+    EXPECT_EQ(world.GetEntityCount(), before + 2u);
+    EXPECT_EQ(CountLines(kNotResidentMessage), 0u) << Log();
+}
+
+// A template built while a component type of its prefab is not registered keeps that component
+// aside; after the type registers, the next load of the scene places the instance with the component.
+// The placed instance moves to the rebuilt template, so no retired template stays after the frame boundary.
+TEST_F(PrefabLibraryTests, ATemplateBuiltBeforeAComponentTypeRegistersPlacesTheComponentAfterIt)
+{
+    const GUID outpost =
+        Register(Write("Outpost.prefab", "[prefab version=1]\n[entity id=\"root\"]\nLateMarkerProbe.Value = 7\n"));
+    constexpr std::string_view kFrontier = "[scene name=\"Frontier\" version=1]\n"
+                                           "[resource id=\"outpost\" path=\"Outpost.prefab\"]\n"
+                                           "[prefab id=\"outpost\" source=\"outpost\"]\n";
+    ECS::World world;
+    const auto first = Load(world, "Frontier.scene", kFrontier);
+    ASSERT_TRUE(first) << first.Error->message;
+
+    RegisterLateProbe<LateMarkerProbe>("LateMarkerProbe");
+    EXPECT_EQ(Scene::ResolveKeptComponents(world), 1u) << Log();
+    const Scene::PrefabTemplate* rebuilt = m_Library->FindByGuid(outpost);
+    EXPECT_EQ(Scene::ResolveKeptComponents(world), 0u) << Log();
+    EXPECT_EQ(m_Library->FindByGuid(outpost), rebuilt) << "a second call rebuilds nothing";
+    m_Library->CollectAtFrameBoundary();
+    EXPECT_EQ(m_Library->GetRetiredCount(), 0u) << "the placed instance shows the rebuilt template";
+
+    ECS::World reopened;
+    const auto second = Load(reopened, "Frontier.scene", kFrontier);
+    ASSERT_TRUE(second) << second.Error->message;
+    std::vector<std::int32_t> values;
+    reopened.Query<ECS::Read<LateMarkerProbe>>().Each([&values](ECS::EntityHandle, const LateMarkerProbe& marker)
+                                                      { values.push_back(marker.Value); });
+    EXPECT_EQ(values, std::vector<std::int32_t>{7}) << Log();
 }
 
 // A Place keeps the prefabs that the instance's PrefabRef fields name, as a scene load does; two
@@ -1013,9 +1101,11 @@ TEST_F(PrefabLibraryTests, APrefabNoWorldHoldsIsEvictedAtTheFrameBoundary)
     const std::string scene = "[scene name=\"S\" version=1]\n[resource id=\"p\" path=\"Soldier.prefab\"]\n"
                               "[prefab id=\"a\" source=\"p\"]\n[prefab id=\"b\" source=\"p\"]\n";
     ECS::World cleared;
-    ASSERT_TRUE(Load(cleared, "A.scene", scene)) << Scene::GetLastSceneIOError().message;
+    const auto readResult = Load(cleared, "A.scene", scene);
+    ASSERT_TRUE(readResult) << readResult.Error->message;
     auto destroyed = std::make_unique<ECS::World>();
-    ASSERT_TRUE(Load(*destroyed, "B.scene", scene)) << Scene::GetLastSceneIOError().message;
+    const auto readResult2 = Load(*destroyed, "B.scene", scene);
+    ASSERT_TRUE(readResult2) << readResult2.Error->message;
     const auto* prefab = m_Library->FindByGuid(soldier);
     ASSERT_NE(prefab, nullptr);
     EXPECT_EQ(m_Library->GetReferenceCount(prefab->Path), 2u);
@@ -1038,10 +1128,11 @@ TEST_F(PrefabLibraryTests, ARebuildKeepsBothGenerationsUntilTheFrameBoundary)
 {
     const GUID soldier = Register(Write("Soldier.prefab", kSoldierPrefab));
     ECS::World world;
-    ASSERT_TRUE(Load(world, "S.scene",
+    const auto readResult = Load(world, "S.scene",
                      "[scene name=\"S\" version=1]\n[resource id=\"p\" path=\"Soldier.prefab\"]\n"
-                     "[prefab id=\"a\" source=\"p\"]\n"))
-        << Scene::GetLastSceneIOError().message;
+                     "[prefab id=\"a\" source=\"p\"]\n");
+    ASSERT_TRUE(readResult)
+        << readResult.Error->message;
     const auto* first = m_Library->FindByGuid(soldier);
     ASSERT_NE(first, nullptr);
     const std::vector<ECS::EntityHandle> firstEntities = first->Entities;
@@ -1073,10 +1164,11 @@ TEST_F(PrefabLibraryTests, SpawnsReuseTheGenerationsClonePlanAndARebuildPlansAga
 {
     const GUID soldier = Register(Write("Soldier.prefab", kSoldierPrefab));
     ECS::World holder;
-    ASSERT_TRUE(Load(holder, "S.scene",
+    const auto readResult = Load(holder, "S.scene",
                      "[scene name=\"S\" version=1]\n[resource id=\"p\" path=\"Soldier.prefab\"]\n"
-                     "[prefab id=\"a\" source=\"p\"]\n"))
-        << Scene::GetLastSceneIOError().message;
+                     "[prefab id=\"a\" source=\"p\"]\n");
+    ASSERT_TRUE(readResult)
+        << readResult.Error->message;
     const auto* first = m_Library->FindByGuid(soldier);
     ASSERT_NE(first, nullptr);
     const ECS::ClonePlan* firstPlan = &first->Plan;
@@ -1123,11 +1215,12 @@ TEST_F(PrefabLibraryTests, APrefabRefToAPrefabThatDoesNotParseLogsItsFileOnceWit
     const GUID broken = Register(Write("Broken.prefab", "[prefab version=1]\n[entity id=\"root\"]\n"
                                                         "[entity id=\"a.b\" parent=\"root\"]\n"));
     ECS::World world;
-    ASSERT_TRUE(Load(world, "Barracks.scene",
+    const auto readResult = Load(world, "Barracks.scene",
                      "[scene name=\"Barracks\" version=1]\n"
                      "[entity id=\"spawner\"]\n"
-                     "PrefabSpawnerProbe.Prefab = [path=\"Broken.prefab\" guid=\"" + broken.ToString() + "\"]\n"))
-        << Scene::GetLastSceneIOError().message;
+                     "PrefabSpawnerProbe.Prefab = [path=\"Broken.prefab\" guid=\"" + broken.ToString() + "\"]\n");
+    ASSERT_TRUE(readResult)
+        << readResult.Error->message;
 
     EXPECT_EQ(CountLines("a PrefabRef names a prefab that could not be loaded: Broken.prefab:3: "), 1u) << Log();
     for (const std::string& line : m_Lines)
@@ -1155,12 +1248,13 @@ void SuppressCrtDialogsInDeathTestChild()
 // Spawns in a job body that the main thread runs while it waits: the pool's one worker is busy.
 void SpawnInAJobTheMainThreadRuns(ECS::World& world, const GUID& prefab)
 {
+    // Declared before the pool: the held job can still read it after the release.
+    std::atomic<bool> release{false};
     JobSystem::WorkStealingThreadPool pool(1);
     std::atomic<bool> started{false};
-    std::atomic<bool> release{false};
     JobSystem::JobCounter blocker;
     JobSystem::JobCounter spawn;
-    pool.Run([&] { started = true; while (!release) std::this_thread::yield(); }, blocker);
+    pool.Run([&] { started = true; while (!release.load()) std::this_thread::yield(); }, blocker);
     while (!started)
         std::this_thread::yield();
     pool.Run([&] { Scene::SpawnPrefab(world, prefab, Components::Transform{}, {}); }, spawn);
@@ -1175,11 +1269,12 @@ TEST_F(PrefabLibraryTests, ASpawnInAJobBodyThatTheMainThreadRunsAsserts)
     GTEST_FLAG_SET(death_test_style, "threadsafe");
     const GUID soldier = Register(Write("Soldier.prefab", kSoldierPrefab));
     ECS::World world;
-    ASSERT_TRUE(Load(world, "Barracks.scene",
+    const auto readResult = Load(world, "Barracks.scene",
                      "[scene name=\"Barracks\" version=1]\n"
                      "[entity id=\"spawner\"]\n"
-                     "PrefabSpawnerProbe.Prefab = [path=\"Soldier.prefab\" guid=\"" + soldier.ToString() + "\"]\n"))
-        << Scene::GetLastSceneIOError().message;
+                     "PrefabSpawnerProbe.Prefab = [path=\"Soldier.prefab\" guid=\"" + soldier.ToString() + "\"]\n");
+    ASSERT_TRUE(readResult)
+        << readResult.Error->message;
     EXPECT_DEATH(
         {
             SuppressCrtDialogsInDeathTestChild();
@@ -1232,11 +1327,88 @@ TEST_F(PrefabLibraryTests, AFileChangeReachesTheInstancesOfEveryWorldAndKeepsThe
     EXPECT_EQ(NameOf(scene, secondLid), "Mine");
     const auto* moved = scene.GetComponent<Components::Transform>(firstLid);
     ASSERT_NE(moved, nullptr);
-    EXPECT_FLOAT_EQ(moved->GetPosition().y, 2.0f);
+    EXPECT_DOUBLE_EQ(moved->GetPosition().Y, 2.0);
     EXPECT_TRUE(OverridesOf(scene, first, firstLid).empty()) << "the old value is no override";
     EXPECT_EQ(OverridesOf(scene, second, secondLid).size(), 1u);
     EXPECT_TRUE(OverridesOf(preview, other, otherLid).empty());
     EXPECT_TRUE(scene.IsValid(first) && scene.IsValid(firstLid) && preview.IsValid(otherLid));
+}
+
+// Design 2.6: a field the instance kept because it differed gets a record at the prefab change, so it stays an
+// override when the prefab takes the same value, and the next change does not move it (Crate A's lid in #5858).
+TEST_F(PrefabLibraryTests, AFieldThePrefabChangesToTheInstanceValueStaysAnOverrideAndKeepsItsValue)
+{
+    const std::filesystem::path file = Write("Crate.prefab", kCratePrefab);
+    const GUID crate = Register(file);
+    ECS::World world;
+    const ECS::EntityHandle root = Scene::PlacePrefab(world, crate, Components::Transform{}, {});
+    ASSERT_TRUE(root.IsValid()) << Log();
+    const ECS::EntityHandle lid = FindChild(world, root);
+    Rename(world, lid, "Top");
+
+    ChangeOnDisk(*m_Library, file, crate, kCrateTopPrefab);
+    const std::vector<Scene::PrefabOverride> kept = OverridesOf(world, root, lid);
+    ASSERT_EQ(kept.size(), 1u) << "the value equal to the prefab's is an override";
+    EXPECT_EQ(kept[0].Kind, Scene::PrefabOverrideKind::Field);
+    EXPECT_EQ(kept[0].Field, "value");
+
+    ChangeOnDisk(*m_Library, file, crate, kCratePrefab);
+    EXPECT_EQ(NameOf(world, lid), "Top");
+    EXPECT_EQ(OverridesOf(world, root, lid).size(), 1u);
+}
+
+// Design 2.6: Revert to prefab value drops the record and the field follows the next prefab change; the record
+// calls of the editor's undo and redo give the record back and drop it again.
+TEST_F(PrefabLibraryTests, ARevertDropsTheRecordAndTheFieldFollowsTheNextPrefabChange)
+{
+    const std::filesystem::path file = Write("Crate.prefab", kCratePrefab);
+    const GUID crate = Register(file);
+    ECS::World world;
+    const ECS::EntityHandle root = Scene::PlacePrefab(world, crate, Components::Transform{}, {});
+    ASSERT_TRUE(root.IsValid()) << Log();
+    const ECS::EntityHandle lid = FindChild(world, root);
+    Rename(world, lid, "Top");
+    ChangeOnDisk(*m_Library, file, crate, kCrateTopPrefab);
+    const std::vector<Scene::PrefabOverride> kept = OverridesOf(world, root, lid);
+    ASSERT_EQ(kept.size(), 1u);
+
+    std::string error;
+    ASSERT_TRUE(Scene::RevertPrefabOverride(world, lid, kept[0], error)) << error;
+    EXPECT_TRUE(OverridesOf(world, root, lid).empty());
+    const std::vector<Scene::PrefabOverrideTarget> targets{{lid, kept[0]}};
+    Scene::RecordPrefabOverrides(world, targets);
+    EXPECT_EQ(OverridesOf(world, root, lid).size(), 1u);
+    Scene::ForgetPrefabOverrides(world, targets);
+    EXPECT_TRUE(OverridesOf(world, root, lid).empty());
+
+    ChangeOnDisk(*m_Library, file, crate, kCratePrefab);
+    EXPECT_EQ(NameOf(world, lid), "Lid");
+}
+
+// Design 2.6: each field line of a [prefab] section is a record, so a line equal to the prefab's value loads as
+// an override and the save writes it again.
+TEST_F(PrefabLibraryTests, AFieldLineEqualToThePrefabValueLoadsAsAnOverrideAndTheSaveKeepsIt)
+{
+    Register(Write("Crate.prefab", kCratePrefab));
+    ECS::World world;
+    const auto readResult = Load(world, "Yard.scene",
+                                 "[scene name=\"Yard\" version=1]\n[resource id=\"crate\" path=\"Crate.prefab\"]\n"
+                                 "[prefab id=\"crate\" source=\"crate\"]\nlid/Name.value = \"Lid\"\n");
+    ASSERT_TRUE(readResult) << readResult.Error->message;
+    ECS::EntityHandle root{};
+    world.Query<ECS::Read<Components::PrefabInstance>>().Each(
+        [&root](ECS::EntityHandle entity, const Components::PrefabInstance&) { root = entity; });
+    ASSERT_TRUE(root.IsValid());
+    const ECS::EntityHandle lid = FindChild(world, root);
+    EXPECT_EQ(NameOf(world, lid), "Lid");
+    EXPECT_EQ(OverridesOf(world, root, lid).size(), 1u);
+
+    Scene::SceneWriteOptions options;
+    options.assetResolver = &*m_Resolver;
+    const std::filesystem::path scenePath = EngineCore::GetInstance().GetResolvedAssetRoot() / "Saved.scene";
+    const auto writeResult = Scene::WriteSceneFile(world, scenePath, options);
+    ASSERT_TRUE(writeResult) << writeResult.Error->message;
+    EXPECT_NE(ReadText(scenePath).find("lid/Name.value = \"Lid\"\n"), std::string::npos) << ReadText(scenePath);
 }
 
 // Design 2.5: a child the prefab gains appears in each instance under its parent, as a member; a child the
@@ -1297,21 +1469,21 @@ TEST_F(PrefabLibraryTests, AnEntityAddedUnderALostChildKeepsItsWorldPosition)
     const ECS::EntityHandle handle = FindChild(world, FindChild(world, root));
     ASSERT_TRUE(handle.IsValid());
     const ECS::EntityHandle sticker = world.CreateEntity();
-    world.AddComponentImmediate(sticker, Components::Transform::FromTRS(Vector3(0.0f, 0.0f, 3.0f), Quaternion::Identity(),
+    world.AddComponentImmediate(sticker, Components::Transform::FromTRS(Mathematics::WorldPosition{0.0, 0.0, 3.0}, Quaternion::Identity(),
                                                                         Vector3(1.0f, 1.0f, 1.0f)));
     world.AddComponentImmediate(sticker, Components::Parent{handle});
     hierarchy.Update(world, 0.0f);
-    ASSERT_FLOAT_EQ(world.GetComponent<Components::WorldTransform>(sticker)->GetPosition().x, 2.0f);
+    ASSERT_DOUBLE_EQ(world.GetComponent<Components::WorldTransform>(sticker)->GetPosition().X, 2.0);
 
     ChangeOnDisk(*m_Library, file, crate,
                  "[prefab version=1]\n[entity id=\"root\"]\n[entity id=\"lid\" parent=\"root\"]\nTransform.position = (0, 1, 0)\n");
     hierarchy.Update(world, 0.0f);
 
     ASSERT_FALSE(world.IsValid(handle)) << "the prefab lost the handle";
-    const Vector3 position = world.GetComponent<Components::WorldTransform>(sticker)->GetPosition();
-    EXPECT_NEAR(position.x, 2.0f, 1e-5f);
-    EXPECT_NEAR(position.y, 1.0f, 1e-5f);
-    EXPECT_NEAR(position.z, 3.0f, 1e-5f);
+    const Mathematics::WorldPosition position = world.GetComponent<Components::WorldTransform>(sticker)->GetPosition();
+    EXPECT_NEAR(position.X, 2.0, 1e-5);
+    EXPECT_NEAR(position.Y, 1.0, 1e-5);
+    EXPECT_NEAR(position.Z, 3.0, 1e-5);
 }
 
 // Design 2.5: a deferred world takes no prefab file change until it resumes, then takes every change made

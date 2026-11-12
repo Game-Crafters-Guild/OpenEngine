@@ -181,15 +181,10 @@ class RTShadowMaskService
     uint64_t m_FrameClock = 0;
 
     uint32_t m_LastInstanceCount = 0;
-    // Skip tripwires for the summary log (fail-visible, never silent) — this
-    // consumer's own instance filter: nonzero render-origin sector, and
-    // non-finite/astronomically-scaled instance TRANSFORMS (distinct from
-    // the shared service's own BLAS triangle-geometry degenerate tripwire —
-    // that one guards mesh index/vertex counts, this one guards per-instance
-    // matrices before they become TLAS instance records).
-    uint64_t m_SkippedSector     = 0;
+    // Skip tripwire for the summary log: non-finite or astronomically scaled
+    // instance matrices before they become TLAS instance records. The shared
+    // service's own BLAS tripwire guards mesh index and vertex counts.
     uint64_t m_SkippedDegenerate = 0;
-    bool m_WarnedSector          = false;
     bool m_WarnedDegenerate      = false;
     bool m_LoggedSummary         = false;
 

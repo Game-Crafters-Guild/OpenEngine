@@ -19,6 +19,7 @@
 // EngineCore, which is what lets a process with no engine — this one — call them.
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -34,6 +35,7 @@
 #include "UI/Controls/Checkbox.h"
 #include "UI/Controls/Dropdown.h"
 #include "UI/Controls/MarkdownText.h"
+#include "UI/Controls/ProgressBar.h"
 #include "UI/Controls/ScrollView.h"
 #include "UI/Controls/Slider.h"
 #include "UI/Controls/Toggle.h"
@@ -776,6 +778,55 @@ TEST(GameUIElementHandleTests, TypedValueAccessorsRoundTripThroughTheRealExports
 
     // A dead handle is NotFound everywhere in the element ABI.
     EXPECT_EQ(GE_UIElement_GetValueFloat(0xFFFFFFFFFFFFull, &f), GE_Result_NotFound);
+}
+
+// A script's Max, Indeterminate and Value on a progress bar reach the real control: a new max
+// clamps the value down, a max that is not positive or not finite is refused.
+TEST(GameUIElementHandleTests, ProgressBarRangeAndStateGoThroughTheRealExports)
+{
+    auto device = MakeHeadlessDevice();
+    if (!device)
+        GTEST_SKIP() << "Device init failed";
+    UIRegistration::RegisterBuiltInControls();
+
+    HudFixture hud(device.get(), "gameui_handle_progress",
+                   "<uielement class='hud-root'><progress id='hp' max='100' /><label id='plain' /></uielement>");
+    ASSERT_TRUE(hud.Ok);
+    auto* bar = dynamic_cast<ProgressBar*>(hud.Find("hp"_sid));
+    UIElement* plain = hud.Find("plain"_sid);
+    ASSERT_NE(bar, nullptr);
+    ASSERT_NE(plain, nullptr);
+    const std::uint64_t barId = bar->GetInstanceId();
+
+    EXPECT_EQ(GE_UIElement_SetValueFloat(barId, 250.0f, 0), GE_Result_Ok);
+    float value = -1.0f;
+    EXPECT_EQ(GE_UIElement_GetValueFloat(barId, &value), GE_Result_Ok);
+    EXPECT_FLOAT_EQ(value, 100.0f) << "the bar clamps to its max";
+
+    EXPECT_EQ(GE_UIElement_SetValueFloat(barId, 80.0f, 0), GE_Result_Ok);
+    EXPECT_EQ(GE_UIElement_SetProgressMax(barId, 50.0f), GE_Result_Ok);
+    float max = 0.0f;
+    EXPECT_EQ(GE_UIElement_GetProgressMax(barId, &max), GE_Result_Ok);
+    EXPECT_FLOAT_EQ(max, 50.0f);
+    EXPECT_EQ(GE_UIElement_GetValueFloat(barId, &value), GE_Result_Ok);
+    EXPECT_FLOAT_EQ(value, 50.0f) << "a new max clamps the value down";
+
+    EXPECT_EQ(GE_UIElement_SetProgressMax(barId, 0.0f), GE_Result_InvalidArg);
+    EXPECT_EQ(GE_UIElement_SetProgressMax(barId, std::numeric_limits<float>::infinity()), GE_Result_InvalidArg);
+    EXPECT_FLOAT_EQ(bar->GetMax(), 50.0f) << "a refused max leaves the range";
+
+    int32_t indeterminate = -1;
+    EXPECT_EQ(GE_UIElement_SetProgressIndeterminate(barId, 1), GE_Result_Ok);
+    EXPECT_TRUE(bar->IsIndeterminate());
+    EXPECT_EQ(GE_UIElement_GetProgressIndeterminate(barId, &indeterminate), GE_Result_Ok);
+    EXPECT_EQ(indeterminate, 1);
+    EXPECT_EQ(GE_UIElement_SetProgressIndeterminate(barId, 0), GE_Result_Ok);
+    EXPECT_FALSE(bar->IsIndeterminate());
+
+    const std::uint64_t plainId = plain->GetInstanceId();
+    EXPECT_EQ(GE_UIElement_SetProgressMax(plainId, 10.0f), GE_Result_InvalidArg);
+    EXPECT_EQ(GE_UIElement_GetProgressIndeterminate(plainId, &indeterminate), GE_Result_InvalidArg);
+    EXPECT_EQ(GE_UIElement_GetProgressMax(0xFFFFFFFFFFFFull, &max), GE_Result_NotFound);
 }
 
 TEST(GameUIElementHandleTests, MarkdownTextSetterUsesTheControlAndRejectsInvalidHandles)

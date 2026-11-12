@@ -367,8 +367,9 @@ A mirror's members follow the C++ fields:
 - A field the engine writes, such as the bounds of `LocalBounds` or the live count of
   `ParticlePlayback`, is get-only. A field that is engine state, such as the GPU handle
   of `MeshRenderer`, has no member.
-- A fixed array is a field of a nested `<Field>Array` type that you index:
-  `transform.Matrix[12]` is the X of the position.
+- A fixed array is a field of a nested `<Field>Array` type that you index.
+- A position is a `WorldPosition`, meters in doubles: `transform.Position.X` is the X of the
+  position, exact at any distance from the origin.
 
 `new MeshRenderer()` has the engine's defaults, exactly as `MeshRenderer{}` in C++:
 drawn, casting and receiving shadows. `default(MeshRenderer)` is all zeros. The defaults
@@ -399,9 +400,13 @@ keeps (`renderer = saved;`) is the error `GE0028`: set the fields you change. `G
 the body of `Execute` only: a method that takes the parameter by `ref` and assigns it is not
 caught, so pass the fields it changes instead.
 
-`Transform` adds builders and accessors to its matrix: `Transform.Identity`,
-`Transform.FromTRS`, `GetPosition`, `GetRotation`, `GetScale`, the axis properties
-(`Forward`, `Right`, `Up`) and the conversions to and from `System.Numerics.Matrix4x4`.
+`Transform` holds an exact `Position` (a `WorldPosition`) and a 3x3 `Basis`, and adds builders and
+accessors: `Transform.Identity`, `Transform.FromTRS` (from a `WorldPosition`, a rotation and a
+scale), `Translate`, `GetRotation`, `GetScale`, the axis properties (`Forward`, `Right`, `Up`) and the
+conversions to and from `System.Numerics.Matrix4x4`. A `Matrix4x4` holds the position in floats:
+`ToMatrix4x4` rounds it, and `FromMatrix4x4` throws `ArgumentException` for a projective matrix
+(a fourth column other than 0, 0, 0, 1). Move a far entity with `Position` or `Translate`, not
+through a matrix.
 `ParticlePlayback.SendEvent` queues a named event for the emitter's next update.
 
 ## Chunk query ABI (internal plumbing)

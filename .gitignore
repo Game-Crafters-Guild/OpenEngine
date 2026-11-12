@@ -469,6 +469,7 @@ cmake-build-debug/*
 !.claude/skills/html-doc-format/
 !.claude/skills/writing-simplified-technical-english/
 !.claude/skills/coordinator/
+!.claude/skills/merge-main/
 
 # Temporary screenshots
 ss*.png

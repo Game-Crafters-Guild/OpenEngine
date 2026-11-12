@@ -20,15 +20,16 @@ class AStarSolver;
 class GridMap : public INavigationMap
 {
 public:
-    // The cells from (MinX, MinZ) to (MaxX, MaxZ), both corners included.
+    // The cells from (MinX, MinZ) to (MaxX, MaxZ), both corners included. A
+    // range can reach past the grid's edge, so it can hold cells off the grid.
     struct CellRange
     {
-        uint32 MinX = 0;
-        uint32 MinZ = 0;
-        uint32 MaxX = 0;
-        uint32 MaxZ = 0;
+        int32 MinX = 0;
+        int32 MinZ = 0;
+        int32 MaxX = 0;
+        int32 MaxZ = 0;
 
-        bool Contains(uint32 cellX, uint32 cellZ) const
+        bool Contains(int32 cellX, int32 cellZ) const
         {
             return cellX >= MinX && cellX <= MaxX && cellZ >= MinZ && cellZ <= MaxZ;
         }
@@ -87,11 +88,9 @@ public:
         // included; GridMap::Raycast's contract.
         bool Raycast(float32 startX, float32 startZ, float32 endX, float32 endZ,
                      float32& hitX, float32& hitY, float32& hitZ) const;
-        // True when the start's cell is open and a disc of `radius` moved
-        // from start to end stays on the grid and at least `radius` from
-        // every blocked cell's rectangle. A zero radius tests the line as
-        // Raycast does. Blocked cells inside `openCells` count as open; it
-        // applies to a radius above zero only.
+        // True when the start's cell is open and a disc of `radius` that goes from start to end keeps
+        // `radius` from every blocked or off-grid cell outside `openCells`. A zero radius tests
+        // the line as Raycast does and takes no `openCells`.
         bool IsSegmentClear(float32 startX, float32 startZ, float32 endX, float32 endZ,
                             float32 radius, const CellRange* openCells = nullptr) const;
 

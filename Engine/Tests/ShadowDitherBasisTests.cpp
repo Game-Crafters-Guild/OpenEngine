@@ -24,11 +24,12 @@ using GameEngine::Engine::Renderer::ShadowMapRenderFeature;
 TEST(ShadowDitherBasis, UboMatchesTheShaderBlock)
 {
     // 464 through shadowFilterParams, then the terrain's clearance map: four
-    // vec4s of grid, one uvec4 of sources and one uvec4 of the lit field
-    // (terrainShadowGrid0..3, terrainShadowSource, terrainShadowField). The
-    // struct is alignas(16), so a member that is not a 16-byte multiple would
-    // land here as an unexpected size rather than as padding nobody notices.
-    EXPECT_EQ(sizeof(ShadowDataGPU), 560u);
+    // vec4s of grid, one uvec4 of sources, one uvec4 of the lit field and one
+    // vec4 of the height span (terrainShadowGrid0..3, terrainShadowSource,
+    // terrainShadowField, terrainShadowHeightSpan). The struct is alignas(16),
+    // so a member that is not a 16-byte multiple would land here as an
+    // unexpected size rather than as padding nobody notices.
+    EXPECT_EQ(sizeof(ShadowDataGPU), 576u);
 }
 
 // The dark-ship gate. Defaulting anywhere else would change the look of every

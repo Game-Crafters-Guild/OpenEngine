@@ -44,6 +44,8 @@ layout(set = 0, binding = GE_ATMOSPHERE_UBO_BINDING) uniform AtmosphereUBO
     float groundHazeStrength;
     vec3  mieAbsorption;  float ozoneCenterHeight;
     vec3  ozoneAbsorption; float ozoneHalfWidth;
+    // World space. The flat scene's planet is centered planetRadius below the world origin.
+    vec3  planetCenter;    float planetCenterStd140Pad;
 } uAtmos;
 
 // The medium at height h above the ground (metres), shared by every pass that integrates the

@@ -53,7 +53,7 @@ enum class NavigationBakeFailure : uint8
     None = 0,
     // Nothing the bake reads lies inside the bounds.
     NoGeometry = 1,
-    // The only terrain is a planet, which has no planar heightfield to read.
+    // The surface's bounds reach a planet's relief: navigation does not bake on a planet.
     SphericalTerrain = 2,
     // The bounds cut into more tiles (mesh) or cells (grid) than a surface holds.
     TooLarge = 3,

@@ -138,7 +138,7 @@ class Archetype
     }
 
     // Stamp every column of one chunk (structural writes: Append rewrote a
-    // fresh row, SwapRemove rewrote the vacated slot).
+    // fresh row, a removal moved the table's last row into the vacated slot).
     void StampAllColumnVersions(uint32_t chunkIdx, uint64_t version)
     {
         if (!m_Table || chunkIdx >= m_Table->GetChunkCount()) return;
@@ -148,9 +148,9 @@ class Archetype
     // Memory pre-allocation for batch operations.
     void Reserve(size_t count);
 
-    // Compact the table by freeing empty chunks. Updates entity metadata for relocated chunks.
+    // Free the table's spare chunks (chunks with no rows). No row moves.
     // Returns the number of chunks freed. Caller must hold worldMutex.
-    uint32_t CompactChunks();
+    uint32_t FreeSpareChunks();
 
     // Compatibility: collect entity handles from all table chunks into a vector.
     // Callers that iterated Archetype::GetEntities() can use this instead.

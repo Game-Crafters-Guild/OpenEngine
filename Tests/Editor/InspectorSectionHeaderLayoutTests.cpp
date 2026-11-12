@@ -151,7 +151,7 @@ TEST(InspectorSectionHeaderLayout, AHeaderBadgeFollowsTheTitleOnOneLineAtNarrowI
         InspectorLayoutFixture fixture;
         fixture.ViewportW = viewportWidth;
         // The enable dot's own sheet gives it the footprint it has in the editor, which places the title.
-        fixture.ExtraSheets.push_back("Assets/UI/controls/EnableDot/EnableDot.css");
+        fixture.ExtraSheets.push_back(GE_UI_MODULE_SOURCE_DIR "/Assets/UI/controls/EnableDot/EnableDot.css");
         if (!fixture.Build(std::move(root)))
             GTEST_SKIP() << fixture.Diagnostic;
         // Content-sized and on one line; the font is the title rule's own.
@@ -205,7 +205,7 @@ TEST(InspectorSectionHeaderLayout, APlaceholderDotLetsAClickThroughToTheHeader)
     root->AddChild(std::move(section));
 
     InspectorLayoutFixture fixture;
-    fixture.ExtraSheets.push_back("Assets/UI/controls/EnableDot/EnableDot.css");
+    fixture.ExtraSheets.push_back(GE_UI_MODULE_SOURCE_DIR "/Assets/UI/controls/EnableDot/EnableDot.css");
     if (!fixture.Build(std::move(root)))
         GTEST_SKIP() << fixture.Diagnostic;
 

@@ -70,7 +70,7 @@ void RegisterPhysicsDebugHandlers(EditorDebugServer& server)
             {"hit", true},
             {"entityId", entityId},
             {"entityName", name},
-            {"point", {result.hitPoint.x, result.hitPoint.y, result.hitPoint.z}},
+            {"point", {result.hitPoint.X, result.hitPoint.Y, result.hitPoint.Z}},
             {"normal", {result.hitNormal.x, result.hitNormal.y, result.hitNormal.z}},
             {"distance", result.distance}
         };

@@ -26,6 +26,7 @@
 
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <chrono>
 #include <filesystem>
 #include <memory>
@@ -83,10 +84,9 @@ void CreateCubeMeshes(ECS::World& world, int32 count)
                                                                  PrimitiveGenerator::DefaultMaterialGuid()));
         entity.Set(Components::Transform{});
         Components::WorldTransform transform{};
-        transform.matrix[0] = transform.matrix[5] = transform.matrix[10] = 0.2f;
-        transform.matrix[12] = -38.0f + kCubeSpacing * static_cast<float32>(i % kCubesPerRow);
-        transform.matrix[13] = 0.1f;
-        transform.matrix[14] = -38.0f + kCubeSpacing * static_cast<float32>(i / kCubesPerRow);
+        transform.Basis[0].x = transform.Basis[1].y = transform.Basis[2].z = 0.2f;
+        transform.Position = Mathematics::WorldPosition{-38.0f + kCubeSpacing * static_cast<float32>(i % kCubesPerRow), 0.1,
+                                                        -38.0f + kCubeSpacing * static_cast<float32>(i / kCubesPerRow)};
         transform.Version = 1u; // resolved, as TransformHierarchySystem leaves it
         entity.Set(transform);
     }
@@ -108,8 +108,7 @@ ECS::Entity CreateAgentRequestingAPath(ECS::World& world, ECS::EntityHandle surf
     state.PathDirty = true;
     agent.Set(state);
     Components::WorldTransform start{};
-    start.matrix[12] = -2.5f;
-    start.matrix[14] = -2.5f;
+    start.Position = Mathematics::WorldPosition{-2.5, 0.0, -2.5};
     start.Version = 1u;
     agent.Set(start);
     world.ProcessCommands();
@@ -373,7 +372,7 @@ TEST_F(NavigationGridJobTest, ABakeRequestedWhileOneIsInFlightStartsOnceThatOneI
 
     auto* moved = wall.GetForWrite<Components::WorldTransform>();
     ASSERT_NE(moved, nullptr);
-    moved->matrix[12] = 2.5f;
+    moved->Position.X = 2.5;
     ASSERT_TRUE(Navigation::RequestBake(*world, surface.GetHandle()));
     Update();
     EXPECT_EQ(Surface(surface).BakePhase, NavigationBakePhase::Baking);
@@ -396,6 +395,37 @@ TEST_F(NavigationGridJobTest, ABakeRequestedWhileOneIsInFlightStartsOnceThatOneI
     ASSERT_NE(grid, nullptr);
     EXPECT_TRUE(grid->IsCellBlocked(6, 4)) << "the wall where it was moved to";
     EXPECT_FALSE(grid->IsCellBlocked(1, 4));
+}
+
+// A mesh bake's tiles are bulk work. A Normal job published after a full update of tiles starts while
+// those tiles still wait, so a bake never holds back a load's or a frame's work.
+TEST_F(NavigationGridJobTest, AMeshBakesTilesDoNotDelayALaterNormalJob)
+{
+    constexpr uint32 kTiles = NavigationSurfaceSystem::kTileSnapshotsPerUpdate;
+    JobSystem::WorkStealingThreadPool& pool = engine->GetJobSystem();
+    ASSERT_LT(pool.GetWorkerCount(), kTiles) << "too many workers to see the order";
+    Testing::CreateGroundPlane(*world);
+    auto entity = world->Create();
+    NavigationSurface surface{};
+    surface.FitBounds = false;
+    surface.Extent = {128.0f, 20.0f, 128.0f}; // 8 x 8 tiles of 32 m
+    entity.Set(surface);
+    world->ProcessCommands();
+
+    std::atomic<int64> waitingAtProbe{-1};
+    {
+        Tests::HeldWorkers hold(pool);
+        Update();
+        ASSERT_EQ(Surface(entity).BakeTotal, kTiles);
+        pool.EnqueueWork([&pool, &waitingAtProbe] {
+            const JobSystem::JobSystemStatistics statistics = pool.GetStatistics();
+            waitingAtProbe.store(int64(statistics.Normal.Queued) + int64(statistics.Background.Queued));
+        });
+    }
+    ASSERT_TRUE(Tests::WaitUntil([&] { return waitingAtProbe.load() >= 0; }, std::chrono::seconds(10)));
+    EXPECT_GE(waitingAtProbe.load(), int64(kTiles - pool.GetWorkerCount()))
+        << "the Normal job waited behind the bake's tiles";
+    UpdateUntilSettled(entity);
 }
 
 // A request on every update, each bake taking many updates: the surface publishes each bake it
@@ -544,7 +574,7 @@ TEST_F(NavigationGridJobTest, QueriesWhileTheGridBakesSeeThePreviousGrid)
 
     auto* moved = wall.GetForWrite<Components::WorldTransform>();
     ASSERT_NE(moved, nullptr);
-    moved->matrix[12] = -1.5f;
+    moved->Position.X = -1.5;
     Tests::HeldWorkers hold(engine->GetJobSystem());
     ASSERT_FALSE(HasFailure()) << "not every worker was held";
     ASSERT_TRUE(Navigation::RequestBake(*world, surface.GetHandle()));

@@ -4,9 +4,11 @@
 #include "ECS/OrderedHandleSet.h"
 #include "Mathematics/Interpolation.h"
 #include "Mathematics/Vector3.h"
+#include "Mathematics/WorldPosition.h"
 #include "Types/ColorUtils.h"
 
 #include "ECS/ECSTemplates.h"
+#include "Engine/Rendering/Camera.h"
 #include "Engine/Rendering/DrawCommand.h"
 #include "Engine/Rendering/Material.h"
 #include "Engine/Rendering/MaterialRegistry.h"
@@ -45,6 +47,7 @@
 #include "Ocean/OceanRenderFeature.h"
 #include "Rendering/Core/GPUScene.h"
 #include "Rendering/Core/GPUInstanceWorldKey.h"
+#include "Types/FalseSharing.h"
 #include "Types/Fnv1a.h"
 #include "Types/FunctionRef.h"
 #include "Types/StringUtils.h"
@@ -260,7 +263,9 @@ struct RenderExtractionParallelState
     };
 
     std::vector<Prepared> prepared;   // index-aligned with m_Records
-    std::vector<ChunkResult> chunks;  // one per chunk
+    // One per chunk. A worker writes the counters and the list of its chunk once per
+    // record; the padding keeps workers on neighboring chunks off one another's lines.
+    std::vector<FalseSharingPadded<ChunkResult>> chunks;
 
     // Fast-frame reads are resolved under one world lock. No structural writes
     // occur on this lane, so these pointers remain valid through serial apply.
@@ -324,7 +329,7 @@ bool IsShadowProximityKeyingEnabled()
 void WriteLastCaches(Components::MeshGPUData& meshGpu, uint32 mshIdx, uint32 matIdx,
                      uint64 meshUploadSequence, uint32 transformVersion, uint32 flags,
                      uint32 skinPaletteOffset, float lodBias, uint32 runtimeId,
-                     const float boundsCenter[3], float boundsRadius, int32 sectorX,
+                     const Vector3& boundsCenter, float boundsRadius, int32 sectorX,
                      int32 sectorY, int32 sectorZ, bool prevDiffers)
 {
     meshGpu.meshIndex = mshIdx;
@@ -335,9 +340,9 @@ void WriteLastCaches(Components::MeshGPUData& meshGpu, uint32 mshIdx, uint32 mat
     meshGpu.LastSkinPaletteOffset = skinPaletteOffset;
     meshGpu.LastLodBias = lodBias;
     meshGpu.LastRuntimeId = runtimeId;
-    meshGpu.LastBoundsCenter[0] = boundsCenter[0];
-    meshGpu.LastBoundsCenter[1] = boundsCenter[1];
-    meshGpu.LastBoundsCenter[2] = boundsCenter[2];
+    meshGpu.LastBoundsCenter[0] = boundsCenter.x;
+    meshGpu.LastBoundsCenter[1] = boundsCenter.y;
+    meshGpu.LastBoundsCenter[2] = boundsCenter.z;
     meshGpu.LastBoundsRadius = boundsRadius;
     meshGpu.LastSectorX = sectorX;
     meshGpu.LastSectorY = sectorY;
@@ -387,6 +392,17 @@ bool PayloadPrevDiffers(const GPUInstance& payload)
                        sizeof(float) * 16) != 0;
 }
 
+// Last frame's model matrix (the GPUScene row) in this frame's sector: `row` itself when the
+// sector did not change, else `row` moved by the sector change.
+Mathematics::Matrix4x4 PreviousMatrixInSector(const Mathematics::Matrix4x4& row, const Components::MeshGPUData& meshGpu,
+                                              const Mathematics::Vector3Int& sector)
+{
+    const Mathematics::Vector3Int lastSector(meshGpu.LastSectorX, meshGpu.LastSectorY, meshGpu.LastSectorZ);
+    if (lastSector == sector)
+        return row;
+    return GameEngine::Engine::Renderer::PremultiplyTranslationBySectorDelta(row, lastSector, sector);
+}
+
 // GPUInstance flag bits from their extraction inputs. Shared by the parallel
 // prepare and the fast path's subset refresh so the two can't disagree on
 // bit layout (bit 0 cast shadows, bit 1 receiveShadows, bits 2/3 depth class,
@@ -427,58 +443,44 @@ uint32 ComputeInstanceFlags(Components::ShadowCasting shadowCasting, bool bounds
 // LOCAL space (the Last* cache representation; radius < 0 = no bounds).
 // prevMatrix = the transform this instance rendered with LAST frame (the
 // GPUScene CPU mirror's transform, read before this frame's UpdateInstance
-// overwrites it) — the motion-vector source. nullptr = no history (first
-// frame, recycled slot, or a render-origin sector change whose prev lives in
-// a different sector frame): prev := current, zero object MV.
-void BuildGpuInstancePayload(GPUInstance& instance, const float* matrix,
-                             const float* prevMatrix, bool hasBounds,
-                             const float boundsCenter[3], float localBoundsRadius,
+// overwrites it), moved into this frame's sector — the motion-vector source.
+// An instance with no history passes `matrix`: zero object MV.
+void BuildGpuInstancePayload(GPUInstance& instance, const Mathematics::Matrix4x4& matrix,
+                             const Mathematics::Matrix4x4& prevMatrix, bool hasBounds,
+                             const Vector3& boundsCenter, float localBoundsRadius,
                              uint32 mshIdx, uint32 matIdx, uint32 flags, float lodBias,
                              uint32 skinPaletteOffset, uint32 runtimeId,
                              int32 sectorX, int32 sectorY, int32 sectorZ, RenderLayerMask renderLayers)
 {
     instance = GPUInstance{};
-    std::memcpy(instance.transform.Data(), matrix, sizeof(float) * 16);
-    std::memcpy(instance.prevTransform.Data(), prevMatrix != nullptr ? prevMatrix : matrix,
-                sizeof(float) * 16);
+    instance.transform = matrix;
+    instance.prevTransform = prevMatrix;
     bool mirrored = false;
     Vector4 normalColumn0;
-    MatrixUtils::ComputeNormalMatrixColumns(matrix,
+    MatrixUtils::ComputeNormalMatrixColumns(matrix.Data(),
                                             normalColumn0,
                                             instance.normalMatrixCol1,
                                             instance.normalMatrixCol2,
                                             &mirrored);
     instance.normalMatrixCol0 = Vector3(normalColumn0.x, normalColumn0.y, normalColumn0.z);
     instance.renderLayerMask = renderLayers.Bits;
-    // Camera-relative rendering: the transform column stays SECTOR-LOCAL (small);
-    // the integer sector is packed into the reserved words and the vertex stage
-    // reconstructs the camera-relative position. boundingCenter, by contrast, is
-    // kept FULL-WORLD (sector origin added back) because GPU culling / LOD run in
-    // world space this slice. For an untagged entity the sector is (0,0,0), so
-    // the packed words are zero and boundingCenter is unchanged — byte-identical.
-    GameEngine::Engine::Renderer::PackSector(sectorX, sectorY, sectorZ,
-                                             instance.sectorPacked[0], instance.sectorPacked[1]);
-    const float sectorOx = static_cast<float>(sectorX) * GameEngine::Engine::Renderer::kSectorSize;
-    const float sectorOy = static_cast<float>(sectorY) * GameEngine::Engine::Renderer::kSectorSize;
-    const float sectorOz = static_cast<float>(sectorZ) * GameEngine::Engine::Renderer::kSectorSize;
+    // Camera-relative rendering: the transform column and boundingCenter are local
+    // to the instance sector, packed into the reserved words. Each consumer
+    // composes them against its own origin sector.
+    GameEngine::Rendering::PackSector(sectorX, sectorY, sectorZ, instance.sectorPacked[0], instance.sectorPacked[1]);
     if (hasBounds)
     {
-        const float* m = matrix;
-        const float* c = boundsCenter;
-        instance.boundingCenter = Vector3(
-            m[0] * c[0] + m[4] * c[1] + m[8] * c[2] + m[12] + sectorOx,
-            m[1] * c[0] + m[5] * c[1] + m[9] * c[2] + m[13] + sectorOy,
-            m[2] * c[0] + m[6] * c[1] + m[10] * c[2] + m[14] + sectorOz);
+        const float* elements = matrix.Data();
+        instance.boundingCenter = matrix.TransformPoint(boundsCenter);
         // The sphere has to contain the mesh under the WHOLE transform, which
         // is that transform's largest singular value — the same number as its
         // largest COLUMN only while the basis is perpendicular, and short of it
         // on a sheared one (MatrixUtils::LargestAxisScale).
-        instance.boundingRadius = localBoundsRadius * MatrixUtils::LargestAxisScale(m);
+        instance.boundingRadius = localBoundsRadius * MatrixUtils::LargestAxisScale(elements);
     }
     else
     {
-        instance.boundingCenter =
-            Vector3(matrix[12] + sectorOx, matrix[13] + sectorOy, matrix[14] + sectorOz);
+        instance.boundingCenter = Vector3(matrix[3][0], matrix[3][1], matrix[3][2]);
         instance.boundingRadius = 1.0f;
     }
     instance.meshIndex = mshIdx;
@@ -487,7 +489,7 @@ void BuildGpuInstancePayload(GPUInstance& instance, const float* matrix,
     // Winding parity is a pure function of the world matrix (re-derived on every
     // build from the det sign above), so it is NOT stored in LastFlags: the
     // transform-version gate already forces a rebuild on any matrix change,
-    // including a mirror toggle, and the fast path rebuilds from wt->matrix.
+    // including a mirror toggle, and the fast path rebuilds from the WorldTransform.
     if (mirrored && Rendering::MirroredWindingEnabled())
         instance.flags |= Rendering::kInstanceFlagMirrored;
     instance.lodBias = lodBias;
@@ -540,7 +542,6 @@ auto RenderableQuery(ECS::World& world)
         ECS::Read<Components::WorldTransform>,
         ECS::Read<Components::MeshRenderer>,
         ECS::Optional<Components::LocalBounds>,
-        ECS::Optional<Components::WorldSectorCoord>,
         ECS::Optional<Components::SkinnedMeshRenderer>,
         ECS::Optional<Components::SkeletonRef>,
         ECS::Optional<Components::AnimatorRef>,
@@ -570,7 +571,7 @@ void AppendRenderableRecords(QueryT& query, std::vector<WorldRenderableRecord>& 
 {
     query.Each([&](ECS::EntityHandle e, const Components::WorldTransform& xf,
                    const Components::MeshRenderer& mr, const Components::LocalBounds* wb,
-                   const Components::WorldSectorCoord* sc, const Components::SkinnedMeshRenderer* smr,
+                   const Components::SkinnedMeshRenderer* smr,
                    const Components::SkeletonRef* skelRef, const Components::AnimatorRef* anim,
                    const Components::LODGroup* lodGroup, Components::MeshGPUData* meshGpu,
                    const Components::GIEmitter* giEmitter, const Components::Transform* local,
@@ -599,11 +600,6 @@ void AppendRenderableRecords(QueryT& query, std::vector<WorldRenderableRecord>& 
                    {
                        rec.hasBounds = true;
                        rec.bounds = *wb;
-                   }
-                   if (sc)
-                   {
-                       rec.hasSectorCoord = true;
-                       rec.sectorCoord = *sc;
                    }
                    if (smr && smr->skeletonId != 0)
                        rec.skeletonId = smr->skeletonId;
@@ -722,21 +718,13 @@ void PrepareRecord(const WorldRenderableRecord& rec,
     const uint32 skinPaletteOffset = paletteOffsets.Current;
 
     const float boundsRadius = rec.hasBounds ? rec.bounds.Box.Radius() : -1.0f;
-    // Render-origin sector (camera-relative rendering). Adding/editing a
-    // WorldSectorCoord changes the packed sector AND the full-world boundingCenter
-    // without touching the transform version, so it MUST participate in the
-    // no-op check — otherwise a component-ADD escalates the full lane but this
-    // guard skips the rebuild and sectorPacked stays 0 (instance renders where it
-    // does not cull → invisible).
-    const int32 secX = rec.hasSectorCoord ? rec.sectorCoord.x : 0;
-    const int32 secY = rec.hasSectorCoord ? rec.sectorCoord.y : 0;
-    const int32 secZ = rec.hasSectorCoord ? rec.sectorCoord.z : 0;
     // Every payload input except the transform. Split out from the no-op
     // check because it also decides continuity: a rebuild caused by any of
     // these breaks the instance's frame-to-frame continuity (the payload the
     // previous frame rendered with is not the payload this one renders with),
     // whereas a transform-only rebuild does not — prevTransform carries that
-    // history exactly. The upload sequence is what sees an in-place mesh
+    // history exactly. The sector is a function of the transform, so it is not
+    // in this list. The upload sequence is what sees an in-place mesh
     // reload: the handle and the mesh row survive it, the geometry does not.
     const bool nonTransformInputsUnchanged =
         meshGpu->instanceIndex != 0xFFFFFFFFu &&
@@ -749,8 +737,6 @@ void PrepareRecord(const WorldRenderableRecord& rec,
         meshGpu->LastLodBias == rec.lodBias &&
         meshGpu->LastRuntimeId == rec.runtimeId &&
         meshGpu->LastBoundsRadius == boundsRadius &&
-        meshGpu->LastSectorX == secX && meshGpu->LastSectorY == secY &&
-        meshGpu->LastSectorZ == secZ &&
         (!rec.hasBounds ||
          (meshGpu->LastBoundsCenter[0] == rec.bounds.Box.center.x &&
           meshGpu->LastBoundsCenter[1] == rec.bounds.Box.center.y &&
@@ -766,15 +752,17 @@ void PrepareRecord(const WorldRenderableRecord& rec,
     // Version-contract tripwire. The read of GPUScene here happens during the
     // parallel phase; it is safe because no thread WRITES GPUScene in prepare
     // (§2.3). The warn-once guard is atomic so concurrent chunks can't tear it.
+    Mathematics::Vector3Int tripwireSector;
     if (instanceUnchanged &&
         std::memcmp(scene.GetInstances()[meshGpu->instanceIndex].transform.Data(),
-                    rec.worldTransform.matrix, sizeof(rec.worldTransform.matrix)) != 0)
+                    GameEngine::Engine::Renderer::SectorLocalMatrix(rec.worldTransform, tripwireSector).Data(),
+                    sizeof(float) * 16u) != 0)
     {
         static std::atomic<bool> s_VersionContractWarned{false};
         if (!s_VersionContractWarned.exchange(true, std::memory_order_relaxed))
         {
             Logger::Log::Error(
-                "RenderExtraction: WorldTransform.matrix changed without a Version bump "
+                "RenderExtraction: WorldTransform changed without a Version bump "
                 "(entity={}) — it will render at a stale transform. See the direct-writer "
                 "contract in Transform.h.",
                 rec.entity.id);
@@ -807,17 +795,20 @@ void PrepareRecord(const WorldRenderableRecord& rec,
     // even for a null meshGpu, CONC-F2). Motion-vector history: last frame's
     // transform still sits in the GPUScene CPU mirror (prepare only READS the
     // scene, §2.3 — the same guarantee the tripwire above relies on). A sector
-    // change means prev lives in a different sector frame: drop history.
+    // change moves that matrix into the new sector, so the motion vector holds.
     ++cr.diag.rebuildCount;
-    const float boundsCenter[3] = {rec.bounds.Box.center.x, rec.bounds.Box.center.y,
-                                   rec.bounds.Box.center.z};
-    const float* prevMatrix = nullptr;
-    if (meshGpu->instanceIndex != 0xFFFFFFFFu &&
-        meshGpu->LastSectorX == secX && meshGpu->LastSectorY == secY &&
-        meshGpu->LastSectorZ == secZ)
-        prevMatrix = scene.GetInstances()[meshGpu->instanceIndex].transform.Data();
-    // secX/secY/secZ computed above (part of the no-op check).
-    BuildGpuInstancePayload(out.payload, rec.worldTransform.matrix, prevMatrix, rec.hasBounds,
+    const Vector3& boundsCenter = rec.bounds.Box.center;
+    Mathematics::Vector3Int sector;
+    const Mathematics::Matrix4x4 localMatrix =
+        GameEngine::Engine::Renderer::SectorLocalMatrix(rec.worldTransform, sector);
+    const bool hasHistory = meshGpu->instanceIndex != 0xFFFFFFFFu;
+    const Mathematics::Matrix4x4 prevMatrix =
+        hasHistory ? PreviousMatrixInSector(scene.GetInstances()[meshGpu->instanceIndex].transform, *meshGpu, sector)
+                   : localMatrix;
+    const int32 secX = sector.x;
+    const int32 secY = sector.y;
+    const int32 secZ = sector.z;
+    BuildGpuInstancePayload(out.payload, localMatrix, prevMatrix, rec.hasBounds,
                             boundsCenter, boundsRadius, mshIdx, matIdx, flags,
                             rec.lodBias, skinPaletteOffset, rec.runtimeId, secX, secY, secZ,
                             rec.meshRenderer.RenderLayers);
@@ -937,13 +928,17 @@ void BuildPatchedInstances(std::span<const RenderExtractionParallelState::DirtyR
         GPUScene::InstanceWrite& write = writes[i];
         write.InstanceIndex = meshGpu->instanceIndex;
         const bool hasBounds = meshGpu->LastBoundsRadius >= 0.0f; // -1 = extracted without bounds
-        const float* prevMatrix = rows[meshGpu->instanceIndex].transform.Data();
-        BuildGpuInstancePayload(write.Instance, wt->matrix, prevMatrix, hasBounds,
-                                meshGpu->LastBoundsCenter, meshGpu->LastBoundsRadius,
+        Mathematics::Vector3Int sector;
+        const Mathematics::Matrix4x4 localMatrix = GameEngine::Engine::Renderer::SectorLocalMatrix(*wt, sector);
+        const Mathematics::Matrix4x4 prevMatrix =
+            PreviousMatrixInSector(rows[meshGpu->instanceIndex].transform, *meshGpu, sector);
+        BuildGpuInstancePayload(write.Instance, localMatrix, prevMatrix, hasBounds,
+                                Vector3(meshGpu->LastBoundsCenter[0], meshGpu->LastBoundsCenter[1],
+                                        meshGpu->LastBoundsCenter[2]),
+                                meshGpu->LastBoundsRadius,
                                 meshGpu->meshIndex, meshGpu->materialIndex, meshGpu->LastFlags,
                                 meshGpu->LastLodBias, meshGpu->LastSkinPaletteOffset,
-                                meshGpu->LastRuntimeId, meshGpu->LastSectorX,
-                                meshGpu->LastSectorY, meshGpu->LastSectorZ, mr->RenderLayers);
+                                meshGpu->LastRuntimeId, sector.x, sector.y, sector.z, mr->RenderLayers);
         const bool differs = PayloadPrevDiffers(write.Instance);
         isMover[i] = (differs && mr) ? 1u : 0u;
         if (isMover[i] != 0u)
@@ -951,6 +946,9 @@ void BuildPatchedInstances(std::span<const RenderExtractionParallelState::DirtyR
                                write.Instance.skinPaletteOffset,
                                RenderServices::kNoPreviousSkinPalette};
         meshGpu->LastTransformVersion = wt->Version;
+        meshGpu->LastSectorX = sector.x;
+        meshGpu->LastSectorY = sector.y;
+        meshGpu->LastSectorZ = sector.z;
         meshGpu->LastPrevDiffers = differs;
     }
 }
@@ -1020,7 +1018,7 @@ void ProcessRecordsParallel(
     state.chunks.resize(numChunks);
     for (std::size_t c = 0; c < numChunks; ++c)
     {
-        auto& cr = state.chunks[c];
+        auto& cr = state.chunks[c].Value;
         cr.digestPartial = 0u;
         cr.diag = {};
         cr.subs.clear(); // retains capacity across frames
@@ -1033,7 +1031,7 @@ void ProcessRecordsParallel(
     {
         const std::size_t begin = c * chunkSize;
         const std::size_t end = std::min(begin + chunkSize, recCount);
-        auto& cr = state.chunks[c];
+        auto& cr = state.chunks[c].Value;
         for (std::size_t i = begin; i < end; ++i)
             PrepareRecord(records[i], state.prepared[i], cr, meshReg, matReg,
                           matchingViews, rs, worldId, extractDiag, scene, allowPrevSettle);
@@ -1055,7 +1053,7 @@ void ProcessRecordsParallel(
 
     // ---- APPLY (serial, record order) ----
     const auto applyStart = PrepClock::now();
-    for (const auto& cr : state.chunks)
+    for (const auto& [cr] : state.chunks)
     {
         contentDigest += cr.digestPartial;
         rebuildCount += cr.diag.rebuildCount;
@@ -1085,14 +1083,14 @@ void ProcessRecordsParallel(
         auto& prep = state.prepared[i];
         if (const std::size_t chunk = i / chunkSize; chunk != spliceChunk)
         {
-            assert(spliceCursor == state.chunks[spliceChunk].subs.size() &&
+            assert(spliceCursor == state.chunks[spliceChunk].Value.subs.size() &&
                    "the apply's splice left submissions of a prepare chunk unread");
             spliceChunk = chunk;
             spliceCursor = 0;
         }
         if (prep.subCount != 0u)
         {
-            const auto& chunkSubs = state.chunks[spliceChunk].subs;
+            const auto& chunkSubs = state.chunks[spliceChunk].Value.subs;
             const auto first = chunkSubs.begin() + static_cast<std::ptrdiff_t>(spliceCursor);
             submissions.insert(submissions.end(), first, first + prep.subCount);
             spliceCursor += prep.subCount;
@@ -1130,7 +1128,7 @@ void ProcessRecordsParallel(
             break;
         }
     }
-    assert((recCount == 0 || spliceCursor == state.chunks[spliceChunk].subs.size()) &&
+    assert((recCount == 0 || spliceCursor == state.chunks[spliceChunk].Value.subs.size()) &&
            "the apply's splice left submissions of the last prepare chunk unread");
 
     applyMs = elapsed(applyStart, PrepClock::now());
@@ -1220,18 +1218,20 @@ namespace
 {
 constexpr float kDominantWeightEpsilon = 1e-4f;
 
-bool ComputeSpatialWeight(const PostProcessExtractedVolume& vol, const float cameraPos[3],
-                          bool hasCameraPos, float& outSpatialWeight)
+bool ComputeSpatialWeight(const PostProcessExtractedVolume& vol, const Rendering::CameraData* camera,
+                          float& outSpatialWeight)
 {
     outSpatialWeight = 1.0f;
     if (vol.IsGlobal)
         return true;
-    if (!hasCameraPos || !vol.ValidSpatial)
+    if (!camera || !vol.ValidSpatial)
         return false;
 
-    const float vx = cameraPos[0] - vol.Center[0];
-    const float vy = cameraPos[1] - vol.Center[1];
-    const float vz = cameraPos[2] - vol.Center[2];
+    const Mathematics::Vector3 eye = CameraEyeRelativeToOrigin(*camera);
+    const Mathematics::Vector3 center = ViewRelativePoint(*camera, vol.Center);
+    const float vx = eye.x - center.x;
+    const float vy = eye.y - center.y;
+    const float vz = eye.z - center.z;
 
     const float lx = vx * vol.AxisX[0] + vy * vol.AxisX[1] + vz * vol.AxisX[2];
     const float ly = vx * vol.AxisY[0] + vy * vol.AxisY[1] + vz * vol.AxisY[2];
@@ -1307,9 +1307,10 @@ void CopyFogVolumeBounds(PostProcessSettings& dst, const PostProcessExtractedVol
     dst.VolumetricFogVolumeShape = vol.Shape;
     dst.VolumetricFogVolumeValid = (!vol.IsGlobal && vol.ValidSpatial) ? 1 : 0;
     dst.VolumetricFogVolumeBlendDistance = std::max(vol.BlendDistance, 0.0f);
-    dst.VolumetricFogVolumeCenterX = vol.Center[0];
-    dst.VolumetricFogVolumeCenterY = vol.Center[1];
-    dst.VolumetricFogVolumeCenterZ = vol.Center[2];
+    const Mathematics::Vector3 center = vol.Center - Mathematics::WorldPosition{};
+    dst.VolumetricFogVolumeCenterX = center.x;
+    dst.VolumetricFogVolumeCenterY = center.y;
+    dst.VolumetricFogVolumeCenterZ = center.z;
     dst.VolumetricFogVolumeAxisXX = vol.AxisX[0];
     dst.VolumetricFogVolumeAxisXY = vol.AxisX[1];
     dst.VolumetricFogVolumeAxisXZ = vol.AxisX[2];
@@ -1396,10 +1397,10 @@ struct ResolvedVolumeStack
     const PostProcessExtractedVolume* ShadowVolume = nullptr;
 };
 
-// Folds the priority-sorted volumes, as seen from cameraPos, into one settings
+// Folds the priority-sorted volumes, as seen from the camera's eye, into one settings
 // block. With camera volume layers, volumes whose VolumeLayers miss them are skipped.
 ResolvedVolumeStack ResolveVolumeStack(std::span<const PostProcessExtractedVolume> volumes,
-                                       const float cameraPos[3], bool hasCameraPos,
+                                       const Rendering::CameraData* camera,
                                        std::optional<RenderLayerMask> cameraVolumeLayers)
 {
     ResolvedVolumeStack stack;
@@ -1414,7 +1415,7 @@ ResolvedVolumeStack ResolveVolumeStack(std::span<const PostProcessExtractedVolum
         if (cameraVolumeLayers && !v.VolumeLayers.Intersects(*cameraVolumeLayers))
             continue;
         float spatialWeight = 1.0f;
-        const bool spatialContributes = ComputeSpatialWeight(v, cameraPos, hasCameraPos, spatialWeight);
+        const bool spatialContributes = ComputeSpatialWeight(v, camera, spatialWeight);
         const float weight = v.BaseWeight * spatialWeight;
         if (spatialContributes)
         {
@@ -1534,9 +1535,7 @@ void RenderExtractionSystem::ExtractPostProcessVolumes(ECS::World& world, uint64
                   ev.IsGlobal = vol.IsGlobal;
                   ev.Shape = static_cast<int32>(vol.Shape);
                   ev.BlendDistance = vol.BlendDistance;
-                  ev.Center[0] = xf.matrix[12];
-                  ev.Center[1] = xf.matrix[13];
-                  ev.Center[2] = xf.matrix[14];
+                  ev.Center = xf.GetPosition();
                   // Exposure is not a volume property — it belongs to the camera (the sensor), applied
                   // per-view below, or to the world default for camera-less views. Volumes contribute
                   // only grading / tonemap / bloom / fog.
@@ -1544,10 +1543,9 @@ void RenderExtractionSystem::ExtractPostProcessVolumes(ECS::World& world, uint64
                   ExtractNightTint(vol, ev.Settings);
                   ev.ValidSpatial = true;
 
-                  const float* mtx = xf.matrix;
-                  const float ax[3] = {mtx[0], mtx[1], mtx[2]};
-                  const float ay[3] = {mtx[4], mtx[5], mtx[6]};
-                  const float az[3] = {mtx[8], mtx[9], mtx[10]};
+                  const GameEngine::Mathematics::Vector3 ax(xf.Basis[0]);
+                  const GameEngine::Mathematics::Vector3 ay(xf.Basis[1]);
+                  const GameEngine::Mathematics::Vector3 az(xf.Basis[2]);
                   const float sx = std::sqrt(ax[0] * ax[0] + ax[1] * ax[1] + ax[2] * ax[2]);
                   const float sy = std::sqrt(ay[0] * ay[0] + ay[1] * ay[1] + ay[2] * ay[2]);
                   const float sz = std::sqrt(az[0] * az[0] + az[1] * az[1] + az[2] * az[2]);
@@ -1602,17 +1600,7 @@ void RenderExtractionSystem::ExtractPostProcessVolumes(ECS::World& world, uint64
                          { return a.Priority < b.Priority; });
 
         const Rendering::CameraData* worldCamData = rs->Views().FindMainCameraData(worldId);
-        const bool hasWorldCameraPos = worldCamData != nullptr;
-        float worldCameraPos[3] = {0.0f, 0.0f, 0.0f};
-        if (worldCamData)
-        {
-            worldCameraPos[0] = worldCamData->cameraPos.x;
-            worldCameraPos[1] = worldCamData->cameraPos.y;
-            worldCameraPos[2] = worldCamData->cameraPos.z;
-        }
-
-        ResolvedVolumeStack worldStack =
-            ResolveVolumeStack(m_Volumes, worldCameraPos, hasWorldCameraPos, std::nullopt);
+        ResolvedVolumeStack worldStack = ResolveVolumeStack(m_Volumes, worldCamData, std::nullopt);
         // Directional shadows are world-global, so the dominant spatially
         // contributing volume carrying a ShadowSettingsEffect wins.
         if (worldStack.ShadowVolume)
@@ -1645,17 +1633,7 @@ void RenderExtractionSystem::ExtractPostProcessVolumes(ECS::World& world, uint64
 
             const RenderLayerMask cameraMask = rs->Views().GetCameraVolumeLayers(view.cameraId);
             const auto* cam = rs->Views().FindCameraData(view.cameraId);
-            const bool hasViewCameraPos = (cam != nullptr);
-            float viewCameraPos[3] = {0.0f, 0.0f, 0.0f};
-            if (cam)
-            {
-                viewCameraPos[0] = cam->cameraPos.x;
-                viewCameraPos[1] = cam->cameraPos.y;
-                viewCameraPos[2] = cam->cameraPos.z;
-            }
-
-            ResolvedVolumeStack viewStack =
-                ResolveVolumeStack(m_Volumes, viewCameraPos, hasViewCameraPos, cameraMask);
+            ResolvedVolumeStack viewStack = ResolveVolumeStack(m_Volumes, cam, cameraMask);
             PostProcessSettings perView = viewStack.Settings;
             const bool any = viewStack.Any;
 
@@ -1732,7 +1710,7 @@ bool RenderExtractionSystem::EvaluateFastPathPreconditions(ECS::World& world, ui
     if (m_FrameStructuralVersion != m_FullPassStructuralVersion)
         reasons |= kEscalationStructuralChange;
 
-    // E5 — Changed<> probes over the four record columns extraction reads
+    // E5 — Changed<> probes over the three record columns extraction reads
     // and never writes, morph carriers included (their MeshRenderer/
     // LocalBounds edits change submission fields the replay depends on).
     // Evaluated every frame on both lanes so the gates advance and edits are
@@ -1740,14 +1718,11 @@ bool RenderExtractionSystem::EvaluateFastPathPreconditions(ECS::World& world, ui
     const uint64 probeVersion = world.GetGlobalSystemVersion();
     m_ProbeSince.LastRunVersion = std::min({m_ProbeGateMeshRenderer.LastRunVersion,
                                             m_ProbeGateLocalBounds.LastRunVersion,
-                                            m_ProbeGateSectorCoord.LastRunVersion,
                                             m_ProbeGateLodGroup.LastRunVersion});
     if (ProbeColumnChanged<Components::MeshRenderer>(world, m_ProbeGateMeshRenderer, probeVersion))
         reasons |= kEscalationProbeMeshRenderer;
     if (ProbeColumnChanged<Components::LocalBounds>(world, m_ProbeGateLocalBounds, probeVersion))
         reasons |= kEscalationProbeLocalBounds;
-    if (ProbeColumnChanged<Components::WorldSectorCoord>(world, m_ProbeGateSectorCoord, probeVersion))
-        reasons |= kEscalationProbeSectorCoord;
     if (ProbeColumnChanged<Components::LODGroup>(world, m_ProbeGateLodGroup, probeVersion))
         reasons |= kEscalationProbeLodGroup;
 
@@ -1922,14 +1897,20 @@ void RenderExtractionSystem::TrackChangedCasterSphere(const Rendering::GPUInstan
     // Enclosing BOTH poses is what makes range-boundary crossings sound in both
     // directions (a caster leaving a light's range still triggers the one final
     // re-render that removes its shadow).
-    const float dx = current.boundingCenter.x - previous.boundingCenter.x;
-    const float dy = current.boundingCenter.y - previous.boundingCenter.y;
-    const float dz = current.boundingCenter.z - previous.boundingCenter.z;
+    // The spheres are in world space: each center is composed against sector (0,0,0).
+    const Mathematics::Vector3Int worldSector{0, 0, 0};
+    const Vector3 previousCenter = SectorLocalPointRelativeTo(
+        previous.boundingCenter, previous.sectorPacked[0], previous.sectorPacked[1], worldSector);
+    const Vector3 currentCenter = SectorLocalPointRelativeTo(
+        current.boundingCenter, current.sectorPacked[0], current.sectorPacked[1], worldSector);
+    const float dx = currentCenter.x - previousCenter.x;
+    const float dy = currentCenter.y - previousCenter.y;
+    const float dz = currentCenter.z - previousCenter.z;
     const float halfDist = 0.5f * std::sqrt(dx * dx + dy * dy + dz * dz);
     ShadowCasterChangeSphere s{};
-    s.X = 0.5f * (previous.boundingCenter.x + current.boundingCenter.x);
-    s.Y = 0.5f * (previous.boundingCenter.y + current.boundingCenter.y);
-    s.Z = 0.5f * (previous.boundingCenter.z + current.boundingCenter.z);
+    s.X = 0.5f * (previousCenter.x + currentCenter.x);
+    s.Y = 0.5f * (previousCenter.y + currentCenter.y);
+    s.Z = 0.5f * (previousCenter.z + currentCenter.z);
     s.Radius = halfDist + std::max(previous.boundingRadius, current.boundingRadius);
     m_ChangedCasterSpheres.push_back(s);
 }
@@ -2197,16 +2178,15 @@ uint32 RenderExtractionSystem::RefreshAlwaysRefreshSubset(ECS::World& world, GPU
         auto* meshGpu = world.GetComponentForWrite<Components::MeshGPUData>(e);
         if (!meshGpu)
             continue;
-        const float boundsCenter[3] = {hasBounds ? lb->Box.center.x : 0.0f,
-                                       hasBounds ? lb->Box.center.y : 0.0f,
-                                       hasBounds ? lb->Box.center.z : 0.0f};
+        const Vector3 boundsCenter = hasBounds ? lb->Box.center : Vector3(0.0f, 0.0f, 0.0f);
         GPUInstance payload;
         const GPUInstance& previousInstance = scene.GetInstances()[meshGpu->instanceIndex];
-        const float* prevMatrix = previousInstance.transform.Data();
-        BuildGpuInstancePayload(payload, wt->matrix, prevMatrix, hasBounds, boundsCenter,
+        Mathematics::Vector3Int sector;
+        const Mathematics::Matrix4x4 localMatrix = GameEngine::Engine::Renderer::SectorLocalMatrix(*wt, sector);
+        const Mathematics::Matrix4x4 prevMatrix = PreviousMatrixInSector(previousInstance.transform, *meshGpu, sector);
+        BuildGpuInstancePayload(payload, localMatrix, prevMatrix, hasBounds, boundsCenter,
                                 boundsRadius, mshIdx, matIdx, flags, lodBias,
-                                skinPaletteOffset, runtimeId,
-                                meshGpu->LastSectorX, meshGpu->LastSectorY, meshGpu->LastSectorZ, mr->RenderLayers);
+                                skinPaletteOffset, runtimeId, sector.x, sector.y, sector.z, mr->RenderLayers);
         const bool prevDiffers = PayloadPrevDiffers(payload);
         // Before UpdateInstance overwrites the mirror `previousInstance` aliases.
         // A refreshed caster counts as changed whatever field moved — a palette
@@ -2228,8 +2208,7 @@ uint32 RenderExtractionSystem::RefreshAlwaysRefreshSubset(ECS::World& world, GPU
                                             paletteOffsets.Current, paletteOffsets.Previous);
         WriteLastCaches(*meshGpu, mshIdx, matIdx, meshEntry->uploadSeq, wt->Version, flags,
                         skinPaletteOffset, lodBias, runtimeId, boundsCenter, boundsRadius,
-                        meshGpu->LastSectorX, meshGpu->LastSectorY, meshGpu->LastSectorZ,
-                        prevDiffers);
+                        sector.x, sector.y, sector.z, prevDiffers);
         ++refreshed;
     }
     return refreshed;
@@ -2266,8 +2245,7 @@ void RenderExtractionSystem::ReleaseUngatheredInstances(ECS::World& world, GPUSc
 bool RenderExtractionSystem::IsStructuralDeltaEligible(uint32 reasons) const
 {
     constexpr uint32 kCoverable = kEscalationStructuralChange | kEscalationProbeMeshRenderer |
-                                  kEscalationProbeLocalBounds | kEscalationProbeSectorCoord |
-                                  kEscalationProbeLodGroup;
+                                  kEscalationProbeLocalBounds | kEscalationProbeLodGroup;
     // Slotless or HLOD-skipped renderables are tracked by no slot, so the
     // count check could not see them leave: such a world keeps the full lane.
     return m_FeedFastPath && m_KeyedStatePrimed && reasons != 0 && (reasons & ~kCoverable) == 0 &&
@@ -2281,8 +2259,7 @@ bool RenderExtractionSystem::GatherStructuralDeltaRecords(ECS::World& world,
     uint32 hlodSkipped = 0;
     uint32 pendingUnresolved = 0;
     auto changed = RenderableQuery(world);
-    changed.Changed<Components::MeshRenderer, Components::LocalBounds, Components::WorldSectorCoord,
-                    Components::LODGroup>(m_ProbeSince);
+    changed.Changed<Components::MeshRenderer, Components::LocalBounds, Components::LODGroup>(m_ProbeSince);
     AppendRenderableRecords(changed, out, hlodSkipped, pendingUnresolved);
     // An unresolved pose waits for the full lane's pending count (E8).
     if (hlodSkipped != 0 || pendingUnresolved != 0)
@@ -2457,6 +2434,9 @@ void RenderExtractionSystem::Update(ECS::World& world, float32 deltaTime)
         return;
 
     const uint64 worldId = world.GetWorldId();
+    // The host declares its game view after extraction, so the camera's pause reaches the view here,
+    // before the view fingerprints and the submissions read it.
+    ApplyActiveCameraWorldPause(rs->Views(), world);
 
     // prevTransform settle discipline: the LastPrevDiffers settle rebuild may
     // fire only on the FIRST extraction run of a feed swap window — a
@@ -2581,15 +2561,12 @@ void RenderExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                           static_cast<uint32_t>(light.ShadowResolutionTier);
                       out.shadowAngularDiameter = std::max(light.ShadowAngularDiameter, 0.0f);
 
-                      // WorldTransform matrix is stored column-major; translation is the last column.
-                      out.positionWS[0] = xf.matrix[12];
-                      out.positionWS[1] = xf.matrix[13];
-                      out.positionWS[2] = xf.matrix[14];
+                      out.positionWS = xf.GetPosition();
 
                       // Shine along entity forward (+Z column). Matches cameras and Unity.
-                      StoreLightAxis(Mathematics::Vector3(xf.matrix[8], xf.matrix[9], xf.matrix[10]), out.directionWS);
-                      StoreLightAxis(Mathematics::Vector3(xf.matrix[0], xf.matrix[1], xf.matrix[2]), out.rightWS);
-                      StoreLightAxis(Mathematics::Vector3(xf.matrix[4], xf.matrix[5], xf.matrix[6]), out.upWS);
+                      StoreLightAxis(Mathematics::Vector3(xf.Basis[2]), out.directionWS);
+                      StoreLightAxis(Mathematics::Vector3(xf.Basis[0]), out.rightWS);
+                      StoreLightAxis(Mathematics::Vector3(xf.Basis[1]), out.upWS);
 
                       rs->SubmitLight(worldId, out);
                       ++lightCount; });

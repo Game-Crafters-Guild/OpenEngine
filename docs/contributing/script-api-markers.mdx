@@ -72,6 +72,7 @@ A parameter, a return value, or a record field must be of a kind in this table. 
 | `Vec2`, `Vec3`, `Vec4` | `Mathematics::Vector2`, `Vector3`, `Vector4` | |
 | `Quat` | `Mathematics::Quaternion` | Stored x, y, z, w. The constructor takes w, x, y, z. |
 | `Mat4` | `Mathematics::Matrix4x4` | Column-major. |
+| `WorldPosition` | `Mathematics::WorldPosition` | Three doubles, 24 bytes, aligned to 8. A record field has no initializer: it starts at the origin. |
 | `ColorLinear` | `ColorLinear` | Four floats, linear. |
 | `Entity` | `ECS::EntityHandle` | The packed 32-bit entity id. |
 | `RenderLayerMask` | `Rendering::RenderLayerMask` | The 32-bit word of layers. A parameter or a return value, never a record field. No default. |

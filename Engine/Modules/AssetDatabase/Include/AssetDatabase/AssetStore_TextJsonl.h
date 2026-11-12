@@ -105,6 +105,7 @@ class AssetStore_TextJsonl final : public IAssetStore
 
     bool SetKeyValue(const GUID& guid, const std::string& key, const std::string& value, std::string* outError) override;
     bool TryGetKeyValue(const GUID& guid, const std::string& key, std::string& outValue) const override;
+    bool RemoveKeyValue(const GUID& guid, const std::string& key, std::string* outError) override;
 
     bool AddRedirect(const GUID& from, const GUID& to, std::string* outError) override;
     bool RemoveRedirect(const GUID& from, std::string* outError) override;

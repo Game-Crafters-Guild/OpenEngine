@@ -11,6 +11,7 @@
 #include "Engine/Rendering/RenderServices.h"
 #include "Mathematics/Interpolation.h"
 #include "Terrain/TerrainTypes.h" // TerrainNeedsTiling (a tiled terrain keeps its lattice cap)
+#include "TerrainECS/Planet/PlanetPageRequester.h"
 #include "TerrainECS/TerrainRenderFeature.h" // unified-height dirty rect (tiled streaming)
 #include "TerrainECS/TerrainService.h" // TerrainService, TerrainData, DirtyRegionLog
 
@@ -21,7 +22,7 @@
 
 #include <algorithm> // std::clamp
 #include <bit>       // std::bit_cast (provision-signal dedupe key)
-#include <cstdlib>   // std::getenv / std::atoi (GE_CBT_EDIT_RETESS A/B toggle)
+#include <cstdlib>   // std::getenv / std::atoi (the GE_CBT_* A/B toggles)
 
 namespace GameEngine::CBTTerrainECS
 {
@@ -33,27 +34,8 @@ namespace GameEngine::CBTTerrainECS
 // ample. Larger only lengthens the (cheap) full re-eval tail after the last edit.
 constexpr uint32 kSphereEditForceEvalFrames = 3u;
 
-// Edit-driven retessellation (round-8b): Classify's geometric-error crease term refines a facet
-// straddling a live sculpt cliff the screen-space AREA metric cannot see (a coarse facet whose
-// projected size did not change). Ships default-ON; GE_CBT_EDIT_RETESS=0 forces the pre-slice
-// area-only metric for an A/B on the same build (and is a kill-switch if it ever regresses).
-bool EditRetessEnabled()
-{
-    static const bool enabled = [] {
-        if (const char* v = std::getenv("GE_CBT_EDIT_RETESS"))
-            return std::atoi(v) != 0;
-        return true;
-    }();
-    return enabled;
-}
-
-// Near-field force-split occupancy gate (round-8e saturation-deadlock fix). Under pool pressure the
-// invisible near-plane/behind-eye force-split re-fills the deepest pool level every frame, pinning the
-// pool at 100% so the topology freezes and a static-camera edit / TargetPixelError change can never
-// re-tessellate (her "updates only happen when the camera moves"). Gating that force-split off above
-// the occupancy ceiling keeps the visible field headroom and the crease term below its occupancy
-// ceiling. Ships default-ON; GE_CBT_NEARFIELD_GATE=0 forces the pre-slice unconditional force-split
-// for an A/B on the same build (and is a kill-switch if it ever regresses).
+// Above the occupancy ceiling, the near-field force-split stops, so the pool keeps headroom and a
+// static-camera edit can still re-tessellate. On by default; GE_CBT_NEARFIELD_GATE=0 turns it off.
 bool NearFieldGateEnabled()
 {
     static const bool enabled = [] {
@@ -75,6 +57,21 @@ bool PoolPressureEnabled()
         return true;
     }();
     return enabled;
+}
+
+// What the classify keeps of the ground wholly behind the eye (CBTClassifyDesc::BehindEye).
+CBTTerrain::BehindEyeRelease ToBehindEyeRelease(Components::TerrainBehindCameraDetail detail)
+{
+    switch (detail)
+    {
+    case Components::TerrainBehindCameraDetail::AlwaysKeep:
+        return CBTTerrain::BehindEyeRelease::AlwaysKeep;
+    case Components::TerrainBehindCameraDetail::AlwaysRelease:
+        return CBTTerrain::BehindEyeRelease::AlwaysRelease;
+    case Components::TerrainBehindCameraDetail::ReleaseWhenNeeded:
+        break;
+    }
+    return CBTTerrain::BehindEyeRelease::ReleaseWhenNeeded;
 }
 
 // The imported heightmap's sample grid when one drives the terrain's heights
@@ -112,7 +109,6 @@ void CBTUpdateSystem::Update(ECS::World& world, float32 /*deltaTime*/)
     CBTTerrain::CBTClassifyDesc classify{};
     classify.Mode = CBTTerrain::kClassifyScreenSpace; // C4 production metric
     classify.FocusRoot = CBTTerrain::kFocusRootAll;   // unused under screen-space
-    classify.EditRetessEnabled = EditRetessEnabled() ? 1u : 0u;
     classify.NearFieldGate = NearFieldGateEnabled() ? 1u : 0u;
     classify.PoolPressure = PoolPressureEnabled() ? 1u : 0u;
 
@@ -129,6 +125,11 @@ void CBTUpdateSystem::Update(ECS::World& world, float32 /*deltaTime*/)
         FindActiveTerrain(world, tuning);
         relief = ResolveActivePlanetRelief(world);
     }
+    // The release acts only where the inspector shows the setting: one rule for both.
+    const auto* terrainService = TerrainECS::TerrainService::TryGet();
+    classify.BehindEye = terrainService && TerrainECS::BehindCameraDetailApplies(tuning, *terrainService)
+                             ? ToBehindEyeRelease(tuning.BehindCameraDetail)
+                             : CBTTerrain::BehindEyeRelease::AlwaysKeep;
 
     // C7: the rendering domain + planet tuning. The feature re-seeds the tree on a
     // planar<->spherical switch, a retired or replaced drawn terrain or a lowered depth cap (EnsureSeeded,
@@ -136,14 +137,9 @@ void CBTUpdateSystem::Update(ECS::World& world, float32 /*deltaTime*/)
     CBTRenderFeature::DomainConfig domain{};
     const bool spherical = (tuning.Domain == Components::TerrainDomain::Spherical);
 
-    // Reset the service-global sculpt store when the active spherical PLANET changes identity — a
-    // different entity, or none (deleted / domain-switched away). The sculpt is per-planet authored
-    // data; without this, a create->edit->delete->recreate sequence leaves the new planet with the
-    // old planet's Dv + stale content (the sub-texel "brush does nothing at 20k" resurrection this
-    // slice exists to kill). A same-entity persist keeps the store: a live radius edit on the SAME
-    // planet re-derives Dv through the next ConfigurePlanetSculpt (modifier/render path), which
-    // REMAPS the authored content onto the new grid (SphereSculptLayer::Configure) instead of
-    // resetting it.
+    // Reset the planet layers when the active spherical planet changes identity: a different
+    // entity, or none (deleted or switched away from the sphere domain). A new planet must not
+    // take the old planet's sculpt.
     const ECS::EntityHandle currentPlanet =
         (active && spherical) ? FindActiveTerrainEntity(world) : ECS::EntityHandle{};
     if (currentPlanet != m_ActivePlanetEntity)
@@ -153,31 +149,30 @@ void CBTUpdateSystem::Update(ECS::World& world, float32 /*deltaTime*/)
                 service->ResetPlanetSculpt();
         m_ActivePlanetEntity = currentPlanet;
     }
-
-    // Sphere sculpt persistence: a planet carrying a saved .tsculpt ref restores it here —
-    // guid-keyed (once per payload), and AFTER the identity reset above so a scene swap in one
-    // frame clears the loaded guid first and the new scene's payload restores the same tick.
-    // The restore adopts the SAVED grid; the per-frame ConfigurePlanetSculpt (render/modifier
-    // path) then remaps to the live radius grid when they differ — load composes with resize.
+    // The planet's sculpt comes from its height layer asset: a scene open or a new asset reference loads it.
     if (currentPlanet.IsValid())
         if (auto* service = TerrainECS::TerrainService::TryGet())
-            service->EnsureSphereSculptLoaded(tuning.SphereSculptGuid.ToGuid());
+        {
+            const float32 texel = tuning.SamplesPerMeter > 0.0f ? 1.0f / tuning.SamplesPerMeter : 0.0f;
+            service->EnsurePlanetHeightLayerLoaded(currentPlanet.id,
+                                                   TerrainECS::PlanetFaceSamples(tuning.PlanetRadius, texel),
+                                                   tuning.HeightLayerGuid.ToGuid());
+        }
 
     if (active)
     {
         // (face,rect) region identity (plan §planet-editing): a spherical terrain's edits
-        // live in the CBT feature's sphere sculpt layer, keyed by (face, face-local rect);
+        // live in the planet page layers, keyed by (face, face-local rect);
         // a planar terrain's edits live in the TerrainData heightfield's UV DirtyRegionLog.
         // Consume the one that matches the active domain.
         if (spherical)
         {
-            // The authoritative sculpt layer + physics mirror live in TerrainService (the brush
-            // and TerrainModifierSystem write it directly), so this reads TerrainService — no
-            // per-frame push, and the physics colliders sample TerrainService's mirror directly.
+            // The planet's sculpt and modifier layers live in TerrainService (the brush and
+            // TerrainModifierSystem write them directly), so this reads TerrainService.
             auto* service = TerrainECS::TerrainService::TryGet();
-            const uint64 version = service ? service->SphereSculptVersion() : 0u;
+            const uint64 version = service ? service->PlanetLayerVersion() : 0u;
 
-            // While the editable sculpt version advances (a live planet edit) — and for a short
+            // While the planet layer version advances (a live planet edit) — and for a short
             // settle after — force a full-pool VertexEval instead of trusting the region-scoped
             // MODIFIED re-eval below. A modifier dragged across the surface bumps the version at a
             // new footprint every frame while the per-frame dirty rect trails behind it, so the
@@ -186,9 +181,9 @@ void CBTUpdateSystem::Update(ECS::World& world, float32 /*deltaTime*/)
             // editing frame makes every live bisector match the current sculpt, so no stale trail
             // survives, regardless of how the dirty rect is scoped or which frame it lands. It runs
             // ONLY while editing, so a quiescent planet keeps the gated re-eval (idle cost unchanged).
-            if (version != m_LastSphereSculptVersion)
+            if (version != m_LastPlanetLayerVersion)
             {
-                m_LastSphereSculptVersion = version;
+                m_LastPlanetLayerVersion = version;
                 m_SphereForceEvalFrames = kSphereEditForceEvalFrames;
             }
             if (m_SphereForceEvalFrames > 0u)
@@ -199,8 +194,8 @@ void CBTUpdateSystem::Update(ECS::World& world, float32 /*deltaTime*/)
 
             CBTTerrain::SphereEditRegions regions{};
             if (service)
-                service->ConsumeSphereSculptDirtyRegions(regions); // drains the render dirty union
-            ConsumeSphereSculpt(version, feature.GetUpdateRecordCount(), regions, classify);
+                service->ConsumePlanetLayerDirtyRegions(regions); // drains the render dirty union
+            ConsumePlanetLayerEdits(feature.GetUpdateRecordCount(), regions, classify);
         }
         else
         {
@@ -225,6 +220,7 @@ void CBTUpdateSystem::Update(ECS::World& world, float32 /*deltaTime*/)
     }
     domain.DomainMode = spherical ? CBTTerrain::kDomainSpherical : CBTTerrain::kDomainPlanar;
     domain.PlanetRadius = tuning.PlanetRadius;
+    domain.PlanetEntity = currentPlanet.id;
     domain.ReliefAmplitude = relief.Amplitude;
     domain.ReliefFrequency = relief.Frequency;
     // Clamp octaves like MaxDepth: the count drives an unbounded per-vertex/per-pixel GPU loop,
@@ -283,15 +279,9 @@ void CBTUpdateSystem::LogProvisionSignal(const Components::Terrain& tuning, uint
                           std::max(tuning.SizeX, tuning.SizeZ), resolvedMaxDepth, depthKind);
 }
 
-void CBTUpdateSystem::ConsumeSphereSculpt(uint64 sphereVersion, uint64 updateRecordCount,
-                                          const CBTTerrain::SphereEditRegions& regions,
-                                          CBTTerrain::CBTClassifyDesc& classify)
+void CBTUpdateSystem::ConsumePlanetLayerEdits(uint64 updateRecordCount, const CBTTerrain::SphereEditRegions& regions,
+                                              CBTTerrain::CBTClassifyDesc& classify)
 {
-    // Once any dab has landed, keep the VertexEval additive sculpt sample on for every
-    // subsequent frame (the relief must persist, not just the edit frame). Before the
-    // first dab it stays off, so the C7 default is byte-identical + free.
-    classify.SphereSculptEnabled = sphereVersion > 0u ? 1u : 0u;
-
     // Ingest the drained dirty union (clear-on-read from TerrainService, so every non-empty call
     // is new content that must not be dropped — this is what preserves several dabs that land
     // between two CBT updates during a fast stroke). Each face's rect is the union since it was

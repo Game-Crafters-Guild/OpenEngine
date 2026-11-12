@@ -69,7 +69,7 @@ SceneRecoveryScan ScanForSceneRecovery(const std::filesystem::path& scenePath)
                 continue;
             const std::string name = entry.path().filename().string();
             if (EndsWith(name, std::string(".tzone") + kStagedSuffix)
-                || EndsWith(name, std::string(".tsculpt") + kStagedSuffix))
+                || EndsWith(name, std::string(".gepage") + kStagedSuffix))
                 scan.StagedPayloads.push_back(entry.path());
         }
     }

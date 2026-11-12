@@ -440,10 +440,10 @@ class AnimationPanelSnapshotCommand final : public Editor::IEditorCommand
 
 std::vector<std::uint8_t> ReadBinaryFile(const std::filesystem::path& path)
 {
-    Vector<uint8> bytes;
+    ByteBuffer bytes;
     if (!ReadFileBytesShared(path, bytes))
         return {};
-    return bytes;
+    return std::vector<std::uint8_t>(bytes.begin(), bytes.end());
 }
 
 bool WriteBinaryFile(const std::filesystem::path& path, const std::vector<std::uint8_t>& bytes)
@@ -6062,7 +6062,7 @@ void AnimationWindowPanel::ConfigureElements()
     // backdrop covers the full window, not just the animation panel.
     if (!m_UnsavedChangesModal)
     {
-        auto modal = std::make_unique<SaveSceneChangesModal>();
+        auto modal = std::make_unique<SaveSceneChangesModal>("animation");
         m_UnsavedChangesModal = modal.get();
         UIManager* ui = GetOwnerManager();
         UIElement* uiRoot = ui ? ui->GetRootElement() : nullptr;

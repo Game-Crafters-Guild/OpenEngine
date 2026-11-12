@@ -2,6 +2,7 @@
 
 #include "AssetCore/SharedFileRead.h"
 #include "Assets/AssetManager.h"
+#include "Assets/Parsers/ParserExtractionHelpers.h"
 #include "FileWatcher/FileWatcher.h"
 #include "Assets/FileWatchingService.h"
 #include "JobSystem/WorkStealingThreadPool.h"
@@ -64,6 +65,29 @@ bool WaitFor(const std::function<bool()>& pred,
         std::this_thread::sleep_for(step);
     }
     return pred();
+}
+
+// What a scan saw while safe-saves replaced the file it was reading.
+struct ReadsDuringReplaces
+{
+    std::atomic<bool> Replacing{true};
+    std::atomic<int> WholeReads{0};
+    std::atomic<int> MixedReads{0};
+};
+
+// Reads `target` through ParserExtraction::ReadFileBody until `reads.Replacing` is cleared,
+// counting each read that returned one of the two bodies whole and each that returned a mix.
+void ReadUntilReplacesEnd(const std::filesystem::path& target, const std::string& oldBody, const std::string& newBody,
+                          ReadsDuringReplaces& reads)
+{
+    while (reads.Replacing.load(std::memory_order_acquire))
+    {
+        const std::string body = ParserExtraction::ReadFileBody(target);
+        if (body == oldBody || body == newBody)
+            reads.WholeReads.fetch_add(1, std::memory_order_relaxed);
+        else if (!body.empty())
+            reads.MixedReads.fetch_add(1, std::memory_order_relaxed);
+    }
 }
 } // namespace
 
@@ -340,6 +364,51 @@ TEST_F(SafeSaveRenameStoreBackedTest, LingeringTempRenameRestoresTheTargetWithIt
     AssetMetadata md{};
     ASSERT_TRUE(reg.TryGetAssetMetadata(targetGuid, md));
     EXPECT_EQ(md.Name, "Hero Texture");
+}
+
+// A safe-save during a ReadFileBody read succeeds, and the read returns the old bytes or the new bytes, never a mix.
+TEST(ParserExtractionReadFileBody, ASafeSaveDuringTheReadSucceedsAndTheReadStaysWhole)
+{
+    const auto root = TestUtils::MakeUniqueTempDirectory("parser_read_file_body_safe_save");
+    std::filesystem::remove_all(root);
+    const auto target = root / "scene.scene";
+    const auto temp = root / "scene_new.scene";
+
+    constexpr size_t kBodyBytes = 4u << 20; // long enough that replaces land inside a read
+    constexpr int kReplaces = 64;
+    const std::string oldBody(kBodyBytes, 'a');
+    const std::string newBody(kBodyBytes, 'b');
+    WriteBinaryFile(target, oldBody);
+
+    ReadsDuringReplaces reads;
+    std::thread scan(ReadUntilReplacesEnd, std::cref(target), std::cref(oldBody), std::cref(newBody),
+                     std::ref(reads));
+
+    int refusedReplaces = 0;
+    for (int replace = 0; replace < kReplaces; ++replace)
+    {
+        WriteBinaryFile(temp, replace % 2 == 0 ? newBody : oldBody);
+#ifdef PLATFORM_WINDOWS
+        const bool replaced = ReplaceFileW(target.wstring().c_str(), temp.wstring().c_str(),
+                                           nullptr, 0, nullptr, nullptr) != 0;
+#else
+        std::error_code ec;
+        std::filesystem::rename(temp, target, ec);
+        const bool replaced = !ec;
+#endif
+        if (!replaced)
+        {
+            ++refusedReplaces;
+            std::filesystem::remove(temp);
+        }
+    }
+    reads.Replacing.store(false, std::memory_order_release);
+    scan.join();
+
+    EXPECT_EQ(refusedReplaces, 0) << "a single-attempt safe-save bounced on the scan's read handle";
+    EXPECT_EQ(reads.MixedReads.load(), 0);
+    EXPECT_GT(reads.WholeReads.load(), 0);
+    std::filesystem::remove_all(root);
 }
 
 // Windows reports a replace-rename (MoveFileEx REPLACE_EXISTING) as REMOVED
@@ -642,6 +711,41 @@ TEST(SharedFileReadTest, AReadOfADirectoryFailsBeforeTheFirstRetry)
     EXPECT_LT(elapsed, std::chrono::milliseconds(2))
         << "a directory read waited "
         << std::chrono::duration<double, std::milli>(elapsed).count() << " ms";
+    std::filesystem::remove_all(dir);
+}
+
+TEST(SharedFileReadTest, AWholeFileReadHandsOverEveryByteOfTheFile)
+{
+    const auto dir = TestUtils::MakeUniqueTempDirectory("shared_file_read_bytes_test");
+    std::filesystem::create_directories(dir);
+    const auto target = dir / "bytes.bin";
+    constexpr size_t kFileBytes = 70001;
+    std::string content(kFileBytes, '\0');
+    for (size_t i = 0; i < content.size(); ++i)
+        content[i] = static_cast<char>(i * 31 + 7);
+    WriteBinaryFile(target, content);
+
+    ByteBuffer bytes;
+    const bool read = ReadFileBytesShared(target, bytes);
+    std::filesystem::remove_all(dir);
+    ASSERT_TRUE(read);
+    ASSERT_EQ(bytes.Size(), content.size());
+    EXPECT_TRUE(std::equal(bytes.begin(), bytes.end(), reinterpret_cast<const uint8*>(content.data())));
+}
+
+// A read that fails leaves no bytes in the output, not even the bytes of an earlier read.
+TEST(SharedFileReadTest, AFailedReadHandsOverNoBytes)
+{
+    const auto dir = TestUtils::MakeUniqueTempDirectory("shared_file_read_failed_test");
+    std::filesystem::create_directories(dir);
+    const auto target = dir / "bytes.bin";
+    WriteBinaryFile(target, "earlier bytes");
+    ByteBuffer bytes;
+    ASSERT_TRUE(ReadFileBytesShared(target, bytes));
+    ASSERT_NE(bytes.Size(), 0u);
+
+    EXPECT_FALSE(ReadFileBytesShared(dir / "missing.bin", bytes));
+    EXPECT_EQ(bytes.Size(), 0u);
     std::filesystem::remove_all(dir);
 }
 

@@ -4,6 +4,7 @@
 #include "Engine/Rendering/CameraUtils.h"
 #include "Engine/Rendering/IEnvironmentSource.h"
 #include "Engine/Rendering/ImageBasedLightingFeature.h"
+#include "Engine/Rendering/Pipeline/PipelineFrameResources.h"
 #include "Engine/Rendering/Pipeline/PipelineResourceNames.h"
 #include "Engine/Rendering/Pipeline/RenderPipelineNodes.h"
 #include "Engine/Rendering/Pipeline/ViewExposureHistory.h"
@@ -16,6 +17,7 @@
 #include "Mathematics/Vector3.h"
 #include "Rendering/Core/Pipeline/PipelineDescTranslator.h"
 #include "Rendering/Core/Pipeline/PipelineTypes.h"
+#include "Rendering/Core/ViewParamsLayout.h"
 #include "Rendering/Materials/Shader/ShaderLayoutShape.h"
 #include "Rendering/ShaderCache/ShaderPackageIO.h"
 #include "Rendering/Utils/TextureUploadHelpers.h"
@@ -466,6 +468,9 @@ bool VolumetricFogRenderer::Initialize(IDevice* device)
         {18, DescriptorType::CombinedImageSampler, 1, kComputeStage},
         {19, DescriptorType::StorageBuffer, 1, kComputeStage},
         {20, DescriptorType::CombinedImageSampler, 1, kComputeStage},
+        // The view parameters: the light cull and the lighting compose world light positions from the
+        // relative light buffer with the view's render origin.
+        {kViewParamsBinding, DescriptorType::UniformBuffer, 1, kComputeStage},
     };
 
     m_CompositeLayout.debugName = "VolumetricFog.Composite.Set0";
@@ -512,8 +517,8 @@ void VolumetricFogRenderer::DestroyResources()
             m_Device->DestroySampler(m_DensityNoiseSampler);
         if (m_DensityNoiseTexture.IsValid())
             m_Device->DestroyTexture(m_DensityNoiseTexture);
-        if (m_ZeroShadowBuffer.IsValid())
-            m_Device->DestroyBuffer(m_ZeroShadowBuffer);
+        if (m_ZeroUniformBuffer.IsValid())
+            m_Device->DestroyBuffer(m_ZeroUniformBuffer);
         if (m_ZeroStorageBuffer.IsValid())
             m_Device->DestroyBuffer(m_ZeroStorageBuffer);
     }
@@ -522,7 +527,7 @@ void VolumetricFogRenderer::DestroyResources()
     m_JitterAtlasTexture = {};
     m_DensityNoiseSampler = {};
     m_DensityNoiseTexture = {};
-    m_ZeroShadowBuffer = {};
+    m_ZeroUniformBuffer = {};
     m_ZeroStorageBuffer = {};
     m_PerView.clear();
     m_Device = nullptr;
@@ -925,21 +930,34 @@ BufferHandle VolumetricFogRenderer::GetOrCreateLocalVolumeBuffer(PerViewState& s
     return state.localVolumeBuffer[slot];
 }
 
-BufferHandle VolumetricFogRenderer::GetZeroShadowBuffer(IDevice* dev)
+BufferHandle VolumetricFogRenderer::GetZeroUniformBuffer(IDevice* dev)
 {
-    if (!m_ZeroShadowBuffer.IsValid() && dev)
+    if (!m_ZeroUniformBuffer.IsValid() && dev)
     {
+        // Covers the largest uniform block it stands in for. Zero view parameters put the render origin at
+        // the world origin.
+        constexpr size_t kBytes = std::max(sizeof(ShadowDataGPU), sizeof(ViewParamsUBO));
+        const std::vector<uint8_t> zero(kBytes, 0u);
         BufferDesc bd{};
-        bd.size = sizeof(ShadowDataGPU);
+        bd.size = kBytes;
         bd.usage = static_cast<uint32_t>(BufferUsage::Uniform);
         bd.memoryUsage = BufferMemoryUsage::Upload;
         bd.flags = BufferCreateFlags::PersistentlyMapped;
-        bd.debugName = "VolumetricFog.ZeroShadowData";
-        m_ZeroShadowBuffer = dev->CreateBuffer(bd);
-        ShadowDataGPU zero{};
-        dev->UpdateBuffer(m_ZeroShadowBuffer, 0, sizeof(zero), &zero);
+        bd.debugName = "VolumetricFog.ZeroUniform";
+        m_ZeroUniformBuffer = dev->CreateBuffer(bd);
+        dev->UpdateBuffer(m_ZeroUniformBuffer, 0, kBytes, zero.data());
     }
-    return m_ZeroShadowBuffer;
+    return m_ZeroUniformBuffer;
+}
+
+void VolumetricFogRenderer::BindViewParams(IDevice& dev, DescriptorSetHandle set,
+                                           const Pipeline::PipelineBufferBindingRG& viewParams)
+{
+    if (viewParams.IsValid())
+        dev.UpdateBufferBinding(set, kViewParamsBinding, viewParams.Buffer, static_cast<size_t>(viewParams.Offset),
+                                sizeof(ViewParamsUBO));
+    else
+        dev.UpdateBufferBinding(set, kViewParamsBinding, GetZeroUniformBuffer(&dev), 0, sizeof(ViewParamsUBO));
 }
 
 BufferHandle VolumetricFogRenderer::GetZeroStorageBuffer(IDevice* dev)
@@ -1254,6 +1272,7 @@ void VolumetricFogRenderer::DeclareForView(Pipeline::ViewDeclare& d,
     // full froxel grid, including empty space beyond opaque surface depth.
     const auto shadowDataB = d.ResolveBuffer(Pipeline::Names::Res::ShadowData);
     const auto lightB = d.ResolveBuffer(Pipeline::Names::Res::LightBuffer);
+    const auto viewParamsB = d.ResolveBuffer(Pipeline::Names::Res::ViewParams);
 
     // The cascade array via the consume-only accessor (valid only when a
     // cascade producer declared into this frame). NEVER import the feature's
@@ -1306,7 +1325,7 @@ void VolumetricFogRenderer::DeclareForView(Pipeline::ViewDeclare& d,
                 p.Write(fogLightIndices, RenderGraph::RGBufferWrite::Storage);
                 p.Write(fogLightClusters, RenderGraph::RGBufferWrite::Storage);
             },
-            [this, fogLightIndices, fogLightClusters, lightB, uboBuf, uboOffset, cx, cy, cz]
+            [this, fogLightIndices, fogLightClusters, lightB, viewParamsB, uboBuf, uboOffset, cx, cy, cz]
             (RenderGraph::RGContext& ctx)
             {
                 auto* dev = ctx.GetDevice();
@@ -1325,6 +1344,7 @@ void VolumetricFogRenderer::DeclareForView(Pipeline::ViewDeclare& d,
                 dev->UpdateStorageBufferBinding(ds, 6, ctx.GetBuffer(fogLightIndices), 0, 0);
                 dev->UpdateStorageBufferBinding(ds, 7, ctx.GetBuffer(fogLightClusters), 0, 0);
                 dev->UpdateStorageBufferBinding(ds, 8, lightB.Buffer, static_cast<size_t>(lightB.Offset), 0);
+                BindViewParams(*dev, ds, viewParamsB);
                 ctx.Cmd->SetPipeline(pipe);
                 ctx.Cmd->BindDescriptorSet(0, ds, pipe);
                 ctx.Cmd->Dispatch(cx, cy, cz);
@@ -1418,7 +1438,7 @@ void VolumetricFogRenderer::DeclareForView(Pipeline::ViewDeclare& d,
         },
         [this, lightingTex, mediaTex, emissionTex, shadowArr, shadowSampler, shadowFallback, iblIrradianceTex,
          iblCubeSampler, uboBuf, uboOffset, volumeBuf, volumeOffset, shadowDataB, fogLightIndices,
-         fogLightClusters, lightB, localShadows, spotShadowSampler,
+         fogLightClusters, lightB, viewParamsB, localShadows, spotShadowSampler,
          pointShadowSampler, spotShadowFallback, pointShadowFallback, gw, gh, gs](RenderGraph::RGContext& ctx)
         {
             auto* dev = ctx.GetDevice();
@@ -1449,7 +1469,7 @@ void VolumetricFogRenderer::DeclareForView(Pipeline::ViewDeclare& d,
                 w.UniformBuffer(4, shadowDataB.Buffer, static_cast<size_t>(shadowDataB.Offset),
                                 sizeof(ShadowDataGPU));
             else
-                w.UniformBuffer(4, GetZeroShadowBuffer(dev), 0, sizeof(ShadowDataGPU));
+                w.UniformBuffer(4, GetZeroUniformBuffer(dev), 0, sizeof(ShadowDataGPU));
 
             auto shadowTex = shadowArr.IsValid() ? ctx.GetTexture(shadowArr) : TextureHandle{};
             if (!shadowTex.IsValid())
@@ -1469,7 +1489,7 @@ void VolumetricFogRenderer::DeclareForView(Pipeline::ViewDeclare& d,
             const auto pointMap = localShadows.PointMap.IsValid()
                 ? ctx.GetTexture(localShadows.PointMap) : pointShadowFallback;
             w.UniformBuffer(17,
-                localShadows.SpotData.IsValid() ? localShadows.SpotData : GetZeroShadowBuffer(dev),
+                localShadows.SpotData.IsValid() ? localShadows.SpotData : GetZeroUniformBuffer(dev),
                 static_cast<size_t>(localShadows.SpotOffset), sizeof(SpotShadowDataGPU));
             w.CombinedImageSampler(18, spotMap, spotShadowSampler);
             w.StorageBuffer(19,
@@ -1486,6 +1506,7 @@ void VolumetricFogRenderer::DeclareForView(Pipeline::ViewDeclare& d,
             w.StorageBuffer(8,
                 lightB.IsValid() ? lightB.Buffer : GetZeroStorageBuffer(dev),
                 lightB.IsValid() ? static_cast<size_t>(lightB.Offset) : 0, 0);
+            BindViewParams(*dev, ds, viewParamsB);
             w.CombinedImageSampler(11, m_JitterAtlasTexture, m_JitterAtlasSampler);
             w.StorageBuffer(12, volumeBuf, volumeOffset, sizeof(FogLocalVolumeBufferGpu));
             w.CombinedImageSampler(13, m_DensityNoiseTexture, m_DensityNoiseSampler);

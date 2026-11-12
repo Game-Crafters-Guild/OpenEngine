@@ -132,9 +132,9 @@ vec2 CBT_PlanarBaryToUV(uint rootIndex, CBT_BVEC3 bary, float invScale)
 // A function of the UNIT direction only — two triangles sharing a vertex normalize to
 // the same direction and so get the same relief: crack-free (see the header note).
 //
-// LOCKSTEP with CBTPlanetShading.h (PlanetBaseNoise / PlanetRelief / PlanetReliefGradient):
-// the CPU mirror is what the arc-law oracles validate, so these must stay bit-for-bit
-// equivalent. The fBM stack (persistence/lacunarity) is normalized by its amplitude sum so
+// LOCKSTEP with CBTPlanetShading.h (PlanetBaseNoise / PlanetRelief / PlanetReliefGradient): the same
+// formula. The CPU relief is the reference and uses Math::FastSin; this code uses sin, so the two agree to
+// the GPU sin's error (#6823). The fBM stack (persistence/lacunarity) is normalized by its amplitude sum so
 // the TOTAL relief keeps the +/- 1.5*amplitude envelope for ANY octave count — the on-shell
 // bound in CBTSphereDomainTests stays valid regardless of octave count.
 const float CBT_RELIEF_PERSISTENCE = 0.5;

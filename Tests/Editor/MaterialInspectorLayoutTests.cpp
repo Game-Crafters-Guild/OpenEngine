@@ -13,8 +13,10 @@
 #include "InspectorLayoutFixture.h"
 #include "Inspectors/InspectorDragHelpers.h"
 #include "Inspectors/MaterialInspectorSections.h"
+#include "Rendering/Materials/MaterialDocument.h"
 #include "UI/AssetField.h"
 #include "UI/Controls/Button.h"
+#include "UI/Controls/Dropdown.h"
 #include "UI/Controls/FloatField.h"
 #include "UI/Controls/Foldout.h"
 #include "UI/Controls/Label.h"
@@ -189,7 +191,7 @@ InspectorLayoutFixture MakeFixture()
     InspectorLayoutFixture fixture;
     fixture.ViewportH = kViewportH;
     // A closed section's content is hidden by the Foldout control's own sheet.
-    fixture.ExtraSheets = {"Assets/UI/controls/Foldout.css"};
+    fixture.ExtraSheets = {GE_UI_MODULE_SOURCE_DIR "/Assets/UI/controls/Foldout.css"};
     return fixture;
 }
 
@@ -336,7 +338,7 @@ TEST(MaterialInspectorLayout, AnInactiveRowDimsItsLabelAndItsValue)
     panel->AddChild(std::move(root));
     InspectorLayoutFixture fixture = MakeFixture();
     // The numeric field's disabled look is its own sheet's, which the field attaches in the editor.
-    fixture.ExtraSheets.push_back("Assets/UI/controls/FloatField.css");
+    fixture.ExtraSheets.push_back(GE_UI_MODULE_SOURCE_DIR "/Assets/UI/controls/FloatField.css");
     if (!fixture.Build(std::move(panel)))
         GTEST_SKIP() << fixture.Diagnostic;
 
@@ -454,4 +456,34 @@ TEST(MaterialInspectorLayout, TheInspectorSetsTheClassesItsRowRulesSelect)
     EXPECT_NE(meshRenderer.find("Editor::MakeMaterialPropertiesFoldout()"), std::string::npos)
         << "the mesh renderer inspector builds the Material Properties foldout by hand, so its bar and "
            "content miss the classes their rules select";
+}
+
+// The Pattern Symmetry row offers the three symmetries in the enum's order, under the names the
+// material file stores, shows the material's own, and says in its tooltip what each one means.
+TEST(MaterialInspectorLayout, ThePatternSymmetryRowOffersEachSymmetryAndShowsTheMaterials)
+{
+    auto root = std::make_unique<UIElement>();
+    Dropdown* field = Editor::AddMaterialPatternSymmetryRow(root.get(), MaterialPatternSymmetry::Square);
+    ASSERT_NE(field, nullptr);
+    EXPECT_EQ(field->GetSelectedIndex(), 2) << "the row does not show the material's Square";
+    EXPECT_EQ(field->GetSelectedValue(), "Square");
+
+    const char* names[] = {"None", "Rectangular", "Square"};
+    for (int index = 0; index < 3; ++index)
+    {
+        field->SetSelectedIndexWithoutNotify(index);
+        EXPECT_EQ(field->GetSelectedLabel(), names[index]) << "option " << index;
+        EXPECT_EQ(MaterialPatternSymmetryFromString(field->GetSelectedValue()),
+                  static_cast<MaterialPatternSymmetry>(index))
+            << "option " << index << " does not store the symmetry it shows";
+    }
+
+    UIElement* row = FieldContainerOf(field)->GetParent();
+    ASSERT_NE(row, nullptr);
+    ASSERT_FALSE(row->GetChildren().empty());
+    ASSERT_FALSE(row->GetChildren().front()->GetChildren().empty());
+    const auto* label = dynamic_cast<const Label*>(row->GetChildren().front()->GetChildren().front().get());
+    ASSERT_NE(label, nullptr) << "the row has no label cell";
+    EXPECT_EQ(label->GetText(), "Pattern Symmetry");
+    EXPECT_NE(label->GetTooltip().find("Square"), std::string::npos) << "the tooltip does not say what Square means";
 }

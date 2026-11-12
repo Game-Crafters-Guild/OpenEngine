@@ -20,6 +20,16 @@ inline constexpr std::array<PageStreaming::PageFieldKind, 4> kSurfacePlanes = {
     PageStreaming::PageFieldKind::Splat, PageStreaming::PageFieldKind::Normal, PageStreaming::PageFieldKind::GrassControl,
     PageStreaming::PageFieldKind::Color};
 
+/// The bit of `plane` in a mask of surface planes.
+constexpr uint8 SurfacePlaneBit(PageStreaming::PageFieldKind plane)
+{
+    return static_cast<uint8>(1u << static_cast<uint8>(plane));
+}
+inline constexpr uint8 kEverySurfacePlane = 0xFFu;
+/// The surface planes whose bake reads the grass regions.
+inline constexpr uint8 kGrassSurfacePlanes =
+    SurfacePlaneBit(PageStreaming::PageFieldKind::GrassControl) | SurfacePlaneBit(PageStreaming::PageFieldKind::Color);
+
 /// The format of a `plane` surface store's samples: Rgba8 (Splat), Bc5 (Normal), Rg8 (GrassControl) or
 /// Rgba8Srgb (Color).
 PageStreaming::PageFieldFormat SurfacePlaneFormat(PageStreaming::PageFieldKind plane);

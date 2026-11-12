@@ -51,8 +51,6 @@
 #include "CBTTerrain/CBTKernelSet.h"
 #include "CBTTerrain/CBTLayout.h"
 #include "CBTTerrain/CBTNearBias.h"
-#include "CBTTerrain/SphereSculptLayer.h"
-#include "CBTTerrain/SphereSculptPaging.h"
 #include "CBTTestHarness.h"
 #include "Mathematics/MatrixOps.h"
 #include "Mathematics/Vector3.h"
@@ -132,8 +130,7 @@ class CBTFarFieldDrainProbe : public ::testing::Test
     // Her scene shape with the editor's shipped demand shaping (near-bias + demand-tuning + priority).
     // Copied from CBTSaturationRetess::BuildHerParams so the probe drives the EXACT production demand
     // model. altM = camera altitude above the surface; oblique look across the sub-camera point.
-    void BuildHerParams(CBTFrameParams& p, float radius, float altM, float splitPx, float mergePx,
-                        const SphereSculptGeometry& geom)
+    void BuildHerParams(CBTFrameParams& p, float radius, float altM, float splitPx, float mergePx)
     {
         using namespace GameEngine::Mathematics;
         p = CBTFrameParams{};
@@ -141,10 +138,6 @@ class CBTFarFieldDrainProbe : public ::testing::Test
         p.PlanetParams[1] = 1250.0f; // relief amplitude (her mountains)
         p.PlanetParams[2] = 6.0f;
         p.PlanetParams[3] = 4.0f;
-        p.AtlasParams0[0] = static_cast<float>(geom.VirtualDim);
-        p.AtlasParams0[1] = static_cast<float>(geom.Cap);
-        p.AtlasParams0[2] = static_cast<float>(geom.PagesPerAxis);
-        p.AtlasParams0[3] = static_cast<float>(geom.PoolPageCount);
         p.Screen[0] = static_cast<float>(kScreenW);
         p.Screen[1] = static_cast<float>(kScreenH);
         p.Screen[2] = splitPx;
@@ -182,14 +175,14 @@ class CBTFarFieldDrainProbe : public ::testing::Test
     // saturated-and-staircased tree her smooth navigation does — the state from which the far field must
     // drain. c.NearFieldGate selects the A/B branch. Returns the next frame index.
     uint32_t DescendToSaturation(CBTInstance& inst, CBTClassifyDesc& c, float radius, float restAltM,
-                                 float splitPx, const SphereSculptGeometry& geom)
+                                 float splitPx)
     {
         const float descent[] = {160000.0f, 60000.0f, 24000.0f, 12000.0f, 7000.0f, restAltM};
         uint32_t frame = 0;
         for (int di = 0; di < 6; ++di)
         {
             CBTFrameParams p;
-            BuildHerParams(p, radius, descent[di], splitPx, splitPx * 0.5f, geom);
+            BuildHerParams(p, radius, descent[di], splitPx, splitPx * 0.5f);
             for (uint32_t f = 0; f < 40u; ++f)
             {
                 c.GateVertexEval = (frame == 0u) ? 0u : 1u;
@@ -215,7 +208,6 @@ class CBTFarFieldDrainProbe : public ::testing::Test
 TEST_F(CBTFarFieldDrainProbe, RoundsToDrainUnderStaticCoarsenDemand)
 {
     const float radius = 50000.0f;
-    const auto geom = MakeSphereSculptGeometry(radius, ResolveSculptPagePoolCount());
     constexpr uint32_t kDrainRounds = 200u;
 
     auto run = [&](uint32_t gate, const char* label) -> std::pair<double, uint32_t> {
@@ -230,14 +222,14 @@ TEST_F(CBTFarFieldDrainProbe, RoundsToDrainUnderStaticCoarsenDemand)
         c.Mode = kClassifyScreenSpace;
         c.TargetDepth = cap;
         c.NearFieldGate = gate;
-        uint32_t frame = DescendToSaturation(inst, c, radius, 4000.0f, 6.5f, geom);
+        uint32_t frame = DescendToSaturation(inst, c, radius, 4000.0f, 6.5f);
 
         // Coarsen-everything hold: a huge merge threshold so every visible facet's edge/area is under
         // the merge band (nothing wants to split; the whole tree wants to coarsen). SAME camera as the
         // descent's final pose — it never moves for the rest of the probe. This is #620's TPE=1000
         // condition made concrete.
         CBTFrameParams p;
-        BuildHerParams(p, radius, 4000.0f, /*splitPx=*/2000.0f, /*mergePx=*/1000.0f, geom);
+        BuildHerParams(p, radius, 4000.0f, /*splitPx=*/2000.0f, /*mergePx=*/1000.0f);
 
         const CBTTessellationStats s0 = inst.ReadTessellationStats();
         const double occ0 = static_cast<double>(s0.LiveCount) / s0.PoolSize;
@@ -306,7 +298,6 @@ TEST_F(CBTFarFieldDrainProbe, RoundsToDrainUnderStaticCoarsenDemand)
 TEST_F(CBTFarFieldDrainProbe, LegalDiamondCensusByDepthTier)
 {
     const float radius = 50000.0f;
-    const auto geom = MakeSphereSculptGeometry(radius, ResolveSculptPagePoolCount());
 
     CBTInstance inst;
     ASSERT_TRUE(inst.Initialize(*m_Device, m_KernelSet));
@@ -314,8 +305,9 @@ TEST_F(CBTFarFieldDrainProbe, LegalDiamondCensusByDepthTier)
     CBTClassifyDesc c{};
     c.Mode = kClassifyScreenSpace;
     c.TargetDepth = inst.GetBaseDepth() + kMaxDecodeSubdiv;
-    c.NearFieldGate = 1u; // current main
-    DescendToSaturation(inst, c, radius, 4000.0f, 6.5f, geom);
+    c.NearFieldGate = 1u;
+    // A 3 px split target: the visible field alone saturates the pool at this pose.
+    DescendToSaturation(inst, c, radius, 4000.0f, 3.0f);
 
     // Read heap + the CURRENT neighbor buffer. After RecordUpdate the ping-pong parity flipped, so the
     // buffer holding the frame's final topology is selected by GetResources().GetNeighborsReadIsA().
@@ -413,7 +405,6 @@ TEST_F(CBTFarFieldDrainProbe, LegalDiamondCensusByDepthTier)
 TEST_F(CBTFarFieldDrainProbe, BulkReseedIsConformingAndReentryIsBounded)
 {
     const float radius = 50000.0f;
-    const auto geom = MakeSphereSculptGeometry(radius, ResolveSculptPagePoolCount());
 
     CBTInstance inst;
     ASSERT_TRUE(inst.Initialize(*m_Device, m_KernelSet));
@@ -424,7 +415,7 @@ TEST_F(CBTFarFieldDrainProbe, BulkReseedIsConformingAndReentryIsBounded)
     c.Mode = kClassifyScreenSpace;
     c.TargetDepth = cap;
     c.NearFieldGate = 1u;
-    uint32_t frame = DescendToSaturation(inst, c, radius, 4000.0f, 6.5f, geom);
+    uint32_t frame = DescendToSaturation(inst, c, radius, 4000.0f, 6.5f);
 
     const CBTTessellationStats sSat = inst.ReadTessellationStats();
     std::printf("\n[reseed] saturated: live=%u occ=%.4f\n", sSat.LiveCount,
@@ -438,7 +429,7 @@ TEST_F(CBTFarFieldDrainProbe, BulkReseedIsConformingAndReentryIsBounded)
     // One inert-ish frame at the saturated pose to let Validate run over the reseeded base + repopulate
     // the counters (InitializeRoots itself does not run the update kernels).
     CBTFrameParams p;
-    BuildHerParams(p, radius, 4000.0f, 6.5f, 3.25f, geom);
+    BuildHerParams(p, radius, 4000.0f, 6.5f, 3.25f);
     c.GateVertexEval = 0u;
     RunFrame(inst, c, p, frame++);
     const CBTTessellationStats sBase = inst.ReadTessellationStats();

@@ -22,7 +22,8 @@ class EditorChangeNotifications;
 
 /// The undo step of an Apply to prefab: overrides of prefab entities written into the prefab files that author
 /// the entities, and the change given to every instance of the world. Undo writes each file's text from before
-/// and gives each applying entity its components from before; Redo writes the text from after.
+/// and gives each applying entity its components from before; Redo writes the text from after and drops the
+/// records of the applied fields.
 class ApplyPrefabOverrideCommand final : public IEditorCommand
 {
     // Only Create can name this type, so only Create constructs a command.
@@ -63,6 +64,7 @@ class ApplyPrefabOverrideCommand final : public IEditorCommand
     ECS::World& m_World;
     EditorChangeNotifications* m_Notifications = nullptr;
     std::vector<Scene::PrefabFileEdit> m_Edits;
+    std::vector<Scene::PrefabOverrideTarget> m_Targets;
     std::vector<Applier> m_Appliers;
 };
 

@@ -20,13 +20,6 @@ Mathematics::Rect RectOfSamples(const SurfaceHeightQuery& query, int64 minX, int
                                         query.FootprintOriginZ() + static_cast<float32>(maxZ) * spacingZ);
 }
 
-Mathematics::Rect WholeFootprint(const SurfaceHeightQuery& query)
-{
-    return Mathematics::Rect::FromEdges(query.FootprintOriginX(), query.FootprintOriginZ(),
-                                        query.FootprintOriginX() + query.FootprintSizeX(),
-                                        query.FootprintOriginZ() + query.FootprintSizeZ());
-}
-
 } // namespace
 
 void PlanarHeightfieldEditCursor::Reset(const SurfaceHeightQuery& query)
@@ -56,7 +49,7 @@ void PlanarHeightfieldEditCursor::CollectEdits(const SurfaceHeightQuery& query, 
     {
         // A first source is the terrain's pages arriving: a reader waited for them, it saw no height.
         if (m_Source != 0 && edits.Source != 0)
-            out.push_back(WholeFootprint(query));
+            out.push_back(query.Footprint());
         Reset(query);
         return;
     }
@@ -67,7 +60,7 @@ void PlanarHeightfieldEditCursor::CollectEdits(const SurfaceHeightQuery& query, 
                                     static_cast<int64>(edits.OverlayChanged.MaxX) + 1,
                                     static_cast<int64>(edits.OverlayChanged.MaxZ) + 1));
     else
-        out.push_back(WholeFootprint(query));
+        out.push_back(query.Footprint());
     m_Version = edits.OverlayVersion;
 }
 

@@ -178,7 +178,7 @@ void GatherEmitter(ECS::World& world, ParticleWorldState& state, ECS::EntityHand
     entry.Entity = entity;
     entry.Seen = state.Frame;
     entry.Emitter = emitter;
-    entry.Transform = Mathematics::Matrix4x4{glm::make_mat4(transform.matrix)};
+    entry.Transform = transform.ToMatrix4x4(transform.GetPosition() - Mathematics::WorldPosition{});
     UpdateStack(world, state, entry);
     if (restart)
     {
@@ -205,8 +205,8 @@ bool SweepPhysics(const void* context, const Mathematics::Vector3& from, const M
     if (distance < kMinimumSweepDistance)
         return false;
     Physics::RayCastQuery query;
-    query.ray.origin = from;
-    query.ray.direction = delta / distance;
+    query.origin = Mathematics::WorldPosition::FromVector3(from);
+    query.direction = delta / distance;
     // Extend the ray by the particle radius; the collision processor places the center off the normal.
     query.maxDistance = distance + radius;
     query.filter.layerMask = layerMask;
@@ -214,7 +214,8 @@ bool SweepPhysics(const void* context, const Mathematics::Vector3& from, const M
     Physics::RayCastResult result;
     if (!physics->RayCast(query, result))
         return false;
-    hit.Position = {result.hitPoint.x, result.hitPoint.y, result.hitPoint.z};
+    // Particles hold 32-bit positions: the subtraction rounds the exact hit point once.
+    hit.Position = result.hitPoint - Mathematics::WorldPosition{};
     hit.Normal = {result.hitNormal.x, result.hitNormal.y, result.hitNormal.z};
     return true;
 }

@@ -33,10 +33,11 @@ inline void ExtractNearFarLH_ZO(const Mathematics::Matrix4x4& proj, float& outNe
         zf = m32 * range;
         zn = zf - range;
     }
-    else if (std::abs(m22) > 1e-6f && std::abs(1.0f - m22) > 1e-6f)
+    else if (m22 < 0.0f)
     {
         // Reverse-Z perspective:
         //   m22 = -near/(far-near), m32 = near*far/(far-near)
+        // m22 < 0 for every finite far plane. m22 = 0 is an infinite far plane and takes the defaults.
         zn = m32 / (1.0f - m22);
         zf = -m32 / m22;
     }
@@ -50,12 +51,26 @@ inline void ExtractNearFarLH_ZO(const Mathematics::Matrix4x4& proj, float& outNe
     outFar = zf;
 }
 
-inline float LinearizeReverseZDepthLH_ZO(float ndcDepth, float nearPlane, float farPlane, bool orthographic)
+/// The depth terms of an LH reverse-Z projection: clip z = M22 * z + M32, clip w = M23 * z + M33.
+/// The GPU reads the same four values as ge_depthTerms.
+struct ProjectionDepthTerms
 {
-    if (orthographic)
-        return farPlane - ndcDepth * (farPlane - nearPlane);
+    float M22 = 0.0f;
+    float M32 = 0.0f;
+    float M23 = 0.0f;
+    float M33 = 0.0f;
 
-    return (nearPlane * farPlane) / (ndcDepth * (farPlane - nearPlane) + nearPlane);
+    static ProjectionDepthTerms Of(const Mathematics::Matrix4x4& proj)
+    {
+        return {proj[2][2], proj[3][2], proj[2][3], proj[3][3]};
+    }
+};
+
+/// Raw reverse-Z depth -> positive view-space distance, exact for a perspective (finite or
+/// infinite) and an orthographic projection. A finite perspective gives its far at depth 0.
+inline float LinearizeReverseZDepthLH_ZO(float ndcDepth, const ProjectionDepthTerms& terms)
+{
+    return (terms.M32 - ndcDepth * terms.M33) / (ndcDepth * terms.M23 - terms.M22);
 }
 
 } // namespace Engine::Renderer

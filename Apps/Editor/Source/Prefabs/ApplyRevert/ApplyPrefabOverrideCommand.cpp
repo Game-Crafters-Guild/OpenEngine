@@ -43,6 +43,7 @@ std::unique_ptr<ApplyPrefabOverrideCommand> ApplyPrefabOverrideCommand::Create(
     Scene::ApplyPrefabOverrides(world, targets, command->m_Edits, outError);
     if (command->m_Edits.empty())
         return nullptr;
+    command->m_Targets.assign(targets.begin(), targets.end());
     NotifyWorldStructure(notifications, &world);
     return command;
 }
@@ -61,6 +62,8 @@ void ApplyPrefabOverrideCommand::Redo()
 {
     for (const Scene::PrefabFileEdit& edit : m_Edits)
         WriteText(edit, edit.After);
+    // The new prefab holds the applied values, so the appliers keep no record of them.
+    Scene::ForgetPrefabOverrides(m_World, m_Targets);
     NotifyWorldStructure(m_Notifications, &m_World);
     if (!m_Notifications)
         return;

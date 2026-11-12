@@ -94,15 +94,11 @@ protected:
         entity.Set(state);
 
         Components::Transform xf{};
-        xf.matrix[0] = 1.0f; xf.matrix[5] = 1.0f; xf.matrix[10] = 1.0f; xf.matrix[15] = 1.0f;
-        xf.matrix[12] = startX;
-        xf.matrix[14] = startZ;
+        xf.Position = Mathematics::WorldPosition{startX, 0.0, startZ};
         entity.Set(xf);
 
         Components::WorldTransform wt{};
-        wt.matrix[0] = 1.0f; wt.matrix[5] = 1.0f; wt.matrix[10] = 1.0f; wt.matrix[15] = 1.0f;
-        wt.matrix[12] = startX;
-        wt.matrix[14] = startZ;
+        wt.Position = xf.Position;
         entity.Set(wt);
 
         m_World->ProcessCommands();
@@ -412,14 +408,14 @@ TEST_F(NavigationSolveBudgetTest, QueuedAgentReportsNoVelocity)
     ASSERT_TRUE(HasPath(*first.Get<Components::NavigationAgentState>()));
     ASSERT_EQ(StatusOf(*second.Get<Components::NavigationAgentState>()), Pathfinding::PathStatus::Pending);
 
-    const float32 queuedX = second.Get<Components::WorldTransform>()->matrix[12];
+    const float64 queuedX = second.Get<Components::WorldTransform>()->GetPosition().X;
     moveSystem.Update(*m_World, kDt);
     m_World->ProcessCommands();
     const auto* queuedState = second.Get<Components::NavigationAgentState>();
     EXPECT_EQ(queuedState->VelocityX, 0.0f);
     EXPECT_EQ(queuedState->VelocityY, 0.0f);
     EXPECT_EQ(queuedState->VelocityZ, 0.0f);
-    EXPECT_EQ(second.Get<Components::WorldTransform>()->matrix[12], queuedX);
+    EXPECT_EQ(second.Get<Components::WorldTransform>()->GetPosition().X, queuedX);
 }
 
 TEST_F(NavigationSolveBudgetTest, WithdrawnRequestRejoinsBehindNewerRequests)
@@ -478,10 +474,10 @@ TEST_F(NavigationSolveBudgetTest, TimerRefreshKeepsWalkingUntilSolved)
     const Pathfinding::PathHandle oldPath{queuedState->PathIndex, queuedState->PathGeneration};
     ASSERT_GT(pathBuffer.GetPointCount(oldPath), 0u) << "a timer refresh keeps its path while it waits";
 
-    const float32 queuedX = queued.Get<Components::WorldTransform>()->matrix[12];
+    const float64 queuedX = queued.Get<Components::WorldTransform>()->GetPosition().X;
     moveSystem.Update(*m_World, kDt);
     m_World->ProcessCommands();
-    EXPECT_GT(queued.Get<Components::WorldTransform>()->matrix[12], queuedX);
+    EXPECT_GT(queued.Get<Components::WorldTransform>()->GetPosition().X, queuedX);
     EXPECT_GT(queued.Get<Components::NavigationAgentState>()->VelocityX, 0.0f);
 
     // The next Update solves it: the new path replaces the old one.
@@ -658,7 +654,9 @@ TEST_F(NavigationSolveBudgetTest, StatisticsKeepTheGridSolvesThatClosedTheMostCe
         EXPECT_EQ(ranked.Record.End, GridSolveEnd::Reached);
         EXPECT_GE(ranked.Record.GoalX, 1u + 3u * 5u) << "one of the four shortest walks is kept";
         if (i > 0)
+        {
             EXPECT_GE(stats.WorstGridSolves[i - 1].Record.Expansions, ranked.Record.Expansions);
+        }
         kept += ranked.Record.Expansions;
     }
     const uint32 leastKept = stats.WorstGridSolves[Stats::kWorstGridSolveCount - 1].Record.Expansions;

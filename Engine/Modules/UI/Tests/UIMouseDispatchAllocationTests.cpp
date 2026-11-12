@@ -294,3 +294,147 @@ TEST(UIMouseDispatchAllocationTests, ClickingWithFramesDoesNotGrowItsAllocationC
         << " iterations); the per-event cost may be accumulating in the frame the transition "
            "schedules rather than in the callback";
 }
+
+namespace
+{
+
+// A leaf under kDepth nested boxes, with a shallow sibling of the chain's head. The
+// leaf has kLeafChildren empty children. Init hovers the shallow box, so no hover chain on this
+// thread has yet reached the leaf; the hover walk from the root has already seen the whole tree.
+struct DeepChainFixture
+{
+    static constexpr int kDepth = 100;
+    static constexpr int kLeafChildren = 80;
+
+    std::unique_ptr<Rendering::IDevice> Dev;
+    std::unique_ptr<UIManager> Ui;
+
+    bool Init()
+    {
+        Dev = MakeHeadlessDevice();
+        if (!Dev)
+            return false;
+        UIRegistration::RegisterBuiltInControls();
+
+        auto root = std::make_unique<UIElement>();
+        root->SetId("root");
+        auto head = std::make_unique<UIElement>();
+        head->AddClass("n");
+        UIElement* parent = head.get();
+        for (int i = 1; i < kDepth; ++i)
+        {
+            auto box = std::make_unique<UIElement>();
+            box->AddClass("n");
+            UIElement* next = box.get();
+            parent->AddChild(std::move(box));
+            parent = next;
+        }
+        auto leaf = std::make_unique<UIElement>();
+        leaf->AddClass("leaf");
+        for (int i = 0; i < kLeafChildren; ++i)
+        {
+            auto child = std::make_unique<UIElement>();
+            child->AddClass("c");
+            leaf->AddChild(std::move(child));
+        }
+        parent->AddChild(std::move(leaf));
+        root->AddChild(std::move(head));
+        auto shallow = std::make_unique<UIElement>();
+        shallow->SetId("shallow");
+        root->AddChild(std::move(shallow));
+
+        Ui = std::make_unique<UIManager>(Dev.get());
+        Ui->SetRoot(std::move(root));
+
+        // This suite pins the dispatch sites only. The cascade keeps its own per-thread scratch, so
+        // #shallow has as many properties as a hovered .n box, and Init grows that scratch first.
+        const auto css = std::filesystem::temp_directory_path() / "ui_mouse_dispatch_deep_chain.css";
+        {
+            std::ofstream f(css);
+            f << R"(
+#root { display: flex; width: 200px; height: 40px; }
+.n { display: flex; width: 100px; height: 20px; }
+.n:hover { background-color: #102030; }
+.leaf { display: flex; width: 50px; height: 10px; }
+.leaf:hover .c { background-color: #203040; }
+.c { width: 0px; height: 0px; }
+#shallow { display: flex; width: 100px; height: 20px; background-color: #304050; }
+)";
+        }
+        if (!Ui->AttachStyleFromFile(css.string()))
+            return false;
+
+        Ui->Update(0.0f, /*interactive=*/false);
+        HoverShallow();
+        HoverShallow();
+        return true;
+    }
+
+    void HoverShallow()
+    {
+        Ui->OnMouseMove(150.0f, 5.0f);
+        Ui->Update(0.0f, /*interactive=*/true);
+    }
+
+    void HoverLeaf()
+    {
+        Ui->OnMouseMove(5.0f, 5.0f);
+        Ui->Update(0.0f, /*interactive=*/true);
+    }
+
+    // A scroll and a key press, both delivered to the hovered leaf and bubbled up its chain.
+    void ScrollAndKey()
+    {
+        Ui->OnScroll(0.0f, -1.0f);
+        Ui->OnKey(65, 1, 0);
+        Ui->OnKey(65, 0, 0);
+    }
+};
+
+template <class Step>
+size_t AllocationsOver(Step&& step)
+{
+    const Memory::AllocationCountScope probe(Memory::CountWindow::ThisThread);
+    step();
+    return probe.Count();
+}
+} // namespace
+
+// The hover path's scratch (the hover diff's chains and lists, the hover-transition chains, the
+// mouse-move bubble chain) comes from a scope and returns at its close; the thread keeps no
+// container sized by the deepest chain. Two identical managers take their first deep hover in
+// turn. Each one's own state grows the same way, so the counts differ only by what the thread
+// kept from the first.
+TEST(UIMouseDispatchAllocationTests, AThreadsFirstDeepHoverAllocatesNoMoreThanItsNext)
+{
+    DeepChainFixture first;
+    DeepChainFixture second;
+    if (!first.Init() || !second.Init())
+        GTEST_SKIP() << "headless device or stylesheet unavailable";
+
+    const size_t firstCount = AllocationsOver([&] { first.HoverLeaf(); });
+    const size_t secondCount = AllocationsOver([&] { second.HoverLeaf(); });
+
+    EXPECT_GT(firstCount, 0u) << "control: a first hover on a new manager allocates its own state";
+    EXPECT_EQ(firstCount, secondCount)
+        << "the first deep hover on this thread allocated more than the same hover on a second manager; "
+           "a per-thread container on the hover path grew to the chain";
+}
+
+// The same shape for the scroll and key bubble chains, after both managers hover the leaf.
+TEST(UIMouseDispatchAllocationTests, AThreadsFirstDeepScrollAndKeyAllocateNoMoreThanItsNext)
+{
+    DeepChainFixture first;
+    DeepChainFixture second;
+    if (!first.Init() || !second.Init())
+        GTEST_SKIP() << "headless device or stylesheet unavailable";
+    first.HoverLeaf();
+    second.HoverLeaf();
+
+    const size_t firstCount = AllocationsOver([&] { first.ScrollAndKey(); });
+    const size_t secondCount = AllocationsOver([&] { second.ScrollAndKey(); });
+
+    EXPECT_EQ(firstCount, secondCount)
+        << "the first deep scroll and key on this thread allocated more than the same events on a second "
+           "manager; a per-thread bubble chain grew to the chain";
+}

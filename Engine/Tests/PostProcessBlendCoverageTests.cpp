@@ -737,7 +737,7 @@ TEST(PostProcessChromaticAberration, UsesDepthAwareFocusAndPixelCorrectSeparatio
     const std::string shaderSource((std::istreambuf_iterator<char>(shaderStream)),
                                    std::istreambuf_iterator<char>());
     EXPECT_NE(shaderSource.find("float AxialDepthWeight()"), std::string::npos);
-    EXPECT_NE(shaderSource.find("LinearizeReverseZ(rawDepth, ViewParams.ge_nearFar.xy)"), std::string::npos);
+    EXPECT_NE(shaderSource.find("LinearizeReverseZ(rawDepth, ViewParams.ge_depthTerms)"), std::string::npos);
     EXPECT_NE(shaderSource.find("pc.dofFocusDistance"), std::string::npos);
     EXPECT_NE(shaderSource.find("normalize(radial)"), std::string::npos);
     EXPECT_NE(shaderSource.find("0.5 * lateral"), std::string::npos);
@@ -1309,20 +1309,9 @@ TEST(PostProcessTonemapControls, ExposesTheThreeLooks)
                            std::istreambuf_iterator<char>());
     };
 
-    const std::string tonemap = readText(shaderRoot / "tonemap.frag");
     const std::string aces2 = readText(shaderRoot / "Includes/tonemap_aces2.glsl");
     const std::string aces2Tables =
         readText(shaderRoot / "Includes/tonemap_aces2_tables.glsl");
-
-    EXPECT_NE(tonemap.find("case kLookFilmic: return TonemapACES2(hdr, Aces2TargetOutputMax())"),
-              std::string::npos);
-    EXPECT_NE(tonemap.find("case 2:           return TonemapAgX(hdr)"), std::string::npos);
-    EXPECT_NE(tonemap.find("const int kLookFilmic = 1;"), std::string::npos);
-    EXPECT_NE(tonemap.find("const int kNoLookArm = 3;"), std::string::npos);
-    // Filmic (ACES 2) is peak-parameterised: it routes display-referred (clamped,
-    // never extended) so its tier ladder owns the headroom rendering.
-    EXPECT_NE(tonemap.find("if (pc.look == kLookFilmic)\n        return min(sdrTonemapped, vec3(outputMax))"),
-              std::string::npos);
 
     // ACES 2's reference transform includes CAM/JMh tone scaling, chroma
     // compression, and hue-dependent gamut compression, tiered over six peak

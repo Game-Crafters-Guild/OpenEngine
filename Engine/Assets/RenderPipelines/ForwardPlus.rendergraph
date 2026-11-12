@@ -2072,36 +2072,6 @@
       },
       "shaderPkg": "Shaders/copy.shaderpkg",
       "type": "FullscreenShader"
-    },
-    {
-      "blendMode": "Additive",
-      "bufferUsages": {
-        "uExposure": "Storage",
-        "ClusterBuffer": "StorageRead",
-        "ClusterParams": "Sampled",
-        "LightBuffer": "StorageRead",
-        "LightIndexBuffer": "StorageRead",
-        "ViewParams": "ConstantBuffer"
-      },
-      "buffers": {
-        "uExposure": "ExposureHistory",
-        "ClusterBuffer": "ClusterBuffer",
-        "ClusterParams": "ClusterParams",
-        "LightBuffer": "LightBuffer",
-        "LightIndexBuffer": "LightIndexBuffer",
-        "ViewParams": "ViewParams"
-      },
-      "enabled": false,
-      "id": "ForwardPlusLighting",
-      "inputUsages": {
-        "DepthTex": "Sampled"
-      },
-      "inputs": {
-        "DepthTex": "View.DepthResolved"
-      },
-      "output": "View.Color",
-      "shaderPkg": "Shaders/forwardplus_lighting.shaderpkg",
-      "type": "FullscreenShader"
     }
   ],
   "pipelineName": "ForwardPlus",

@@ -56,6 +56,7 @@ layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 // the consumers' keyword is what gates their half.
 #define GE_LOD_FADE_PACKING 1
 #include "Includes/lod_crossfade.glsl"
+#include "Includes/instance_sector.glsl"
 
 const uint kMaxMeshLODs = 4u;
 const uint kBatchNotFound = 0xFFFFFFFFu;
@@ -97,20 +98,26 @@ const float kLodThresholdCeil = 0.5;
 const float kLodThresholdDescendFactor = 0.5;
 
 // Binding-1 instance struct. Two ABI-locked variants, selected at compile time:
-//  - SCATTER_COMPACT: the coalesced 32 B scatter-hot mirror
+//  - SCATTER_COMPACT: the coalesced 40 B scatter-hot mirror
 //    (GPUScene.h::GPUInstanceScatterHot). Consecutive threads read consecutive
 //    bytes → coalesced, attacking the uncoalesced-fetch cost. Field names match
-//    the full struct so main() below is variant-agnostic.
+//    the full struct so main() below is variant-agnostic; the center is three
+//    scalars (a vec3 would align the struct to 16 B and pad it to 48 B), read
+//    through ge_InstanceCenterRelativeToOrigin.
 //  - default: the authoritative 240 B GPUInstance (full-fat fetch; the
-//    GE_SCATTER_COMPACT=0 fallback). 32 B read at a 240 B stride → uncoalesced.
+//    GE_SCATTER_COMPACT=0 fallback). 40 B read at a 240 B stride → uncoalesced.
 #ifdef SCATTER_COMPACT
 struct GPUInstance {
     uint  meshIndex;
     uint  materialIndex;
     uint  flags;
     float lodBias;
-    vec3  boundingCenter;
+    float boundingCenterX;
+    float boundingCenterY;
+    float boundingCenterZ;
     float boundingRadius;
+    uint  sectorPacked0;
+    uint  sectorPacked1;
 };
 #else
 struct GPUInstance {
@@ -364,7 +371,26 @@ layout(push_constant) uniform PushConstants {
     // legal. The CPU sets it only for camera slices of a view that asked for
     // the history, and no view asks for it until a consumer exists.
     uint  renderedHistoryEnabled;
+    // The render origin sector of the slice. cameraPos is relative to its origin.
+    int   originSectorX;
+    int   originSectorY;
+    int   originSectorZ;
 } pc;
+
+// The bounding center of an instance relative to the origin of the slice's origin sector, the frame
+// of cameraPos. The stored center is local to the sector in the instance's sectorPacked words.
+vec3 ge_InstanceCenterRelativeToOrigin(uint instanceIndex)
+{
+#ifdef SCATTER_COMPACT
+    vec3 local = vec3(instances[instanceIndex].boundingCenterX, instances[instanceIndex].boundingCenterY,
+                      instances[instanceIndex].boundingCenterZ);
+#else
+    vec3 local = instances[instanceIndex].boundingCenter;
+#endif
+    return ge_SectorRelativePoint(local, instances[instanceIndex].sectorPacked0,
+                                  instances[instanceIndex].sectorPacked1,
+                                  ivec3(pc.originSectorX, pc.originSectorY, pc.originSectorZ));
+}
 
 // classMode values -- MUST match GPUDrawStreamBuilder::kClassMode*.
 const uint kClassModeOff    = 0u;
@@ -465,7 +491,8 @@ uint ge_ScanLOD(uint meshIndex, uint lodCount, float coverage) {
 // the buffer by meshIndex; lodCount is hoisted (read 3x). With a dwell band
 // active this is no longer a pure function of coverage — it also reads and
 // updates this (instance, view)'s previous level.
-uint ge_SelectLOD(uint instanceIndex, uint meshIndex, vec3 worldCenter,
+// `center` is relative to the slice's origin sector, the frame of cameraPos.
+uint ge_SelectLOD(uint instanceIndex, uint meshIndex, vec3 center,
                   float worldRadius, float instLodBias) {
     uint lodCount = meshes[meshIndex].lodCount;
     if (lodCount <= 1u) return 0u;
@@ -473,7 +500,7 @@ uint ge_SelectLOD(uint instanceIndex, uint meshIndex, vec3 worldCenter,
     if (pc.projScaleY <= 0.0) return 0u;
 
     vec3 camPos = vec3(pc.cameraPosX, pc.cameraPosY, pc.cameraPosZ);
-    float dist = max(distance(camPos, worldCenter), 1e-4);
+    float dist = max(distance(camPos, center), 1e-4);
     float coverage = worldRadius * pc.projScaleY / dist;
     // Culling encloses every admitted level; selection retains LOD0's metric.
     coverage *= meshes[meshIndex].lodCoverageScale;
@@ -659,7 +686,7 @@ void main() {
     // any later would leave a stale record inside the drawn count.
     if (pc.smallCullCoverage > 0.0 && pc.projScaleY > 0.0) {
         vec3 camPos = vec3(pc.cameraPosX, pc.cameraPosY, pc.cameraPosZ);
-        float dist = max(distance(camPos, instances[instanceIndex].boundingCenter), 1e-4);
+        float dist = max(distance(camPos, ge_InstanceCenterRelativeToOrigin(instanceIndex)), 1e-4);
         float coverage = instances[instanceIndex].boundingRadius * pc.projScaleY / dist;
         coverage *= exp2(instances[instanceIndex].lodBias + pc.lodBiasGlobal);
         if (coverage < pc.smallCullCoverage) {
@@ -727,7 +754,7 @@ void main() {
     // dwell-band history (written nowhere between here and the commit at the
     // end), so moving it changes nothing it produces.
     uint lod = ge_SelectLOD(instanceIndex, meshIndex,
-                            instances[instanceIndex].boundingCenter,
+                            ge_InstanceCenterRelativeToOrigin(instanceIndex),
                             instances[instanceIndex].boundingRadius,
                             instances[instanceIndex].lodBias);
 

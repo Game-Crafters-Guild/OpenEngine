@@ -52,6 +52,22 @@ UIPrimitive MakeFrameTriangle(const ArrowFrame& frame, float apex, float base, f
 
 } // namespace
 
+BoxSide ArrowEdge(ArrowDirection direction)
+{
+    switch (direction)
+    {
+    case ArrowDirection::Down:
+        return BoxSide::Bottom;
+    case ArrowDirection::Left:
+        return BoxSide::Left;
+    case ArrowDirection::Right:
+        return BoxSide::Right;
+    case ArrowDirection::Up:
+    default:
+        return BoxSide::Top;
+    }
+}
+
 PointerArrowPrimitives MakePointerArrow(const PointerArrow& arrow)
 {
     PointerArrowPrimitives out;

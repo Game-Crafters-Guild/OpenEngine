@@ -3,6 +3,7 @@
 #include "PlatformServices/PlatformServices.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <span>
 #include <string>
@@ -170,6 +171,26 @@ GE_API int32_t GE_CDECL GE_Platform_ListEntitlements(uint8_t* buffer, int32_t bu
 GE_API int32_t GE_CDECL GE_Platform_DeleteSaveFile(const char* slotUtf8, const char* nameUtf8)
 {
     return ToAbiResult(PS::Get().DeleteFile(ViewOrEmpty(slotUtf8), ViewOrEmpty(nameUtf8)));
+}
+
+GE_API int32_t GE_CDECL GE_Platform_DeleteSaveSlot(const char* slotUtf8)
+{
+    return ToAbiResult(PS::Get().DeleteSlot(ViewOrEmpty(slotUtf8)));
+}
+
+GE_API int32_t GE_CDECL GE_Platform_GetSaveFileInfo(
+    const char* slotUtf8, const char* nameUtf8, uint64_t* outSizeBytes, int64_t* outLastWriteUnixMs)
+{
+    if (outSizeBytes == nullptr || outLastWriteUnixMs == nullptr)
+        return ToAbiResult(PS::Result::InvalidArgument);
+    PS::SaveFileInfo info;
+    const PS::Result result = PS::Get().GetFileInfo(ViewOrEmpty(slotUtf8), ViewOrEmpty(nameUtf8), info);
+    if (result != PS::Result::Ok)
+        return ToAbiResult(result);
+    *outSizeBytes = info.SizeBytes;
+    *outLastWriteUnixMs =
+        std::chrono::duration_cast<std::chrono::milliseconds>(info.LastWriteTime.time_since_epoch()).count();
+    return ToAbiResult(PS::Result::Ok);
 }
 
 GE_API int32_t GE_CDECL GE_Platform_CommitSave(const char* slotUtf8)

@@ -147,12 +147,6 @@ void GameViewPanel::PrepareForFirstMount(UIManager* ui)
     SetNoCameraOverlayVisible(m_NoCameraOverlayVisible);
 }
 
-void GameViewPanel::OnDockTabActivationArmed(float contentWidth, float contentHeight)
-{
-    if (m_ActivationArmedCallback)
-        m_ActivationArmedCallback(contentWidth, contentHeight);
-}
-
 void GameViewPanel::OnMountVisibilityChanged(bool isVisible)
 {
     // Dock activation assigns the owner manager before this notification. Bind

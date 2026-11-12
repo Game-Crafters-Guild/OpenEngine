@@ -20,7 +20,7 @@ const GameEngine::Scene::PickResult result = GameEngine::Scene::RaycastScene(ray
 if (result.MeshBvhPending)
     return; // ask again next frame: a mesh on the ray is still preparing its picking data
 if (result.Hit)
-    groundHeight = result.Best.WorldPosition.y;
+    groundHeight = result.Best.Point.y;
 ```
 
 `RaycastSceneAll` fills a list with every hit along the ray, front to back. The terrain gives at most its nearest hit. It returns true when a mesh on the ray is still preparing its picking data and gave no hit, so the list may change on a later frame.

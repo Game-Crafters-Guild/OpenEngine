@@ -1,5 +1,11 @@
-# GameEngine overlay of vcpkg's joltphysics port.
-# Sole modification: -DFLOATING_POINT_EXCEPTIONS_ENABLED=OFF in the Release build only.
+# GameEngine overlay of vcpkg's joltphysics port. It differs from the upstream port in four ways:
+# 1. -DDOUBLE_PRECISION=ON in both variants. Body positions are doubles (RVec3 = DVec3), and the
+#    exported JoltConfig.cmake defines JPH_DOUBLE_PRECISION for every consumer.
+# 2. WINDOWS_USE_MSBUILD. Jolt.cmake selects /arch and exports the JPH_USE_* defines only for a
+#    Visual Studio generator. The library and the engine (/arch:AVX2) must agree on JPH_USE_AVX,
+#    because it selects how a DVec3 argument passes (by value or by reference).
+# 3. "port-version": 1 in vcpkg.json, for the double-precision build of items 1 and 2.
+# 4. -DFLOATING_POINT_EXCEPTIONS_ENABLED=OFF in the Release build only.
 # Jolt's upstream defaults this ON for MSVC Debug+Release, which installs SSE FP exception
 # traps inside Jolt's .cpp scope guards (baked into the compiled .lib). That costs per-frame
 # time in physics-active scenes even in optimized builds. Only meaningful on MSVC; no-op on
@@ -32,6 +38,7 @@ vcpkg_check_features(OUT_FEATURE_OPTIONS FEATURE_OPTIONS
 
 vcpkg_cmake_configure(
     SOURCE_PATH "${SOURCE_PATH}/Build"
+    WINDOWS_USE_MSBUILD
     OPTIONS
         -DTARGET_UNIT_TESTS=OFF
         -DTARGET_HELLO_WORLD=OFF
@@ -46,6 +53,7 @@ vcpkg_cmake_configure(
         -DJPH_USE_DX12=OFF
         -DJPH_USE_VK=OFF
         -DJPH_USE_MTL=OFF
+        -DDOUBLE_PRECISION=ON
         ${FEATURE_OPTIONS}
     OPTIONS_RELEASE
         -DGENERATE_DEBUG_SYMBOLS=OFF

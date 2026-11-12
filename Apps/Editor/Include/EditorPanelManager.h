@@ -86,8 +86,9 @@ class EditorPanelManager
     void ShowOrActivateBuildPanel(EditorWindowContext* ctx);
     void ShowOrActivateMixerPanel(EditorWindowContext* ctx);
     void ShowOrActivateWebPanel(EditorWindowContext* ctx);
-    /// Opens the Web panel at the editor documentation URL in the main window.
-    void ShowOrActivateHelpPanel();
+    /// Opens the Web panel in the main window at the editor documentation, or at @p page under it
+    /// (a path under WebPanel::kHelpDocsURL).
+    void ShowOrActivateHelpPanel(std::string_view page = {});
 
     // -- Per-frame panel updates --
     // Panels register a callback once (typically in their constructor) so UpdatePanels

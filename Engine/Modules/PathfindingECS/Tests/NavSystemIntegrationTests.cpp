@@ -87,15 +87,11 @@ protected:
         entity.Set(state);
 
         Components::Transform xf{};
-        xf.matrix[12] = posX;
-        xf.matrix[13] = 0.0f;
-        xf.matrix[14] = posZ;
+        xf.Position = Mathematics::WorldPosition{posX, 0.0, posZ};
         entity.Set(xf);
 
         Components::WorldTransform wt{};
-        wt.matrix[12] = posX;
-        wt.matrix[13] = 0.0f;
-        wt.matrix[14] = posZ;
+        wt.Position = xf.Position;
         entity.Set(wt);
 
         world->ProcessCommands();
@@ -132,6 +128,12 @@ protected:
         auto* ptr = entity.Get<Components::WorldTransform>();
         EXPECT_NE(ptr, nullptr);
         return *ptr;
+    }
+
+    // The grid takes float32 meters. The test worlds stay near the origin.
+    static Mathematics::Vector3 PositionOf(const Components::WorldTransform& wt)
+    {
+        return wt.GetPosition() - Mathematics::WorldPosition{};
     }
 
     static bool GridHasReservationFor(const Pathfinding::GridMap& grid, uint32 agentId)
@@ -228,8 +230,8 @@ TEST_F(NavSystemIntegrationTest, MovementAlongPath)
     pathSystem.Update(*world, kDeltaTime);
     world->ProcessCommands();
 
-    float32 startX = GetTransform(agentEntity).matrix[12];
-    float32 startZ = GetTransform(agentEntity).matrix[14];
+    const float64 startX = GetTransform(agentEntity).GetPosition().X;
+    const float64 startZ = GetTransform(agentEntity).GetPosition().Z;
 
     NavigationMovementSystem moveSystem;
     for (int i = 0; i < 10; ++i)
@@ -238,11 +240,11 @@ TEST_F(NavSystemIntegrationTest, MovementAlongPath)
         world->ProcessCommands();
     }
 
-    float32 newX = GetTransform(agentEntity).matrix[12];
-    float32 newZ = GetTransform(agentEntity).matrix[14];
+    const float64 newX = GetTransform(agentEntity).GetPosition().X;
+    const float64 newZ = GetTransform(agentEntity).GetPosition().Z;
 
     // Agent should have moved from start position
-    float32 distMoved = std::sqrt((newX - startX) * (newX - startX) +
+    const float64 distMoved = std::sqrt((newX - startX) * (newX - startX) +
                                   (newZ - startZ) * (newZ - startZ));
     EXPECT_GT(distMoved, 0.1f);
 }
@@ -282,6 +284,92 @@ TEST_F(NavSystemIntegrationTest, AgentReachesDestination)
     }
 
     EXPECT_TRUE(reached) << "Agent should have reached its destination";
+}
+
+// The point is near a corner of cell (4,4), 0.68 m from the cell's center: the agent stops within
+// StoppingDistance of the point, not of the center.
+TEST_F(NavSystemIntegrationTest, AgentStopsWithinStoppingDistanceOfItsDestinationPoint)
+{
+    auto gridEntity = CreateGridSource();
+    auto src = GetGridSource(gridEntity);
+
+    constexpr float32 kDestX = 4.02f;
+    constexpr float32 kDestZ = 4.02f;
+    auto agentEntity = CreateAgent(8.5f, 8.5f, kDestX, kDestZ, src.NavMapIndex, src.NavMapGeneration);
+
+    NavigationPathfindingSystem pathSystem;
+    pathSystem.Update(*world, kDeltaTime);
+    world->ProcessCommands();
+
+    NavigationMovementSystem moveSystem;
+    constexpr int kMaxIterations = 600;
+    for (int i = 0; i < kMaxIterations && GetAgentState(agentEntity).HasDestination; ++i)
+    {
+        moveSystem.Update(*world, kDeltaTime);
+        world->ProcessCommands();
+    }
+
+    ASSERT_FALSE(GetAgentState(agentEntity).HasDestination) << "the agent did not arrive";
+    const auto wt = GetTransform(agentEntity);
+    const float64 dx = wt.GetPosition().X - kDestX;
+    const float64 dz = wt.GetPosition().Z - kDestZ;
+    EXPECT_LE(std::sqrt(dx * dx + dz * dz), GetAgent(agentEntity).StoppingDistance);
+}
+
+// The point is 0.16 m inside the grid's far edge, then 0.16 m inside its near edge, and the
+// agent's radius is 0.45 m: the agent arrives at the point and does not solve its path again
+// on every tick.
+TEST_F(NavSystemIntegrationTest, AgentArrivesAtADestinationWithinItsRadiusOfTheGridEdge)
+{
+    auto gridEntity = CreateGridSource();
+    auto src = GetGridSource(gridEntity);
+
+    struct EdgeTrip
+    {
+        float32 StartZ;
+        float32 DestZ;
+    };
+    constexpr float32 kDestX = 8.5f;
+    constexpr EdgeTrip kTrips[] = {
+        {4.5f, static_cast<float32>(kTestGridDepth) * kTestCellSize - 0.16f},
+        {11.5f, 0.16f},
+    };
+
+    NavigationPathfindingSystem pathSystem;
+    NavigationMovementSystem moveSystem;
+    for (const EdgeTrip& trip : kTrips)
+    {
+        SCOPED_TRACE(::testing::Message() << "destination z " << trip.DestZ);
+        auto agentEntity =
+            CreateAgent(kDestX, trip.StartZ, kDestX, trip.DestZ, src.NavMapIndex, src.NavMapGeneration);
+        Components::NavigationAgent agent = GetAgent(agentEntity);
+        agent.Radius = 0.45f;
+        agentEntity.Set(agent);
+        world->ProcessCommands();
+
+        pathSystem.Update(*world, kDeltaTime);
+        world->ProcessCommands();
+        const uint32 firstGeneration = GetAgentState(agentEntity).PathGeneration;
+
+        constexpr int kMaxIterations = 600;
+        for (int i = 0; i < kMaxIterations && GetAgentState(agentEntity).HasDestination; ++i)
+        {
+            moveSystem.Update(*world, kDeltaTime);
+            world->ProcessCommands();
+            pathSystem.Update(*world, kDeltaTime);
+            world->ProcessCommands();
+        }
+
+        const auto wt = GetTransform(agentEntity);
+        const float64 dx = wt.GetPosition().X - kDestX;
+        const float64 dz = wt.GetPosition().Z - trip.DestZ;
+        const uint32 solves = GetAgentState(agentEntity).PathGeneration - firstGeneration;
+        ASSERT_FALSE(GetAgentState(agentEntity).HasDestination)
+            << "the agent did not arrive: it stands at (" << wt.GetPosition().X << ", " << wt.GetPosition().Z
+            << ") and PathGeneration rose by " << solves;
+        EXPECT_LE(std::sqrt(dx * dx + dz * dz), GetAgent(agentEntity).StoppingDistance);
+        EXPECT_LE(solves, 3u) << "the path was solved again " << solves << " times on the way";
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -389,7 +477,7 @@ TEST_F(NavSystemIntegrationTest, StandingOccupancyRemainsWhenDestinationCancelle
     const auto wt = GetTransform(agentEntity);
     uint32 hereX = 0;
     uint32 hereZ = 0;
-    ASSERT_TRUE(gridMap->WorldToCell(wt.matrix[12], wt.matrix[14], hereX, hereZ));
+    ASSERT_TRUE(gridMap->WorldToCell(PositionOf(wt).x, PositionOf(wt).z, hereX, hereZ));
     EXPECT_EQ(gridMap->GetCellReservation(hereX, hereZ).AgentId, agentId);
     EXPECT_NE(gridMap->GetCellReservation(hereX, hereZ).Occupancy, 0u);
     EXPECT_TRUE(GetAgentState(agentEntity).CellReservationOwner != 0u);
@@ -434,7 +522,7 @@ TEST_F(NavSystemIntegrationTest, BodyStampRemainsOnPathDirtyRetarget)
     const auto wt = GetTransform(agentEntity);
     uint32 hereX = 0;
     uint32 hereZ = 0;
-    ASSERT_TRUE(gridMap->WorldToCell(wt.matrix[12], wt.matrix[14], hereX, hereZ));
+    ASSERT_TRUE(gridMap->WorldToCell(PositionOf(wt).x, PositionOf(wt).z, hereX, hereZ));
 
     pathSystem.Update(*world, kDeltaTime);
     world->ProcessCommands();
@@ -515,7 +603,7 @@ TEST_F(NavSystemIntegrationTest, ReservationsDroppedFromCellsTheAgentLeft)
     const auto wt = GetTransform(agentEntity);
     uint32 hereX = 0;
     uint32 hereZ = 0;
-    ASSERT_TRUE(gridMap->WorldToCell(wt.matrix[12], wt.matrix[14], hereX, hereZ));
+    ASSERT_TRUE(gridMap->WorldToCell(PositionOf(wt).x, PositionOf(wt).z, hereX, hereZ));
     ASSERT_NE(hereX, startX) << "Agent should have left the start cell";
 
     EXPECT_NE(gridMap->GetCellReservation(startX, startZ).AgentId, agentId)
@@ -568,7 +656,7 @@ TEST_F(NavSystemIntegrationTest, ReservationsDroppedWhenPathDirtyWithoutReplan)
     const auto wt = GetTransform(agentEntity);
     uint32 hereX = 0;
     uint32 hereZ = 0;
-    ASSERT_TRUE(gridMap->WorldToCell(wt.matrix[12], wt.matrix[14], hereX, hereZ));
+    ASSERT_TRUE(gridMap->WorldToCell(PositionOf(wt).x, PositionOf(wt).z, hereX, hereZ));
     EXPECT_NE(gridMap->GetCellReservation(startX, startZ).AgentId, agentId)
         << "A following command must drop cells behind the agent";
     EXPECT_EQ(gridMap->GetCellReservation(hereX, hereZ).AgentId, agentId)
@@ -627,7 +715,7 @@ TEST_F(NavSystemIntegrationTest, IdleAgentKeepsOccupancyOnCurrentCell)
     const auto walkerWt = GetTransform(walker);
     uint32 walkerX = 0;
     uint32 walkerZ = 0;
-    ASSERT_TRUE(gridMap->WorldToCell(walkerWt.matrix[12], walkerWt.matrix[14], walkerX, walkerZ));
+    ASSERT_TRUE(gridMap->WorldToCell(PositionOf(walkerWt).x, PositionOf(walkerWt).z, walkerX, walkerZ));
     EXPECT_FALSE(walkerX == blockX && walkerZ == blockZ)
         << "Walker must not occupy the blocker's cell";
 }
@@ -691,7 +779,7 @@ TEST_F(NavSystemIntegrationTest, FailedOccupancyReplansAfterBodyLeaves)
         const auto walkerWt = GetTransform(walker);
         uint32 walkerX = 0;
         uint32 walkerZ = 0;
-        ASSERT_TRUE(gridMap->WorldToCell(walkerWt.matrix[12], walkerWt.matrix[14], walkerX, walkerZ));
+        ASSERT_TRUE(gridMap->WorldToCell(PositionOf(walkerWt).x, PositionOf(walkerWt).z, walkerX, walkerZ));
         EXPECT_FALSE(walkerX == gapX && walkerZ == gapZ)
             << "Movement must still refuse another agent's body cell";
     }
@@ -711,7 +799,7 @@ TEST_F(NavSystemIntegrationTest, FailedOccupancyReplansAfterBodyLeaves)
     EXPECT_TRUE(status == Pathfinding::PathStatus::Complete ||
                 status == Pathfinding::PathStatus::Partial)
         << "Walker must recover after the occupying body leaves";
-    EXPECT_GT(GetTransform(walker).matrix[12], 8.0f);
+    EXPECT_GT(GetTransform(walker).GetPosition().X, 8.0f);
 }
 
 TEST_F(NavSystemIntegrationTest, HeadOnCorridorDoesNotShareACell)
@@ -753,15 +841,15 @@ TEST_F(NavSystemIntegrationTest, HeadOnCorridorDoesNotShareACell)
         const auto l = GetTransform(left);
         const auto r = GetTransform(right);
         uint32 lx = 0, lz = 0, rx = 0, rz = 0;
-        ASSERT_TRUE(gridMap->WorldToCell(l.matrix[12], l.matrix[14], lx, lz));
-        ASSERT_TRUE(gridMap->WorldToCell(r.matrix[12], r.matrix[14], rx, rz));
+        ASSERT_TRUE(gridMap->WorldToCell(PositionOf(l).x, PositionOf(l).z, lx, lz));
+        ASSERT_TRUE(gridMap->WorldToCell(PositionOf(r).x, PositionOf(r).z, rx, rz));
         if (lx == rx && lz == rz)
             ++shared;
     }
     EXPECT_EQ(shared, 0) << "Occupancy refuse must keep a body stamp so the other agent cannot step in";
-    EXPECT_GT(GetTransform(left).matrix[12], 3.0f)
+    EXPECT_GT(GetTransform(left).GetPosition().X, 3.0f)
         << "Must leave spawn; a freeze is not a shared-cell pass";
-    EXPECT_LT(GetTransform(right).matrix[12], 13.0f)
+    EXPECT_LT(GetTransform(right).GetPosition().X, 13.0f)
         << "Must leave spawn; a freeze is not a shared-cell pass";
 }
 
@@ -806,8 +894,8 @@ TEST_F(NavSystemIntegrationTest, DestAllowedPairDoesNotShareACell)
         const auto l = GetTransform(left);
         const auto r = GetTransform(right);
         uint32 lx = 0, lz = 0, rx = 0, rz = 0;
-        ASSERT_TRUE(gridMap->WorldToCell(l.matrix[12], l.matrix[14], lx, lz));
-        ASSERT_TRUE(gridMap->WorldToCell(r.matrix[12], r.matrix[14], rx, rz));
+        ASSERT_TRUE(gridMap->WorldToCell(PositionOf(l).x, PositionOf(l).z, lx, lz));
+        ASSERT_TRUE(gridMap->WorldToCell(PositionOf(r).x, PositionOf(r).z, rx, rz));
         if (lx == rx && lz == rz)
             ++shared;
     }
@@ -816,13 +904,13 @@ TEST_F(NavSystemIntegrationTest, DestAllowedPairDoesNotShareACell)
 
     const auto leftEnd = GetTransform(left);
     const auto rightEnd = GetTransform(right);
-    const bool leftMoved = leftEnd.matrix[12] > 3.5f;
-    const bool rightMoved = rightEnd.matrix[12] < 8.5f;
+    const bool leftMoved = leftEnd.GetPosition().X > 3.5f;
+    const bool rightMoved = rightEnd.GetPosition().X < 8.5f;
     const bool leftArrived = !GetAgentState(left).HasDestination;
     const bool rightArrived = !GetAgentState(right).HasDestination;
     EXPECT_TRUE((leftMoved && rightMoved) || (leftArrived && rightArrived))
         << "Dest-allowed pair must close, not freeze on dest occupancy. "
-        << "L=" << leftEnd.matrix[12] << " R=" << rightEnd.matrix[12]
+        << "L=" << leftEnd.GetPosition().X << " R=" << rightEnd.GetPosition().X
         << " leftDest=" << GetAgentState(left).HasDestination
         << " rightDest=" << GetAgentState(right).HasDestination;
 }
@@ -870,8 +958,8 @@ TEST_F(NavSystemIntegrationTest, CrossingPathsNeverShareACellAndBothArrive)
         const auto we = GetTransform(westEast);
         const auto ns = GetTransform(northSouth);
         uint32 wx = 0, wz = 0, nx = 0, nz = 0;
-        ASSERT_TRUE(gridMap->WorldToCell(we.matrix[12], we.matrix[14], wx, wz));
-        ASSERT_TRUE(gridMap->WorldToCell(ns.matrix[12], ns.matrix[14], nx, nz));
+        ASSERT_TRUE(gridMap->WorldToCell(PositionOf(we).x, PositionOf(we).z, wx, wz));
+        ASSERT_TRUE(gridMap->WorldToCell(PositionOf(ns).x, PositionOf(ns).z, nx, nz));
         if (wx == nx && wz == nz)
             ++shared;
 
@@ -884,10 +972,10 @@ TEST_F(NavSystemIntegrationTest, CrossingPathsNeverShareACellAndBothArrive)
     EXPECT_EQ(shared, 0) << "Crossing agents must never occupy the same cell on any tick";
     EXPECT_TRUE(westEastArrived)
         << "West-east agent must finish; a taxed crossing must not become a permanent stall. "
-        << "x=" << GetTransform(westEast).matrix[12]
+        << "x=" << GetTransform(westEast).GetPosition().X
         << " status=" << static_cast<int>(GetAgentState(westEast).Status);
     EXPECT_TRUE(northSouthArrived)
         << "North-south agent must finish; a taxed crossing must not become a permanent stall. "
-        << "z=" << GetTransform(northSouth).matrix[14]
+        << "z=" << GetTransform(northSouth).GetPosition().Z
         << " status=" << static_cast<int>(GetAgentState(northSouth).Status);
 }

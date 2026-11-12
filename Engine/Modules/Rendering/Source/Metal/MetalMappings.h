@@ -73,6 +73,13 @@ inline MTL::PixelFormat ToMTLPixelFormat(TextureFormat format)
     }
 }
 
+// A depth target of this format is also the pass's stencil attachment, so a
+// pipeline drawn into that pass must name it as its stencil format too.
+inline bool IsCombinedDepthStencil(MTL::PixelFormat format)
+{
+    return format == MTL::PixelFormatDepth32Float_Stencil8;
+}
+
 inline MTL::VertexFormat ToMTLVertexFormat(Format format)
 {
     switch (format)

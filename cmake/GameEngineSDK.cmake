@@ -338,6 +338,11 @@ add_library(GameEngine::Engine INTERFACE IMPORTED)
 
 target_include_directories(GameEngine::Engine INTERFACE \"\${_GE_SDK_DIR}/include\")
 target_compile_features(GameEngine::Engine INTERFACE cxx_std_20)
+# A game compiles the engine's inline maths too, also in Objective-C++ files: no fused a * b + c there
+# either (Math::MulAdd only). The languages and the MSVC test are the same as for the engine's own sources.
+if(NOT MSVC)
+    target_compile_options(GameEngine::Engine INTERFACE \"\$<\$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-ffp-contract=off>\")
+endif()
 
 # On MSVC, use /WHOLEARCHIVE for Engine.lib to ensure static auto-registrars
 # (scene schemas, component registrations) are included even when no symbol is

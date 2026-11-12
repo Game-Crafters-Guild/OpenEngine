@@ -51,6 +51,8 @@ public:
         m_Flow.RebaseOrigin(shiftX, shiftZ);
     }
     bool Initialize(::GameEngine::Rendering::IDevice* device);
+    // The dispatch's pipeline, interned by Initialize.
+    ::GameEngine::Rendering::ComputePipelineId GetPipelineId() const { return m_Pipe; }
     bool IsReady() const { return m_Ready; }
 
     uint32 GetResolution() const { return m_Resolution; }

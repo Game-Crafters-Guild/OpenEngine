@@ -8,6 +8,7 @@
 #include "Core/StandardPaths.h"
 #include "FileSystem/FileSystem.h"
 
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -28,7 +29,6 @@ constexpr std::string_view kProviderName = "Local";
 constexpr std::string_view kProviderVersion = "1.0";
 constexpr std::string_view kAccountId = "local-offline";
 constexpr std::string_view kAccountDisplayName = "Local User";
-constexpr std::string_view kWriteTempSuffix = ".gewrite";
 // Lives directly in the save root; never collides with slot directories
 // (ListSlots only reports directories) or save files (those live inside
 // slot directories).
@@ -102,9 +102,12 @@ bool IsValidSlot(std::string_view slot)
     return IsValidName(slot, Limits::kMaxSlotNameLength);
 }
 
+// A name of the temporary-file shape is refused: Initialize removes such a
+// file when its writer stopped, and ListFiles must never show it.
 bool IsValidFile(std::string_view name)
 {
-    return IsValidName(name, Limits::kMaxFileNameLength);
+    return IsValidName(name, Limits::kMaxFileNameLength) &&
+           !GameEngine::FileSystem::IsTemporarySiblingName(name);
 }
 
 // Achievements are mock state for tests/editor play, but they survive
@@ -141,6 +144,21 @@ void LoadAchievements(LocalProviderState& state)
     }
 }
 
+// Writes the data to the temporary file. A failed write removes the file.
+bool WriteTemporaryFile(const std::filesystem::path& path, const void* data, size_t size)
+{
+    {
+        std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+        if (stream && size > 0)
+            stream.write(static_cast<const char*>(data), static_cast<std::streamsize>(size));
+        if (stream)
+            return true;
+    }
+    std::error_code ec;
+    std::filesystem::remove(path, ec);
+    return false;
+}
+
 void SaveAchievements(const LocalProviderState& state)
 {
     std::ostringstream content;
@@ -151,18 +169,19 @@ void SaveAchievements(const LocalProviderState& state)
     }
 
     const std::filesystem::path finalPath = state.SaveRoot / kAchievementsFileName;
-    std::filesystem::path tempPath = finalPath;
-    tempPath += kWriteTempSuffix;
-    {
-        std::ofstream stream(tempPath, std::ios::binary | std::ios::trunc);
-        if (!stream)
-            return;
-        const std::string data = content.str();
-        stream.write(data.data(), static_cast<std::streamsize>(data.size()));
-        if (!stream)
-            return;
-    }
-    GameEngine::FileSystem::PublishFile(tempPath, finalPath);
+    const std::filesystem::path tempPath = GameEngine::FileSystem::MakeTemporarySiblingPath(finalPath);
+    const std::string data = content.str();
+    if (WriteTemporaryFile(tempPath, data.data(), data.size()))
+        GameEngine::FileSystem::PublishFile(tempPath, finalPath);
+}
+
+// Removes the temporary files that a writer which stopped before its rename
+// left in the save root and in each slot.
+void RemoveOrphanedWrites(const std::filesystem::path& saveRoot)
+{
+    GameEngine::FileSystem::RemoveOrphanedTemporaryFiles(saveRoot, kAchievementsFileName);
+    for (const std::filesystem::path& slot : GameEngine::FileSystem::ListDirectories(saveRoot))
+        GameEngine::FileSystem::RemoveOrphanedTemporaryFiles(slot, {});
 }
 
 GE_PS_Result Local_Initialize(const GE_PS_ConfigV1* config)
@@ -186,6 +205,7 @@ GE_PS_Result Local_Initialize(const GE_PS_ConfigV1* config)
     std::filesystem::create_directories(state.SaveRoot, ec);
     if (ec)
         return GE_PS_IOError;
+    RemoveOrphanedWrites(state.SaveRoot);
 
     state.Entitlements.clear();
     for (uint32_t i = 0; i < config->entitlementCount; ++i)
@@ -341,20 +361,13 @@ GE_PS_Result Local_WriteFile(GE_PS_Str slot, GE_PS_Str name, const uint8_t* data
     if (ec)
         return GE_PS_IOError;
 
-    // Write through a temp file + rename so an interrupted write never
-    // leaves a truncated save behind.
+    // Write through a temporary file of this write only, then rename it.
+    // An interrupted write never leaves a truncated save, and two
+    // processes never write the same temporary file.
     const std::filesystem::path finalPath = slotPath / ToView(name);
-    std::filesystem::path tempPath = finalPath;
-    tempPath += kWriteTempSuffix;
-    {
-        std::ofstream stream(tempPath, std::ios::binary | std::ios::trunc);
-        if (!stream)
-            return GE_PS_IOError;
-        if (size > 0)
-            stream.write(reinterpret_cast<const char*>(data), static_cast<std::streamsize>(size));
-        if (!stream)
-            return GE_PS_IOError;
-    }
+    const std::filesystem::path tempPath = GameEngine::FileSystem::MakeTemporarySiblingPath(finalPath);
+    if (!WriteTemporaryFile(tempPath, data, size))
+        return GE_PS_IOError;
     if (!GameEngine::FileSystem::PublishFile(tempPath, finalPath))
         return GE_PS_IOError;
     return GE_PS_Ok;
@@ -373,6 +386,53 @@ GE_PS_Result Local_DeleteFile(GE_PS_Str slot, GE_PS_Str name)
     std::error_code ec;
     if (!std::filesystem::remove(filePath, ec) || ec)
         return ec ? GE_PS_IOError : GE_PS_NotFound;
+    return GE_PS_Ok;
+}
+
+GE_PS_Result Local_DeleteSlot(GE_PS_Str slot)
+{
+    const std::lock_guard<std::mutex> lock(StateMutex());
+    const LocalProviderState& state = State();
+    if (!state.Initialized)
+        return GE_PS_NotInitialized;
+    if (!IsValidSlot(ToView(slot)))
+        return GE_PS_InvalidArgument;
+
+    const std::filesystem::path slotPath = state.SaveRoot / ToView(slot);
+    std::error_code ec;
+    if (!std::filesystem::is_directory(slotPath, ec))
+        return GE_PS_NotFound;
+    std::filesystem::remove_all(slotPath, ec);
+    return ec ? GE_PS_IOError : GE_PS_Ok;
+}
+
+GE_PS_Result Local_GetFileInfo(GE_PS_Str slot, GE_PS_Str name, GE_PS_FileInfoV1* outInfo)
+{
+    const std::lock_guard<std::mutex> lock(StateMutex());
+    const LocalProviderState& state = State();
+    if (!state.Initialized)
+        return GE_PS_NotInitialized;
+    if (outInfo == nullptr || !IsValidSlot(ToView(slot)) || !IsValidFile(ToView(name)))
+        return GE_PS_InvalidArgument;
+
+    const std::filesystem::path filePath = state.SaveRoot / ToView(slot) / ToView(name);
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(filePath, ec))
+        return GE_PS_NotFound;
+    const uint64_t size = std::filesystem::file_size(filePath, ec);
+    if (ec)
+        return GE_PS_IOError;
+    const std::filesystem::file_time_type writeTime = std::filesystem::last_write_time(filePath, ec);
+    if (ec)
+        return GE_PS_IOError;
+
+    // Converts file_clock to system_clock through the offset between the two clocks now.
+    // Some libc++ versions do not have std::chrono::clock_cast.
+    const auto systemTime = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+        writeTime - std::filesystem::file_time_type::clock::now() + std::chrono::system_clock::now());
+    outInfo->sizeBytes = size;
+    outInfo->lastWriteUnixMs =
+        std::chrono::duration_cast<std::chrono::milliseconds>(systemTime.time_since_epoch()).count();
     return GE_PS_Ok;
 }
 
@@ -474,7 +534,7 @@ GE_PS_Result Local_ListEntitlements(GE_PS_StringSinkFn sink, void* userData)
 
 const GE_PlatformProviderV1 kLocalProviderTable = {
     /*abiMajor*/ 1,
-    /*abiMinor*/ 0,
+    /*abiMinor*/ 1,
     /*sizeBytes*/ sizeof(GE_PlatformProviderV1),
     &Local_Initialize,
     &Local_Shutdown,
@@ -499,6 +559,8 @@ const GE_PlatformProviderV1 kLocalProviderTable = {
     /*ShowAchievements*/ nullptr,
     /*ShowAccountPicker*/ nullptr,
     /*ShowStorePage*/ nullptr,
+    &Local_DeleteSlot,
+    &Local_GetFileInfo,
 };
 
 } // namespace

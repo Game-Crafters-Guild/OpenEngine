@@ -21,6 +21,7 @@
 // Thread safety:
 //   - Not thread-safe. Call from the render thread only.
 
+#include "Logger/Logger.h"
 #include "Rendering/Core/FrameBufferAllocator.h"
 
 #include <algorithm>
@@ -84,17 +85,16 @@ struct PerFrameWritePoolConfig
         // The cap is per ring slot, so the worst case is 32 MB x the ring depth
         // (160 MB at 3 frames in flight), and only for a scene that demands it.
         {1u << 20, 256, Rendering::BufferUsage::Storage, 32u << 20},
-        // BonePalette: starts at 32 MB (~700K mat3x4 bones — see
-        // BonePaletteLayout.h); grows on demand up to 256 MB if a crowd
-        // scene exceeds the steady-state budget. The starting size
-        // covers normal scenes (1000 chars × 50 joints × 48 B × 2
-        // frames-in-flight = ~4.8 MB live with ~6x headroom). Grow-on-
-        // demand removes the hard cap that previously forced overflow
-        // entities to render at bind pose.
+        // BonePalette: starts at 1 MiB per ring (~21K mat3x4 bones) and grows up to 256 MiB.
+        // SkinPaletteAtlas reserves the live palettes at BeginFrame and grows the ring in the
+        // frame for later palettes, so it refuses no palette below the cap.
         // The TAA skinned motion-vector pass reads LAST frame's palettes to
         // evaluate the previous skinned pose, so a slot is still read one frame
         // after the frame that wrote it: the ring depth has a slot for that reader.
-        {32u << 20, 16, Rendering::BufferUsage::Storage, 256u << 20},
+        // The transfer bits serve the GPU copy of an in-frame growth.
+        {1u << 20, 16,
+         Rendering::BufferUsage::Storage | Rendering::BufferUsage::TransferSrc | Rendering::BufferUsage::TransferDst,
+         256u << 20},
     }};
 
     // 0 = read the device's pacing at Initialize. Only pass an explicit value
@@ -122,16 +122,24 @@ class PerFrameWritePool
             ? config.FramesInFlight
             : device->GetFramesInFlight();
 
+        static const char* kNames[] = {
+            "PerFramePool.MaterialParams",
+            "PerFramePool.BonePalette",
+        };
+
         for (uint32_t i = 0; i < kFrameWriteUsageCount; ++i)
         {
             const auto& uc = config.usages[i];
+            // Every usage class has users that allocate from it every frame.
             if (uc.capacityBytes == 0)
-                continue;
-
-            static const char* kNames[] = {
-                "PerFramePool.MaterialParams",
-                "PerFramePool.BonePalette",
-            };
+            {
+                Logger::Log::Error(
+                    "PerFrameWritePool: {} has a start capacity of 0 bytes. Set its "
+                    "PerFrameWritePoolConfig capacityBytes to a non-zero size.",
+                    kNames[i]);
+                Shutdown();
+                return false;
+            }
 
             // Every usage class is filled during the application UPDATE phase
             // (RenderingLoop::Update, before the frame's IDevice::BeginFrame), and
@@ -205,6 +213,29 @@ class PerFrameWritePool
         assert(idx < kFrameWriteUsageCount);
         assert(m_Allocators[idx].IsInitialized());
         return m_Allocators[idx].Reserve(capacityBytes);
+    }
+
+    // Make room for one more Allocate in this frame, growing the ring now when it
+    // is short; callers keep FrameBufferAllocator::MakeRoomInFrame's rule.
+    bool MakeRoomInFrame(FrameWriteUsage usage, size_t bytes, size_t alignment)
+    {
+        if (!m_Initialized)
+            return false;
+        const auto usageIndex = static_cast<uint32_t>(usage);
+        assert(usageIndex < kFrameWriteUsageCount);
+        assert(m_Allocators[usageIndex].IsInitialized());
+        return m_Allocators[usageIndex].MakeRoomInFrame(bytes, alignment);
+    }
+
+    /// The GPU copies this frame's in-frame growths of `usage` owe its current buffer;
+    /// see FrameBufferAllocator::TakeFrameCopies.
+    std::vector<Rendering::FrameBufferAllocator::FrameCopy> TakeFrameCopies(FrameWriteUsage usage)
+    {
+        if (!m_Initialized)
+            return {};
+        const auto usageIndex = static_cast<uint32_t>(usage);
+        assert(usageIndex < kFrameWriteUsageCount);
+        return m_Allocators[usageIndex].TakeFrameCopies();
     }
 
     // Get the buffer handle for the current frame of a specific usage class.

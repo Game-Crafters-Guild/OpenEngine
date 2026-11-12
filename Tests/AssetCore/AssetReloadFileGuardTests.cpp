@@ -34,7 +34,7 @@ class TextAsset : public Asset
         return true;
     }
 
-    bool LoadFromData(const Vector<uint8>& data) override
+    bool LoadFromData(std::span<const uint8> data) override
     {
         ++LoadFromDataCount;
         if (!AcceptsData)
@@ -68,7 +68,7 @@ class KeepsPayloadOnRejectAsset : public TextAsset
     using TextAsset::TextAsset;
 
   protected:
-    bool ReloadFromData(const Vector<uint8>& data) override
+    bool ReloadFromData(std::span<const uint8> data) override
     {
         return AcceptsData && TextAsset::ReloadFromData(data);
     }

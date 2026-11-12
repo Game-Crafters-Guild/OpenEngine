@@ -81,9 +81,7 @@ protected:
     static Components::WorldTransform MakeWorldTransform(float32 x, float32 y, float32 z)
     {
         Components::WorldTransform wt{};
-        wt.matrix[12] = x;
-        wt.matrix[13] = y;
-        wt.matrix[14] = z;
+        wt.Position = Mathematics::WorldPosition{x, y, z};
         wt.Version = 1u; // resolved, as TransformHierarchySystem leaves it
         return wt;
     }

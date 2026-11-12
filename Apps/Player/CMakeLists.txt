@@ -1,6 +1,18 @@
 # Apps/Player/CMakeLists.txt
 # Standalone Player runtime — lightweight game executable without Editor.
 
+# The vcpkg ports' license texts are part of the notices of both Players.
+if(DEFINED VCPKG_INSTALLED_DIR)
+    set(_GE_VCPKG_INSTALLED_DIR "${VCPKG_INSTALLED_DIR}")
+elseif(DEFINED _VCPKG_INSTALLED_DIR)
+    set(_GE_VCPKG_INSTALLED_DIR "${_VCPKG_INSTALLED_DIR}")
+else()
+    message(FATAL_ERROR "Third-party notice staging requires VCPKG_INSTALLED_DIR")
+endif()
+if(NOT DEFINED VCPKG_TARGET_TRIPLET)
+    message(FATAL_ERROR "Third-party notice staging requires VCPKG_TARGET_TRIPLET")
+endif()
+
 # Web Player (wasm): the same PlayerApplication driven by the browser's rAF
 # loop from WebMain.cpp instead of main.cpp's desktop loop. The canvas comes
 # from Tools/Web/shell.html and the WebGPU device binds to it. ASYNCIFY is
@@ -45,6 +57,17 @@ if(EMSCRIPTEN)
         # extra pthreads each map the whole SharedArrayBuffer.
         target_link_options(WebPlayer PRIVATE "SHELL:-s PTHREAD_POOL_SIZE=8")
     endif()
+    # The template carries the notices of the third-party code in the player and its
+    # shaders, and the export copies them into every game.
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    set_property(TARGET WebPlayer APPEND PROPERTY LINK_DEPENDS
+        ${CMAKE_SOURCE_DIR}/Tools/Web/build_web_package.py)
+    add_custom_command(TARGET WebPlayer POST_BUILD
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/Tools/Web/build_web_package.py
+            --game-notices $<TARGET_FILE_DIR:WebPlayer>
+            --vcpkg-share ${_GE_VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/share
+        COMMENT "Writing the third-party notices of the web player template"
+        VERBATIM)
     return()
 endif()
 
@@ -120,17 +143,6 @@ ge_stage_packages(Player)
 # so this is also where an exported game's content lives.
 ge_get_staged_content_dir(Player _GE_PLAYER_CONTENT_DIR)
 set(_GE_PLAYER_NOTICES_DEST "${_GE_PLAYER_CONTENT_DIR}/ThirdPartyNotices")
-
-if(DEFINED VCPKG_INSTALLED_DIR)
-    set(_GE_VCPKG_INSTALLED_DIR "${VCPKG_INSTALLED_DIR}")
-elseif(DEFINED _VCPKG_INSTALLED_DIR)
-    set(_GE_VCPKG_INSTALLED_DIR "${_VCPKG_INSTALLED_DIR}")
-else()
-    message(FATAL_ERROR "Third-party notice staging requires VCPKG_INSTALLED_DIR")
-endif()
-if(NOT DEFINED VCPKG_TARGET_TRIPLET)
-    message(FATAL_ERROR "Third-party notice staging requires VCPKG_TARGET_TRIPLET")
-endif()
 
 # Stage engine shader sources (Adapters, Includes, Surfaces) + compiled
 # .shaderpkg/.spv for runtime material variant compilation via

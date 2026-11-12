@@ -53,3 +53,13 @@
 	white-space: normal;
 	border-radius: var(--ui_radius_md);
 }
+
+/* SceneViewNoticeOverlay's notice with a button: the shared notice control's opaque information kind
+   (controls/InspectorNotice/InspectorNotice.css), 560 px wide as the exposure hint and never wider than
+   the layer. Unlike the layer, it takes pointer input for its button. */
+.scene-view-action-notice {
+	width: 560px;
+	max-width: 100%;
+	margin: 0 0 6px 0;
+	pointer-events: auto;
+}

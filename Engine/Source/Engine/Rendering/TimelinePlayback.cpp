@@ -147,7 +147,7 @@ void ApplyValueSample(ECS::World& world,
         auto* transform = world.GetComponentForWrite<Transform>(target);
         if (!transform)
             return;
-        const Vector3 position(sample.Value[0], sample.Value[1], sample.Value[2]);
+        const Mathematics::WorldPosition position{sample.Value[0], sample.Value[1], sample.Value[2]};
         *transform = Transform::FromTRS(position, transform->GetRotation(), transform->GetScale());
         return;
     }
@@ -191,7 +191,7 @@ void ApplyValueSample(ECS::World& world,
 
         if (sample.PropertyPath == "Transform.position" && sample.ComponentCount >= 3)
         {
-            const Vector3 position(sample.Value[0], sample.Value[1], sample.Value[2]);
+            const Mathematics::WorldPosition position{sample.Value[0], sample.Value[1], sample.Value[2]};
             *transform = Transform::FromTRS(position, transform->GetRotation(), transform->GetScale());
             return;
         }
@@ -245,12 +245,12 @@ void PlayTimelineAudioEvent(Audio::AudioSystem& audio,
     Audio::AudioEmitterHandle voice = Audio::INVALID_AUDIO_EMITTER_HANDLE;
     if (const auto* worldXf = world.GetComponent<WorldTransform>(rootEntity))
     {
-        const Vector3 pos(worldXf->matrix[12], worldXf->matrix[13], worldXf->matrix[14]);
+        const Vector3 pos = worldXf->GetPosition() - Mathematics::WorldPosition{};
         voice = audio.Play3D(event.AudioGuid, 0, pos, Vector3{}, options);
     }
     else if (const auto* localXf = world.GetComponent<Transform>(rootEntity))
     {
-        const Vector3 pos = localXf->GetPosition();
+        const Vector3 pos = localXf->GetPosition() - Mathematics::WorldPosition{};
         voice = audio.Play3D(event.AudioGuid, 0, pos, Vector3{}, options);
     }
     else

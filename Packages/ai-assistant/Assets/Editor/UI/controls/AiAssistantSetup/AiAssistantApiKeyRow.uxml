@@ -1,0 +1,12 @@
+<!-- The API key row of Settings > AI Assistant (AiAssistantApiKeyRow): a masked field, Save and
+     Remove, and the line that says where the key is kept. The ids are the
+     contract with AiAssistantApiKeyRow.cpp. -->
+<UIElement class="ai-setup-key">
+  <UIElement class="settings-row">
+    <Label class="settings-row-label" text="API key" />
+    <TextField id="AiSetupApiKeyField" class="settings-row-field" masked="true" />
+    <Button id="AiSetupApiKeySave" class="small" text="Save" />
+    <Button id="AiSetupApiKeyRemove" class="small secondary" text="Remove" />
+  </UIElement>
+  <Label id="AiSetupApiKeyNote" class="ai-setup-key-note" />
+</UIElement>

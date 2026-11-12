@@ -103,6 +103,8 @@ const std::vector<UserSystemEntry>& GetUserSystems();
 void StartUserSystems(ECS::World& world);
 void TickUserSystems(ECS::World& world, float dt);
 void StopUserSystems(ECS::World& world);
+// True between StartUserSystems and StopUserSystems for this world, across its resets.
+bool AreUserSystemsStarted(const ECS::World& world);
 
 // Consume the latest completed native tick for this exact world/reset once.
 // A different view/world does not consume it. Stop, module replacement and an

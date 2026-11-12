@@ -288,25 +288,22 @@ class ArchetypeChunk
         return first;
     }
 
-    // Remove entity at index via swap-and-pop with the last element.
-    // Returns the entity that was moved into `index`, or Invalid if
-    // `index` was the last element (no swap needed).
-    EntityHandle SwapRemove(uint32_t index)
+    // Move this chunk's last row into `target` at `targetIndex`, then remove the last row.
+    // Both chunks must have the same layout. Returns the moved entity, or Invalid if the
+    // target is the last row itself (the row is only removed).
+    EntityHandle MoveLastRowTo(ArchetypeChunk& target, uint32_t targetIndex)
     {
-        uint32_t last = m_Count - 1;
+        const uint32_t last = m_Count - 1;
         EntityHandle movedEntity = EntityHandle::Invalid();
 
-        if (index != last)
+        if (&target != this || targetIndex != last)
         {
             movedEntity = GetEntityHandles()[last];
-            GetEntityHandles()[index] = movedEntity;
-
-            // Swap component data for every column
+            target.GetEntityHandles()[targetIndex] = movedEntity;
             for (const auto& col : m_Layout->Columns)
             {
-                std::byte* base = m_Memory + col.Offset;
-                std::byte* dst = base + static_cast<std::size_t>(index) * col.Size;
-                std::byte* src = base + static_cast<std::size_t>(last) * col.Size;
+                std::byte* dst = target.m_Memory + col.Offset + static_cast<std::size_t>(targetIndex) * col.Size;
+                const std::byte* src = m_Memory + col.Offset + static_cast<std::size_t>(last) * col.Size;
                 std::memcpy(dst, src, col.Size);
             }
         }
@@ -451,6 +448,7 @@ class ArchetypeTable
 
     const ColumnLayout& GetLayout() const { return m_Layout; }
     uint32_t GetEntityCount() const { return m_EntityCount; }
+    // Chunks that hold rows. Each holds at least one row, and all but the last are full.
     std::size_t GetChunkCount() const { return m_Chunks.size(); }
 
     std::span<ArchetypeChunk> GetChunks() { return std::span<ArchetypeChunk>(m_Chunks); }
@@ -469,10 +467,9 @@ class ArchetypeTable
     // enter chunks only via Append or AppendRun, whose callers stamp all
     // columns). Do not treat zero-init as a safety net.
     //
-    // The array swaps entries in CompactChunks alongside m_Chunks /
-    // m_ChunkMemory, travels with move ctor/assign, and grows in
-    // AllocateNewChunk (which Reserve and AddEntity share) — all four
-    // maintenance paths (design M14, pinned by CompactRelocationKeepsStamps).
+    // The array gets a zero row in AppendChunk, loses the last row when a
+    // removal empties the last chunk, and travels with move ctor/assign
+    // (design M14, pinned by RemovalMoveKeepsStamps).
     //
     // Relaxed atomics: parallel dispatches partition chunks disjointly so two
     // workers never race one chunk's stamps, and consumers read after a
@@ -541,28 +538,16 @@ class ArchetypeTable
     // Structural operations
     // ------------------------------------------------------------------
 
-    // Add an entity. Returns its location (chunkIndex, indexInChunk).
-    // Component data at the returned location is uninitialized.
+    // Add an entity in the last chunk, or in a new last chunk when it is full.
+    // Returns its location (chunkIndex, indexInChunk). Component data at the
+    // returned location is uninitialized.
     EntityLocation AddEntity(EntityHandle entity)
     {
-        ArchetypeChunk* target = nullptr;
-        uint32_t chunkIdx = 0;
-
-        if (!m_Chunks.empty() && !m_Chunks.back().IsFull())
-        {
-            chunkIdx = static_cast<uint32_t>(m_Chunks.size() - 1);
-            target = &m_Chunks.back();
-        }
-        else
-        {
-            chunkIdx = static_cast<uint32_t>(m_Chunks.size());
-            AllocateNewChunk();
-            target = &m_Chunks.back();
-        }
-
-        uint32_t indexInChunk = target->Append(entity);
+        if (m_Chunks.empty() || m_Chunks.back().IsFull())
+            AppendChunk();
+        const uint32_t indexInChunk = m_Chunks.back().Append(entity);
         ++m_EntityCount;
-        return {chunkIdx, indexInChunk};
+        return {static_cast<uint32_t>(m_Chunks.size() - 1), indexInChunk};
     }
 
     // Adds entities as one run of consecutive rows in the chunk AddEntity would
@@ -571,7 +556,7 @@ class ArchetypeTable
     RowRun AddEntities(std::span<const EntityHandle> entities)
     {
         if (m_Chunks.empty() || m_Chunks.back().IsFull())
-            AllocateNewChunk();
+            AppendChunk();
         ArchetypeChunk& target = m_Chunks.back();
         const uint32_t count =
             std::min(static_cast<uint32_t>(entities.size()), target.GetCapacity() - target.GetCount());
@@ -580,111 +565,57 @@ class ArchetypeTable
         return {static_cast<uint32_t>(m_Chunks.size() - 1), first, count};
     }
 
-    // Remove entity at the given location via swap-and-pop within the chunk.
-    // Returns the entity that was swapped into the vacated slot (for metadata
-    // fixup), or Invalid if the removed entity was the last in its chunk.
-    // Empty chunks stay allocated to avoid cascading metadata fixups for all
-    // entities in a relocated chunk. Chunk compaction is a future optimization.
+    // Remove the entity at `loc` and move the table's last row into its slot, so that
+    // every chunk but the last stays full. Returns the moved entity (the caller updates
+    // its location to `loc`), or Invalid if `loc` was the last row. A last chunk that
+    // becomes empty leaves the chunk list and stays allocated as a spare for later adds.
     EntityHandle RemoveEntity(EntityLocation loc)
     {
-        auto& chunk = m_Chunks[loc.ChunkIndex];
-        EntityHandle moved = chunk.SwapRemove(loc.IndexInChunk);
+        ArchetypeChunk& last = m_Chunks.back();
+        const EntityHandle moved = last.MoveLastRowTo(m_Chunks[loc.ChunkIndex], loc.IndexInChunk);
         --m_EntityCount;
+        if (last.IsEmpty())
+        {
+            m_Chunks.pop_back();
+            PopColumnVersionRow();
+        }
         return moved;
     }
 
-    // Reserve enough chunks for at least `entityCount` total entities.
+    // Allocate spare chunks so that `entityCount` rows fit with no further allocation.
     void Reserve(uint32_t entityCount)
     {
         if (m_Layout.Capacity == 0)
             return;
-        uint32_t chunksNeeded = (entityCount + m_Layout.Capacity - 1) / m_Layout.Capacity;
-        while (m_Chunks.size() < chunksNeeded)
-            AllocateNewChunk();
+        const std::size_t chunksNeeded =
+            (std::size_t{entityCount} + m_Layout.Capacity - 1) / m_Layout.Capacity;
+        if (m_ChunkMemory.size() >= chunksNeeded)
+            return;
+        m_Chunks.reserve(chunksNeeded);
+        m_ColumnVersions.reserve(chunksNeeded * GetColumnCount());
+        m_ChunkMemory.reserve(chunksNeeded);
+        while (m_ChunkMemory.size() < chunksNeeded)
+            m_ChunkMemory.push_back(AllocateChunkMemory());
     }
 
-    // Compact: remove empty chunks by swapping them with the last non-empty chunk.
-    // The callback is invoked for each relocated chunk so the caller can update
-    // entity metadata: callback(oldChunkIndex, newChunkIndex, chunk).
-    // Returns the number of chunks freed.
-    template <typename RelocateCallback>
-    uint32_t CompactChunks(RelocateCallback&& onRelocate)
+    // Free the spare chunks: chunks that removals emptied and chunks that Reserve
+    // allocated ahead. No row moves. Returns the number of chunks freed.
+    uint32_t FreeSpareChunks()
     {
-        uint32_t freed = 0;
-        // Scan forward for empty chunks; swap with last non-empty chunk.
-        std::size_t writeIdx = 0;
-        std::size_t readEnd = m_Chunks.size();
-
-        while (writeIdx < readEnd)
-        {
-            if (m_Chunks[writeIdx].GetCount() > 0)
-            {
-                ++writeIdx;
-                continue;
-            }
-
-            // Found an empty chunk at writeIdx. Find the last non-empty chunk to swap with.
-            while (readEnd > writeIdx + 1 && m_Chunks[readEnd - 1].GetCount() == 0)
-            {
-                // Trailing empty chunks can just be freed.
-                FreeChunkMemory(m_ChunkMemory[readEnd - 1]);
-                m_ChunkMemory.pop_back();
-                m_Chunks.pop_back();
-                PopColumnVersionRow();
-                --readEnd;
-                ++freed;
-            }
-
-            if (writeIdx >= readEnd)
-                break;
-
-            if (m_Chunks[writeIdx].GetCount() == 0 && readEnd > writeIdx + 1)
-            {
-                // Swap non-empty chunk at readEnd-1 into writeIdx.
-                uint32_t fromIdx = static_cast<uint32_t>(readEnd - 1);
-                uint32_t toIdx = static_cast<uint32_t>(writeIdx);
-
-                std::swap(m_ChunkMemory[toIdx], m_ChunkMemory[fromIdx]);
-                std::swap(m_Chunks[toIdx], m_Chunks[fromIdx]);
-                SwapColumnVersionRows(toIdx, fromIdx);
-
-                // Notify caller so entity metadata can be updated.
-                onRelocate(fromIdx, toIdx, m_Chunks[toIdx]);
-
-                // Free the now-empty chunk at the end.
-                FreeChunkMemory(m_ChunkMemory[fromIdx]);
-                m_ChunkMemory.pop_back();
-                m_Chunks.pop_back();
-                PopColumnVersionRow();
-                --readEnd;
-                ++freed;
-            }
-            else if (m_Chunks[writeIdx].GetCount() == 0)
-            {
-                // Last chunk is empty — just free it.
-                FreeChunkMemory(m_ChunkMemory[writeIdx]);
-                m_ChunkMemory.pop_back();
-                m_Chunks.pop_back();
-                PopColumnVersionRow();
-                --readEnd;
-                ++freed;
-            }
-
-            ++writeIdx;
-        }
-
+        const std::size_t inUse = m_Chunks.size();
+        const auto freed = static_cast<uint32_t>(m_ChunkMemory.size() - inUse);
+        for (std::size_t i = inUse; i < m_ChunkMemory.size(); ++i)
+            FreeChunkMemory(m_ChunkMemory[i]);
+        m_ChunkMemory.resize(inUse);
         return freed;
     }
 
-    // Iterate all non-empty chunks.
+    // Iterate all chunks.
     template <typename Func>
     void ForEachChunk(Func&& func)
     {
         for (auto& chunk : m_Chunks)
-        {
-            if (chunk.GetCount() > 0)
-                func(chunk);
-        }
+            func(chunk);
     }
 
   private:
@@ -704,9 +635,25 @@ class ArchetypeTable
         ::operator delete(ptr, m_Layout.AllocationBytes, std::align_val_t{m_Layout.AllocationAlignment});
     }
 
-    void AllocateNewChunk()
+    // Append an empty chunk to the chunk list. It uses the first spare, and
+    // allocates only when there is no spare.
+    void AppendChunk()
     {
-        std::byte* mem = AllocateChunkMemory();
+        const std::size_t index = m_Chunks.size();
+        if (index == m_ChunkMemory.size())
+        {
+            std::byte* allocated = AllocateChunkMemory();
+            try
+            {
+                m_ChunkMemory.push_back(allocated);
+            }
+            catch (...)
+            {
+                FreeChunkMemory(allocated);
+                throw;
+            }
+        }
+        std::byte* mem = m_ChunkMemory[index];
         // Skip the defensive zero-fill in release. Every live slot is written
         // before it is read: AddEntity calls Append() immediately after any
         // new chunk alloc; component columns are populated by the caller
@@ -717,29 +664,18 @@ class ArchetypeTable
 #ifndef NDEBUG
         std::memset(mem, 0, m_Layout.AllocationBytes);
 #endif
+        // One version row per chunk; zero = never changed (design C7).
+        m_ColumnVersions.resize(m_ColumnVersions.size() + GetColumnCount(), 0);
         try
         {
-            // One version row per chunk; zero = never changed (design C7).
-            m_ColumnVersions.resize(m_ColumnVersions.size() + GetColumnCount(), 0);
             m_Chunks.emplace_back(mem, &m_Layout);
-            m_ChunkMemory.push_back(mem);
         }
         catch (...)
         {
-            // Keep the three side arrays in sync if any vector growth fails.
-            if (m_Chunks.size() > m_ChunkMemory.size())
-                m_Chunks.pop_back();
-            m_ColumnVersions.resize(m_ChunkMemory.size() * GetColumnCount());
-            FreeChunkMemory(mem);
+            // The memory stays a spare.
+            PopColumnVersionRow();
             throw;
         }
-    }
-
-    void SwapColumnVersionRows(std::size_t a, std::size_t b)
-    {
-        const std::size_t cc = GetColumnCount();
-        for (std::size_t k = 0; k < cc; ++k)
-            std::swap(m_ColumnVersions[a * cc + k], m_ColumnVersions[b * cc + k]);
     }
 
     void PopColumnVersionRow()
@@ -748,7 +684,9 @@ class ArchetypeTable
     }
 
     ColumnLayout m_Layout;
-    std::vector<std::byte*> m_ChunkMemory;   // Raw memory ownership
+    // Owns all chunk memory. Entry i backs m_Chunks[i]; the entries past
+    // m_Chunks.size() are spares, which hold no rows.
+    std::vector<std::byte*> m_ChunkMemory;
     std::vector<ArchetypeChunk> m_Chunks;     // Lightweight views over memory
     // Per-(chunk x column) write-grant versions — see the accessor block above.
     std::vector<uint64_t> m_ColumnVersions;

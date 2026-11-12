@@ -1,10 +1,13 @@
 #include <gtest/gtest.h>
 
+#include "Core/ApplicationPaths.h"
+#include "Mathematics/Rect.h"
 #include "UI/Controls/Checkbox.h"
 #include "UI/Controls/Label.h"
 #include "UI/Controls/MaskField.h"
 #include "UI/Internal/MaskFieldAccess.h"
 #include "UI/Internal/LayoutAccess.h"
+#include "UI/ITextMeasurable.h"
 #include "UI/Controls/ScrollView.h"
 #include "UI/Registration/ElementRegistration.h"
 #include "UI/StyleProperties.h"
@@ -13,6 +16,9 @@
 #include "IsolatedUIFixture.h"
 #include "SharedHeadlessDevice.h"
 
+#include <fstream>
+#include <memory>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -45,6 +51,29 @@ void Click(UIElement& element)
 std::vector<MaskOption> SevenOptions()
 {
     return {{0x01u, "A"}, {0x02u, "B"}, {0x08u, "C"}, {0x10u, "D"}, {0x40u, "E"}, {0x100u, "F"}, {0x400u, "G"}};
+}
+
+// The control's own sheet as the build stages it next to the test exe; empty when it is not staged.
+std::string ReadStagedMaskFieldSheet()
+{
+    std::ifstream in(ApplicationPaths::GetExecutableDirectory() / "Assets" / "UI" / "controls" / "MaskField.css",
+                     std::ios::binary);
+    if (!in)
+        return {};
+    std::ostringstream ss;
+    ss << in.rdbuf();
+    return ss.str();
+}
+
+// The name of an option row: the checkbox's label.
+const Label* OptionRowLabel(const UIElement& row)
+{
+    for (const auto& child : row.GetChildren())
+    {
+        if (child->HasClass("checkbox-label"))
+            return dynamic_cast<const Label*>(child.get());
+    }
+    return nullptr;
 }
 
 struct BitsEvent
@@ -248,10 +277,12 @@ TEST(MaskFieldTests, APopupTallerThanTheWindowOpensUpwardAndScrolls)
     EXPECT_FALSE(MaskFieldAccess::OptionList(*field)->Style().Get(Style::MaxHeight).has_value());
 }
 
-// A fit-content popup anchored to a field in the right-hand column of a narrow panel is pulled back inside
-// the panel, so long layer names stay readable (the dropdown's rule, shared).
-TEST(MaskFieldTests, ANarrowPanelPullsThePopupBackInside)
+// The dropdown's rule, shared: the popup hangs from the header's left edge at the width of its widest name,
+// also past the panel, and a name wider than the window's room ends in an ellipsis.
+TEST(MaskFieldTests, ThePopupFitsItsWidestNameAndALongNameEndsInAnEllipsis)
 {
+    const std::string maskFieldSheet = ReadStagedMaskFieldSheet();
+    ASSERT_FALSE(maskFieldSheet.empty()) << "controls/MaskField.css is not staged next to the test exe";
     UITesting::IsolatedUIFixture fixture;
     const bool built = fixture.Build(
         1.0f,
@@ -264,8 +295,9 @@ TEST(MaskFieldTests, ANarrowPanelPullsThePopupBackInside)
 .dropdown { min-width: 60px; }
 .dropdown-items { position: absolute; top: 100%; left: 0px; width: 100%; }
 .dropdown-items.fit-content { width: auto; min-width: 100%; }
+.dropdown-item-fit-content { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dropdown-item { padding: 2px 10px 2px 24px; }
-)");
+)" + maskFieldSheet);
     if (!fixture.DeviceAvailable())
         GTEST_SKIP() << "No Vulkan device available";
     ASSERT_TRUE(built) << fixture.Diagnostic();
@@ -277,17 +309,32 @@ TEST(MaskFieldTests, ANarrowPanelPullsThePopupBackInside)
     auto owned = std::make_unique<MaskField>();
     MaskField* field = owned.get();
     host->AddChild(std::move(owned));
-    const std::vector<MaskOption> options = {{0x1u, "A long layer name for distant scenery"}, {0x2u, "Props"}};
-    field->SetOptions(options);
+    const std::vector<MaskOption> shortNames = {{0x1u, "Distant scenery"}, {0x2u, "Props"}};
+    field->SetOptions(shortNames);
     fixture.Settle();
     MaskFieldAccess::OpenPopup(*field);
     fixture.Settle();
 
     UIElement* popup = MaskFieldAccess::Popup(*field);
-    const float paneLeft = pane->GetLayoutX();
-    const float paneRight = paneLeft + pane->GetLayoutWidth();
-    const float popupLeft = popup->GetLayoutX();
-    const float popupRight = popupLeft + popup->GetLayoutWidth();
-    EXPECT_LE(popupRight, paneRight + 0.5f) << "popup right " << popupRight << " leaves the panel at " << paneRight;
-    EXPECT_GE(popupLeft, paneLeft - 0.5f) << "popup left " << popupLeft << " starts before the panel at " << paneLeft;
+    const Mathematics::Rect header = field->GetWindowRect();
+    Mathematics::Rect box = popup->GetWindowRect();
+    EXPECT_NEAR(box.X, header.X, 0.5f) << "the popup hangs from the header's left edge";
+    EXPECT_GT(box.Right(), pane->GetWindowRect().Right()) << "the popup draws over the next panel";
+    EXPECT_LT(box.Right(), 398.0f) << "the popup is as wide as its widest name, not as the window";
+    const Label* name = OptionRowLabel(*MaskFieldAccess::OptionRows(*field)[0]);
+    ASSERT_NE(name, nullptr);
+    EXPECT_FALSE(name->GetTextMeasurable()->WasLastRunEllipsized()) << "a name that fits is whole";
+
+    MaskFieldAccess::ClosePopup(*field);
+    const std::vector<MaskOption> longName = {{0x1u, std::string(400, 'W')}, {0x2u, "Props"}};
+    field->SetOptions(longName);
+    fixture.Settle();
+    MaskFieldAccess::OpenPopup(*field);
+    fixture.Settle();
+    box = popup->GetWindowRect();
+    EXPECT_NEAR(box.X, header.X, 0.5f) << "the room right of the header is the larger";
+    EXPECT_NEAR(box.Right(), 398.0f, 0.5f) << "the popup takes the room up to the window's edge";
+    name = OptionRowLabel(*MaskFieldAccess::OptionRows(*field)[0]);
+    ASSERT_NE(name, nullptr);
+    EXPECT_TRUE(name->GetTextMeasurable()->WasLastRunEllipsized()) << "the long name ends in an ellipsis";
 }

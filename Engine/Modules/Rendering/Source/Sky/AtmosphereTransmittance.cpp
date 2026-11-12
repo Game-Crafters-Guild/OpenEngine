@@ -73,7 +73,7 @@ const AtmosphereParametersGPU& ScatteringAtmosphere()
 {
     static const AtmosphereParametersGPU atmosphere = [] {
         AtmosphereParametersGPU atmo{};
-        SkyRenderer::FillDefaultAtmosphere(atmo);
+        SkyRenderer::FillDefaultAtmosphere(atmo, SkyPlanet{});
         return atmo;
     }();
     return atmosphere;

@@ -219,14 +219,14 @@ public:
         // slices, depth), snapshotted at its declaration the same way. A forward producer that
         // re-interns a pipeline at emit requests its build for these formats on a worker and draws
         // only once the device has built it (PipelineVariantCache::EnsureConcreteWarm).
-        // ColorCount 0 = no world pass yet.
+        // ColorCount 0 = no world pass and no paused frame yet (RecordPausedViewWarmKeys).
         Rendering::PipelineFormatKey WorldColorFormatKey{};
         // Where that world pass's parallax materials take their relief depth from, snapshotted with
         // it: the scene warm keys a parallax material's colour variant on it as the pass does.
         ReliefDepthSource WorldReliefDepthSource = ReliefDepthSource::NoPrepass;
         // The keywords that world pass drew its entities with, snapshotted with it and, unlike
         // WorldPassKeywords, kept across BeginFrame: the scene warm reads it outside the frame's
-        // declaration window. nullopt = no world pass yet.
+        // declaration window. nullopt = no world pass and no paused frame yet.
         std::optional<Rendering::MaterialKeyword> DeclaredWorldPassKeywords;
 
         // The light UBO that WriteViewLightBuffer wrote last. The world pass and the shader-graph
@@ -264,8 +264,15 @@ public:
     // — camera registry —
     Rendering::CameraId AllocateCamera(const char* debugName);
     bool ReleaseCamera(Rendering::CameraId id); // refuses while a view references it
-    void SetCameraData(Rendering::CameraId id, const Rendering::CameraData& data);
+    /// The camera's matrices and its near distance and culling range, set together by the camera's owner.
+    /// Culling, light and shadow code read the ranges here, never from the projection matrix.
+    void SetCameraData(Rendering::CameraId id, const Rendering::CameraData& data,
+                       const Rendering::CameraRanges& ranges);
     const Rendering::CameraData* FindCameraData(Rendering::CameraId id) const;
+    /// Zero ranges for an unknown camera or one whose owner has not set them.
+    Rendering::CameraRanges FindCameraRanges(Rendering::CameraId id) const;
+    /// The ranges of the camera that view `viewId` looks through.
+    Rendering::CameraRanges ResolveCameraRanges(Rendering::ViewId viewId) const;
     /// The main camera of world `worldId`: the one camera the sky's sun state, the sky-view LUT's
     /// altitude band and the world-level volume blend read. Among the views that draw the world (a view
     /// with world id 0 draws every world; `worldId` 0 asks for every world), take part this frame, draw
@@ -377,6 +384,15 @@ public:
     void SetViewCamera(Rendering::ViewId id, Rendering::CameraId cameraId);
     void SetViewRenderLayerMask(Rendering::ViewId id, Rendering::RenderLayerMask layers);
     void SetViewActiveRenderPipeline(Rendering::ViewId id, bool enabled);
+    /// Pauses or resumes the world drawing of a view (ViewDesc::worldPaused). A paused view
+    /// clears its output to its clear colour and keeps presenting the UI over it.
+    void SetViewWorldPaused(Rendering::ViewId id, bool paused);
+    /// Makes the world pause of a view follow its world's active camera
+    /// (ViewDesc::worldPauseFollowsActiveCamera).
+    void SetViewWorldPauseFollowsActiveCamera(Rendering::ViewId id);
+    /// Pauses or resumes the world drawing of each view of `worldId` whose pause follows its
+    /// world's active camera.
+    void SetActiveCameraViewsWorldPaused(uint64 worldId, bool paused);
 
     void SetViewWorldId(Rendering::ViewId id, uint64 worldId);
     void SetViewCullingStrategy(Rendering::ViewId id,
@@ -400,11 +416,11 @@ public:
     uint32 GetViewWorldColorSampleCount(Rendering::ViewId id) const;
     // PerViewResources::PrepassFormatKey (DepthFormat undefined until the view's first prepass).
     Rendering::PipelineFormatKey GetViewPrepassFormatKey(Rendering::ViewId id) const;
-    // PerViewResources::WorldColorFormatKey (ColorCount 0 until the view's first world pass).
+    // PerViewResources::WorldColorFormatKey (ColorCount 0 until the view's first world pass or paused frame).
     Rendering::PipelineFormatKey GetViewWorldColorFormatKey(Rendering::ViewId id) const;
     // PerViewResources::WorldReliefDepthSource (NoPrepass until the view's first world pass).
     ReliefDepthSource GetViewWorldReliefDepthSource(Rendering::ViewId id) const;
-    // PerViewResources::DeclaredWorldPassKeywords (nullopt until the view's first world pass).
+    // PerViewResources::DeclaredWorldPassKeywords (nullopt until the view's first world pass or paused frame).
     std::optional<Rendering::MaterialKeyword> GetViewDeclaredWorldPassKeywords(Rendering::ViewId id) const;
     // PerViewResources::WorldViewportHeight in pixels, after render scale (0 until the view's
     // first world pass). Callers converting a world size to a screen size need this paired with

@@ -27,6 +27,8 @@ struct PopupRecord
     std::string Shortcut;
     INativeContextMenu::CommandCallback Command;
     std::function<void()> Closed;
+    // Show closes the popup before it returns, as a native popup's modal menu loop does.
+    bool ClosesInShow = false;
     Platform::Window* Window = nullptr;
     int X = 0;
     int Y = 0;
@@ -64,6 +66,8 @@ class RecordingPopup final : public INativeContextMenu
         m_Record->X = x;
         m_Record->Y = y;
         ++m_Record->Shows;
+        if (m_Record->ClosesInShow && m_Record->Closed)
+            m_Record->Closed();
     }
   private:
     std::shared_ptr<PopupRecord> m_Record;

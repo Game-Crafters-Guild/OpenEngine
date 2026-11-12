@@ -44,7 +44,7 @@ std::filesystem::path CurrentPath(const StackFile& file)
 
 bool CaptureStackFile(const StackFile& file, Editor::UndoRedoService::SnapshotTarget::Snapshot& out)
 {
-    Vector<uint8> bytes;
+    ByteBuffer bytes;
     if (!ReadFileBytesShared(CurrentPath(file), bytes))
         return false;
     out.assign(bytes.begin(), bytes.end());

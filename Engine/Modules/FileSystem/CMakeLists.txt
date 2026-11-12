@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.20)
 
 project(FileSystem LANGUAGES CXX)
 
-# File copying and publication: nothing behind them but the standard library
+# File copying, publication and the advisory file lock: nothing behind them but the standard library
 # and Logger plus a header-only Platform process identity. Native copies through
 # the platform's own copy_file so permissions
 # survive; the browser streams, and publishes without a rename.
@@ -11,9 +11,9 @@ set(FILESYSTEM_CORE_SOURCES
     Source/RenameWithRetry.cpp
 )
 if(EMSCRIPTEN)
-    list(APPEND FILESYSTEM_CORE_SOURCES Source/FileSystemCore_Web.cpp)
+    list(APPEND FILESYSTEM_CORE_SOURCES Source/FileSystemCore_Web.cpp Source/ScopedFileLock_Web.cpp)
 else()
-    list(APPEND FILESYSTEM_CORE_SOURCES Source/FileSystemCore_Native.cpp)
+    list(APPEND FILESYSTEM_CORE_SOURCES Source/FileSystemCore_Native.cpp Source/ScopedFileLock_Native.cpp)
 endif()
 
 add_library(FileSystemCore OBJECT ${FILESYSTEM_CORE_SOURCES})
@@ -28,9 +28,9 @@ target_link_libraries(FileSystemCore PUBLIC Logger)
 # to the persistent mount; native removes on a JobSystem channel's blocking
 # thread (TreeRemoval) and lets the user choose where projects live.
 if(EMSCRIPTEN)
-    set(FILESYSTEM_SOURCES Source/FileSystem_Web.cpp Source/ScopedFileLock_Web.cpp Source/OrphanedTemporaryFiles.cpp Source/TreeRemoval_Web.cpp)
+    set(FILESYSTEM_SOURCES Source/FileSystem_Web.cpp Source/OrphanedTemporaryFiles.cpp Source/TreeRemoval_Web.cpp)
 else()
-    set(FILESYSTEM_SOURCES Source/FileSystem_Native.cpp Source/ScopedFileLock_Native.cpp Source/OrphanedTemporaryFiles.cpp Source/TreeRemoval_Native.cpp)
+    set(FILESYSTEM_SOURCES Source/FileSystem_Native.cpp Source/OrphanedTemporaryFiles.cpp Source/TreeRemoval_Native.cpp)
 endif()
 
 add_library(FileSystem OBJECT ${FILESYSTEM_SOURCES})

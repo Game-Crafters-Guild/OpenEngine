@@ -32,6 +32,9 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <format>
+#include <memory>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -101,24 +104,35 @@ ModelEntityResult ModelEntityFactory::CreateFromModel(
     renderRes.meshHandles = meshReg.RegisterModelMeshes(modelGuid, modelAsset);
     const double meshMs = msElapsed(tMesh);
 
+    // A resident model's materials are converted and registered by its first spawn
+    // only; a later spawn takes them from the mesh registry.
     const auto tConvert = Clock::now();
-    renderRes.materials = ModelMaterialBridge::ConvertAll(
-        modelGuid, modelAsset.GetMaterials());
+    std::shared_ptr<const Rendering::MeshGPURegistry::ModelMaterialList> materials =
+        meshReg.FindModelMaterials(modelGuid);
+    const bool firstSpawn = materials == nullptr;
+    if (firstSpawn)
+        materials = std::make_shared<const Rendering::MeshGPURegistry::ModelMaterialList>(
+            ModelMaterialBridge::ConvertAll(modelGuid, modelAsset.GetMaterials()));
+    renderRes.materials = materials;
     const double convertMs = msElapsed(tConvert);
 
     const auto& embeddedImages = modelAsset.GetEmbeddedImages();
 
     double materialRegMs = 0.0;
     double embeddedTexMs = 0.0;
-    for (const auto& cm : renderRes.materials)
+    if (firstSpawn)
     {
-        const auto tMatReg = Clock::now();
-        Material* mat = rs.RegisterAndPrewarmMaterial(cm.derivedGuid, cm.document);
-        materialRegMs += msElapsed(tMatReg);
+        for (const auto& cm : *materials)
+        {
+            const auto tMatReg = Clock::now();
+            Material* mat = rs.RegisterAndPrewarmMaterial(cm.derivedGuid, cm.document);
+            materialRegMs += msElapsed(tMatReg);
 
-        const auto tEmb = Clock::now();
-        rs.Textures().ResolveEmbeddedTextures(mat, cm.document, modelGuid, embeddedImages);
-        embeddedTexMs += msElapsed(tEmb);
+            const auto tEmb = Clock::now();
+            rs.Textures().ResolveEmbeddedTextures(mat, cm.document, modelGuid, embeddedImages);
+            embeddedTexMs += msElapsed(tEmb);
+        }
+        meshReg.KeepModelMaterials(modelGuid, materials);
     }
 
     // --- Determine if skinned ---
@@ -270,12 +284,10 @@ ModelEntityResult ModelEntityFactory::CreateFromModel(
                 }
 
                 ECS::ComponentBundle bundle;
-                Components::Transform xf{};
-                std::memcpy(xf.matrix,
-                            (imported.ParentSourceNodeIndex >= 0 && !parentIsImportedBone)
-                                ? imported.LocalTransform
-                                : imported.Transform,
-                            sizeof(xf.matrix));
+                const Components::Transform xf =
+                    Components::Transform::FromMatrix4x4(Mathematics::Matrix4x4::FromColumnMajor(
+                        (imported.ParentSourceNodeIndex >= 0 && !parentIsImportedBone) ? imported.LocalTransform
+                                                                                        : imported.Transform));
                 bundle.Add(xf);
 
                 Components::Name nm{};
@@ -341,13 +353,11 @@ ModelEntityResult ModelEntityFactory::CreateFromModel(
             if (!mesh.IsSkinned() && sourceNodeIndex >= 0)
             {
                 if (sceneNodeEntities.find(sourceNodeIndex) != sceneNodeEntities.end())
-                    std::memcpy(xf.matrix,
-                                extraPlacement ? extraPlacement->SourceNodeLocalTransform : mesh.SourceNodeLocalTransform,
-                                sizeof(xf.matrix));
+                    xf = Components::Transform::FromMatrix4x4(Mathematics::Matrix4x4::FromColumnMajor(
+                        extraPlacement ? extraPlacement->SourceNodeLocalTransform : mesh.SourceNodeLocalTransform));
                 else
-                    std::memcpy(xf.matrix,
-                                extraPlacement ? extraPlacement->SourceNodeTransform : mesh.SourceNodeTransform,
-                                sizeof(xf.matrix));
+                    xf = Components::Transform::FromMatrix4x4(Mathematics::Matrix4x4::FromColumnMajor(
+                        extraPlacement ? extraPlacement->SourceNodeTransform : mesh.SourceNodeTransform));
             }
             bundle.Add(xf);
 
@@ -526,9 +536,7 @@ ModelEntityResult ModelEntityFactory::CreateFromModel(
             }
 
             ECS::ComponentBundle bundle;
-            Components::Transform xf{};
-            std::memcpy(xf.matrix, imported.Transform, sizeof(xf.matrix));
-            bundle.Add(xf);
+            bundle.Add(Components::Transform::FromMatrix4x4(Mathematics::Matrix4x4::FromColumnMajor(imported.Transform)));
             addName(bundle, imported.Name.empty() ? (baseName + "_camera") : imported.Name);
             addParent(bundle);
 
@@ -549,9 +557,7 @@ ModelEntityResult ModelEntityFactory::CreateFromModel(
         for (const auto& imported : modelAsset.GetImportedLights())
         {
             ECS::ComponentBundle bundle;
-            Components::Transform xf{};
-            std::memcpy(xf.matrix, imported.Transform, sizeof(xf.matrix));
-            bundle.Add(xf);
+            bundle.Add(Components::Transform::FromMatrix4x4(Mathematics::Matrix4x4::FromColumnMajor(imported.Transform)));
             addName(bundle, imported.Name.empty() ? (baseName + "_light") : imported.Name);
             addParent(bundle);
 
@@ -611,13 +617,23 @@ ModelEntityResult ModelEntityFactory::CreateFromModel(
 
     const double entityCreateMs = msElapsed(tEntityCreate);
     const double totalMs = msElapsed(tTotal);
-    Logger::Log::Info(
-        "[ModelLoad] '{}' ({} meshes, {} mats, {} embedded imgs, {} cameras, {} lights, {} helpers): "
-        "TOTAL {:.1f}ms | mesh {:.1f}ms | matConvert {:.1f}ms | matRegister {:.1f}ms | embeddedTex {:.1f}ms | entityCreate {:.2f}ms",
-        rootName, meshCount, renderRes.materials.size(), embeddedImages.size(),
-        modelAsset.GetImportedCameras().size(), modelAsset.GetImportedLights().size(),
-        modelAsset.GetImportedSceneNodes().size(),
-        totalMs, meshMs, convertMs, materialRegMs, embeddedTexMs, entityCreateMs);
+    // Info for the first spawn of a model; a later spawn writes the same fields at Debug.
+    const Logger::LogLevel logLevel = firstSpawn ? Logger::LogLevel::Info : Logger::LogLevel::Debug;
+    if (Logger::Log::ShouldLog(logLevel))
+    {
+        const std::string line = std::format(
+            "[ModelLoad] '{}' ({} meshes, {} mats, {} embedded imgs, {} cameras, {} lights, {} helpers): "
+            "TOTAL {:.3f}ms | mesh {:.3f}ms | matConvert {:.3f}ms | matRegister {:.3f}ms | embeddedTex {:.3f}ms | "
+            "entityCreate {:.3f}ms",
+            rootName, meshCount, materials->size(), embeddedImages.size(),
+            modelAsset.GetImportedCameras().size(), modelAsset.GetImportedLights().size(),
+            modelAsset.GetImportedSceneNodes().size(),
+            totalMs, meshMs, convertMs, materialRegMs, embeddedTexMs, entityCreateMs);
+        if (firstSpawn)
+            Logger::Log::Info(line);
+        else
+            Logger::Log::Debug(line);
+    }
 
     return result;
 }

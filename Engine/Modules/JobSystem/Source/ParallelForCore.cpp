@@ -16,6 +16,10 @@
 // would have. A helper's first act is to give its count back to the pool,
 // which outlives it; nothing after that depends on the count.
 //
+// A run with HelpersToKeepQueued counts its queued helpers (RunBlock::Queued).
+// Before each of its claims, the caller publishes helpers up to the hook's count
+// with the same reference and budget steps, and only before it closes the run.
+//
 // A helper, in order (every exit after step 1 goes through Leave):
 //  (0) load the claim word: closed or past the end -> drop the reference and
 //      end, having counted nothing and touched nothing of the caller's;
@@ -87,6 +91,8 @@ struct RunBlock
     std::atomic<size_t> Claim{0};
     std::atomic<uint32> InProgress{0};
     std::atomic<uint32> References{0};
+    // Helpers published and not yet started; kept only when KeepQueued is set.
+    std::atomic<uint32> Queued{0};
     std::atomic<bool> Stopped{false};
     std::atomic<bool> HasException{false};
     std::exception_ptr Exception;
@@ -94,6 +100,7 @@ struct RunBlock
     bool (*Invoke)(void* body, size_t unit) = nullptr;
     void* Body = nullptr;
     const ParallelForOptions::UnitAdmission* Admission = nullptr;
+    const std::function<size_t()>* KeepQueued = nullptr; // ParallelForOptions::HelpersToKeepQueued
     WorkStealingThreadPool* Pool = nullptr;
     JobPriority HelperClass = JobPriority::Normal;
 #if GE_DEBUG_INSTRUMENTATION
@@ -201,10 +208,9 @@ bool RunAdmittedUnit(RunBlock& block)
     return true;
 }
 
-// The helper task: one reference to the block, and one count of the pool's
-// unstarted helpers, reserved for it before it was published and given back
-// when it starts. Move-only; an envelope destroyed without running gives its
-// count back and drops its reference.
+// The helper task: one block reference, and one unstarted count (and one Queued
+// count with KeepQueued) that it gives back when it starts. Move-only; an
+// envelope that never runs gives back its counts and drops its reference.
 class ClaimHelper
 {
   public:
@@ -286,6 +292,8 @@ class ClaimHelper
             // The count this helper gave back at its start, taken again for
             // the copy it publishes: one unstarted helper for one.
             unstarted->fetch_add(1, std::memory_order_relaxed);
+            if (block.KeepQueued != nullptr)
+                block.Queued.fetch_add(1, std::memory_order_relaxed);
             pool.EnqueueWork(ClaimHelper(std::exchange(m_Block, nullptr), unstarted), block.HelperClass);
             return;
         }
@@ -293,10 +301,15 @@ class ClaimHelper
     }
 
   private:
+    // Also takes this helper out of its run's Queued count; m_Block is set while m_Unstarted is.
     void GiveBackUnstartedCount()
     {
         if (m_Unstarted)
+        {
             std::exchange(m_Unstarted, nullptr)->fetch_sub(1, std::memory_order_relaxed);
+            if (m_Block->KeepQueued != nullptr)
+                m_Block->Queued.fetch_sub(1, std::memory_order_relaxed);
+        }
     }
 
     void Reset()
@@ -360,8 +373,37 @@ void WaitForUnitsInProgress(RunBlock& block)
     }
 }
 
-// The caller's claims, Stop polled before each.
-void RunCallerUnits(RunBlock& block, const std::function<bool()>* stop)
+// Publishes helpers until the run's KeepQueued count is queued, at most one
+// batch and the units left after the caller's next claim, through `reserve`
+// (the pool's ReserveForkTasks, within `budget`).
+void KeepHelpersQueued(RunBlock& block, std::atomic<uint32>& unstarted,
+                       size_t (*reserve)(std::atomic<uint32>&, size_t, size_t), size_t budget)
+{
+    const size_t claimWord = block.Claim.load(std::memory_order_seq_cst);
+    if (!IsOpenWithUnitsLeft(claimWord, block.UnitCount) || block.Pool->IsShuttingDown())
+        return;
+    const size_t target = (*block.KeepQueued)();
+    const size_t queued = block.Queued.load(std::memory_order_relaxed);
+    if (target <= queued)
+        return;
+    const size_t wanted =
+        std::min({target - queued, block.UnitCount - claimWord - 1, WorkStealingThreadPool::kStackBatch});
+    const size_t granted = wanted == 0 ? 0 : reserve(unstarted, wanted, budget);
+    if (granted == 0)
+        return;
+    // The caller's own reference keeps the block alive while these are added.
+    block.References.fetch_add(static_cast<uint32>(granted), std::memory_order_relaxed);
+    block.Queued.fetch_add(static_cast<uint32>(granted), std::memory_order_relaxed);
+    ClaimHelper staging[WorkStealingThreadPool::kStackBatch];
+    for (size_t i = 0; i < granted; ++i)
+        staging[i] = ClaimHelper(&block, &unstarted);
+    block.Pool->EnqueueWorkBatch(staging, granted, block.HelperClass);
+}
+
+// The caller's claims, Stop polled before each and, with KeepQueued, the
+// queued helpers topped up after it.
+void RunCallerUnits(RunBlock& block, const std::function<bool()>* stop, std::atomic<uint32>& unstarted,
+                    size_t (*reserve)(std::atomic<uint32>&, size_t, size_t), size_t budget)
 {
     for (;;)
     {
@@ -380,6 +422,18 @@ void RunCallerUnits(RunBlock& block, const std::function<bool()>* stop)
             if (stopRequested)
             {
                 StopRun(block);
+                return;
+            }
+        }
+        if (block.KeepQueued != nullptr)
+        {
+            try
+            {
+                KeepHelpersQueued(block, unstarted, reserve, budget);
+            }
+            catch (...)
+            {
+                RecordExceptionAndStop(block);
                 return;
             }
         }
@@ -466,20 +520,21 @@ bool WorkStealingThreadPool::RunParallelFor(WorkStealingThreadPool* pool, bool (
     if (pool == nullptr)
         return RunEveryUnitOnTheCaller(invoke, body, unitCount, options.Stop);
 
+    const bool mayPublish = !pool->m_InlineMode && !pool->IsShuttingDown() && unitCount > 1;
+    const std::function<size_t()>* keepQueued =
+        (mayPublish && options.HelpersToKeepQueued != nullptr && *options.HelpersToKeepQueued)
+            ? options.HelpersToKeepQueued
+            : nullptr;
     const size_t asked = options.Helpers == ParallelForOptions::kAllWorkers ? pool->GetWorkerCount() : options.Helpers;
-    const size_t wanted =
-        (pool->m_InlineMode || pool->IsShuttingDown() || unitCount <= 1)
-            ? 0
-            : std::min({asked, unitCount - 1, kStackBatch});
+    const size_t wanted = mayPublish ? std::min({asked, unitCount - 1, kStackBatch}) : 0;
+    // Helpers take the forking body's class; a Background ask demotes them.
     const JobPriority helperClass =
-        (options.HelperPriority == JobPriority::Background || CallerContext().Class == JobPriority::Background)
-            ? JobPriority::Background
-            : JobPriority::Normal;
-    std::atomic<uint32>& unstarted = pool->m_UnstartedForkTasks[static_cast<size_t>(helperClass)];
-    const size_t helpers =
-        wanted == 0 ? 0
-                    : ReserveForkTasks(unstarted, wanted, kMaxUnstartedForkTasksPerWorker * pool->GetWorkerCount());
-    if (helpers == 0)
+        options.HelperPriority == JobPriority::Background ? JobPriority::Background : CallerContext().Class;
+    std::atomic<uint32>& unstarted = pool->m_Counters.UnstartedForkTasks[static_cast<size_t>(helperClass)];
+    const size_t budget = kMaxUnstartedForkTasksPerWorker * pool->GetWorkerCount();
+    const size_t helpers = wanted == 0 ? 0 : ReserveForkTasks(unstarted, wanted, budget);
+    // A run that may publish helpers later needs its block even with none now.
+    if (helpers == 0 && keepQueued == nullptr)
         return RunEveryUnitOnTheCaller(invoke, body, unitCount, options.Stop);
 
     RunBlock* block = CreateRunBlock();
@@ -487,6 +542,8 @@ bool WorkStealingThreadPool::RunParallelFor(WorkStealingThreadPool* pool, bool (
     block->Invoke = invoke;
     block->Body = body;
     block->Admission = options.Admission;
+    block->KeepQueued = keepQueued;
+    block->Queued.store(static_cast<uint32>(helpers), std::memory_order_relaxed);
     block->Pool = pool;
     block->HelperClass = helperClass;
 #if GE_DEBUG_INSTRUMENTATION
@@ -499,13 +556,14 @@ bool WorkStealingThreadPool::RunParallelFor(WorkStealingThreadPool* pool, bool (
 
     {
         const CloseAndJoinOnExit join(*block);
+        if (helpers > 0)
         {
             ClaimHelper staging[kStackBatch];
             for (size_t i = 0; i < helpers; ++i)
                 staging[i] = ClaimHelper(block, &unstarted);
             pool->EnqueueWorkBatch(staging, helpers, block->HelperClass);
         }
-        RunCallerUnits(*block, options.Stop);
+        RunCallerUnits(*block, options.Stop, unstarted, &ReserveForkTasks, budget);
     }
 
     const bool stopped = block->Stopped.load(std::memory_order_relaxed);

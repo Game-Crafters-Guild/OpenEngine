@@ -8,15 +8,6 @@ add_library(MeshPicking OBJECT
 
 target_compile_features(MeshPicking PUBLIC cxx_std_20)
 
-if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    include(CheckCXXCompilerFlag)
-    check_cxx_compiler_flag("-mavx2" MESHPICKING_SUPPORTS_AVX2)
-    check_cxx_compiler_flag("-mfma"  MESHPICKING_SUPPORTS_FMA)
-    if(MESHPICKING_SUPPORTS_AVX2 AND MESHPICKING_SUPPORTS_FMA)
-        target_compile_options(MeshPicking PRIVATE -mavx2 -mfma)
-    endif()
-endif()
-
 target_include_directories(MeshPicking
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/Include

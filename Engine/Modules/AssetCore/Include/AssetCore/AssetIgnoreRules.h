@@ -1,6 +1,9 @@
 #pragma once
 
+#include "Types/FlatSet.h"
+
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_set>
@@ -38,6 +41,19 @@ struct AssetIgnoreRules
     std::unordered_set<std::string> ignoredExtensionsLower;
     // Lower-cased canonical prefixes (forward slashes), always ending with '/'.
     std::vector<std::string> ignoredPrefixesLower;
+    // Lower-cased names of tool output folders ("build", "Library"). Directly under the
+    // root, the defaults ignore them by path prefix. Deeper, a folder with one of these
+    // names is ignored only when it holds a file of toolOutputMarkerFileNames.
+    FlatSet<std::string> toolOutputDirNamesLower;
+    // File names that mark a folder as tool output (a CMake build tree, a Python environment).
+    std::vector<std::string> toolOutputMarkerFileNames;
+
+    // A folder that the rules ignore, and the rule in words for a log line.
+    struct IgnoredFolder
+    {
+        std::filesystem::path Folder;
+        std::string Reason;
+    };
 
     static AssetIgnoreRules CreateDefault();
 
@@ -62,6 +78,12 @@ struct AssetIgnoreRules
     // Tests a file path for indexing (expects an absolute or root-relative path).
     bool ShouldIgnoreFile(const std::filesystem::path& filePath,
                           const std::filesystem::path& assetRoot) const;
+
+    // Returns the outermost folder of a canonical relative file path that a folder rule
+    // ignores, or nothing. Reads the disk for the tool output markers. A hidden folder
+    // (a name that starts with '.') returns nothing: it is not content.
+    std::optional<IgnoredFolder> FindIgnoredFolder(std::string_view canonicalRel,
+                                                   const std::filesystem::path& assetRoot) const;
 
     // Stable 64-bit hash of all rule sets, deterministic across runs and
     // platforms. Used by the warm-start snapshot to invalidate cached

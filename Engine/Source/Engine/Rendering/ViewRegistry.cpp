@@ -32,6 +32,8 @@ CameraId ViewRegistry::AllocateCamera(const char* debugName)
 {
     CameraInfo info{};
     info.id = m_NextCameraId++;
+    // Zero matrices mark the camera as unset for its readers; the eye at the origin keeps its sector valid.
+    SetCameraEye(info.data, Mathematics::WorldPosition{});
     info.debugName = debugName;
     m_Cameras.push_back(info);
     return info.id;
@@ -62,16 +64,45 @@ bool ViewRegistry::ReleaseCamera(CameraId id)
     return true;
 }
 
-void ViewRegistry::SetCameraData(CameraId id, const CameraData& data)
+void ViewRegistry::SetCameraData(CameraId id, const CameraData& data, const CameraRanges& ranges)
 {
     for (auto& cam : m_Cameras)
     {
         if (cam.id == id)
         {
+            // Without an eye the rebased matrices are zero and the view draws nothing.
+            if (data.renderOriginSector[3] == 0 && !cam.missingEyeLogged)
+            {
+                LOG_ERROR("Camera {} ('{}'): the camera has no eye: call SetCameraEye after the matrices are set",
+                          cam.id, cam.debugName ? cam.debugName : "");
+                cam.missingEyeLogged = true;
+            }
+            assert(data.renderOriginSector[3] != 0 && "the camera has no eye: call SetCameraEye after the matrices are set");
             cam.data = data;
+            cam.ranges = ranges;
             return;
         }
     }
+}
+
+CameraRanges ViewRegistry::FindCameraRanges(CameraId id) const
+{
+    for (const auto& cam : m_Cameras)
+    {
+        if (cam.id == id)
+            return cam.ranges;
+    }
+    return {};
+}
+
+CameraRanges ViewRegistry::ResolveCameraRanges(ViewId viewId) const
+{
+    for (const auto& view : m_Views)
+    {
+        if (view.id == viewId)
+            return FindCameraRanges(view.cameraId);
+    }
+    return {};
 }
 
 const CameraData* ViewRegistry::FindCameraData(CameraId id) const
@@ -93,7 +124,7 @@ const CameraData* ViewRegistry::FindMainCameraData(uint64 worldId) const
     {
         if (worldId != 0 && view.worldId != 0 && view.worldId != worldId)
             continue;
-        if (!view.activeRenderPipeline || !view.Participates())
+        if (!view.RenderedByPipeline())
             continue;
         if (view.purpose != ViewPurpose::Game && view.purpose != ViewPurpose::EditorScene)
             continue;
@@ -144,6 +175,7 @@ CameraData ViewRegistry::ResolveCameraData(ViewId viewId) const
     cam.view = identity;
     cam.proj = identity;
     cam.viewProj = identity;
+    SetCameraEye(cam, Mathematics::WorldPosition{});
 
     CameraId cameraId = 0;
     for (const auto& v : m_Views)
@@ -166,14 +198,6 @@ CameraData ViewRegistry::ResolveCameraData(ViewId viewId) const
         }
     }
 
-    // Camera-relative rendering: derive the render origin from the (full-world)
-    // camera position and fill the rebased view/viewProj the vertex stage uses
-    // for a precise clip position. view/proj/viewProj/cameraPos stay full-world,
-    // so culling, ViewParams (FindCameraData path), and every fragment consumer
-    // are unaffected. Inside the activation radius the sector is (0,0,0) and the
-    // rebased matrices equal the full-world ones bit-for-bit.
-    ComputeRebasedView(cam.view, cam.proj, cam.viewProj, cam.cameraPos.x, cam.cameraPos.y,
-                       cam.cameraPos.z, cam.viewRel, cam.viewProjRel, cam.renderOriginSector);
     return cam;
 }
 
@@ -410,6 +434,39 @@ void ViewRegistry::SetViewActiveRenderPipeline(ViewId id, bool enabled)
             view.activeRenderPipeline = enabled;
             return;
         }
+    }
+}
+
+void ViewRegistry::SetViewWorldPaused(ViewId id, bool paused)
+{
+    for (auto& view : m_Views)
+    {
+        if (view.id == id)
+        {
+            view.worldPaused = paused;
+            return;
+        }
+    }
+}
+
+void ViewRegistry::SetViewWorldPauseFollowsActiveCamera(ViewId id)
+{
+    for (auto& view : m_Views)
+    {
+        if (view.id == id)
+        {
+            view.worldPauseFollowsActiveCamera = true;
+            return;
+        }
+    }
+}
+
+void ViewRegistry::SetActiveCameraViewsWorldPaused(uint64 worldId, bool paused)
+{
+    for (auto& view : m_Views)
+    {
+        if (view.worldPauseFollowsActiveCamera && view.worldId == worldId)
+            view.worldPaused = paused;
     }
 }
 

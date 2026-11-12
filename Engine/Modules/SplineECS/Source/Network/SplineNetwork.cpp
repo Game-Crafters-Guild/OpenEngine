@@ -372,14 +372,16 @@ bool SplineNetwork::State::RefreshCurve(const SplineService& service, ECS::Entit
     CachedCurve& cached = Curves.GetOrInsert(entity.id);
     cached.Seen = true;
     cached.Curve.Spline = data;
+    const Mathematics::Matrix4x4 worldMatrix =
+        transform.ToMatrix4x4(transform.GetPosition() - Mathematics::WorldPosition{});
     const bool same = cached.Curve.Entity == entity && cached.Curve.Kind == member.Kind &&
                       cached.SplineVersion == data->Version && cached.SplineLength == data->TotalArcLength &&
-                      std::memcmp(cached.Matrix.Data(), transform.matrix, sizeof(transform.matrix)) == 0;
+                      std::memcmp(cached.Matrix.Data(), worldMatrix.Data(), sizeof(float32) * 16u) == 0;
     if (same)
         return false;
     cached.SplineVersion = data->Version;
     cached.SplineLength = data->TotalArcLength;
-    cached.Matrix = Mathematics::Matrix4x4::FromColumnMajor(transform.matrix);
+    cached.Matrix = worldMatrix;
     ++cached.Generation;
     cached.Curve = Network::SampleMemberCurve(entity, member.Kind, *data, cached.Matrix);
     return true;

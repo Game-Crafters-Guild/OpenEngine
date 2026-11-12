@@ -137,10 +137,10 @@ namespace GameEngine.ManagedInteropTests
         // Nanoseconds per ComponentType<Transform>.Get of one entity, and per Get and Set pair.
         private static (double get, double pair) TimeTransformGetSet(in GameEngine.ECS.WorldHandle world, uint entity)
         {
-            float sum = 0f;
+            double sum = 0.0;
             var sw = Stopwatch.StartNew();
             for (int i = 0; i < kTransformPairs; i++)
-                sum += GameEngine.ECS.ComponentType<Transform>.Get(in world, entity).X;
+                sum += GameEngine.ECS.ComponentType<Transform>.Get(in world, entity).Position.X;
             double get = sw.Elapsed.TotalMilliseconds * 1e6 / kTransformPairs;
             sw.Restart();
             for (int i = 0; i < kTransformPairs; i++)

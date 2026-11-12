@@ -1,7 +1,6 @@
 #include "JobSystem/TaskSlabPool.h"
 
 #include "JobSystem/ConcurrentQueue.h"
-#include <type_traits>
 
 namespace JobSystem::Detail
 {
@@ -22,21 +21,7 @@ struct SlabStats
 // static destruction are safe: the storage persists and no destructor runs.
 SlabStats s_Stats;
 
-// Every release is a tokenless (implicit-producer) enqueue: each releasing
-// thread fills its own sub-queue, built with its block index on the thread's
-// first release; the index never grows on try_enqueue. The default index (32
-// blocks of 32) would let one thread hold only 1,024 slabs, a quarter of the
-// cap; this one indexes the whole cap, so a single releasing thread can fill
-// the freelist.
-struct SlabFreelistTraits : QueueAllocationTraits
-{
-    static const size_t IMPLICIT_INITIAL_INDEX_SIZE =
-        kTaskSlabPoolCapacity / QueueAllocationTraits::BLOCK_SIZE;
-};
-
-using SlabFreelist = moodycamel::ConcurrentQueue<void*, SlabFreelistTraits>;
-static_assert(std::is_base_of_v<QueueAllocationTraits, SlabFreelistTraits>,
-              "the slab freelist allocates through the counted queue traits");
+using SlabFreelist = FreelistQueue<void*, kTaskSlabPoolCapacity>;
 
 SlabFreelist& Freelist()
 {
@@ -48,7 +33,7 @@ SlabFreelist& Freelist()
     // The constructed capacity is the retention cap: try_enqueue never
     // allocates new blocks, so the freelist can never hold more than
     // kTaskSlabPoolCapacity slabs (512KB) — overflow frees go to the heap.
-    // Any one releasing thread can reach the cap (SlabFreelistTraits).
+    // Any one releasing thread can reach the cap (FreelistQueueTraits).
     static SlabFreelist* const s_Freelist = new SlabFreelist(kTaskSlabPoolCapacity);
     return *s_Freelist;
 }

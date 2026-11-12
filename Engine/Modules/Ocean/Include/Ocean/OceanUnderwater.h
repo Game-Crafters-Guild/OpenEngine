@@ -118,7 +118,8 @@ private:
     ::GameEngine::Rendering::DescriptorSetLayoutDesc m_Layout{};
 
     // Shadowed overlay variant: same fullscreen pass, plus CSM visibility for
-    // Wicked-style volumetric underwater shafts when the frame produced shadows.
+    // volumetric underwater shafts when the frame produced shadows. The shafts follow
+    // the approach of Wicked Engine's underwater effect.
     ::GameEngine::Rendering::PipelineDesc m_ShadowPipeline{};
     ::GameEngine::Rendering::GraphicsPipelineId m_ShadowPipelineId{};
     ::GameEngine::Rendering::DescriptorSetLayoutDesc m_ShadowLayout{};

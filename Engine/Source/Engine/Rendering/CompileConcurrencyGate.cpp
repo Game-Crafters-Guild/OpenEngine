@@ -101,21 +101,30 @@ void CompileConcurrencyGate::Submit(std::function<void()> work, JobSystem::JobPr
         // Closed: `work` is destroyed unrun when this function returns, after the unlock.
         if (m_Closed)
             return;
-        // A slot is free only when running < cap; the pump keeps running == cap
-        // while either lane is non-empty, so a free slot here implies both lanes
-        // empty and admitting directly cannot reorder ahead of queued work.
-        if (m_Running >= m_Cap)
+        if (priority != JobSystem::JobPriority::Awaited)
         {
-            if (priority == JobSystem::JobPriority::Background)
-                m_PendingBackground.push_back(std::move(work));
-            else
-                m_PendingNormal.push_back(std::move(work));
-            return;
+            // A slot is free only when running < cap; the pump keeps running == cap
+            // while a pending lane is not empty, so a free slot here implies empty
+            // lanes and admitting directly cannot reorder ahead of queued work.
+            if (m_Running >= m_Cap)
+            {
+                if (priority == JobSystem::JobPriority::Background)
+                    m_PendingBackground.push_back(std::move(work));
+                else
+                    m_PendingNormal.push_back(std::move(work));
+                return;
+            }
+            ++m_Running;
+            m_HighWater = std::max(m_HighWater, m_Running);
         }
-        ++m_Running;
-        m_HighWater = std::max(m_HighWater, m_Running);
     }
 
+    // A thread waits for Awaited work: it takes no slot and is not queued behind the gate.
+    if (priority == JobSystem::JobPriority::Awaited)
+    {
+        m_Dispatch(std::move(work), priority);
+        return;
+    }
     try
     {
         DispatchTracked(std::move(work), priority);
@@ -165,10 +174,9 @@ void CompileConcurrencyGate::DispatchTracked(std::function<void()> work,
 
 void CompileConcurrencyGate::OnJobFinished() noexcept
 {
-    // Release the finished job's slot and promote the next pending job, draining
-    // the Background lane (user-visible variant misses) before Normal (bulk
-    // prewarm). Loop only to skip a job whose dispatch fails: drop it and try the
-    // next so the slot is never leaked.
+    // Release the finished job's slot and promote the next pending job. Normal goes
+    // before Background, as in the pool.
+    // Loop only to skip a job whose dispatch fails: drop it and try the next so the slot is never leaked.
     for (;;)
     {
         std::function<void()> next;
@@ -176,17 +184,17 @@ void CompileConcurrencyGate::OnJobFinished() noexcept
         {
             std::lock_guard lock(m_Mutex);
             --m_Running;
-            if (!m_PendingBackground.empty())
-            {
-                next = std::move(m_PendingBackground.front());
-                m_PendingBackground.pop_front();
-                priority = JobSystem::JobPriority::Background;
-            }
-            else if (!m_PendingNormal.empty())
+            if (!m_PendingNormal.empty())
             {
                 next = std::move(m_PendingNormal.front());
                 m_PendingNormal.pop_front();
                 priority = JobSystem::JobPriority::Normal;
+            }
+            else if (!m_PendingBackground.empty())
+            {
+                next = std::move(m_PendingBackground.front());
+                m_PendingBackground.pop_front();
+                priority = JobSystem::JobPriority::Background;
             }
             else
             {

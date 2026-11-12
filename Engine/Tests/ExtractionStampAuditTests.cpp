@@ -1,7 +1,7 @@
 // Stamp-audit lock (extraction-fusion T15, correctness A1c): an idle animated
 // scene — one playing skinned entity plus one morph-carrying entity, with no
-// actual changes — must not write-grant ("stamp") the four extraction probe
-// columns (MeshRenderer, LocalBounds, WorldSectorCoord, LODGroup) frame over
+// actual changes — must not write-grant ("stamp") the three extraction probe
+// columns (MeshRenderer, LocalBounds, LODGroup) frame over
 // frame. The ECS stamps write columns at visit, BEFORE the callback, for
 // every non-filtered chunk, so any per-frame system that binds a probed
 // column mutably re-arms this failure regardless of what its body does.
@@ -30,7 +30,6 @@
 #include "Components/Rendering/LODGroup.h"
 #include "Components/Rendering/MeshRenderer.h"
 #include "Components/Rendering/MorphTargetWeights.h"
-#include "Components/Rendering/WorldSectorCoord.h"
 
 #include <filesystem>
 
@@ -148,7 +147,6 @@ TEST(ExtractionStampAuditTests, IdleAnimatedSceneDoesNotStampProbedColumns)
     skinned.Set(Components::MeshRenderer{});
     skinned.Set(Components::LocalBounds{});
     skinned.Set(Components::LODGroup{});
-    skinned.Set(Components::WorldSectorCoord{});
 
     // Morph-carrying entity: MorphTargetSystem visits its chunk every frame
     // (null model GUID -> early return, but stamp-at-visit fires before the
@@ -158,7 +156,6 @@ TEST(ExtractionStampAuditTests, IdleAnimatedSceneDoesNotStampProbedColumns)
     morph.Set(Components::MorphTargetWeights{});
     morph.Set(Components::LocalBounds{});
     morph.Set(Components::LODGroup{});
-    morph.Set(Components::WorldSectorCoord{});
 
     world.ProcessCommands();
 
@@ -188,14 +185,12 @@ TEST(ExtractionStampAuditTests, IdleAnimatedSceneDoesNotStampProbedColumns)
     ASSERT_NE(animAfter, nullptr);
     EXPECT_GT(animAfter->Time, 0.0f) << "clip is not actually playing";
 
-    // The lock: all four probe columns stayed quiet across the idle frames.
+    // The lock: all three probe columns stayed quiet across the idle frames.
     EXPECT_EQ(VisitedSince<Components::MeshRenderer>(world, gate), 0u)
         << "an idle frame write-granted MeshRenderer - a Changed<MeshRenderer> "
            "probe would fire every frame in any animated scene";
     EXPECT_EQ(VisitedSince<Components::LocalBounds>(world, gate), 0u)
         << "an idle frame write-granted LocalBounds";
-    EXPECT_EQ(VisitedSince<Components::WorldSectorCoord>(world, gate), 0u)
-        << "an idle frame write-granted WorldSectorCoord";
     EXPECT_EQ(VisitedSince<Components::LODGroup>(world, gate), 0u)
         << "an idle frame write-granted LODGroup";
 

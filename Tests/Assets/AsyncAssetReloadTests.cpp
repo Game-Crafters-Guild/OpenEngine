@@ -97,7 +97,7 @@ class AsyncReloadTestAsset final : public Asset
         return ApplyContent(std::move(text));
     }
 
-    bool LoadFromData(const Vector<uint8>& data) override
+    bool LoadFromData(std::span<const uint8> data) override
     {
         s_DecodeStarted.fetch_add(1);
         while (s_BlockDecodes.load())

@@ -18,7 +18,8 @@ RenderingDeviceCapabilities DesktopCapabilities()
     RenderingDeviceCapabilities caps{};
     caps.supportsBindlessResources = true;
     caps.supportsBufferDeviceAddress = true;
-    caps.supportsSampleRateShading = true;
+    caps.supportsInterpolationFunctions = true;
+    caps.supportsShaderClipDistance = true;
     return caps;
 }
 
@@ -49,13 +50,13 @@ struct ScopedForceCompat
 };
 } // namespace
 
-TEST(RendererProfile, InterpolationFunctionsFollowSampleRateShading)
+TEST(RendererProfile, InterpolationFunctionsFollowTheDeviceCapability)
 {
     RenderingDeviceCapabilities caps = DesktopCapabilities();
     EXPECT_TRUE(RendererProfile::FromCapabilities(caps).UseInterpolationFunctions);
-    caps.supportsSampleRateShading = false;
+    caps.supportsInterpolationFunctions = false;
     EXPECT_FALSE(RendererProfile::FromCapabilities(caps).UseInterpolationFunctions)
-        << "a device without sampleRateShading must not be handed interpolateAtOffset";
+        << "a device without the interpolation functions must not be handed interpolateAtOffset";
 }
 
 TEST(RendererProfile, ForcedCompatibilityTakesNoInterpolationFunctions)
@@ -63,6 +64,20 @@ TEST(RendererProfile, ForcedCompatibilityTakesNoInterpolationFunctions)
     RenderingDeviceCapabilities caps = DesktopCapabilities();
     ScopedForceCompat forced;
     ASSERT_TRUE(ApplyForceCompatOverride(caps));
-    EXPECT_FALSE(caps.supportsSampleRateShading);
+    EXPECT_FALSE(caps.supportsInterpolationFunctions);
     EXPECT_FALSE(RendererProfile::FromCapabilities(caps).UseInterpolationFunctions);
+}
+
+TEST(RendererProfile, ClipDistanceFollowsShaderClipDistance)
+{
+    RenderingDeviceCapabilities caps = DesktopCapabilities();
+    EXPECT_TRUE(RendererProfile::FromCapabilities(caps).UseClipDistance);
+    caps.supportsShaderClipDistance = false;
+    EXPECT_FALSE(RendererProfile::FromCapabilities(caps).UseClipDistance)
+        << "a device without shaderClipDistance must not be handed gl_ClipDistance";
+
+    caps = DesktopCapabilities();
+    ScopedForceCompat forced;
+    ASSERT_TRUE(ApplyForceCompatOverride(caps));
+    EXPECT_FALSE(RendererProfile::FromCapabilities(caps).UseClipDistance) << "WGSL takes no clip distance";
 }

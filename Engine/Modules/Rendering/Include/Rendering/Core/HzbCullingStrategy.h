@@ -30,6 +30,7 @@ class HzbCullingStrategy final : public ICullingStrategy
 {
   public:
     void ScheduleCulling(const ViewCullingContext& ctx) override;
+    bool ReservesOcclusionSlice() const override { return true; }
 };
 
 // Default occlusion culling strategy for a perspective main view (editor game

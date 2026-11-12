@@ -81,9 +81,7 @@ protected:
     static Components::WorldTransform At(float x, float y, float z)
     {
         Components::WorldTransform transform;
-        transform.matrix[12] = x;
-        transform.matrix[13] = y;
-        transform.matrix[14] = z;
+        transform.Position = Mathematics::WorldPosition{x, y, z};
         return transform;
     }
 

@@ -12,12 +12,11 @@ namespace GameEngine
 {
 
 class Button;
-class Label;
 class TextField;
 
 /// Shared search-field chrome used by panel searches and SearchDialog.
-/// Owns the query field, placeholder, search icon, optional filter dropdown,
-/// and clear action as siblings so overlays and pointer routing are consistent.
+/// Owns the query field (its placeholder is the field's own), search icon, optional filter
+/// dropdown, and clear action as siblings so overlays and pointer routing are consistent.
 class SearchFieldWithFilter : public UIElement
 {
 public:
@@ -47,7 +46,6 @@ private:
     void ApplyQueryVisualState(const std::string& value);
 
     TextField* m_Field = nullptr;
-    Label* m_Placeholder = nullptr;
     UIElement* m_SearchIcon = nullptr;
     Dropdown* m_Filter = nullptr;
     Button* m_ClearButton = nullptr;

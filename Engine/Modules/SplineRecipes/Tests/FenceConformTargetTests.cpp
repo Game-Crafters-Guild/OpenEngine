@@ -150,27 +150,17 @@ class FenceConformTargetTests : public ::testing::Test
         canopy.Set(bounds);
 
         WorldTransform xf{};
-        xf.matrix[0] = 2.0f * halfX;
-        xf.matrix[5] = 2.0f * halfY;
-        xf.matrix[10] = 8.0f;
-        xf.matrix[12] = centerX;
-        xf.matrix[13] = kCanopyTopY - halfY;
-        xf.matrix[14] = 0.0f;
+        xf.Basis[0].x = 2.0f * halfX;
+        xf.Basis[1].y = 2.0f * halfY;
+        xf.Basis[2].z = 8.0f;
+        xf.Position = GameEngine::Mathematics::WorldPosition{centerX, kCanopyTopY - halfY, 0.0};
         canopy.Set(xf);
         world.ProcessCommands();
 
         using GameEngine::Engine::Renderer::RenderExtractionSystem;
         RenderExtractionSystem::WorldRenderableRecord rec{};
         rec.entity = canopy.GetHandle();
-        for (int i = 0; i < 16; ++i)
-            rec.worldTransform.matrix[i] = 0.0f;
-        rec.worldTransform.matrix[0] = 1.0f;
-        rec.worldTransform.matrix[5] = 1.0f;
-        rec.worldTransform.matrix[10] = 1.0f;
-        rec.worldTransform.matrix[15] = 1.0f;
-        rec.worldTransform.matrix[12] = centerX;
-        rec.worldTransform.matrix[13] = kCanopyTopY - halfY;
-        rec.worldTransform.matrix[14] = 0.0f;
+        rec.worldTransform.Position = xf.Position;
         rec.worldTransform.Version = 1u;
         rec.hasBounds = true;
         rec.bounds.Box.center = {0.0f, 0.0f, 0.0f};

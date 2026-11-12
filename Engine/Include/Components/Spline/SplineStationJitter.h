@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Components/Spline/SplinePoolSelection.h"
+#include "Types/Fnv1a.h"
 #include "Types/Types.h"
 
 namespace GameEngine::Components
@@ -32,16 +33,13 @@ inline constexpr uint64 kSplineJitterChannelSalt = 0x5000ull;
 // station before it untouched. The station ordinal is the pre-dropout position
 // along the spline, so removing a station does not reshuffle its neighbours.
 //
-// Built on the pinned splitmix64 mix the pool pick uses, so a placement has ONE
-// determinism contract rather than two.
+// The draw uses the same SplitMix64 mix as the pool pick, so a placement has one determinism contract.
 constexpr float32 SplineJitterUnit(uint32 seed, SplineJitterChannel channel, uint32 stationIndex)
 {
-    uint64 h = SplineSelectionMix(seed);
-    h = SplineSelectionMix(h ^ (static_cast<uint64>(channel) + kSplineJitterChannelSalt));
-    h = SplineSelectionMix(h ^ static_cast<uint64>(stationIndex));
-    // Top 24 bits over 2^24: every quotient is exactly representable in float32,
-    // so the draw is bit-identical on any toolchain that has IEEE floats.
-    return static_cast<float32>(h >> 40) * (1.0f / 16777216.0f);
+    uint64 h = Hashing::SplitMix64(seed);
+    h = Hashing::SplitMix64(h ^ (static_cast<uint64>(channel) + kSplineJitterChannelSalt));
+    h = Hashing::SplitMix64(h ^ static_cast<uint64>(stationIndex));
+    return static_cast<float32>(h >> Hashing::kUnitDrawDiscardedBits) * Hashing::kUnitDrawScale;
 }
 
 // The same draw mapped to [-1, 1) — the symmetric form the jitter knobs scale,

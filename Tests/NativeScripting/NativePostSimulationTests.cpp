@@ -80,7 +80,7 @@ struct DeferredProbe : ECS::SystemBase
     void OnPostSimulation(ECS::World& world, float)
     {
         Components::Transform value;
-        value.matrix[12] = 9.f;
+        value.Position.X = 9.0;
         ECS::Entity(&world, Target).Set(value);
     }
 };
@@ -196,16 +196,16 @@ TEST_F(NativePostSimulation, LateHookKeepsOrdinaryDeferredCommandSemantics)
     const auto entity = world.Create();
     DeferredProbe::Target = entity.GetHandle();
     Components::Transform initial;
-    initial.matrix[12] = 2.f;
+    initial.Position.X = 2.0;
     world.AddComponentImmediate(DeferredProbe::Target, initial);
     ECS::UserSystemAdapter<DeferredProbe> adapter("DeferredProbe");
     ns::RegisterUserSystem(&adapter);
     ns::StartUserSystems(world);
     ns::TickUserSystems(world, .1f);
     NativePostSimulationSystem{nullptr}.Update(world, .1f);
-    EXPECT_FLOAT_EQ(world.GetComponent<Components::Transform>(DeferredProbe::Target)->matrix[12], 2.f);
+    EXPECT_DOUBLE_EQ(world.GetComponent<Components::Transform>(DeferredProbe::Target)->Position.X, 2.0);
     world.ProcessCommands();
-    EXPECT_FLOAT_EQ(world.GetComponent<Components::Transform>(DeferredProbe::Target)->matrix[12], 9.f);
+    EXPECT_DOUBLE_EQ(world.GetComponent<Components::Transform>(DeferredProbe::Target)->Position.X, 9.0);
 }
 
 TEST_F(NativePostSimulation, LegacyOnlyRegistrationDoesNotDispatchOrRequestALateDrain)

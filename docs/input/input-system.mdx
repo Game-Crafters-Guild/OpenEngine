@@ -1,11 +1,11 @@
 ---
 title: The input system
-description: How a game reads the keyboard, the mouse, and pointer lock, and how the editor and the Player deliver that input to it.
+description: How a game reads the keyboard, the mouse, gamepads, and pointer lock, and how the editor and the Player deliver that input to it.
 sidebar:
   order: 1
 ---
 
-How a game reads the keyboard, the mouse, and pointer lock, and how the editor and the Player deliver that input to it. Every API item shows its C++ and its C# form: pick a language on any code view and the whole site follows. Input actions and bindings from C# are covered in [Play mode, input and ECS](../scripting/play-mode-input-ecs.mdx).
+How a game reads the keyboard, the mouse, gamepads, and pointer lock, and how the editor and the Player deliver that input to it. Every API item shows its C++ and its C# form: pick a language on any code view and the whole site follows. Input actions and bindings from C# are covered in [Play mode, input and ECS](../scripting/play-mode-input-ecs.mdx).
 
 ## How input reaches a game
 
@@ -239,6 +239,59 @@ public class MouseLook : GameSystem
 
 ::::
 :::::
+
+## Gamepads
+
+`IsGamepadConnected`, `GetGamepadAxis` and `IsGamepadButtonDown` read up to four pads in the Xbox layout (`GamepadCodes.h`). A pad that is connected when the game starts arrives a few frames later, as a pad plugged in during play does.
+
+Each gamepad axis has the same range and sign on every platform:
+
+| Axis | Range | Sign |
+|---|---|---|
+| `LeftX`, `RightX` | -1 to 1 | +1 with the stick pushed right |
+| `LeftY`, `RightY` | -1 to 1 | +1 with the stick pushed up |
+| `LeftTrigger`, `RightTrigger` | 0 to 1 | 1 with the trigger pulled fully |
+
+To invert an axis, bind it with a negative scale. `BindGamepadAxis` takes the scale as its last argument: with a scale of -1, `RightY` gives +1 with the right stick pushed down.
+
+On Windows, gamepads read through Microsoft GameInput. Windows 10 version 1903 and newer can run it, but Windows does not always install it. Put the GameInput redistributable in your game's installer (Microsoft's package `Microsoft.GameInput`, `GameInputRedist.msi`). The engine does not install it.
+
+| Pad on Windows | How it reads |
+|---|---|
+| Xbox and Xbox-compatible pads | Through GameInput's gamepad layout. |
+| Other pads, for example a DualSense or a Switch Pro controller | GameInput gives the pad's raw controls. The engine finds the pad's USB vendor and product id in the community mapping database SDL_GameControllerDB and maps the controls to the Xbox layout. A pad that the database does not list does not read as a gamepad, and the log names it once. |
+
+On macOS, gamepads read through Apple's Game Controller framework, which is part of macOS. The engine reads every pad that the framework gives with its extended gamepad profile: Xbox, DualShock 4, DualSense, and MFi pads, and since macOS 13 many other Bluetooth and USB pads. The framework maps these pads to the Xbox layout, so the engine uses no mapping database on macOS. A pad that the framework does not support does not read as a gamepad. A pad without the extended gamepad profile does not read as a gamepad either, and the log names it once. The framework sends a pad's input only while the game is the frontmost application. On macOS, `GetGamepadRuntimeState()` changes from `Starting` to `Available` and stays there.
+
+Read `GetGamepadRuntimeState()` before you ask the player for a gamepad:
+
+| State | Meaning |
+|---|---|
+| `Starting` | The engine is still starting the gamepad runtime. No pad reads as connected yet. A headless application starts no gamepad runtime, so the state stays `Starting`. |
+| `Available` | Gamepads work. |
+| `RuntimeMissing` | The PC does not have GameInput, so gamepads are off. Show the player: "Install the GameInput runtime from Microsoft, then restart the game to use a gamepad." |
+| `Failed` | GameInput is installed but did not start, so gamepads are off. The log has the error code. |
+
+The game starts and runs in all four states. The log names the state once, at start.
+
+:::::tabs
+::::tab[C++]
+
+```cpp title="Input/InputSystem.h"
+GamepadRuntimeState GetGamepadRuntimeState() const;
+```
+
+::::
+::::tab[C#]
+
+```csharp title="GameEngine.Scripting.Bindings.dll"
+public static GamepadRuntimeState GetGamepadRuntimeState();
+```
+
+::::
+:::::
+
+On Linux, macOS, the Steam Deck and in the browser the state changes from `Starting` to `Available` in the first frames and does not change after that.
 
 ## In the editor
 

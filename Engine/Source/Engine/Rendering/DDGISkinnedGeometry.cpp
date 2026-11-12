@@ -289,8 +289,6 @@ DDGISkinnedGeometry::TickResult DDGISkinnedGeometry::Tick(
     for (uint32_t i = 0; i < instances.size(); ++i)
     {
         const Rendering::GPUInstance& inst = instances[i];
-        if ((inst.sectorPacked[0] | inst.sectorPacked[1]) != 0u)
-            continue;
         auto itInfo = meshInfo.find(inst.meshIndex);
         if (itInfo == meshInfo.end())
             continue;

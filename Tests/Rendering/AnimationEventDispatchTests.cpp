@@ -173,6 +173,15 @@ struct ClipPathRig
         return NamesOf(Engine::Renderer::GetFiredEvents(*world.GetComponent<Components::Animator>(root)));
     }
 
+    // The clip time of each AnimatorRef, in query order.
+    std::vector<float> ClipTimes()
+    {
+        std::vector<float> times;
+        world.Query<ECS::Read<Components::AnimatorRef>>().Each(
+            [&times](const Components::AnimatorRef& animatorRef) { times.push_back(animatorRef.Time); });
+        return times;
+    }
+
     // Sets every AnimatorRef's clip time, as a seek does.
     void SetTime(float seconds)
     {
@@ -206,6 +215,25 @@ struct GraphPathRig
         collectorSystem.Update(world, seconds);
         graphSystem.Update(world, seconds);
         return NamesOf(Engine::Renderer::GetFiredEvents(*world.GetComponent<Components::Animator>(entity)));
+    }
+};
+
+// The clip-path rig's systems run by the scheduler, which hands them the clock's frame seconds.
+struct ScheduledClipPathRig
+{
+    ClipPathRig& rig;
+    ECS::SystemManager systems;
+
+    explicit ScheduledClipPathRig(ClipPathRig& clipPathRig) : rig(clipPathRig)
+    {
+        systems.AddSystem<Engine::Renderer::AnimationEventCollectorSystem>();
+        systems.AddSystem<Engine::Renderer::AnimationSystem>(&rig.renderServices);
+    }
+
+    Names Frame(float seconds)
+    {
+        systems.Update(rig.world, seconds);
+        return NamesOf(Engine::Renderer::GetFiredEvents(*rig.world.GetComponent<Components::Animator>(rig.root)));
     }
 };
 
@@ -383,6 +411,23 @@ TEST_F(AnimationEventDispatch, GraphPathFiresFrame19OnceAtTheClipsRate)
 
     const std::vector<Names> fired = Play(rig, 30);
     ExpectFiredOnceIn(fired, "hit", kFramesToCrossFrame19 - 1);
+}
+
+TEST_F(AnimationEventDispatch, APausedClockHoldsTheClipTimeAndFiresNothing)
+{
+    const uint32 clip = RegisterClip(MakeClip({{19, "hit"}}));
+    ASSERT_NE(clip, 0u);
+    ClipPathRig rig(clip, 0u);
+    ScheduledClipPathRig scheduled(rig);
+    scheduled.Frame(kFrameSeconds);
+    const std::vector<float> held = rig.ClipTimes();
+
+    rig.world.GetSimulationClock().SetTimeScale(0.0);
+    EXPECT_EQ(CountOf(Play(scheduled, kFramesToCrossFrame19 + 5), "hit"), 0) << "a paused clock crosses no event";
+    EXPECT_EQ(rig.ClipTimes(), held) << "a paused clock holds the clip time";
+
+    rig.world.GetSimulationClock().SetTimeScale(1.0);
+    ExpectFiredOnceIn(Play(scheduled, kFramesToCrossFrame19), "hit", kFramesToCrossFrame19 - 2);
 }
 
 TEST_F(AnimationEventDispatch, MontageSlotFiresTheMontagesEventOnce)

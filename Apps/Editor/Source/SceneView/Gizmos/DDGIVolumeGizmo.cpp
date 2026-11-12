@@ -111,7 +111,7 @@ void DDGIVolumeGizmo::Render(GizmoRenderContext& context)
                 // × transform scale — DDGIVolume.h's doc). v1 ignores rotation
                 // only, so this is still a plain world-axis-aligned box and no
                 // oriented-box math is needed.
-                const Vector3 pos = xf.GetPosition();
+                const Vector3 pos = xf.GetPosition() - Mathematics::WorldPosition{};
 
                 Vector3 right;
                 Vector3 up;
@@ -133,7 +133,7 @@ void DDGIVolumeGizmo::Render(GizmoRenderContext& context)
                 // Same derivation the extraction system feeds the GPU, so the
                 // drawn box is exactly the sampled box.
                 Vector3 halfExtents = Engine::Renderer::DDGIProbeFeature::ComputeVolumeHalfExtents(
-                    Mathematics::Matrix4x4::FromColumnMajor(xf.matrix));
+                    xf.ToMatrix4x4(xf.GetPosition() - Mathematics::WorldPosition{}));
 
                 // A following volume is not where its transform says it is, so
                 // draw it where DDGIVolumeSystem::ApplyCameraFit puts it. The

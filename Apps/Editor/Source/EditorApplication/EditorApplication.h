@@ -29,6 +29,7 @@
 #include "Editor/Registries/StatusBarItemRegistry.h"
 #include "EditorVideoPlayerController.h"
 #include "Startup/EditorSessionDescriptor.h"
+#include "Startup/StartupWindowShowGate.h"
 #include "JobSystem/TaskHandle.h"
 #include "Mathematics/RectInt.h"
 
@@ -89,6 +90,7 @@ struct EditorStyleSheetContribution; // fwd (EditorSDK panel registry)
 struct EditorOverlayDescriptor;      // fwd (EditorSDK panel registry)
 class HdrOutputController;
 class SceneEditorController;
+enum class AnimationAssetWindow : uint8_t;
 class WindowDockingController;
 class ColorPickerPresenter;
 class SceneThumbnailCapture;
@@ -270,8 +272,6 @@ class EditorApplication : public Application
         int lastPosY = 0;
         bool hasLastPos = false;
         bool pendingShow = false; // show window after startup render warm-up
-        uint32_t startupPresentedFrames = 0;
-        uint32_t startupSceneReadyPresentedFrames = 0;
         Editor::WindowSwapchainResize swapchainResize;
         bool pendingSwapchainResize = false;
         int pendingWidth = 0;
@@ -426,6 +426,7 @@ class EditorApplication : public Application
     std::filesystem::path m_DeferredStartupScene;
     std::filesystem::path m_DeferredStartupSceneWorkspace;
     bool m_PendingWindowShow = true;
+    Editor::Startup::StartupWindowShowGate m_StartupShowGate;
     // Last project the per-project services (native C++ hot-reload, LOD import policy)
     // were wired to; Update() re-wires when the engine workspace root changes
     // (project open/switch).
@@ -670,10 +671,8 @@ class EditorApplication : public Application
         double terminalPassesMs = 0.0; // BuildWindowTerminalPasses + debug callbacks
         double rgCompileMs     = 0.0;
         double rgExecuteMs     = 0.0;
-        double variantCompileMs = 0.0;
-        double prewarmMs       = 0.0;
         double presentMs       = 0.0;
-        bool sceneViewportReady = false;
+        bool sceneViewportReady = false; // a Scene View pane shows an image this frame
     };
     // Shared per-window RenderGraph render sequence: world views → thumbnails → UI
     // composite → terminal encode → execute → present.
@@ -696,6 +695,8 @@ class EditorApplication : public Application
     void AttachDeferredNativeToolWindows();
     void OpenDeferredInternalFile();
     bool OpenGraphAsset(const std::filesystem::path& path);
+    bool OpenAnimationAsset(const std::filesystem::path& path, Editor::AnimationAssetWindow window);
+    bool ShowAssetInInspector(const std::filesystem::path& path);
     void BindGraphPanel(GraphPanel& panel);
     void ActivateGraphDock(EditorWindowContext* ctx, GraphPanel& panel);
     void ShowOrFocusAssetViewInSceneTabs(EditorWindowContext* ctx);

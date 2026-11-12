@@ -11,6 +11,9 @@ namespace GameEngine::Engine::Renderer
 class GamepadCameraControllerSystem : public ECS::ISystem
 {
 public:
+    // The fly camera moves while the game is paused.
+    static constexpr ECS::SystemTime Time = ECS::SystemTime::Real;
+
     explicit GamepadCameraControllerSystem(Input::InputSystem* inputSystem)
         : m_InputSystem(inputSystem)
     {

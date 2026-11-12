@@ -26,9 +26,11 @@
 #include "Rendering/Core/RenderGraph/RGFrame.h"            // RGFrame, RGFrameStamp, RGBuffer
 #include "Rendering/ShaderCache/ShaderPackageIO.h"         // ShaderPackage (cache value)
 #include "Engine/Rendering/Pipeline/PipelineFrameResources.h" // Pipeline::ViewTargetsRG
+#include "Types/FlatMap.h"                                 // FlatMap member
 #include "Types/Types.h"                                   // String
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -86,7 +88,7 @@ struct GpuDrivenFrameRG
     // (pointer, FrameIndex) PAIR carried by the shared RGFrameStamp.
     Rendering::RenderGraph::RGFrameStamp For;
     Rendering::RenderGraph::RGBuffer SceneInstances{};
-    // Coalesced 32 B/instance scatter-hot mirror (Scatter.World fetch lever).
+    // Coalesced 40 B/instance scatter-hot mirror (Scatter.World fetch lever).
     // Invalid when GE_SCATTER_COMPACT=0; the scatter then binds SceneInstances.
     Rendering::RenderGraph::RGBuffer SceneScatterHot{};
     Rendering::RenderGraph::RGBuffer SceneMeshes{};
@@ -372,10 +374,9 @@ class FrameOrchestrator
     // mount and no stand-in: a pipeline it cannot use draws nothing.
     static constexpr std::string_view kEngineStandInPath = "RenderPipelines/ForwardPlus.rendergraph";
 
-    // Warm the package cache off the frame thread. `kind` is the form the
-    // consuming device ingests — the cached package is handed to nodes as-is,
-    // so it must be read in the form they will feed to pipeline creation.
-    void PreLoadShaderPackage(const std::string& name, Rendering::ShaderSourceKind kind);
+    // Reads the shader packages that the passes of `pipeline` name into the preload store; thread-safe.
+    // `kind` is the form the device ingests. After the store closes (see m_ShaderPkgCache), it stores nothing.
+    void PreLoadRenderPipelineShaderPackages(const RenderPipelineAsset& pipeline, Rendering::ShaderSourceKind kind);
     bool TryConsumePreLoadedShaderPackage(const std::string& name, Rendering::ShaderPackage& out);
 
     // The declare sequence of the spine currently being declared.
@@ -395,6 +396,8 @@ class FrameOrchestrator
     void OnDeviceRebuilt();
 
   private:
+    friend struct FrameOrchestratorTestAccess;
+
     // Who handles a refresh that cannot apply the requested pipeline.
     enum class PipelineRefreshMode
     {
@@ -563,10 +566,15 @@ class FrameOrchestrator
     // (the asset-driven refresh is suspended). Cleared by a path request.
     bool m_ActiveBlueprintPinned = false;
 
-    // Background-preloaded shader packages (populated during Init / editor
-    // background load, consumed by pipeline nodes at Declare).
+    // Shader packages of the start-up pipeline, read by its compile and taken by its nodes at Declare.
+    // The store closes at the first applied declare or a refused request; then every read uses the disk.
+    // Copies the reflection of a stored package and leaves the entry for TryConsumePreLoadedShaderPackage.
+    bool CopyPreLoadedShaderMeta(const std::string& name, Rendering::ShaderMeta& out);
+    void ClosePreLoadedShaderPackages();
     std::mutex m_ShaderPkgCacheMutex;
-    std::unordered_map<std::string, Rendering::ShaderPackage> m_ShaderPkgCache;
+    FlatMap<std::string, Rendering::ShaderPackage> m_ShaderPkgCache;
+    // Written under the mutex; the frame thread reads it without the lock to skip the close.
+    std::atomic<bool> m_ShaderPkgCacheClosed = false;
 
     // Active-.rendergraph AssetReloaded subscriber. ReloadedOnly: only
     // AssetReloaded dispatches on the main thread, and blueprint compile is

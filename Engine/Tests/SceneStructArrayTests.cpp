@@ -228,10 +228,10 @@ TEST_F(SceneStructArray, FilledElementsRoundTripSlotExactAndDefaultElementsWrite
     for (int pass = 0; pass < 2; ++pass)
     {
         ECS::World loaded;
-        Scene::SceneDegradation degradation;
         Scene::SceneReadOptions options;
-        options.outDegradation = &degradation;
-        ASSERT_TRUE(Scene::ReadSceneInto(loaded, path, options)) << Scene::GetLastSceneIOError().message;
+        const Scene::SceneInstantiateResult readResult = Scene::ReadSceneInto(loaded, path, options);
+        const Scene::SceneDegradation& degradation = readResult.Degradation;
+        ASSERT_TRUE(readResult) << readResult.Error->message;
         EXPECT_TRUE(degradation.skips.empty());
         const SceneStructArrayProbe actual = OnlyProbe(loaded);
         EXPECT_EQ(actual.Seed, authored.Seed);
@@ -272,7 +272,8 @@ TEST_F(SceneStructArray, OutOfRangeIndexAndUnknownSubFieldAreSkippedWithoutTouch
     WriteText(path, text);
 
     ECS::World loaded;
-    ASSERT_TRUE(Scene::ReadSceneInto(loaded, path)) << Scene::GetLastSceneIOError().message;
+    const auto readResult = Scene::ReadSceneInto(loaded, path);
+    ASSERT_TRUE(readResult) << readResult.Error->message;
     const SceneStructArrayProbe actual = OnlyProbe(loaded);
     EXPECT_EQ(actual.Entries[0], authored.Entries[0]);
     EXPECT_EQ(actual.Entries[1].Point, 0u) << "the out-of-range line landed on a real element";
@@ -294,10 +295,10 @@ TEST_F(SceneStructArray, MalformedSubFieldValueIsReportedAsADegradedLoad)
     WriteText(path, text);
 
     ECS::World loaded;
-    Scene::SceneDegradation degradation;
     Scene::SceneReadOptions options;
-    options.outDegradation = &degradation;
-    ASSERT_TRUE(Scene::ReadSceneInto(loaded, path, options)) << Scene::GetLastSceneIOError().message;
+    const Scene::SceneInstantiateResult readResult = Scene::ReadSceneInto(loaded, path, options);
+    const Scene::SceneDegradation& degradation = readResult.Degradation;
+    ASSERT_TRUE(readResult) << readResult.Error->message;
     EXPECT_TRUE(degradation.IsDegraded()) << "a malformed element value loaded silently";
 }
 
@@ -319,7 +320,8 @@ TEST_F(SceneStructArray, ElementsAreComparedWithTheOwnersDefaultNotTheirStructs)
         << "an element equal to the owner's default wrote a line:\n" << text;
 
     ECS::World loaded;
-    ASSERT_TRUE(Scene::ReadSceneInto(loaded, path)) << Scene::GetLastSceneIOError().message;
+    const auto readResult = Scene::ReadSceneInto(loaded, path);
+    ASSERT_TRUE(readResult) << readResult.Error->message;
     int count = 0;
     loaded.Query<ECS::Read<SceneStructArrayOwnerDefaultProbe>>().Each(
         [&](const SceneStructArrayOwnerDefaultProbe& value)
@@ -355,10 +357,10 @@ TEST_F(SceneStructArray, ATableInsideATableRoundTrips)
     EXPECT_EQ(text.find("Branches0."), std::string::npos) << text;
 
     ECS::World loaded;
-    Scene::SceneDegradation degradation;
     Scene::SceneReadOptions options;
-    options.outDegradation = &degradation;
-    ASSERT_TRUE(Scene::ReadSceneInto(loaded, path, options)) << Scene::GetLastSceneIOError().message;
+    const Scene::SceneInstantiateResult readResult = Scene::ReadSceneInto(loaded, path, options);
+    const Scene::SceneDegradation& degradation = readResult.Degradation;
+    ASSERT_TRUE(readResult) << readResult.Error->message;
     EXPECT_TRUE(degradation.skips.empty());
     int count = 0;
     loaded.Query<ECS::Read<SceneStructArrayTree>>().Each(

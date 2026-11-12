@@ -6,10 +6,8 @@ namespace GameEngine::PageStreaming
 {
 
 // One page-table entry: the physical-cache slot holding a page in the low 24 bits and the page's
-// level in the top byte, or kNoPage. The planet sculpt's page table packs its entries the same way
-// (CBTTerrain/CBTLayout.h, kSculptPageIdMask, kSculptPageLevelShift, kSculptNoPage); only the
-// bit layout and the sentinel are common: in the sculpt the level is a refinement of one page,
-// here it is the pyramid level the slot holds. Test kNoPage first: its top byte is not a level.
+// level in the top byte, or kNoPage. The level is the pyramid level the slot holds. Test kNoPage
+// first: its top byte is not a level.
 
 /// The entry of a page with no resident slot.
 inline constexpr uint32 kNoPage = 0xFFFFFFFFu;

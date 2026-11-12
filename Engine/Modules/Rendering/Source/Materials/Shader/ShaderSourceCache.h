@@ -11,12 +11,15 @@
 
 namespace GameEngine { namespace Rendering {
 
+struct TextureSlotResolution;
+
 // Every shader source file the compile path reads, held in memory: read once,
 // hashed once, scanned for its #include directives once, and served from memory
 // until an edit is announced. Every reader goes through it: the include-closure
 // walk that builds the compile key, the includer that feeds shaderc, the
-// composer's surface and adapter reads, a file stage's top-level source and the
-// cache-hit revalidation. The key and the compile read the same held bytes, and
+// composer's surface and adapter reads, a file stage's top-level source, the
+// cache-hit revalidation and the surface texture slots that material registration
+// looks up (TextureSlots). The key and the compile read the same held bytes, and
 // a compile during which an edit was announced may have read newer bytes than its
 // key folded: CompileProgramToCache compares Generation() from before the key
 // with the one after the compile and returns such a program without storing it,
@@ -62,6 +65,7 @@ public:
     // shaders. A handle keeps its snapshot alive after an announcement has
     // emptied the cache, so a walk in flight finishes on the bytes it started on.
     using EntryPtr = std::shared_ptr<const Entry>;
+    using TextureSlotsPtr = std::shared_ptr<const TextureSlotResolution>;
 
     // Where one #include operand resolved.
     struct Resolution
@@ -90,6 +94,17 @@ public:
     // Copies the held bytes of `path` into `out`, keyed by NormalizedKey(path).
     // False when the file cannot be read.
     bool ReadText(const std::filesystem::path& path, std::string& out);
+
+    // The texture slots the surface file declares (ShaderComposer::ResolveTextureSlots
+    // over the held bytes), parsed once per held file and held on the same terms as
+    // the bytes. Null when the file cannot be read.
+    TextureSlotsPtr TextureSlots(const std::filesystem::path& path, const std::string& normalizedKey);
+
+    // True when the texture slots of `normalizedKey` are held, so TextureSlots touches no file.
+    bool HoldsTextureSlots(const std::string& normalizedKey);
+
+    // How many files this thread has read from disk through the cache.
+    static uint64_t FileReadsOnThisThreadForTest();
 
     // The first `requestingDir / operand` (skipped when the directory is empty),
     // then `root / operand` for each of `roots` in order, that exists: the
@@ -121,6 +136,8 @@ private:
     // rootsSignature -> (requestingDir '\n' operand) -> resolution, null for
     // "resolves nowhere". The prewarm looks one up per directive.
     FastHashMap<std::string, FastHashMap<std::string, ResolutionPtr>> m_Resolutions;
+    // normalizedKey -> the surface's texture slots. Material registration looks one up per material.
+    FastHashMap<std::string, TextureSlotsPtr> m_TextureSlots;
 };
 
 }} // namespace GameEngine::Rendering

@@ -6,7 +6,8 @@
 // connection's later requests behind it, and is dropped when the connection closes; the
 // gates hear each response, a deferred one included, and a reply serialized on a job as the
 // client's response without its PNG payload; an assistant's binding is admitted only by a
-// gate that claims it.
+// gate that claims it; a network-thread handler runs and is answered while the main thread
+// is inside a long frame, without the gates (issue #5836).
 
 #include "DebugServer/AssistantSessionHandlers.h"
 #include "DebugServer/DebugServerReply.h"
@@ -36,6 +37,7 @@
 #endif
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <functional>
@@ -507,4 +509,55 @@ TEST_F(DebugServerRequestGatesTest, TheGatesHearAReplySerializedOnAJobWithoutIts
     nlohmann::json expected = reply;
     expected["result"].erase("pngBase64");
     EXPECT_EQ(*heard, expected);
+}
+
+// The editor's quit: a request sent while the main thread is inside a long frame (no
+// FlushPendingRequests) runs and is answered within the bound, so the loop can stop at that
+// frame's end. The gates are main-thread objects and hear nothing of it.
+TEST_F(DebugServerRequestGatesTest, ANetworkThreadHandlerAnswersDuringALongFrameWithoutTheGates)
+{
+    constexpr auto kLongFrame = std::chrono::seconds(2);
+    constexpr auto kBound = std::chrono::milliseconds(500);
+    int gateCalls = 0;
+    Editor::DebugRequestGate gate;
+    gate.GateId = "counts";
+    gate.Before = [&gateCalls](const Editor::DebugRequestGateContext&) {
+        ++gateCalls;
+        return Editor::DebugRequestVerdict{};
+    };
+    m_Gates.Register(std::move(gate));
+    std::atomic<bool> quitRequested{false};
+    m_Server.RegisterHandler(
+        "shutdown",
+        [&quitRequested](const EditorDebugServer::RequestContext&) {
+            quitRequested = true;
+            return nlohmann::json{{"ok", true}};
+        },
+        EditorDebugServer::HandlerThread::Network);
+    StartAndConnect();
+
+    const auto sent = std::chrono::steady_clock::now();
+    Send("1", "shutdown");
+    std::string line;
+    bool answered = false;
+    while (!answered && std::chrono::steady_clock::now() - sent < kLongFrame)
+    {
+        char c = 0;
+        while (!answered && recv(m_Client, &c, 1, 0) == 1)
+        {
+            if (c == '\n')
+                answered = true;
+            else
+                line.push_back(c);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    const auto delay = std::chrono::steady_clock::now() - sent;
+
+    ASSERT_TRUE(answered) << "no answer within the " << kLongFrame.count() << " s frame";
+    EXPECT_TRUE(quitRequested);
+    EXPECT_LT(delay, kBound) << std::chrono::duration_cast<std::chrono::milliseconds>(delay).count() << " ms";
+    const nlohmann::json reply = nlohmann::json::parse(line, nullptr, false);
+    EXPECT_EQ(reply.value("ok", false), true) << line;
+    EXPECT_EQ(gateCalls, 0);
 }

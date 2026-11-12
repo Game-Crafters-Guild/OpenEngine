@@ -51,7 +51,8 @@ TEST(OversizedChunkAllocation, NormalLayoutsKeepTheStandardAllocation)
         EXPECT_LE(table.GetLayout().TotalBytesUsed, kArchetypeChunkBytes);
         EXPECT_EQ(table.GetLayout().AllocationBytes, kArchetypeChunkBytes);
         EXPECT_EQ(table.GetLayout().AllocationAlignment, kCacheLineSize);
-        table.Reserve(table.GetLayout().Capacity + 1);
+        for (uint32_t i = 0; i <= table.GetLayout().Capacity; ++i)
+            table.AddEntity(EntityHandle(i + 1, 1));
         EXPECT_EQ(table.GetChunkCount(), 2u);
         ExpectAllocation(table);
     }
@@ -131,7 +132,7 @@ TEST(OversizedChunkAllocation, RejectsUnrepresentableLayoutsBeforeAllocation)
     }
 }
 
-TEST(OversizedChunkAllocation, CompactionAndTableMovesPreserveOwnershipAndVersions)
+TEST(OversizedChunkAllocation, RemovalAndTableMovesPreserveOwnershipAndVersions)
 {
     const std::array metas{ComponentMeta{1, sizeof(LargePayload), alignof(LargePayload)}};
     ArchetypeTable table(metas);
@@ -141,23 +142,18 @@ TEST(OversizedChunkAllocation, CompactionAndTableMovesPreserveOwnershipAndVersio
         std::memset(table.GetChunks()[i].GetColumnRaw(0), int(i + 1), sizeof(LargePayload));
         table.StampColumnVersion(i, 0, 100 + i);
     }
-    table.RemoveEntity({0, 0});
-    table.RemoveEntity({2, 0});
-    uint32_t relocations = 0;
-    EXPECT_EQ(table.CompactChunks([&](uint32_t from, uint32_t to, const ArchetypeChunk& chunk) {
-        ++relocations;
-        EXPECT_EQ(from, 3u);
-        EXPECT_EQ(to, 0u);
-        EXPECT_EQ(chunk.GetEntityHandles()[0], EntityHandle(4, 1));
-    }), 2u);
-    EXPECT_EQ(relocations, 1u);
+    // The last row moves into the hole; each emptied last chunk leaves the table as a spare.
+    EXPECT_EQ(table.RemoveEntity({0, 0}), EntityHandle(4, 1));
+    EXPECT_EQ(table.RemoveEntity({2, 0}), EntityHandle::Invalid());
+    EXPECT_EQ(table.GetChunkCount(), 2u);
     EXPECT_EQ(table.GetEntityCount(), 2u);
     ArchetypeTable moved(std::move(table));
     ArchetypeTable assigned(metas);
     assigned.AddEntity(EntityHandle(99, 1)); // Move assignment must free its prior allocation.
     assigned = std::move(moved);
     ExpectAllocation(assigned);
-    EXPECT_EQ(assigned.GetColumnVersion(0, 0), 103u);
+    // Versions stay with the chunk; the World stamps a chunk that receives a moved row.
+    EXPECT_EQ(assigned.GetColumnVersion(0, 0), 100u);
     EXPECT_EQ(assigned.GetColumnVersion(1, 0), 101u);
     for (std::size_t i = 0; i < assigned.GetChunkCount(); ++i)
     {
@@ -167,10 +163,12 @@ TEST(OversizedChunkAllocation, CompactionAndTableMovesPreserveOwnershipAndVersio
         EXPECT_TRUE(std::all_of(bytes.begin(), bytes.end(), [=](std::byte value) {
             return value == std::byte(i == 0 ? 4 : 2);
         }));
-        assigned.RemoveEntity({static_cast<uint32_t>(i), 0});
     }
-    EXPECT_EQ(assigned.CompactChunks([](auto...) {}), 2u);
+    EXPECT_EQ(assigned.FreeSpareChunks(), 2u);
+    while (assigned.GetEntityCount() > 0)
+        assigned.RemoveEntity({0, 0});
     EXPECT_EQ(assigned.GetChunkCount(), 0u);
+    EXPECT_EQ(assigned.FreeSpareChunks(), 2u);
 }
 
 #ifndef NDEBUG
@@ -178,9 +176,10 @@ TEST(OversizedChunkAllocation, DebugFillCoversTheEntireAllocation)
 {
     const std::array metas{ComponentMeta{1, sizeof(LargePayload), alignof(LargePayload)}};
     ArchetypeTable table(metas);
-    table.Reserve(1);
+    table.AddEntity(EntityHandle(1, 1));
+    // Every byte after row 0's entity handle (at offset 0) keeps the fill.
     const auto* memory = table.GetChunks()[0].GetMemory();
-    EXPECT_TRUE(std::all_of(memory, memory + table.GetLayout().AllocationBytes,
+    EXPECT_TRUE(std::all_of(memory + sizeof(EntityHandle), memory + table.GetLayout().AllocationBytes,
                            [](std::byte value) { return value == std::byte{0}; }));
 }
 #endif

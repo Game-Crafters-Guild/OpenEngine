@@ -36,6 +36,8 @@
 #include <thread>
 #include <vector>
 
+#include "JoinOnScopeExit.h"
+#include "ScopedLogLevel.h"
 #include "TestPlatform.h"
 
 namespace GameEngine::Tests {
@@ -138,6 +140,13 @@ class StallWatchdog
     std::thread m_Thread;
 };
 
+// Ends the waiter threads of a stress test before JoinOnScopeExit joins them. Each waiter reads
+// `stop` while it waits for a round, so the store alone ends it.
+void StopWaiters(std::atomic<bool>& stop)
+{
+    stop.store(true, std::memory_order_relaxed);
+}
+
 } // namespace
 
 // ============================================================================
@@ -155,7 +164,7 @@ TEST(CompletionWaiterTest, ExternalWaitNeverStrands)
     LogTimerPeriod();
     constexpr uint64_t kIterations = 150'000;
 
-    Logger::Log::SetLogLevel(Logger::LogLevel::Error);
+    const ScopedLogLevel quietLog(Logger::LogLevel::Error);
     JobSystem::WorkStealingThreadPool pool(4);
 
     std::atomic<uint64_t> progress{0};
@@ -183,7 +192,6 @@ TEST(CompletionWaiterTest, ExternalWaitNeverStrands)
         progress.fetch_add(1, std::memory_order_relaxed);
     }
 
-    Logger::Log::SetLogLevel(Logger::LogLevel::Debug);
     pool.Shutdown();
     SUCCEED() << kIterations << " Wait-vs-complete races without a strand";
 }
@@ -197,7 +205,7 @@ TEST(CompletionWaiterTest, MultiWaiterAllWake)
     constexpr uint64_t kRounds = 20'000;
     constexpr int kHelperWaiters = 3;
 
-    Logger::Log::SetLogLevel(Logger::LogLevel::Error);
+    const ScopedLogLevel quietLog(Logger::LogLevel::Error);
     JobSystem::WorkStealingThreadPool pool(4);
 
     std::atomic<uint64_t> progress{0};
@@ -235,6 +243,7 @@ TEST(CompletionWaiterTest, MultiWaiterAllWake)
     {
         helpers.emplace_back(helper);
     }
+    JoinOnScopeExit stopAndJoin(helpers, [&stop] { StopWaiters(stop); });
 
     uint64_t rng = 0xC0FFEE123456789ull;
     auto nextRand = [&rng]() {
@@ -267,7 +276,6 @@ TEST(CompletionWaiterTest, MultiWaiterAllWake)
         t.join();
     }
 
-    Logger::Log::SetLogLevel(Logger::LogLevel::Debug);
     pool.Shutdown();
     SUCCEED() << kRounds << " rounds x " << (kHelperWaiters + 1) << " concurrent waiters";
 }
@@ -282,7 +290,7 @@ TEST(CompletionWaiterTest, CancelVsCompleteBothWakeWaiter)
 {
     constexpr uint64_t kRounds = 60'000;
 
-    Logger::Log::SetLogLevel(Logger::LogLevel::Error);
+    const ScopedLogLevel quietLog(Logger::LogLevel::Error);
     JobSystem::WorkStealingThreadPool pool(1);
 
     std::atomic<uint64_t> progress{0};
@@ -311,6 +319,7 @@ TEST(CompletionWaiterTest, CancelVsCompleteBothWakeWaiter)
             waiterDone.store(1, std::memory_order_release);
         }
     });
+    JoinOnScopeExit stopAndJoin({&waiter, 1}, [&stop] { StopWaiters(stop); });
 
     uint64_t rng = 0xDEADBEEFCAFEF00Dull;
     auto nextRand = [&rng]() {
@@ -373,7 +382,6 @@ TEST(CompletionWaiterTest, CancelVsCompleteBothWakeWaiter)
     EXPECT_GT(cancelWins, kRounds / 100);
     EXPECT_GT(workerWins, kRounds / 100);
 
-    Logger::Log::SetLogLevel(Logger::LogLevel::Debug);
     pool.Shutdown();
 }
 
@@ -396,7 +404,7 @@ TEST(CompletionWaiterTest, WaitRegistrationAtCompletionWindow)
 {
     constexpr uint64_t kIterations = 120'000;
 
-    Logger::Log::SetLogLevel(Logger::LogLevel::Error);
+    const ScopedLogLevel quietLog(Logger::LogLevel::Error);
     JobSystem::WorkStealingThreadPool pool(2);
 
     std::atomic<uint64_t> progress{0};
@@ -441,6 +449,7 @@ TEST(CompletionWaiterTest, WaitRegistrationAtCompletionWindow)
             helperDone.store(1, std::memory_order_release);
         }
     });
+    JoinOnScopeExit stopAndJoin({&helper, 1}, [&stop] { StopWaiters(stop); });
 
     uint64_t rng = 0xB5297A4D3F84D5B5ull;
     auto nextRand = [&rng]() {
@@ -489,7 +498,6 @@ TEST(CompletionWaiterTest, WaitRegistrationAtCompletionWindow)
     EXPECT_EQ(payloadFailures.load(std::memory_order_relaxed), 0u)
         << "a Wait exit observed terminal status without the outcome payload";
 
-    Logger::Log::SetLogLevel(Logger::LogLevel::Debug);
     pool.Shutdown();
     SUCCEED() << kIterations << " completion-window-gated Wait races without a strand";
 }
@@ -506,7 +514,7 @@ TEST(JobSystemBench, BENCHMARK_SubmitCompleteLatency)
     constexpr size_t kWarmup = 20'000;
     constexpr size_t kIterations = 100'000;
 
-    Logger::Log::SetLogLevel(Logger::LogLevel::Error);
+    const ScopedLogLevel quietLog(Logger::LogLevel::Error);
     LogTimerPeriod();
 
     JobSystem::WorkStealingThreadPool pool(4);
@@ -546,7 +554,6 @@ TEST(JobSystemBench, BENCHMARK_SubmitCompleteLatency)
                 Percentile(samples, 0.999), samples.back(), wallMs,
                 AmbientBusyPercent(cpu0, cpu1));
 
-    Logger::Log::SetLogLevel(Logger::LogLevel::Debug);
     pool.Shutdown();
 }
 
@@ -561,10 +568,11 @@ TEST(JobSystemBench, BENCHMARK_HandleCompletionThroughput)
     constexpr size_t kTasksPerProducer = kTasks / kProducers;
     constexpr size_t kInFlightWindow = 4096;
 
-    Logger::Log::SetLogLevel(Logger::LogLevel::Error);
+    const ScopedLogLevel quietLog(Logger::LogLevel::Error);
 
-    JobSystem::WorkStealingThreadPool pool(1);
+    // Declared before the pool: a queued job can still use it when an ASSERT returns early.
     std::atomic<size_t> executed{0};
+    JobSystem::WorkStealingThreadPool pool(1);
 
     for (size_t i = 0; i < kWarmup; ++i)
     {
@@ -629,7 +637,6 @@ TEST(JobSystemBench, BENCHMARK_HandleCompletionThroughput)
                 seconds * 1e9 / static_cast<double>(kTasks), seconds * 1000.0,
                 AmbientBusyPercent(cpu0, cpu1));
 
-    Logger::Log::SetLogLevel(Logger::LogLevel::Debug);
     pool.Shutdown();
 }
 

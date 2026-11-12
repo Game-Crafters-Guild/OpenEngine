@@ -10,6 +10,7 @@
 
 #include <gtest/gtest.h>
 
+#include "AssetCore/SharedFileRead.h"
 #include "Assets/AssetManager.h"
 #include "Assets/AssetRegistry.h"
 #include "Assets/AssetTasks.h"
@@ -22,6 +23,7 @@
 #include "Mathematics/Vector3.h"
 #include "TestTempDir.h"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -50,10 +52,11 @@ void WriteBytes(const std::filesystem::path& path, const std::vector<uint8>& byt
     out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
 }
 
-std::vector<uint8> ReadBytes(const std::filesystem::path& path)
+ByteBuffer ReadBytes(const std::filesystem::path& path)
 {
-    std::ifstream in(path, std::ios::binary);
-    return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+    ByteBuffer bytes;
+    EXPECT_TRUE(ReadFileBytesShared(path, bytes)) << path;
+    return bytes;
 }
 
 // An uncompressed 32-bit top-left TGA. The cook resolves to Uncompressed with no GPU, and still
@@ -261,7 +264,8 @@ void ExpectSameModel(const ModelAsset& actual, const ModelAsset& expected)
     ASSERT_EQ(actual.GetEmbeddedImages().size(), expected.GetEmbeddedImages().size());
     for (size_t imageIndex = 0; imageIndex < actual.GetEmbeddedImages().size(); ++imageIndex)
     {
-        EXPECT_EQ(actual.GetEmbeddedImages()[imageIndex].Data, expected.GetEmbeddedImages()[imageIndex].Data);
+        EXPECT_TRUE(std::ranges::equal(actual.GetEmbeddedImages()[imageIndex].Data,
+                                       expected.GetEmbeddedImages()[imageIndex].Data));
         EXPECT_EQ(actual.GetEmbeddedImages()[imageIndex].MimeType, expected.GetEmbeddedImages()[imageIndex].MimeType);
     }
 }
@@ -429,7 +433,8 @@ TEST_F(AssetDecodeInputReadTest, GltfDecodeTakesExternalBufferAndImageReadBefore
     ASSERT_EQ(loaded->GetMeshes().size(), 1u);
     EXPECT_EQ(loaded->GetMeshes()[0].Vertices.size(), 3u);
     ASSERT_EQ(loaded->GetEmbeddedImages().size(), 1u);
-    EXPECT_EQ(loaded->GetEmbeddedImages()[0].Data, image);
+    const ByteBuffer& loadedImage = loaded->GetEmbeddedImages()[0].Data;
+    EXPECT_EQ(std::vector<uint8>(loadedImage.begin(), loadedImage.end()), image);
     ExpectSameModel(*loaded, *direct);
 }
 

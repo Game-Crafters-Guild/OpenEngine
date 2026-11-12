@@ -11,16 +11,20 @@
 #include "Engine/Rendering/Pipeline/RenderPipeline.h"
 #include "Engine/Rendering/Pipeline/RenderPipelineNodes.h"
 #include "Ocean/Systems/RegisterOceanSystems.h"
+#include "Platform/Process.h"
+#include "Rendering/Common/Utils.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Materials/Shader/ShaderMeta.h"
 #include "Rendering/ShaderCache/ShaderPackageIO.h"
 #include "TerrainECS/Systems/RegisterTerrainSystems.h"
 #include "TerrainGrass/RegisterTerrainGrass.h"
 #include "EngineLogCapture.h"
+#include "FrameOrchestratorTestAccess.h"
 
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -1489,5 +1493,281 @@ TEST(RenderPipelineCompiler, AnOutputFromAWaitingPassLeavesNothingToDraw)
     })json");
     EXPECT_FALSE(bp.HasErrors()) << IssuesToString(bp);
     EXPECT_NE(IssueFor(bp, PipelineIssueCode::PendingScriptOutput, "Fog"), nullptr) << IssuesToString(bp);
+}
+
+// ── Shader package reflection: one read per compile, and the preload store ──
+
+namespace
+{
+using GameEngine::Engine::Renderer::FrameOrchestrator;
+using GameEngine::Engine::Renderer::FrameOrchestratorTestAccess;
+
+constexpr const char* kReflectionPackage = "ge_reflection_store_test.shaderpkg";
+int s_ReflectionPackageLookups = 0;
+
+// The temp directory of this process's staged packages: two suite processes never share a file.
+std::filesystem::path ReflectionPackageDirectory()
+{
+    return std::filesystem::temp_directory_path() /
+           ("ge_reflection_store_" + std::to_string(GameEngine::Platform::GetCurrentProcessId()));
+}
+
+// Resolves relative shader paths into ReflectionPackageDirectory and counts the lookups of
+// kReflectionPackage: every disk read of a relative package resolves its path once.
+std::filesystem::path CountingShaderPathResolver(const std::filesystem::path& relativePath)
+{
+    if (relativePath.filename() == kReflectionPackage)
+        ++s_ReflectionPackageLookups;
+    return ReflectionPackageDirectory() / relativePath.filename();
+}
+
+// Stages kReflectionPackage (push-constant member "goodKey", set-0 binding "uGood") and installs the
+// counting resolver; the previous resolver comes back on every exit path.
+class ShaderPackageReflectionTest : public ::testing::Test
+{
+  protected:
+    void SetUp() override
+    {
+        using namespace GameEngine::Rendering;
+        m_PreviousResolver = Utils::GetShaderPathResolver();
+        Utils::SetShaderPathResolver(&CountingShaderPathResolver);
+
+        Member goodMember;
+        goodMember.Name = "goodKey";
+        goodMember.Size = 4;
+        PushConstantRangeMeta pushConstants;
+        pushConstants.Name = "pc";
+        pushConstants.Block.Members.push_back(goodMember);
+        pushConstants.Block.Size = 4;
+        pushConstants.Size = 4;
+        DescriptorBindingMeta binding;
+        binding.Binding = 0;
+        binding.Name = "uGood";
+        binding.Type = ShaderMetaBindingType::kCombinedImageSampler;
+        DescriptorSetMeta set0;
+        set0.Set = 0;
+        set0.Bindings.push_back(binding);
+        m_Meta.Version = 1;
+        m_Meta.PushConstants.push_back(pushConstants);
+        m_Meta.Sets.push_back(set0);
+
+        const std::unordered_map<std::string, std::vector<uint8_t>> stages = {{"vs", {1, 2, 3, 4}},
+                                                                             {"fs", {5, 6, 7, 8}}};
+        std::string error;
+        std::error_code directoryError;
+        std::filesystem::create_directories(ReflectionPackageDirectory(), directoryError);
+        ASSERT_FALSE(directoryError) << directoryError.message();
+        ASSERT_TRUE(SaveShaderPkg(ReflectionPackageDirectory() / kReflectionPackage, m_Meta, stages, std::nullopt,
+                                  &error))
+            << error;
+        s_ReflectionPackageLookups = 0;
+    }
+
+    void TearDown() override
+    {
+        Rendering::Utils::SetShaderPathResolver(m_PreviousResolver);
+        std::error_code ec;
+        std::filesystem::remove_all(ReflectionPackageDirectory(), ec);
+    }
+
+    // Loads into `asset` a pipeline whose `passCount` fullscreen passes all name kReflectionPackage,
+    // each with one push constant and one input the package does not declare.
+    static void LoadPipelineNamingThePackage(RenderPipelineAsset& asset, int passCount)
+    {
+        nlohmann::json passes = nlohmann::json::array();
+        for (int i = 0; i < passCount; ++i)
+            passes.push_back({{"id", "FX" + std::to_string(i)},
+                              {"type", "FullscreenShader"},
+                              {"shaderPkg", kReflectionPackage},
+                              {"output", "View.Resolve"},
+                              {"pushConstants", {{"goodKey", 1.0}, {"badKey", 2.0}}},
+                              {"inputs", {{"uGood", "View.Color"}, {"uBad", "View.Color"}}}});
+        const std::string text = nlohmann::json{{"schemaVersion", 2}, {"passes", passes}}.dump();
+        ASSERT_TRUE(asset.LoadFromData(Vector<uint8>(text.begin(), text.end())));
+    }
+
+    static int LookupsOfOneDiskRead()
+    {
+        Rendering::ShaderPackage package;
+        std::string error;
+        EXPECT_TRUE(Rendering::LoadShaderPkg(kReflectionPackage, Rendering::ShaderSourceKind::SpirV, package, &error))
+            << error;
+        const int lookups = s_ReflectionPackageLookups;
+        s_ReflectionPackageLookups = 0;
+        return lookups;
+    }
+
+    Rendering::ShaderMeta m_Meta;
+    Rendering::Utils::ShaderPathResolverFunc m_PreviousResolver = nullptr;
+};
+} // namespace
+
+TEST_F(ShaderPackageReflectionTest, ACompileReadsAPackageOnceHoweverManyPassesNameIt)
+{
+    const int lookupsPerRead = LookupsOfOneDiskRead();
+    ASSERT_GT(lookupsPerRead, 0);
+
+    RenderPipelineAsset asset(GUID::Null(), std::filesystem::path("reflection.rendergraph"));
+    LoadPipelineNamingThePackage(asset, 3);
+    const auto bp = RenderPipelineCompiler{}.Compile(asset, BuildRegistry());
+    EXPECT_FALSE(bp.HasErrors()) << IssuesToString(bp);
+    EXPECT_EQ(s_ReflectionPackageLookups, lookupsPerRead);
+    for (const char* pass : {"FX0", "FX1", "FX2"})
+    {
+        int badKeyWarnings = 0;
+        for (const auto& issue : bp.issues)
+            badKeyWarnings += issue.nodeId == pass && issue.message.find("badKey") != std::string::npos;
+        EXPECT_EQ(badKeyWarnings, 1) << pass << IssuesToString(bp);
+    }
+}
+
+TEST_F(ShaderPackageReflectionTest, AServedReflectionIsNotReadFromDiskAndGivesTheSameWarnings)
+{
+    RenderPipelineAsset asset(GUID::Null(), std::filesystem::path("reflection.rendergraph"));
+    LoadPipelineNamingThePackage(asset, 2);
+    const auto fromDisk = RenderPipelineCompiler{}.Compile(asset, BuildRegistry());
+    s_ReflectionPackageLookups = 0;
+
+    int lookupCalls = 0;
+    const ShaderMetaLookup servePackage = [this, &lookupCalls](const std::string& package, Rendering::ShaderMeta& out)
+    {
+        ++lookupCalls;
+        if (package != kReflectionPackage)
+            return false;
+        out = m_Meta;
+        return true;
+    };
+    const auto served = RenderPipelineCompiler{}.Compile(asset, BuildRegistry(), Rendering::ShaderSourceKind::SpirV,
+                                                         UnknownPassTypes::Refused, servePackage);
+    EXPECT_EQ(s_ReflectionPackageLookups, 0);
+    EXPECT_EQ(lookupCalls, 1);
+    EXPECT_FALSE(served.HasErrors()) << IssuesToString(served);
+    EXPECT_TRUE(HasIssue(served, PipelineIssueSeverity::Warning, "badKey")) << IssuesToString(served);
+    EXPECT_TRUE(HasIssue(served, PipelineIssueSeverity::Warning, "uBad")) << IssuesToString(served);
+    EXPECT_EQ(IssuesToString(served), IssuesToString(fromDisk));
+}
+
+TEST_F(ShaderPackageReflectionTest, APreloadedPackageServesTheCompileAndStaysForItsNode)
+{
+    RenderPipelineAsset asset(GUID::Null(), std::filesystem::path("reflection.rendergraph"));
+    LoadPipelineNamingThePackage(asset, 2);
+    FrameOrchestrator spine;
+    spine.PreLoadRenderPipelineShaderPackages(asset, Rendering::ShaderSourceKind::SpirV);
+    const int preloadLookups = s_ReflectionPackageLookups;
+    s_ReflectionPackageLookups = 0;
+    ASSERT_EQ(preloadLookups, LookupsOfOneDiskRead());
+
+    const auto bp = RenderPipelineCompiler{}.Compile(asset, BuildRegistry(), Rendering::ShaderSourceKind::SpirV,
+                                                     UnknownPassTypes::Refused,
+                                                     FrameOrchestratorTestAccess::PreLoadedShaderMeta(spine));
+    EXPECT_EQ(s_ReflectionPackageLookups, 0);
+    EXPECT_TRUE(HasIssue(bp, PipelineIssueSeverity::Warning, "badKey")) << IssuesToString(bp);
+
+    Rendering::ShaderPackage package;
+    ASSERT_TRUE(spine.TryConsumePreLoadedShaderPackage(kReflectionPackage, package));
+    EXPECT_EQ(package.stageBytes.at("fs"), (std::vector<uint8_t>{5, 6, 7, 8}));
+    EXPECT_FALSE(spine.TryConsumePreLoadedShaderPackage(kReflectionPackage, package));
+}
+
+TEST_F(ShaderPackageReflectionTest, ALookupThatMissesOnePackageReadsItFromDiskAndServesOnlyTheOther)
+{
+    const int lookupsPerRead = LookupsOfOneDiskRead();
+    // The other package is not on the disk: only the lookup knows it, with its own reflection.
+    constexpr const char* kOtherPackage = "ge_reflection_store_other.shaderpkg";
+    Rendering::ShaderMeta otherMeta = m_Meta;
+    otherMeta.PushConstants[0].Block.Members[0].Name = "otherKey";
+    otherMeta.Sets[0].Bindings[0].Name = "uOther";
+
+    const nlohmann::json passes = nlohmann::json::array(
+        {{{"id", "FX"},
+          {"type", "FullscreenShader"},
+          {"shaderPkg", kReflectionPackage},
+          {"output", "View.Resolve"},
+          {"pushConstants", {{"goodKey", 1.0}}},
+          {"inputs", {{"uGood", "View.Color"}}}},
+         {{"id", "Other"},
+          {"type", "FullscreenShader"},
+          {"shaderPkg", kOtherPackage},
+          {"output", "View.Resolve"},
+          {"pushConstants", {{"otherKey", 1.0}}},
+          {"inputs", {{"uOther", "View.Color"}}}}});
+    const std::string text = nlohmann::json{{"schemaVersion", 2}, {"passes", passes}}.dump();
+    RenderPipelineAsset asset(GUID::Null(), std::filesystem::path("reflection.rendergraph"));
+    ASSERT_TRUE(asset.LoadFromData(Vector<uint8>(text.begin(), text.end())));
+
+    std::vector<std::string> asked;
+    const ShaderMetaLookup serveOther = [&asked, &otherMeta](const std::string& package, Rendering::ShaderMeta& out)
+    {
+        asked.push_back(package);
+        if (package != kOtherPackage)
+            return false;
+        out = otherMeta;
+        return true;
+    };
+    const auto bp = RenderPipelineCompiler{}.Compile(asset, BuildRegistry(), Rendering::ShaderSourceKind::SpirV,
+                                                     UnknownPassTypes::Refused, serveOther);
+    EXPECT_FALSE(bp.HasErrors()) << IssuesToString(bp);
+    EXPECT_EQ(s_ReflectionPackageLookups, lookupsPerRead);
+    EXPECT_EQ(asked, (std::vector<std::string>{kReflectionPackage, kOtherPackage}));
+    for (const char* name : {"goodKey", "uGood", "otherKey", "uOther"})
+        EXPECT_EQ(IssuesToString(bp).find(name), std::string::npos) << name << IssuesToString(bp);
+}
+
+TEST_F(ShaderPackageReflectionTest, AClosedStoreServesNothingAndTheCompileReadsTheDisk)
+{
+    RenderPipelineAsset asset(GUID::Null(), std::filesystem::path("reflection.rendergraph"));
+    LoadPipelineNamingThePackage(asset, 2);
+    FrameOrchestrator spine;
+    spine.PreLoadRenderPipelineShaderPackages(asset, Rendering::ShaderSourceKind::SpirV);
+    s_ReflectionPackageLookups = 0;
+    const int lookupsPerRead = LookupsOfOneDiskRead();
+
+    FrameOrchestratorTestAccess::ClosePreLoadedShaderPackages(spine);
+    EXPECT_TRUE(FrameOrchestratorTestAccess::PreLoadedShaderPackagesClosed(spine));
+    const auto bp = RenderPipelineCompiler{}.Compile(asset, BuildRegistry(), Rendering::ShaderSourceKind::SpirV,
+                                                     UnknownPassTypes::Refused,
+                                                     FrameOrchestratorTestAccess::PreLoadedShaderMeta(spine));
+    EXPECT_EQ(s_ReflectionPackageLookups, lookupsPerRead);
+    EXPECT_TRUE(HasIssue(bp, PipelineIssueSeverity::Warning, "badKey")) << IssuesToString(bp);
+
+    Rendering::ShaderPackage package;
+    EXPECT_FALSE(spine.TryConsumePreLoadedShaderPackage(kReflectionPackage, package));
+    spine.PreLoadRenderPipelineShaderPackages(asset, Rendering::ShaderSourceKind::SpirV);
+    EXPECT_FALSE(spine.TryConsumePreLoadedShaderPackage(kReflectionPackage, package));
+}
+
+TEST_F(ShaderPackageReflectionTest, TheStoreServesTheReflectionOfOnlyThePackagesItHolds)
+{
+    RenderPipelineAsset asset(GUID::Null(), std::filesystem::path("reflection.rendergraph"));
+    LoadPipelineNamingThePackage(asset, 1);
+    FrameOrchestrator spine;
+    spine.PreLoadRenderPipelineShaderPackages(asset, Rendering::ShaderSourceKind::SpirV);
+    const ShaderMetaLookup lookup = FrameOrchestratorTestAccess::PreLoadedShaderMeta(spine);
+    Rendering::ShaderMeta meta;
+    EXPECT_TRUE(lookup(kReflectionPackage, meta));
+    EXPECT_FALSE(lookup("ge_reflection_store_missing.shaderpkg", meta));
+}
+
+TEST(RenderPipelineCompiler, ShaderPackagesOfListsEachPackageOnceAfterTheSourceOverrides)
+{
+    const std::string text = R"json({
+      "schemaVersion": 2,
+      "passes": [
+        { "id": "A", "type": "FullscreenShader", "shaderPkg": "a.shaderpkg" },
+        { "id": "B", "type": "FullscreenShader", "shaderPkg": "b.shaderpkg",
+          "shaderSourceOverrides": { "spirv": { "shaderPkg": "b_native.shaderpkg" } } },
+        { "id": "C", "type": "ComputeShader", "shaderPkg": "a.shaderpkg" },
+        { "id": "D", "type": "ComputeShader", "shaderPkg": "d.shaderpkg",
+          "shaderSourceOverrides": { "spirv": null } },
+        { "id": "World", "type": "WorldRender" }
+      ]
+    })json";
+    RenderPipelineAsset asset(GUID::Null(), std::filesystem::path("packages.rendergraph"));
+    asset.LoadFromData(Vector<uint8>(text.begin(), text.end()));
+
+    EXPECT_EQ(RenderPipelineCompiler::ShaderPackagesOf(asset, Rendering::ShaderSourceKind::SpirV),
+              (std::vector<std::string>{"a.shaderpkg", "b_native.shaderpkg"}));
+    EXPECT_EQ(RenderPipelineCompiler::ShaderPackagesOf(asset, Rendering::ShaderSourceKind::Wgsl),
+              (std::vector<std::string>{"a.shaderpkg", "b.shaderpkg", "d.shaderpkg"}));
 }
 

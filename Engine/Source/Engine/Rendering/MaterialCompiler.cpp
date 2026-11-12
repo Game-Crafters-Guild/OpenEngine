@@ -288,18 +288,13 @@ MaterialCompiler::Result MaterialCompiler::BuildResultFromSnapshot(
     e.materialPath = materialPath;
 
     Rendering::MaterialBuildContext ctx;
-    ctx.AdapterShaderDir = ResolveAdapterShaderDir(assets);
+    FillMaterialSourceRoots(assets, ctx);
     // A packaged runtime's cooked cache is probed first; a miss compiles into the workspace's.
     const ShaderCacheRoots& shaderCacheRoots = ShaderProgramAsset::GetShaderCacheRoots();
     ctx.ReadOnlyCacheRoots = shaderCacheRoots.ReadOnly;
     ctx.CacheRoot = shaderCacheRoots.Writable.empty()
         ? EngineCore::GetInstance().GetWorkspaceRoot() / ".Cache" / "Shaders"
         : shaderCacheRoots.Writable;
-    ctx.IncludeDirs = {assets.GetAssetRoot()};
-    ctx.ProjectRoots = CollectProjectRoots(assets);
-    ctx.AssetSourceRoots = CollectAssetSourceRoots(assets);
-    ctx.PackageShaderDirs = CollectPackageShaderDirs(assets);
-    AppendStagedModuleShaderDirs(ctx.AdapterShaderDir, ctx.PackageShaderDirs);
 
     MaterialShaderPackageBuilder builder(doc, materialPath, debugName, ctx);
     e.surfaceGraphPath = builder.GetGraphSourcePath();

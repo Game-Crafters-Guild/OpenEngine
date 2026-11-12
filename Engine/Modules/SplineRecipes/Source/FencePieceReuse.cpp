@@ -1,10 +1,10 @@
 #include "SplineRecipes/FencePieceReuse.h"
 
+#include "Components/GeneratedEntity.h"
 #include "Components/Hierarchy.h"
 #include "Components/Name.h"
 #include "Components/Rendering/LocalBounds.h"
 #include "Components/Rendering/MeshRenderer.h"
-#include "Components/RuntimeOnlyEntity.h"
 #include "Components/Spline/SplineFenceSpanPiece.h"
 #include "Components/Transform.h"
 #include "ECS/ECSTemplates.h"
@@ -68,7 +68,7 @@ ECS::EntityHandle SpawnPiece(ECS::World& world, ECS::EntityHandle parent,
     piece.Set(transform);
     piece.Set(emission.Source->Renderer);
     piece.Set(emission.Source->Bounds);
-    piece.Set(Components::RuntimeOnlyEntity{});
+    piece.Set(Components::GeneratedEntity{});
     // Parenting is what keeps the hierarchy readable: the pieces collapse
     // under the placer instead of flooding the scene root.
     piece.Set(Components::Parent{parent});

@@ -10,6 +10,7 @@ class UIElement;
 namespace Components
 {
 struct TerrainSurfaceRule;
+enum class TerrainDomain : uint32;
 }
 } // namespace GameEngine
 
@@ -27,8 +28,13 @@ namespace GameEngine::Editor
 // is several hundred pixels away from it.
 
 // The effect writes nothing because it has no rows. Appended under the effect
-// header, where the Add Rule button that fixes it also lives.
+// header; it names the Add Rule button and the Replace Rules control that fix it.
 void AddSurfaceRulesEmptyNotice(UIElement* parent, uint32 ruleCount);
+
+// On a planet the rows do not paint the ground. The notice says so, says that they are saved,
+// and names the effects that shape a planet.
+// Silent on a flat terrain.
+void AddSurfaceRulesPlanetNotice(UIElement* parent, Components::TerrainDomain domain);
 
 // This row's own state, rendered at the row: why it is ignored, or — for a row
 // with no conditions — what "unconditional" costs. Silent for a row that writes
@@ -54,5 +60,9 @@ void AddRuleCapNotice(UIElement* parent, uint32 ruleCount);
 // the cap is per rule, so a set with one full row and seven empty ones must not
 // read as though the whole effect is full.
 void AddConditionCapNotice(UIElement* parent, uint32 ruleIndex, uint32 conditionCount);
+
+// The scene load refused this condition's kind: the load report's text, at the row.
+// Silent when `refusedKind` is 0, the kind loaded.
+void AddRefusedConditionNotice(UIElement* parent, uint32 ruleIndex, uint32 conditionIndex, uint8 refusedKind);
 
 } // namespace GameEngine::Editor

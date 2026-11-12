@@ -179,10 +179,11 @@ TEST(FrameMemoryTests, AFrameVectorGrownOnAJoinedWorkerUsesTheWorkersArena)
 // The joined unit runs on the only worker, inside a Submit body that waits for its counter.
 TEST(FrameMemoryTests, AJoinedUnitOnAHelpingThreadIsAllowed)
 {
+    // Declared before the pool: the held job can still read it after the release.
+    std::atomic<bool> published{false};
     WorkStealingThreadPool pool(1);
     SimulatedFrame frame;
     std::atomic<bool> started{false};
-    std::atomic<bool> published{false};
     std::thread::id helper;
     std::thread::id ranOn;
     [[maybe_unused]] bool helperJoinedAfter = true;
@@ -360,10 +361,11 @@ TEST(FrameMemoryDeathTest, AThrowingUnitRestoresTheWorkersFrameJoinedBit)
     GTEST_FLAG_SET(death_test_style, "threadsafe");
     EXPECT_DEATH(
         {
+            // Declared before the pool: the held job can still read it after the release.
+            std::atomic<bool> published{false};
             WorkStealingThreadPool pool(1);
             SimulatedFrame frame;
             std::atomic<bool> started{false};
-            std::atomic<bool> published{false};
             JobCounter joined;
             TaskHandle body = pool.Submit([&pool, &started, &published, &joined] {
                 started.store(true, std::memory_order_release);
@@ -387,8 +389,9 @@ TEST(FrameMemoryDeathTest, AJoinedRunStillOutstandingAtTheFrameAdvanceAsserts)
     GTEST_FLAG_SET(death_test_style, "threadsafe");
     EXPECT_DEATH(
         {
-            WorkStealingThreadPool pool(1);
+            // Declared before the pool: the held job can still read it after the release.
             std::atomic<bool> release{false};
+            WorkStealingThreadPool pool(1);
             JobCounter polled;
             {
                 SimulatedFrame frame;

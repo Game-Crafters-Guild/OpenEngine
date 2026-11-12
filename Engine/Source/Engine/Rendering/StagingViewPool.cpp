@@ -331,7 +331,8 @@ const StagingViewPool::Entry& StagingViewPool::Resolve(StagingViewHandle handle)
 void StagingViewPool::WriteCameraData(Entry& entry)
 {
     const float aspect = static_cast<float>(entry.Width) / static_cast<float>(entry.Height);
-    m_RenderServices.Views().SetCameraData(entry.Camera, entry.CameraPose.ToCameraData(aspect));
+    m_RenderServices.Views().SetCameraData(entry.Camera, entry.CameraPose.ToCameraData(aspect),
+                                           entry.CameraPose.ToCameraRanges());
 }
 
 void StagingViewPool::UpdateTargetNames(Entry& entry)

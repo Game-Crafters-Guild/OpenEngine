@@ -52,7 +52,7 @@ class InlineReloadTestAsset final : public Asset
         return Apply(std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()));
     }
 
-    bool LoadFromData(const Vector<uint8>& data) override
+    bool LoadFromData(std::span<const uint8> data) override
     {
         return Apply(std::string(data.begin(), data.end()));
     }

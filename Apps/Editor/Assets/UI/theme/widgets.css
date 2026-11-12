@@ -30,9 +30,13 @@
 	color: var(--ui_color_text_bright);
 }
 
+/* The selected name is one line; a name wider than the field ends in an ellipsis before the chevron. */
 .dropdown-header-label {
 	flex: 1 1 auto;
 	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
 /* The selected option's icon. Present only on a dropdown whose options declare
@@ -84,9 +88,26 @@
 	box-shadow: var(--popup-shadow, 0 -1px 24px rgba(0, 0, 0, 0.25));
 }
 
+/* A fit-content list is as wide as its widest entry and at least as wide as its header. Its entries
+   stay on one line; with less room in the window they end in an ellipsis, and a cut entry shows its
+   whole text as its tooltip (DropdownPopupPlacement.cpp). */
 .dropdown-items.fit-content {
 	width: auto;
 	min-width: 100%;
+}
+
+/* A text row of a fit-content list. Dropdown and MaskField set this class on such a row. */
+.dropdown-item-fit-content {
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+/* The name of an icon or picture row. Such a list is always fit-content (Dropdown::UpdatePopupWidthClass). */
+.dropdown-item-label {
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
 }
 
 .dropdown.open-upward > .dropdown-items {
@@ -534,6 +555,12 @@
 	color: var(--ui_color_text);
 	font-size: var(--ui_font_size_base);
 	overflow: visible;
+	/* The query field's placeholder (controls/FieldPlaceholder/FieldPlaceholder.css) starts where
+	   the typed text starts (.search-field-with-filter-input TextInput) and ends before the icon
+	   and the clear action; the field's descendants inherit these insets. */
+	--ui_field_placeholder_left: 8px;
+	--ui_field_placeholder_right: 32px;
+	--ui_field_placeholder_lift: 2px;
 }
 
 /* A panel search (BuildPanelSearchBar) reads as a field at rest: the inspector value field's
@@ -569,7 +596,7 @@
 /* A line box centered in the 24px field leaves the capitals half a pixel and the lowercase two
    pixels below the field's center (measured on the rendered panels). One pixel more padding
    below than above lifts the text to within half a pixel of the center; the placeholder takes
-   the same lift. */
+   the same lift (.search-field-with-filter). */
 .search-field-with-filter-input TextInput {
 	background-color: transparent;
 	border: none;
@@ -587,34 +614,9 @@
 	background-color: transparent;
 }
 
-.search-field-with-filter-placeholder {
-	position: absolute;
-	left: 8px;
-	right: 32px;
-	top: 0;
-	height: 100%;
-	min-width: 0;
-	display: flex;
-	align-items: center;
-	/* A hint, not a value: quieter than the typed text and italic, so an empty field reads at
-	   rest and never as one holding text. */
-	color: var(--ui_color_text_placeholder);
-	/* The same one-pixel lift as the typed text (.search-field-with-filter-input TextInput). */
-	padding-bottom: 2px;
-	font-style: italic;
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	pointer-events: none;
-	z-index: 11;
-}
-
-.search-field-with-filter-placeholder.hidden {
-	display: none;
-}
-
-.search-field-with-filter.has-search-filter .search-field-with-filter-placeholder {
-	right: 52px;
+/* The filter dropdown takes 20px more of the field's trailing edge. */
+.search-field-with-filter.has-search-filter {
+	--ui_field_placeholder_right: 52px;
 }
 
 .search-field-with-filter-icon {
@@ -715,12 +717,8 @@
 }
 
 .search-field-with-filter-clear,
-button.search-field-with-filter-clear,
-.button.search-field-with-filter-clear,
 .button.icon-button.search-field-with-filter-clear,
 .panel-search-clear,
-button.panel-search-clear,
-.button.panel-search-clear,
 .button.icon-button.panel-search-clear {
 	position: absolute;
 	right: 4px;
@@ -748,12 +746,8 @@ button.panel-search-clear,
 }
 
 .search-field-with-filter-clear:hover,
-button.search-field-with-filter-clear:hover,
-.button.search-field-with-filter-clear:hover,
 .button.icon-button.search-field-with-filter-clear:hover,
 .panel-search-clear:hover,
-button.panel-search-clear:hover,
-.button.panel-search-clear:hover,
 .button.icon-button.panel-search-clear:hover {
 	background-color: transparent;
 	opacity: 1;
@@ -1128,8 +1122,6 @@ checkbox:checked:hover .checkbox-box,
 }
 
 .script-editor-search-clear,
-button.script-editor-search-clear,
-.button.script-editor-search-clear,
 .button.icon-button.script-editor-search-clear {
 	position: absolute;
 	right: 4px;
@@ -1150,8 +1142,6 @@ button.script-editor-search-clear,
 }
 
 .script-editor-search-clear:hover,
-button.script-editor-search-clear:hover,
-.button.script-editor-search-clear:hover,
 .button.icon-button.script-editor-search-clear:hover {
 	background-color: transparent;
 	opacity: 1.0;
@@ -1270,10 +1260,7 @@ button.script-editor-save-button.icon-button.linenumbers-icon,
 .button.script-editor-save-button.icon-button.linenumbers-icon,
 .dock-content .script-editor-save-button,
 .dock-leaf .script-editor-save-button,
-.panel .script-editor-save-button,
-.dock-content button.script-editor-save-button,
-.dock-leaf button.script-editor-save-button,
-.panel button.script-editor-save-button {
+.panel .script-editor-save-button {
 	width: 24px;
 	height: 24px;
 	min-width: 24px;
@@ -1396,297 +1383,10 @@ button.script-editor-save-button.icon-button.wrap-icon.icon-active,
 	background-color: #1e1e1e;
 }
 
-/* UI Control styles should live in `Apps/Editor/Assets/UI/controls/` and be
- * attached by controls themselves (RequestSubtreeStyleAssetPath), rather than
- * growing this file. See `UI/controls/Button.css`, `Foldout.css`, etc. */
-
-/* Button Control Styles
-   Default button styling following Material Design / Bootstrap patterns */
-
-button,
-.button {
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-    justify-content: center;
-    padding: 8px 16px;
-    min-height: 32px;
-    border-radius: var(--ui_radius_sm);
-    border-width: 1px;
-    border-color: var(--ui_color_border_subtle);
-    background-color: var(--ui_color_border_subtle);
-    color: var(--ui_color_text);
-    cursor: pointer;
-    font-size: var(--ui_font_size_base);
-}
-
-button:hover,
-.button:hover {
-    background-color: #4A4A4A;
-    border-color: #4A4A4A;
-}
-
-button:active,
-button.active,
-button.pressed,
-.button:active,
-.button.active,
-.button.pressed {
-    background-color: var(--ui_color_bg_hover);
-    border-color: var(--ui_color_border_subtle);
-}
-
-/* Keyboard focus only, matching Button.css. This sheet is global; Button.css is
-   a subtree sheet the Button control attaches, so it never reaches a plain
-   element that only carries `class="button"` — hence the rule lives in both. */
-button:focus-visible,
-.button:focus-visible {
-    outline: 2px solid var(--ui_color_accent_blue);
-    outline-offset: 2px;
-}
-
-button.layout-button:focus,
-.layout-button:focus {
-    outline: none;
-    outline-offset: 0px;
-}
-
-/* Layout buttons opt out of generic button styling */
-button.layout-button,
-.button.layout-button,
-.layout-button {
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-    gap: 8px;
-    padding: 4px 12px;
-    height: 28px;
-    min-height: 28px;
-    border-radius: 4px;
-    border-width: 0px;
-    border-style: none;
-    border-color: transparent;
-    background-color: #333333;
-    color: #BDBDBD;
-    font-size: var(--ui_font_size_base);
-    cursor: pointer;
-    transition: none;
-    outline: none;
-    outline-offset: 0px;
-}
-
-/* Override layout-button state classes from core.css */
-button.layout-button.layout-button-base,
-.button.layout-button.layout-button-base,
-.layout-button.layout-button-base,
-button.layout-button.layout-button-hover,
-.button.layout-button.layout-button-hover,
-.layout-button.layout-button-hover,
-button.layout-button.layout-button-pressed,
-.button.layout-button.layout-button-pressed,
-.layout-button.layout-button-pressed,
-button.layout-button.layout-button-selected,
-.button.layout-button.layout-button-selected,
-.layout-button.layout-button-selected {
-    background-color: #333333;
-    border-color: transparent;
-    color: #BDBDBD;
-}
-
-button.layout-button.layout-button-hover,
-.button.layout-button.layout-button-hover,
-.layout-button.layout-button-hover,
-button.layout-button.layout-button-selected,
-.button.layout-button.layout-button-selected,
-.layout-button.layout-button-selected {
-    background-color: #242424;
-    color: #F2F2F2;
-}
-
-button.layout-button.layout-button-selected:hover,
-.button.layout-button.layout-button-selected:hover,
-.layout-button.layout-button-selected:hover {
-    background-color: #121212;
-    color: #F2F2F2;
-}
-
-/* Final overrides: ensure layout buttons ignore generic + secondary variants */
-button.layout-button.secondary,
-.button.layout-button.secondary,
-.layout-button.secondary {
-    background-color: #333333;
-    border-color: transparent;
-    color: #BDBDBD;
-}
-
-button.layout-button.secondary:hover,
-.button.layout-button.secondary:hover,
-.layout-button.secondary:hover {
-    background-color: #242424;
-    border-color: transparent;
-    color: #F2F2F2;
-}
-
-button.layout-button.secondary:active,
-button.layout-button.secondary.active,
-button.layout-button.secondary.pressed,
-.button.layout-button.secondary:active,
-.button.layout-button.secondary.active,
-.button.layout-button.secondary.pressed,
-.layout-button.secondary:active,
-.layout-button.secondary.active,
-.layout-button.secondary.pressed {
-    background-color: #121212;
-    border-color: transparent;
-    color: #F2F2F2;
-}
-
-button.layout-button.secondary.active:hover,
-.button.layout-button.secondary.active:hover,
-.layout-button.secondary.active:hover {
-    background-color: #121212;
-    color: #F2F2F2;
-    border-color: transparent;
-}
-
-button.layout-button.secondary:focus,
-.button.layout-button.secondary:focus,
-.layout-button.secondary:focus {
-    outline: none;
-    outline-offset: 0px;
-}
-
-button.layout-button:hover,
-.button.layout-button:hover,
-.layout-button:hover,
-button.layout-button:active,
-.button.layout-button:active,
-.layout-button:active,
-button.layout-button.pressed,
-.button.layout-button.pressed,
-.layout-button.pressed,
-button.layout-button.active,
-.button.layout-button.active,
-.layout-button.active,
-button.layout-button.active:hover,
-.button.layout-button.active:hover,
-.layout-button.active:hover,
-button.layout-button.active:active,
-.button.layout-button.active:active,
-.layout-button.active:active,
-button.layout-button.active.pressed,
-.button.layout-button.active.pressed,
-.layout-button.active.pressed,
-button.layout-button:focus,
-.button.layout-button:focus,
-.layout-button:focus {
-    outline: none;
-    outline-offset: 0px;
-    border-width: 0px;
-    border-style: none;
-    border-color: transparent;
-}
-
-button.layout-button:hover,
-.button.layout-button:hover,
-.layout-button:hover,
-button.layout-button.active,
-.button.layout-button.active,
-.layout-button.active,
-button.layout-button.active:hover,
-.button.layout-button.active:hover,
-.layout-button.active:hover {
-    background-color: #242424;
-    border-color: transparent;
-    color: #F2F2F2;
-}
-
-button.layout-button.active:hover,
-.button.layout-button.active:hover,
-.layout-button.active:hover {
-    background-color: #121212;
-}
-
-button.layout-button:active,
-.button.layout-button:active,
-.layout-button:active,
-button.layout-button.pressed,
-.button.layout-button.pressed,
-.layout-button.pressed,
-button.layout-button.active:active,
-.button.layout-button.active:active,
-.layout-button.active:active,
-button.layout-button.active.pressed,
-.button.layout-button.active.pressed,
-.layout-button.active.pressed {
-    background-color: #121212;
-    border-color: transparent;
-    color: #F2F2F2;
-}
-
-button:disabled,
-.button:disabled,
-.button.disabled {
-    background-color: var(--ui_color_bg_hover);
-    border-color: var(--ui_color_bg_selected);
-    color: var(--ui_color_text_disabled);
-    cursor: not-allowed;
-}
-
-/* Button text child */
-.button-text {
-    color: inherit;
-    font-size: inherit;
-    pointer-events: none;
-}
-
-/* Primary variant */
-button.primary,
-.button.primary {
-    background-color: var(--ui_color_accent_blue);
-    border-color: var(--ui_color_accent_blue);
-    color: var(--ui_color_text_bright);
-}
-
-button.primary:hover,
-.button.primary:hover {
-    background-color: var(--ui_color_accent_blue_hover);
-    border-color: var(--ui_color_accent_blue_hover);
-}
-
-button.primary:active,
-button.primary.active,
-button.primary.pressed,
-.button.primary:active,
-.button.primary.active,
-.button.primary.pressed {
-    background-color: var(--ui_color_accent_blue_pressed);
-    border-color: var(--ui_color_accent_blue_pressed);
-}
-
-/* Secondary variant */
-button.secondary,
-.button.secondary {
-    background-color: transparent;
-    border-color: var(--ui_color_border_subtle);
-    color: var(--ui_color_text);
-}
-
-button.secondary:hover,
-.button.secondary:hover {
-    background-color: rgba(255, 255, 255, 0.192);
-    border-color: #4A4A4A;
-}
-
-button.secondary:active,
-button.secondary.active,
-button.secondary.pressed,
-.button.secondary:active,
-.button.secondary.active,
-.button.secondary.pressed {
-    background-color: rgba(255, 255, 255, 0.31);
-    border-color: var(--ui_color_border_subtle);
-}
+/* A control's styles live beside the control (the UI module's controls in
+ * `Engine/Modules/UI/Assets/UI/controls/`) and the control attaches them itself.
+ * This file does not copy them: a copy here wins every equal-specificity tie
+ * against the control's own sheet. */
 
 /* Icon buttons with .active (e.g. loop, sync-playhead, record) – no white fill, match play/stop */
 button.icon-button.secondary.active,
@@ -1701,14 +1401,9 @@ button.record-icon.secondary.active,
     border-color: transparent;
 }
 
-/* Icon buttons
- *
- * Important: this must come AFTER the generic button variants (notably
- * `.secondary:hover`) so icon buttons don't pick up the light hover fill.
- */
-.icon-button,
-button.icon-button,
-.button.icon-button {
+/* An icon button that is not a Button control (a lock icon on a tab or a tree row).
+ * Button.css styles the Button control. */
+.icon-button {
 	width: 24px;
 	height: 24px;
 	padding: 4px;
@@ -1723,68 +1418,12 @@ button.icon-button,
 .icon-button:hover,
 .icon-button:active,
 .icon-button.pressed,
-button.icon-button:hover,
-button.icon-button:active,
-button.icon-button.pressed,
-.button.icon-button:hover,
-.button.icon-button:active,
-.button.icon-button.pressed,
 .icon-button.secondary:hover,
 .icon-button.secondary:active,
-.icon-button.secondary.pressed,
-button.icon-button.secondary:hover,
-button.icon-button.secondary:active,
-button.icon-button.secondary.pressed,
-.button.icon-button.secondary:hover,
-.button.icon-button.secondary:active,
-.button.icon-button.secondary.pressed {
+.icon-button.secondary.pressed {
 	background-color: transparent;
 	border-color: transparent;
 	border-width: 0px;
-}
-
-/* Success variant */
-button.success,
-.button.success {
-    background-color: #28A745;
-    border-color: #28A745;
-    color: var(--ui_color_text_bright);
-}
-
-button.success:hover,
-.button.success:hover {
-    background-color: #34CE57;
-    border-color: #34CE57;
-}
-
-/* Danger variant */
-button.danger,
-.button.danger {
-    background-color: #DC3545;
-    border-color: #DC3545;
-    color: var(--ui_color_text_bright);
-}
-
-button.danger:hover,
-.button.danger:hover {
-    background-color: #E04555;
-    border-color: #E04555;
-}
-
-/* Small size variant */
-button.small,
-.button.small {
-    padding: 4px 8px;
-    min-height: 24px;
-    font-size: var(--ui_font_size_small);
-}
-
-/* Large size variant */
-button.large,
-.button.large {
-    padding: 12px 24px;
-    min-height: 40px;
-    font-size: var(--ui_font_size_header);
 }
 
 /* Code-folding UI (ScriptTextArea fold markers)

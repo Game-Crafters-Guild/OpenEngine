@@ -250,7 +250,8 @@ bool SegmentClearOfWalls(const Pathfinding::GridMap& grid, float32 startX, float
     if (!grid.Raycast(startX, 0.0f, startZ, endX, 0.0f, endZ, hitX, hitY, hitZ))
         return true;
     uint32 hitCx = 0, hitCz = 0;
-    return openCells && grid.WorldToCell(hitX, hitZ, hitCx, hitCz) && openCells->Contains(hitCx, hitCz);
+    return openCells && grid.WorldToCell(hitX, hitZ, hitCx, hitCz) &&
+           openCells->Contains(static_cast<int32>(hitCx), static_cast<int32>(hitCz));
 }
 
 } // anonymous namespace
@@ -326,9 +327,10 @@ void NavigationMovementSystem::Update(ECS::World& world, float32 deltaTime)
                     params.AvoidanceQuality = static_cast<Pathfinding::ObstacleAvoidanceQuality>(agent.AvoidanceQuality);
                     params.SeparationWeight = agent.SeparationWeight;
 
-                    float32 posX = wt.matrix[12];
-                    float32 posY = wt.matrix[13];
-                    float32 posZ = wt.matrix[14];
+                    const Mathematics::Vector3 position = wt.GetPosition() - Mathematics::WorldPosition{};
+                    float32 posX = position.x;
+                    float32 posY = position.y;
+                    float32 posZ = position.z;
 
                     state.CrowdAgentHandle = crowd.AddAgent(posX, posY, posZ, params);
                     state.CrowdGeneration = crowd.GetGeneration();
@@ -375,6 +377,7 @@ void NavigationMovementSystem::Update(ECS::World& world, float32 deltaTime)
             const Components::Transform& /*xf*/,
             const Components::WorldTransform& wt)
         {
+            const Mathematics::Vector3 agentPosition = wt.GetPosition() - Mathematics::WorldPosition{};
             // Halt / arrival: drop the lookahead corridor but keep a body
             // stamp on the cell the agent is standing in so others cannot
             // walk through idle units.
@@ -388,7 +391,7 @@ void NavigationMovementSystem::Update(ECS::World& world, float32 deltaTime)
                     QueueMove(e, wt, cx, cy, cz);
                     return;
                 }
-                ReserveStandingCell(agent, state, *navWorld, wt.matrix[12], wt.matrix[14],
+                ReserveStandingCell(agent, state, *navWorld, agentPosition.x, agentPosition.z,
                                     m_AccumulatedTime);
                 return;
             }
@@ -428,7 +431,7 @@ void NavigationMovementSystem::Update(ECS::World& world, float32 deltaTime)
                 state.VelocityY = 0.0f;
                 state.VelocityZ = 0.0f;
                 if (status == Pathfinding::PathStatus::Failed)
-                    ReserveStandingCell(agent, state, *navWorld, wt.matrix[12], wt.matrix[14],
+                    ReserveStandingCell(agent, state, *navWorld, agentPosition.x, agentPosition.z,
                                         m_AccumulatedTime);
                 return;
             }
@@ -454,7 +457,7 @@ void NavigationMovementSystem::Update(ECS::World& world, float32 deltaTime)
             if (proxyGridMap)
             {
                 startFootprint.Valid = proxyGridMap->WorldToCell(
-                    wt.matrix[12], wt.matrix[14], startFootprint.X, startFootprint.Z);
+                    agentPosition.x, agentPosition.z, startFootprint.X, startFootprint.Z);
                 startFootprint.Radius = proxyGridMap->FootprintRadiusInCells(agent.Radius);
             }
             if (proxyGridMap && !state.PathDirty)
@@ -469,24 +472,22 @@ void NavigationMovementSystem::Update(ECS::World& world, float32 deltaTime)
                 const bool destOk = proxyGridMap->WorldToCell(
                     state.DestinationX, state.DestinationZ, destCx, destCz);
 
-                // Dest sits on an obstacle stamp ring. A smoothed shortcut can
-                // clip that 8-neighbour stamp every frame, so the ring counts
-                // as open unless the dest cell itself is blocked. A blocked
-                // cell beyond the ring is a real wall.
+                // The ring around an open dest cell counts as open: the dest's obstacle stamp and
+                // the ground off the grid next to it. A blocked cell beyond the ring is a real wall.
                 Pathfinding::GridMap::CellRange destRing;
                 const bool destRingOpen = destOk && !proxyGridMap->IsCellBlocked(destCx, destCz);
                 if (destRingOpen)
                 {
-                    destRing.MinX = destCx > 0 ? destCx - 1 : 0;
-                    destRing.MinZ = destCz > 0 ? destCz - 1 : 0;
-                    destRing.MaxX = destCx + 1;
-                    destRing.MaxZ = destCz + 1;
+                    destRing.MinX = static_cast<int32>(destCx) - 1;
+                    destRing.MinZ = static_cast<int32>(destCz) - 1;
+                    destRing.MaxX = static_cast<int32>(destCx) + 1;
+                    destRing.MaxZ = static_cast<int32>(destCz) + 1;
                 }
                 const float32 sweepRadius =
                     proxyGridMap->GetSettings().Type == Pathfinding::GridType::Square ? agent.Radius : 0.0f;
 
-                float32 rayStartX = wt.matrix[12];
-                float32 rayStartZ = wt.matrix[14];
+                float32 rayStartX = agentPosition.x;
+                float32 rayStartZ = agentPosition.z;
                 for (uint32 pi = state.CurrentPathPointIndex; pi < checkEnd && !state.PathDirty; ++pi)
                 {
                     Pathfinding::PathPoint pt = pathBuffer.GetPoint(proxyPath, pi);
@@ -543,9 +544,9 @@ void NavigationMovementSystem::Update(ECS::World& world, float32 deltaTime)
                 }
             }
 
-            float32 posX = wt.matrix[12];
-            float32 posY = wt.matrix[13];
-            float32 posZ = wt.matrix[14];
+            float32 posX = agentPosition.x;
+            float32 posY = agentPosition.y;
+            float32 posZ = agentPosition.z;
 
             float32 dirX = state.CurrentWaypointX - posX;
             float32 dirY = state.CurrentWaypointY - posY;
@@ -660,7 +661,8 @@ void NavigationMovementSystem::Update(ECS::World& world, float32 deltaTime)
 void NavigationMovementSystem::QueueMove(ECS::EntityHandle entity, const Components::WorldTransform& current,
                                          float32 x, float32 y, float32 z)
 {
-    if (x != current.matrix[12] || y != current.matrix[13] || z != current.matrix[14])
+    const Mathematics::Vector3 position = current.GetPosition() - Mathematics::WorldPosition{};
+    if (x != position.x || y != position.y || z != position.z)
         m_Moves.push_back({entity, x, y, z});
 }
 
@@ -674,12 +676,8 @@ void NavigationMovementSystem::WriteMoves(ECS::World& world) const
         auto* wt = world.GetComponentForWrite<Components::WorldTransform>(move.Entity);
         if (!xf || !wt)
             continue;
-        xf->matrix[12] = move.X;
-        xf->matrix[13] = move.Y;
-        xf->matrix[14] = move.Z;
-        wt->matrix[12] = move.X;
-        wt->matrix[13] = move.Y;
-        wt->matrix[14] = move.Z;
+        xf->Position = Mathematics::WorldPosition{move.X, move.Y, move.Z};
+        wt->Position = xf->Position;
         Components::BumpWorldTransform(world, move.Entity, *wt);
     }
 }

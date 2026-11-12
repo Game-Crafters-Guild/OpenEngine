@@ -339,7 +339,6 @@ bool RunLegacyAndCapture(IDevice* device,
         {
             ExtractFrustumPlanes(cascadeVPs[c], input.frustumPlanes);
         }
-        input.cameraPosition = Vector3(0.0f, 0.0f, -100.0f);
         input.cameraForward = Vector3(0.0f, 0.0f, 1.0f);
         input.firstInstance = 0;
         input.instanceCount = instanceCount;
@@ -370,7 +369,6 @@ bool RunUnifiedAndCapture(IDevice* device,
     CascadeCullingGroup group{};
     group.viewId = 1;
     group.cascadeCount = cascadeCount;
-    group.cameraPosition = Vector3(0.0f, 0.0f, -100.0f);
     group.cameraForward = Vector3(0.0f, 0.0f, 1.0f);
     group.firstInstance = 0;
     group.instanceCount = instanceCount;
@@ -433,7 +431,6 @@ bool RunColorFanOutCase(IDevice* device,
             input.projMatrix = faceVPs[f];
             input.viewProjMatrix = faceVPs[f];
             ExtractFrustumPlanes(faceVPs[f], input.frustumPlanes);
-            input.cameraPosition = Vector3(0.0f, 0.0f, -100.0f);
             input.cameraForward = Vector3(0.0f, 0.0f, 1.0f);
             input.firstInstance = 0;
             input.instanceCount = instanceCount;
@@ -459,7 +456,6 @@ bool RunColorFanOutCase(IDevice* device,
         group.cascadeCount = faceCount;
         group.cascadeIndexBase = kFaceBase;
         group.shadowCasterDispatch = false;
-        group.cameraPosition = Vector3(0.0f, 0.0f, -100.0f);
         group.cameraForward = Vector3(0.0f, 0.0f, 1.0f);
         group.firstInstance = 0;
         group.instanceCount = instanceCount;

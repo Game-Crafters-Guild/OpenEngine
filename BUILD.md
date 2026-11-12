@@ -98,6 +98,7 @@ The engine hosts .NET 10: the managed assemblies target `net10.0` and run on the
 | **Visual Studio 2026** with the *Desktop development with C++* workload | Includes MSVC, **CMake 3.25 or newer**, **Ninja** and Git. A standalone CMake and Ninja on PATH also work. Visual Studio 2022 works too: swap `vs2026-` for `vs2022-` in preset names. | [visualstudio.microsoft.com/downloads](https://visualstudio.microsoft.com/downloads/) |
 | **.NET 10 SDK** | C# scripting host and managed assemblies; not needed with `-DENABLE_SCRIPTING=OFF` ([Building without .NET](#building-without-net)). | `winget install Microsoft.DotNet.SDK.10` |
 | **Vulkan-capable GPU driver** | Runtime requirement (Vulkan 1.3). | GPU vendor |
+| **Microsoft GameInput runtime** | Runtime requirement for gamepads on Windows. Without it the editor and the Player run with gamepads off and log the fix. | `winget install Microsoft.GameInput` |
 | **Vulkan SDK** *(recommended)* | Not needed to compile. Supplies the validation layers Debug builds enable, and `spirv-val`. | [vulkan.lunarg.com](https://vulkan.lunarg.com/) |
 | **Node.js 20 or newer** *(optional)* | Builds the `McpServer` and `GameEngineCli` targets; without it configure omits both, and `node mcp/ge.mjs` and `publish_game.py build` cannot drive the editor. | [nodejs.org](https://nodejs.org/) |
 | **Python 3.10 or newer** *(optional)* | Runs `Tools/Scripts/publish_game.py` and `build_deck.py`. Without it, `GamePublishingTests` is not registered. | [python.org](https://www.python.org/downloads/) |
@@ -204,10 +205,10 @@ From a Mac, `./Tools/Scripts/build-steamdeck-docker.sh` produces the same build 
 
 ## Build configurations
 
-- **Debug**: `/Od /Zi /MDd /RTC1`, iterator debugging, every libc++ hardening check (debug mode; a failed check is logged before the abort), static analysis as warnings, Vulkan validation layers on. The slowest; use it when you want every check firing.
+- **Debug**: `/Od /Zi /MDd /RTC1`, iterator debugging, every libc++ hardening check (debug mode; a failed check is logged before the abort), static analysis as warnings, Vulkan validation layers on. The slowest (10 to 30 fps in the editor is expected); use it when you want every check firing.
 - **DebugFast**: the default and the daily configuration. Same source-level debugging as Debug without the debug CRT (`/MD`, no `/RTC1`, no static analysis), validation layers off by default, asserts and standard-library precondition checks live (an out-of-range `operator[]` stops the process; libc++ runs its fast checks, which trap without a message), compiler warnings treated as errors by default on MSVC, GCC and Clang (including AppleClang).
 - **RelWithDebInfo**: `/O2` with symbols, asserts compiled out. For performance checks with usable crash stacks.
-- **Release**: optimized; the shipping configuration, and the only one a performance number comes from.
+- **Release**: optimized; the shipping configuration, and the only one a performance number comes from, on both arms of a comparison: `/Od` changes which side of a frame is the bottleneck, so a Debug delta can have the wrong sign.
 
 MSVC treats compiler warnings as errors in Debug, DebugFast and RelWithDebInfo. Non-MSVC compilers use the same configurations when `ENABLE_WERROR_NON_MSVC` is ON. A fresh configure defaults to ON for GCC, Clang and AppleClang. Existing build caches retain their saved value; use `-DENABLE_WERROR_NON_MSVC=ON` to enable it there. An explicit `OFF` opts out on non-MSVC compilers. Release does not use this option.
 

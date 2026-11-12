@@ -10,6 +10,7 @@
 
 #include "Mathematics/Matrix4x4.h"
 #include "Mathematics/Vector3.h"
+#include "Mathematics/WorldPosition.h"
 
 #include <array>
 #include <cstdint>
@@ -51,7 +52,8 @@ struct AreaShadowFrameInfo
     Mathematics::Matrix4x4 lightView{};
     Mathematics::Matrix4x4 lightProj{};
     Mathematics::Matrix4x4 lightVP{};
-    Mathematics::Vector3 position{};
+    // The light's world position in double, the point the relative shadow matrices are built from.
+    Mathematics::WorldPosition position{};
     Mathematics::Vector3 direction{};
     float lightSize = 0.0f;
     float nearPlane = 0.0f;
@@ -65,7 +67,8 @@ struct SpotShadowFrameInfo
     Mathematics::Matrix4x4 lightView{};
     Mathematics::Matrix4x4 lightProj{};
     Mathematics::Matrix4x4 lightVP{};
-    Mathematics::Vector3 position{};
+    // The light's world position in double, the point the relative shadow matrices are built from.
+    Mathematics::WorldPosition position{};
     Mathematics::Vector3 direction{};
     float nearPlane = 0.0f;
     float farPlane = 0.0f;
@@ -78,7 +81,8 @@ struct PointShadowFrameInfo
     std::array<Mathematics::Matrix4x4, kPointShadowFaceCount> lightView{};
     Mathematics::Matrix4x4 lightProj{};
     std::array<Mathematics::Matrix4x4, kPointShadowFaceCount> lightVP{};
-    Mathematics::Vector3 position{};
+    // The light's world position in double, the point the relative shadow matrices are built from.
+    Mathematics::WorldPosition position{};
     std::array<Mathematics::Vector3, kPointShadowFaceCount> direction{};
     float nearPlane = 0.0f;
     float farPlane = 0.0f;

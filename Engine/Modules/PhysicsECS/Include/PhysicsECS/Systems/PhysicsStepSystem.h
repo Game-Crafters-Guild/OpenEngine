@@ -15,11 +15,14 @@ class PhysicsWorld;
 
 namespace GameEngine::PhysicsECS
 {
-// Moves each kinematic body toward its entity's WorldTransform, then steps the physics world: in fixed steps
-// when fixedTimeStep is above 0, else one step of the frame's deltaTime.
+// Steps the physics world once by deltaTime. It runs once per step of the world's SimulationClock, with the
+// fixed delta. On the first step of a frame, it first moves each kinematic body toward its entity's
+// WorldTransform over the time of all the steps of that frame.
 class PhysicsStepSystem : public ECS::ISystem
 {
 public:
+    static constexpr ECS::SystemCadence Cadence = ECS::SystemCadence::Simulation;
+
     const char* GetName() const override { return "PhysicsStepSystem"; }
     // Contact and trigger handlers run inside the step and call the engine's main-thread script API
     // (entity.Physics, an unsubscribe), so the step runs on the updating thread, outside any job,

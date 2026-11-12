@@ -22,6 +22,8 @@ target_link_libraries(Physics
         Logger
     PRIVATE
         Platform
+        # JoltPhysicsBackend.cpp sizes Jolt's worker pool from JobSystem::AvailableProcessors.
+        JobSystem
 )
 
 # Jolt via vcpkg (default backend). vcpkg manifest feature: `physics`.

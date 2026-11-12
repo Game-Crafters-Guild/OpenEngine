@@ -19,6 +19,7 @@
 #include "Rendering/Passes/MsaaColorResolvePass.h"
 #include "Rendering/Passes/TonemapPass.h"
 #include "Rendering/ShaderCache/ShaderPackageIO.h"
+#include "TestCameraEye.h"
 #include "Types/Color.h"
 
 #include <algorithm>
@@ -246,7 +247,7 @@ class MsaaColorResolveTest : public testing::TestWithParam<uint32_t>
         cameraData.view = Mathematics::Matrix4x4::Identity();
         cameraData.proj = Mathematics::Matrix4x4::Identity();
         cameraData.viewProj = Mathematics::Matrix4x4::Identity();
-        m_Services->Views().SetCameraData(camera, cameraData);
+        m_Services->Views().SetCameraData(camera, ::GameEngine::Tests::TestCameraWithEye(cameraData), {0.1f, 1000.0f});
         m_View = m_Services->Views().AllocateView("MsaaResolveView", camera);
         ViewClearConfig clear{};
         clear.clearDepth = true;

@@ -206,7 +206,7 @@ DepthCacheStreamCamera ResolveDepthCacheStreamCamera(Engine::Renderer::RenderSer
 
     for (const auto& view : rs->Views().GetViews())
     {
-        if (!view.activeRenderPipeline || !view.Participates())
+        if (!view.RenderedByPipeline())
             continue;
         if (useCamera(view.cameraId))
             return out;
@@ -1052,7 +1052,8 @@ void OceanExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                 }
                 if (wb.ExtentX <= 0.0f || wb.ExtentZ <= 0.0f)
                     return;
-                const float32* m = wt.matrix;
+                const Mathematics::Matrix4x4 worldMatrix = wt.ToMatrix4x4(wt.GetPosition() - Mathematics::WorldPosition{});
+                const float32* m = worldMatrix.Data();
                 WaterBodyEmit e{};
                 e.X = m[12];
                 e.Y = m[13];
@@ -1126,7 +1127,8 @@ void OceanExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                 if (count < 3u)
                     return;
 
-                const float32* m = wt.matrix;
+                const Mathematics::Matrix4x4 worldMatrix = wt.ToMatrix4x4(wt.GetPosition() - Mathematics::WorldPosition{});
+                const float32* m = worldMatrix.Data();
                 PolygonBodyEmit e{};
                 e.Query.PointCount = count;
                 e.Clip.Meta[0] = static_cast<float32>(count);
@@ -1398,7 +1400,8 @@ void OceanExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                     foundSun = true;
                     // Shine is +Z (col2). OceanParams wants surface-to-sun,
                     // the opposite of travel direction.
-                    const float32* m = wt.matrix;
+                    const Mathematics::Matrix4x4 worldMatrix = wt.ToMatrix4x4(wt.GetPosition() - Mathematics::WorldPosition{});
+                    const float32* m = worldMatrix.Data();
                     const float32 fx = -m[8], fy = -m[9], fz = -m[10];
                     float32 len = std::sqrt(fx * fx + fy * fy + fz * fz);
                     if (len < 1e-6f)
@@ -1495,7 +1498,8 @@ void OceanExtractionSystem::Update(ECS::World& world, float32 deltaTime)
             {
                 if (sb.ExtentX <= 0.0f || sb.ExtentZ <= 0.0f)
                     return;
-                const float32* m = wt.matrix;
+                const Mathematics::Matrix4x4 worldMatrix = wt.ToMatrix4x4(wt.GetPosition() - Mathematics::WorldPosition{});
+                const float32* m = worldMatrix.Data();
                 OceanSeabedGPU g{};
                 g.OriginExtent[0] = m[12]; // world X of the entity origin
                 g.OriginExtent[1] = m[14]; // world Z of the entity origin
@@ -1519,7 +1523,8 @@ void OceanExtractionSystem::Update(ECS::World& world, float32 deltaTime)
             {
                 if (dc.ExtentX <= 0.0f || dc.ExtentZ <= 0.0f || dc.Depth < 0.0f)
                     return;
-                const float32* m = wt.matrix;
+                const Mathematics::Matrix4x4 worldMatrix = wt.ToMatrix4x4(wt.GetPosition() - Mathematics::WorldPosition{});
+                const float32* m = worldMatrix.Data();
                 OceanDepthContributorGPU g{};
                 g.OriginExtent[0] = m[12];
                 g.OriginExtent[1] = m[14];
@@ -1549,7 +1554,8 @@ void OceanExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                 if (renderer && !renderer->RenderLayers.Intersects(mc.ContributorLayers))
                     return;
 
-                const Mathematics::AABB aabb = bounds.Box.TransformToAABB(wt.matrix);
+                const Mathematics::Matrix4x4 worldMatrix = wt.ToMatrix4x4(wt.GetPosition() - Mathematics::WorldPosition{});
+                const Mathematics::AABB aabb = bounds.Box.TransformToAABB(worldMatrix.Data());
                 if (aabb.max.y < aabb.min.y || aabb.max.x < aabb.min.x || aabb.max.z < aabb.min.z)
                     return;
                 if (aabb.min.y > params.SeaLevel)
@@ -1616,7 +1622,8 @@ void OceanExtractionSystem::Update(ECS::World& world, float32 deltaTime)
             auto *m = materialFor(body.MaterialOverride, body.MaterialPriority, entity.id);
             if (!m)
                 return;
-            const float x = wt.matrix[12], z = wt.matrix[14];
+            const Mathematics::Vector3 position = wt.GetPosition() - Mathematics::WorldPosition{};
+            const float x = position.x, z = position.z;
             m->Bounds[0] = x - body.ExtentX;
             m->Bounds[1] = z - body.ExtentZ;
             m->Bounds[2] = x + body.ExtentX;
@@ -1641,11 +1648,12 @@ void OceanExtractionSystem::Update(ECS::World& world, float32 deltaTime)
             m->PointCount = static_cast<float>(count);
             m->Bounds[0] = m->Bounds[1] = std::numeric_limits<float>::max();
             m->Bounds[2] = m->Bounds[3] = -std::numeric_limits<float>::max();
+            const Mathematics::Matrix4x4 worldMatrix = wt.ToMatrix4x4(wt.GetPosition() - Mathematics::WorldPosition{});
+            const float32* wm = worldMatrix.Data();
             for (uint32 i = 0; i < count; ++i)
             {
-                const float x = wt.matrix[0] * body.PointX[i] + wt.matrix[8] * body.PointZ[i] + wt.matrix[12];
-                const float z =
-                    wt.matrix[2] * body.PointX[i] + wt.matrix[10] * body.PointZ[i] + wt.matrix[14];
+                const float x = wm[0] * body.PointX[i] + wm[8] * body.PointZ[i] + wm[12];
+                const float z = wm[2] * body.PointX[i] + wm[10] * body.PointZ[i] + wm[14];
                 m->Points[i][0] = x;
                 m->Points[i][1] = z;
                 m->Bounds[0] = std::min(m->Bounds[0], x);
@@ -1674,8 +1682,9 @@ void OceanExtractionSystem::Update(ECS::World& world, float32 deltaTime)
         packet.Geometry = static_cast<OceanInputGeometry>(geometry);
         packet.Priority = priority;
         packet.EntityId = entity.id;
-        packet.CenterX = wt.matrix[12];
-        packet.CenterZ = wt.matrix[14];
+        const Mathematics::Vector3 center = wt.GetPosition() - Mathematics::WorldPosition{};
+        packet.CenterX = center.x;
+        packet.CenterZ = center.z;
         packet.ExtentX = std::max(extentX, 0.0f);
         packet.ExtentZ = std::max(extentZ, 0.0f);
         packet.Feather = std::max(feather, 0.0f);
@@ -2017,7 +2026,8 @@ void OceanExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                     e.Albedo = si.Albedo;
                     e.Depth = si.Depth;
                     e.ReverseFlow = si.ReverseFlow;
-                    const float32* m = wt.matrix; // column-major: local -> world
+                    const Mathematics::Matrix4x4 worldMatrix = wt.ToMatrix4x4(wt.GetPosition() - Mathematics::WorldPosition{});
+                    const float32* m = worldMatrix.Data(); // column-major: local -> world
                     e.Samples.reserve(frames.size());
                     for (const Spline::SplineFrame& fr : frames)
                     {
@@ -2126,7 +2136,8 @@ void OceanExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                 {
                     if (fs.ExtentX <= 0.0f || fs.ExtentZ <= 0.0f)
                         return;
-                    const float32* m = wt.matrix;
+                    const Mathematics::Matrix4x4 worldMatrix = wt.ToMatrix4x4(wt.GetPosition() - Mathematics::WorldPosition{});
+                    const float32* m = worldMatrix.Data();
                     OceanFlowSourceGPU g{};
                     g.OriginExtent[0] = m[12]; // world X of the entity origin
                     g.OriginExtent[1] = m[14]; // world Z of the entity origin
@@ -2148,7 +2159,8 @@ void OceanExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                     if (flowMapGuid.IsNull())
                         return;
 
-                    const float32* m = wt.matrix;
+                    const Mathematics::Matrix4x4 worldMatrix = wt.ToMatrix4x4(wt.GetPosition() - Mathematics::WorldPosition{});
+                    const float32* m = worldMatrix.Data();
                     OceanFlowMapSourceGPU g{};
                     g.OriginExtent[0] = m[12]; // world X of the entity origin
                     g.OriginExtent[1] = m[14]; // world Z of the entity origin
@@ -2225,7 +2237,8 @@ void OceanExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                 if (maskGuid.IsNull())
                     return;
 
-                const float32* m = wt.matrix;
+                const Mathematics::Matrix4x4 worldMatrix = wt.ToMatrix4x4(wt.GetPosition() - Mathematics::WorldPosition{});
+                const float32* m = worldMatrix.Data();
                 OceanWaveMaskTextureSourceGPU g{};
                 g.OriginExtent[0] = m[12]; // world X of the entity origin
                 g.OriginExtent[1] = m[14]; // world Z of the entity origin
@@ -2384,7 +2397,8 @@ void OceanExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                 {
                     if (cs.ExtentX <= 0.0f || cs.ExtentZ <= 0.0f)
                         return;
-                    const float32* m = wt.matrix;
+                    const Mathematics::Matrix4x4 worldMatrix = wt.ToMatrix4x4(wt.GetPosition() - Mathematics::WorldPosition{});
+                    const float32* m = worldMatrix.Data();
                     OceanClipSourceGPU g{};
                     g.OriginExtent[0] = m[12]; // world X of the entity origin
                     g.OriginExtent[1] = m[14]; // world Z of the entity origin
@@ -2418,7 +2432,8 @@ void OceanExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                 {
                     if (as.ExtentX <= 0.0f || as.ExtentZ <= 0.0f)
                         return;
-                    const float32* m = wt.matrix;
+                    const Mathematics::Matrix4x4 worldMatrix = wt.ToMatrix4x4(wt.GetPosition() - Mathematics::WorldPosition{});
+                    const float32* m = worldMatrix.Data();
                     OceanAlbedoSourceGPU g{};
                     g.OriginExtent[0] = m[12]; // world X of the entity origin
                     g.OriginExtent[1] = m[14]; // world Z of the entity origin
@@ -2479,7 +2494,8 @@ void OceanExtractionSystem::Update(ECS::World& world, float32 deltaTime)
             {
                 if (uv.ExtentX <= 0.0f || uv.ExtentY <= 0.0f || uv.ExtentZ <= 0.0f)
                     return;
-                const float32* m = wt.matrix;
+                const Mathematics::Matrix4x4 worldMatrix = wt.ToMatrix4x4(wt.GetPosition() - Mathematics::WorldPosition{});
+                const float32* m = worldMatrix.Data();
                 OceanRenderFeature::UnderwaterVolumeBox b{};
                 b.CenterX = m[12];
                 b.CenterY = m[13];
@@ -2497,7 +2513,8 @@ void OceanExtractionSystem::Update(ECS::World& world, float32 deltaTime)
             {
                 if (uv.ExtentX <= 0.0f || uv.ExtentY <= 0.0f || uv.ExtentZ <= 0.0f)
                     return;
-                const float32* m = wt.matrix;
+                const Mathematics::Matrix4x4 worldMatrix = wt.ToMatrix4x4(wt.GetPosition() - Mathematics::WorldPosition{});
+                const float32* m = worldMatrix.Data();
                 OceanRenderFeature::UnderwaterVolumeBox b{};
                 b.CenterX = m[12];
                 b.CenterY = m[13];
@@ -2515,7 +2532,8 @@ void OceanExtractionSystem::Update(ECS::World& world, float32 deltaTime)
             {
                 if (uv.ExtentX <= 0.0f || uv.ExtentY <= 0.0f || uv.ExtentZ <= 0.0f)
                     return;
-                const float32* m = wt.matrix;
+                const Mathematics::Matrix4x4 worldMatrix = wt.ToMatrix4x4(wt.GetPosition() - Mathematics::WorldPosition{});
+                const float32* m = worldMatrix.Data();
                 OceanRenderFeature::UnderwaterVolumeBox b{};
                 b.CenterX = m[12];
                 b.CenterY = m[13];
@@ -2543,7 +2561,8 @@ void OceanExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                 {
                     if (imp.Radius <= 0.0f)
                         return;
-                    const float32* m = wt.matrix;
+                    const Mathematics::Matrix4x4 worldMatrix = wt.ToMatrix4x4(wt.GetPosition() - Mathematics::WorldPosition{});
+                    const float32* m = worldMatrix.Data();
                     OceanWaveImpulseGPU g{};
                     g.CenterRadiusAmp[0] = m[12]; // world X of the entity origin
                     g.CenterRadiusAmp[1] = m[14]; // world Z of the entity origin
@@ -2566,7 +2585,8 @@ void OceanExtractionSystem::Update(ECS::World& world, float32 deltaTime)
                     [&](ECS::EntityHandle entity, const Components::OceanWaterInteraction& inter,
                         const Components::WorldTransform& wt)
                     {
-                        const float32* m = wt.matrix;
+                        const Mathematics::Matrix4x4 worldMatrix = wt.ToMatrix4x4(wt.GetPosition() - Mathematics::WorldPosition{});
+                        const float32* m = worldMatrix.Data();
                         const float32 wx = m[12];
                         const float32 wy = m[13];
                         const float32 wz = m[14];
@@ -2717,12 +2737,12 @@ void OceanExtractionSystem::Update(ECS::World& world, float32 deltaTime)
         // Cascade scale (MinScale -> finest cascade extent) + texel resolution
         // (LodDataResolution) + grid density. Applied once per frame by
         // OceanRenderFeature::ApplyCascadeConfig.
-        const uint32 geometryGridSize = ResolveOceanGeometryGridSize(
+        const uint32 ringCellsPerTile = ResolveOceanRingCellsPerTile(
             renderer.GeometryUpSampleFactor, renderer.GeometryDownSampleFactor);
-        params.GeometryGridSize = static_cast<float32>(geometryGridSize);
+        params.RingCellsPerTile = static_cast<float32>(ringCellsPerTile);
         feature.SetCascadeBaseScale(renderer.MinScale);
         feature.SetCascadeResolution(renderer.LodDataResolution);
-        feature.SetGeometryGridSize(geometryGridSize);
+        feature.SetRingCellsPerTile(ringCellsPerTile);
         feature.SetCombineEnabled(renderer.CombineCascade);
         OceanRasterDepthCaptureSettings rasterSettings{};
         rasterSettings.Enabled = renderer.RasterDepthCapture;
@@ -2739,8 +2759,8 @@ void OceanExtractionSystem::Update(ECS::World& world, float32 deltaTime)
         feature.SetLodCountLimit(0);
         feature.SetCascadeBaseScale(0.0f);
         feature.SetCascadeResolution(0u);
-        params.GeometryGridSize = static_cast<float32>(kDefaultOceanGeometryGridSize);
-        feature.SetGeometryGridSize(0u);
+        params.RingCellsPerTile = static_cast<float32>(kDefaultOceanRingCellsPerTile);
+        feature.SetRingCellsPerTile(0u);
         feature.SetCombineEnabled(false);
         feature.SetRasterDepthCaptureSettings({});
     }

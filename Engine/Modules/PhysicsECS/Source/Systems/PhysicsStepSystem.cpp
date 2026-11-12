@@ -26,11 +26,10 @@ bool BitEqual(const Physics::Transform& a, const Physics::Transform& b)
 Physics::Transform PoseOf(const GameEngine::Components::WorldTransform& worldTransform)
 {
     GameEngine::Components::Transform worldPose{};
-    std::memcpy(worldPose.matrix, worldTransform.matrix, sizeof(worldPose.matrix));
-    const auto position = worldPose.GetPosition();
+    worldPose.Basis = worldTransform.Basis;
     const auto rotation = worldPose.GetRotation().GetGLM();
     Physics::Transform pose{};
-    pose.position = Physics::Vector3(position.x, position.y, position.z);
+    pose.position = worldTransform.Position;
     pose.rotation = Physics::Quaternion(rotation.w, rotation.x, rotation.y, rotation.z);
     return pose;
 }
@@ -38,19 +37,6 @@ Physics::Transform PoseOf(const GameEngine::Components::WorldTransform& worldTra
 bool HandleLess(const Physics::BodyHandle& a, const Physics::BodyHandle& b)
 {
     return a.Value() < b.Value();
-}
-
-// The number of fixed steps the accumulator holds, at most maxSubSteps. The step loop subtracts the same
-// fixed step the same number of times.
-int32 CountFixedSteps(float32 accumulator, float32 fixedTimeStep, int32 maxSubSteps)
-{
-    int32 steps = 0;
-    while (accumulator >= fixedTimeStep && steps < maxSubSteps)
-    {
-        accumulator -= fixedTimeStep;
-        ++steps;
-    }
-    return steps;
 }
 } // namespace
 
@@ -139,67 +125,37 @@ void PhysicsStepSystem::Update(ECS::World& world, float32 deltaTime)
     if (!w)
         return;
 
-    // Time the whole step (all fixed sub-steps + interpolation snapshot) so the
-    // editor Monitors panel can chart per-frame physics cost. This is the clean
-    // simulation boundary; measuring here keeps the timing decoupled from the
-    // scheduler and from Core diagnostics.
+    // Time the step so the editor Monitors panel can chart the physics cost of a frame.
     const auto stepStart = std::chrono::steady_clock::now();
 
     const auto& s = PhysicsWorldService::GetSettings();
     const int32 collisionSteps = (s.collisionSteps > 0) ? s.collisionSteps : 1;
 
-    // Fixed-timestep stepping (recommended for stability and determinism).
-    // Note: PhysicsWorld is currently a global singleton, so this accumulator is effectively global too.
-    static float32 accumulator = 0.0f;
-    static std::uint64_t lastGen = 0;
-    const std::uint64_t gen = PhysicsWorldService::GetWorldGeneration();
-    if (gen != lastGen)
+    // A call outside SystemManager::Update sees step 0 and counts as a frame of one step.
+    const ECS::SimulationClock& clock = world.GetSimulationClock();
+    const uint32 stepInFrame = clock.GetStepInFrame();
+    const bool firstStepOfFrame = stepInFrame <= 1;
+    if (firstStepOfFrame)
     {
-        accumulator = 0.0f;
-        lastGen = gen;
+        const uint32 stepsThisFrame = (stepInFrame == 0) ? 1u : clock.GetStepsThisFrame();
+        MoveKinematicBodies(world, *w, static_cast<float32>(stepsThisFrame) * deltaTime);
     }
 
-    const float32 fixed = s.fixedTimeStep;
-    const int32 maxSub = (s.maxSubSteps > 0) ? s.maxSubSteps : 1;
-
-    if (fixed > 0.0f)
-    {
-        // Clamp to avoid "spiral of death" on long frames (e.g., debugger break).
-        const float32 clampedDt = (deltaTime > 0.25f) ? 0.25f : ((deltaTime < 0.0f) ? 0.0f : deltaTime);
-        accumulator += clampedDt;
-
-        const int32 steps = CountFixedSteps(accumulator, fixed, maxSub);
-        MoveKinematicBodies(world, *w, static_cast<float32>(steps) * fixed);
-        for (int32 step = 0; step < steps; ++step)
+    // Snapshot previous transforms for interpolation (prev <- current).
+    world.Query<ECS::Write<GameEngine::Components::PhysicsBody>>()
+        .Each(
+        [&](ECS::EntityHandle /*e*/, GameEngine::Components::PhysicsBody& body)
         {
-            // Snapshot previous transforms for interpolation (prev <- current).
-            world.Query<ECS::Write<GameEngine::Components::PhysicsBody>>()
-                .Each(
-                [&](ECS::EntityHandle /*e*/, GameEngine::Components::PhysicsBody& body)
-                {
-                    if (!body.initialized || !w->IsBodyValid(body.body))
-                        return;
-                    body.prevPhysicsTransform = w->GetBodyTransform(body.body);
-                    body.hasPrevPhysicsTransform = true;
-                });
+            if (!body.initialized || !w->IsBodyValid(body.body))
+                return;
+            body.prevPhysicsTransform = w->GetBodyTransform(body.body);
+            body.hasPrevPhysicsTransform = true;
+        });
 
-            w->Step(fixed, collisionSteps);
-            accumulator -= fixed;
-        }
-
-        const float32 alpha = (fixed > 0.0f) ? (accumulator / fixed) : 1.0f;
-        PhysicsWorldService::SetRenderInterpolationAlpha(alpha);
-    }
-    else
-    {
-        // Variable timestep fallback.
-        MoveKinematicBodies(world, *w, deltaTime);
-        w->Step(deltaTime, collisionSteps);
-        PhysicsWorldService::SetRenderInterpolationAlpha(1.0f);
-    }
+    w->Step(deltaTime, collisionSteps);
 
     const auto stepEnd = std::chrono::steady_clock::now();
-    PhysicsWorldService::SetLastStepMs(
-        static_cast<float32>(std::chrono::duration<double, std::milli>(stepEnd - stepStart).count()));
+    const float32 stepMs = static_cast<float32>(std::chrono::duration<double, std::milli>(stepEnd - stepStart).count());
+    PhysicsWorldService::AddStepMs(stepMs);
 }
 } // namespace GameEngine::PhysicsECS

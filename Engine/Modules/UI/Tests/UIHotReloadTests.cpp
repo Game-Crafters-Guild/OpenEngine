@@ -1627,6 +1627,76 @@ TEST(UIHotReloadTests, ReconcileAnnouncesToTheBoundTargetAfterReplacingElements)
     EXPECT_EQ(clicks, 1) << "a preserved button was wired again and fires once per reconcile";
 }
 
+// A children-only binding gives the target the layout root's id, as it gives it the root's
+// classes. A swap to a layout whose root has no id clears it, but keeps an id that code set.
+TEST(UIHotReloadTests, ChildrenBindingGivesTheTargetTheLayoutRootId)
+{
+    auto dev = MakeHeadlessDevice();
+    if (!dev)
+    {
+        GTEST_SKIP() << "No device";
+    }
+    UIRegistration::RegisterBuiltInControls();
+
+    auto assetRoot = std::filesystem::temp_directory_path() / "ui_children_binding_root_id_assets";
+    std::filesystem::create_directories(assetRoot);
+    JobSystem::WorkStealingThreadPool pool(2);
+    AssetManager assets;
+    ASSERT_TRUE(assets.Initialize(assetRoot, &pool));
+
+    const auto pathWithId = MakeTagIdentityUxml("root_id_with_id.uxml",
+                                                "<UIElement id=\"build-hud\" class=\"build-hud\">\n"
+                                                "  <UIElement id=\"build-panel\"/>\n"
+                                                "</UIElement>\n");
+    const auto pathWithoutId = MakeTagIdentityUxml("root_id_without_id.uxml",
+                                                   "<UIElement>\n"
+                                                   "  <UIElement id=\"other-panel\"/>\n"
+                                                   "</UIElement>\n");
+    auto& reg = assets.GetRegistry();
+    ASSERT_TRUE(reg.RegisterAsset(pathWithId));
+    ASSERT_TRUE(reg.RegisterAsset(pathWithoutId));
+    auto assetWithId = assets.LoadAssetAsync(reg.GetAssetGUID(pathWithId), AssetLoadPriority::Normal).get();
+    auto assetWithoutId = assets.LoadAssetAsync(reg.GetAssetGUID(pathWithoutId), AssetLoadPriority::Normal).get();
+    auto* layoutWithId = dynamic_cast<UILayoutAsset*>(assetWithId.get());
+    auto* layoutWithoutId = dynamic_cast<UILayoutAsset*>(assetWithoutId.get());
+    ASSERT_NE(layoutWithId, nullptr);
+    ASSERT_NE(layoutWithoutId, nullptr);
+
+    UIManager ui(dev.get(), &assets);
+    auto rootEl = std::make_unique<UIElement>();
+    auto containerOwned = std::make_unique<UIElement>();
+    UIElement* container = containerOwned.get();
+    rootEl->AddChild(std::move(containerOwned));
+    ui.SetRoot(std::move(rootEl));
+
+    ASSERT_TRUE(ui.BindLayoutToSubtreeChildrenFromAsset(container, *layoutWithId));
+    UIElement* root = ui.GetRootElement();
+    EXPECT_EQ(root->FindById("build-hud"_sid), container) << "the layout root's id names the container";
+    EXPECT_TRUE(container->HasClass("build-hud"));
+    UIElement* panel = root->FindById("build-panel"_sid);
+    ASSERT_NE(panel, nullptr);
+    EXPECT_EQ(panel->GetParent(), container);
+
+    ASSERT_TRUE(ui.BindLayoutToSubtreeChildrenFromAsset(container, *layoutWithoutId));
+    EXPECT_EQ(root->FindById("build-hud"_sid), nullptr) << "a swapped-out layout's root id must not stay";
+    EXPECT_TRUE(container->GetId().empty());
+    EXPECT_NE(root->FindById("other-panel"_sid), nullptr);
+
+    ASSERT_TRUE(ui.BindLayoutToSubtreeChildrenFromAsset(container, *layoutWithId));
+    container->SetId("hud-from-code");
+    ASSERT_TRUE(ui.BindLayoutToSubtreeChildrenFromAsset(container, *layoutWithoutId));
+    EXPECT_EQ(container->GetId(), "hud-from-code") << "a swap keeps an id that code set";
+
+    // An inactive dock tab is detached from the live root, so the bind seeds it directly.
+    auto detached = std::make_unique<UIElement>();
+    ASSERT_TRUE(ui.BindLayoutToSubtreeChildrenFromAsset(detached.get(), *layoutWithId));
+    EXPECT_EQ(detached->GetId(), "build-hud") << "the seed gives a detached container the root's id";
+    EXPECT_TRUE(detached->HasClass("build-hud"));
+    ASSERT_TRUE(ui.BindLayoutToSubtreeChildrenFromAsset(detached.get(), *layoutWithoutId));
+    EXPECT_TRUE(detached->GetId().empty()) << "a detached swap clears the root id that the seed set";
+    EXPECT_FALSE(detached->HasClass("build-hud"));
+}
+
 // A save that is not atomic — truncate, then write — puts the file through
 // zero length and then through a half-written prefix before it is complete.
 // Neither state is an edit the author made, and applying either one costs the
@@ -1768,4 +1838,71 @@ TEST(UIHotReloadTests, ControlOwnedStylesResistProjectShadowing)
     }
     std::error_code ec;
     fs::remove_all(root, ec);
+}
+
+// A UI module control sheet (a UI::kControlAssetPaths path in the editor mount), requested through
+// a live UIManager, loses an equal-specificity tie to a host sheet. A reload of the sheet and a
+// rebuild of its asset object keep that order.
+TEST(UIHotReloadTests, ControlSheetLosesEqualSpecificityTieToHostSheetAcrossReloadAndRebuild)
+{
+    auto dev = MakeHeadlessDevice();
+    if (!dev)
+        GTEST_SKIP() << "No device";
+    UiRgHarness rg(dev.get());
+    UIRegistration::RegisterBuiltInControls();
+    namespace fs = std::filesystem;
+    const TemporaryStyleDirectory root;
+    fs::create_directories(root.Path / "project");
+    fs::create_directories(root.Path / "editor/UI/controls");
+    const fs::path controlPath = root.Path / "editor/UI/controls/Button.css";
+    std::ofstream(controlPath) << ".probe { width: 50px; height: 10px; }\n";
+
+    JobSystem::WorkStealingThreadPool pool(2);
+    AssetManager assets;
+    ASSERT_TRUE(assets.Initialize(root.Path / "project", &pool, root.Path / "state/assets.assetdb",
+                                  root.Path / "state/cache"));
+    AssetSourceDesc editorSource{};
+    editorSource.Alias = std::string(kAssetSourceAliasEditor);
+    editorSource.Root = root.Path / "editor";
+    editorSource.RegisterFileWatcher = false;
+    ASSERT_TRUE(assets.RegisterSource(editorSource));
+    assets.WaitForStartupScan(std::string(kAssetSourceAliasEditor));
+    assets.WaitForStartupScan();
+
+    UIManager ui(dev.get(), &assets);
+    Stylesheet host{};
+    ASSERT_TRUE(UIParsing::CSSParser::ParseStylesFromString(".probe { width: 120px; }\n", host));
+    ui.AddStylesheet(std::make_shared<const Stylesheet>(std::move(host)));
+
+    auto tree = std::make_unique<UIElement>();
+    auto probe = std::make_unique<UIElement>();
+    probe->AddClass("probe");
+    probe->RequestSubtreeStyleAssetPath("UI/controls/Button.css", std::string(kAssetSourceAliasEditor));
+    UIElement* probeRaw = probe.get();
+    UIElement* treeRaw = tree.get();
+    tree->AddChild(std::move(probe));
+    ui.SetRoot(std::move(tree));
+    ui.Update(0.0f, false);
+    DriveUiRender(ui, rg);
+    ASSERT_EQ(probeRaw->GetRequestedSubtreeStyleAssetGuids().size(), 1u) << "the control sheet did not attach";
+    EXPECT_NEAR(probeRaw->GetLayoutHeight(), 10.0f, 1.0f) << "the control sheet does not style the element";
+    EXPECT_NEAR(probeRaw->GetLayoutWidth(), 120.0f, 1.0f) << "the control sheet won a tie against the host sheet";
+
+    const GUID controlGuid = probeRaw->GetRequestedSubtreeStyleAssetGuids().front();
+    std::ofstream(controlPath, std::ios::trunc) << ".probe { width: 60px; height: 30px; }\n";
+    ASSERT_EQ(assets.ReloadAssetNow(controlGuid), ReloadOutcome::Reloaded);
+    assets.GetEventDispatcher().DispatchEvent(
+        AssetEvent(AssetEventType::AssetReloaded, controlGuid, AssetType::UIStyle, controlPath.string()));
+    ui.Update(0.0f, false);
+    DriveUiRender(ui, rg);
+    EXPECT_NEAR(probeRaw->GetLayoutHeight(), 30.0f, 1.0f) << "the reload did not reach the element";
+    EXPECT_NEAR(probeRaw->GetLayoutWidth(), 120.0f, 1.0f) << "the reloaded control sheet won a tie against the host sheet";
+
+    // A new asset object for the sheet, attached again through the element's cached GUID.
+    assets.UnregisterLoadedAsset(controlGuid);
+    treeRaw->AddChild(treeRaw->TakeChild(probeRaw));
+    ui.Update(0.0f, false);
+    DriveUiRender(ui, rg);
+    EXPECT_NEAR(probeRaw->GetLayoutHeight(), 30.0f, 1.0f) << "the rebuilt control sheet does not style the element";
+    EXPECT_NEAR(probeRaw->GetLayoutWidth(), 120.0f, 1.0f) << "the rebuilt control sheet won a tie against the host sheet";
 }

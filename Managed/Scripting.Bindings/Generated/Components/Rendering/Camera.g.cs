@@ -192,5 +192,8 @@ namespace GameEngine.Scripting
 
         [FieldOffset(801)]
         public bool PixelPerfectExpand;
+
+        [FieldOffset(802)]
+        public bool WorldDrawingPaused;
     }
 }

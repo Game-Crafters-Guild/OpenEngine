@@ -13,9 +13,13 @@
 #include "Rendering/Core/CullDeformationMargins.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/RenderGraph/RGFrame.h"
+#include "Mathematics/Vector3Int.h"
+#include "Mathematics/WorldPosition.h"
 #include "Types/FunctionRef.h"
 
+#include <algorithm>
 #include <atomic>
+#include <cassert>
 #include <cstddef>
 #include <memory>
 #include <mutex>
@@ -31,6 +35,64 @@ namespace Rendering
 // Forward declarations
 class IDevice;
 class CommandList;
+
+// Each sector axis is a 21-bit two's-complement integer in [-2^20, 2^20 - 1], about +/-1.07e9 m.
+// Three axes pack into GPUInstance::sectorPacked. GLSL mirror: Shaders/Includes/instance_sector.glsl.
+inline constexpr int32_t kSectorAxisBits = 21;
+inline constexpr uint32_t kSectorAxisMask = (1u << kSectorAxisBits) - 1u; // 0x1FFFFF
+inline constexpr int32_t kSectorAxisMin = -(1 << (kSectorAxisBits - 1));
+inline constexpr int32_t kSectorAxisMax = (1 << (kSectorAxisBits - 1)) - 1;
+
+// An axis past the 21-bit range asserts in development and clamps in release: a wrap would move the
+// instance to the far side of the world.
+inline int32_t ClampSectorAxis(int32_t s)
+{
+    assert(s >= kSectorAxisMin && s <= kSectorAxisMax && "render-origin sector axis out of 21-bit range");
+    return std::clamp(s, kSectorAxisMin, kSectorAxisMax);
+}
+
+// Pack three 21-bit sector axes into two 32-bit words.
+//   p0: [0..20] X, [21..31] low 11 bits of Y
+//   p1: [0..9]  high 10 bits of Y, [10..30] Z, [31] unused
+inline void PackSector(int32_t sx, int32_t sy, int32_t sz, uint32_t& p0, uint32_t& p1)
+{
+    const uint32_t ux = static_cast<uint32_t>(ClampSectorAxis(sx)) & kSectorAxisMask;
+    const uint32_t uy = static_cast<uint32_t>(ClampSectorAxis(sy)) & kSectorAxisMask;
+    const uint32_t uz = static_cast<uint32_t>(ClampSectorAxis(sz)) & kSectorAxisMask;
+    p0 = ux | ((uy & 0x7FFu) << 21);
+    p1 = (uy >> 11) | (uz << 10);
+}
+
+// The sign-extending decode of one 21-bit axis, as ge_UnpackInstanceSector does it.
+inline int32_t SignExtendSectorAxis(uint32_t v)
+{
+    const uint32_t low = v & kSectorAxisMask;
+    const uint32_t signBit = 1u << (kSectorAxisBits - 1);
+    return (low & signBit) ? static_cast<int32_t>(low | ~kSectorAxisMask) : static_cast<int32_t>(low);
+}
+
+inline void UnpackSector(uint32_t p0, uint32_t p1, int32_t& sx, int32_t& sy, int32_t& sz)
+{
+    const uint32_t ux = p0 & kSectorAxisMask;
+    const uint32_t uy = ((p0 >> 21) & 0x7FFu) | ((p1 & 0x3FFu) << 11);
+    const uint32_t uz = (p1 >> 10) & kSectorAxisMask;
+    sx = SignExtendSectorAxis(ux);
+    sy = SignExtendSectorAxis(uy);
+    sz = SignExtendSectorAxis(uz);
+}
+
+// A point local to the sector packed in (p0, p1), moved to the frame of the origin of `originSector`.
+// The integer sectors subtract first, then the point rounds to fp32 once, as ge_SectorRelativePoint
+// does on the GPU. Use originSector (0,0,0) for the world-space point.
+inline Vector3 SectorLocalPointRelativeTo(const Vector3& local, uint32_t p0, uint32_t p1,
+                                          const Mathematics::Vector3Int& originSector)
+{
+    Mathematics::Vector3Int sector;
+    UnpackSector(p0, p1, sector.x, sector.y, sector.z);
+    const Mathematics::Vector3Int delta{sector.x - originSector.x, sector.y - originSector.y,
+                                        sector.z - originSector.z};
+    return Mathematics::WorldPosition::FromSector(delta, local) - Mathematics::WorldPosition{};
+}
 
 /**
  * @brief GPU-resident instance data
@@ -59,7 +121,8 @@ struct GPUInstance
     uint32_t materialIndex;  // Index into MaterialSystem's per-material tables
     uint32_t flags;          // Instance flags (visible, cast shadows, etc.)
     float lodBias;           // LOD bias for this instance
-    Vector3 boundingCenter;  // Bounding sphere center (world space)
+    Vector3 boundingCenter;  // Bounding sphere center, local to the sector in sectorPacked. A reader
+                             // composes it with SectorLocalPointRelativeTo (ge_SectorRelativePoint on the GPU).
     float boundingRadius;    // Bounding sphere radius
     uint32_t skinPaletteOffset; // Offset (in bone-slot units; 1 slot = 3 vec4 rows in the
                                 // mat3x4 layout — see Includes/bone_palette.glsl) into
@@ -67,13 +130,8 @@ struct GPUInstance
     uint32_t runtimeId;         // Phase 6: SkeletonStore runtime id, used by the
                                 // per-runtime visibility-aggregation pass to gate
                                 // skinning compute work. 0 for unskinned entities.
-    uint32_t sectorPacked[2];   // Packed 21-bit-per-axis render-origin sector for camera-relative
-                                // rendering (Engine/Rendering/RenderOrigin.h::PackSector). Zero =>
-                                // sector (0,0,0) => transform holds full world space and the 240
-                                // bytes match the pre-camera-relative layout exactly, so
-                                // UpdateInstance's byte-compare still treats an untagged instance
-                                // as identity (quiescence preserved). custom0 still lands on a
-                                // std430 vec4 boundary. Always build instances with `GPUInstance{}`.
+    uint32_t sectorPacked[2];   // The sector of transform and boundingCenter, 21 bits per axis (PackSector).
+                                // Zero is sector (0,0,0), where both are world space. Build with `GPUInstance{}`.
     Vector4 custom0 = Vector4(1.0f, 1.0f, 1.0f, 1.0f); // Per-instance shader payload.
 };
 static_assert(offsetof(GPUInstance, normalMatrixCol0) == 128, "GPUInstance.normalMatrixCol0 offset drift");
@@ -88,11 +146,11 @@ static_assert(sizeof(GPUInstance) == 240,
  * @brief Coalesced scatter-hot mirror of the fields draw_command_scatter.comp
  *        reads from GPUInstance.
  *
- * The scatter reads only 32 of the 240 GPUInstance bytes (meshIndex,
- * materialIndex, flags, lodBias, boundingCenter, boundingRadius) but strides
+ * The scatter reads only 40 of the 240 GPUInstance bytes (meshIndex,
+ * materialIndex, flags, lodBias, boundingCenter, boundingRadius, sectorPacked) but strides
  * the full 240 B struct, so consecutive threads' reads land in disjoint cache
  * lines (uncoalesced — the 48% fetch cost in the Scatter.World attribution).
- * This tightly-packed 32 B array lets consecutive threads read consecutive
+ * This tightly-packed 40 B array lets consecutive threads read consecutive
  * bytes → coalesced. It is written alongside GPUInstance in the three instance
  * mutators (Add/Update/Remove) so it stays in exact lockstep with the
  * authoritative buffer; GPUInstance remains the sole source for shading.
@@ -107,23 +165,30 @@ struct GPUInstanceScatterHot
     uint32_t materialIndex; // 4
     uint32_t flags;         // 8  (bits 16..31 = 16-bit world tag; bit 4 mirrored)
     float lodBias;          // 12
-    Vector3 boundingCenter; // 16 (std430 vec3 lands on the 16 B boundary)
+    Vector3 boundingCenter; // 16 (three scalars in GLSL: the struct stays 4 B aligned)
     float boundingRadius;   // 28
+    uint32_t sectorPacked[2]; // 32 (the sector boundingCenter is local to)
 };
-static_assert(sizeof(GPUInstanceScatterHot) == 32,
-              "GPUInstanceScatterHot must be 32 bytes to match the shader's std430 layout");
+static_assert(sizeof(GPUInstanceScatterHot) == 40,
+              "GPUInstanceScatterHot must be 40 bytes to match the shader's std430 layout");
 static_assert(offsetof(GPUInstanceScatterHot, boundingCenter) == 16,
-              "GPUInstanceScatterHot.boundingCenter must sit on the std430 vec3 boundary");
+              "GPUInstanceScatterHot.boundingCenter offset drift");
 static_assert(offsetof(GPUInstanceScatterHot, boundingRadius) == 28,
               "GPUInstanceScatterHot.boundingRadius offset drift");
+static_assert(offsetof(GPUInstanceScatterHot, sectorPacked) == 32,
+              "GPUInstanceScatterHot.sectorPacked offset drift");
 
 /// Extract the scatter-hot fields from a full instance. Kept inline so the
 /// three mutators write the mirror without indirection.
 inline GPUInstanceScatterHot MakeScatterHot(const GPUInstance& instance)
 {
-    return GPUInstanceScatterHot{instance.meshIndex, instance.materialIndex,
-                                 instance.flags,     instance.lodBias,
-                                 instance.boundingCenter, instance.boundingRadius};
+    return GPUInstanceScatterHot{instance.meshIndex,
+                                 instance.materialIndex,
+                                 instance.flags,
+                                 instance.lodBias,
+                                 instance.boundingCenter,
+                                 instance.boundingRadius,
+                                 {instance.sectorPacked[0], instance.sectorPacked[1]}};
 }
 
 /**
@@ -222,13 +287,15 @@ inline constexpr uint32_t kCullPassDropEditorHidden = 1u << 1;
 
 struct GPUCullingData
 {
+    // The view, the projection and the planes take points relative to the origin of originSector.
+    // A kernel composes each instance center against originSector (ge_SectorRelativePoint).
     Matrix4x4 viewMatrix;     // View matrix
     Matrix4x4 projMatrix;     // Projection matrix
     Matrix4x4 viewProjMatrix; // Combined view-projection matrix
     // Per-view frustum planes: [view][L,R,B,T,N,F]. Matches the spec-const
     // `kViewCount` variant selected at PSO creation time on the GPU side.
     Vector4 frustumPlanes[kMaxViewsPerCullingDispatch][6];
-    Vector3 cameraPosition;   // Camera position (world space)
+    Mathematics::Vector3Int originSector; // The render origin sector of the view
     float nearPlane;          // Near plane distance
 	    Vector3 cameraForward;    // Camera forward direction (MUST match shader!)
 	    float farPlane;           // Far plane distance
@@ -266,7 +333,7 @@ struct GPUCullingData
 static_assert(sizeof(GPUCullingData) == 656,
               "GPUCullingData must match the culling shaders' std430 layout");
 static_assert(offsetof(GPUCullingData, frustumPlanes) == 192, "GPUCullingData.frustumPlanes offset drift");
-static_assert(offsetof(GPUCullingData, cameraPosition) == 576, "GPUCullingData.cameraPosition offset drift");
+static_assert(offsetof(GPUCullingData, originSector) == 576, "GPUCullingData.originSector offset drift");
 static_assert(offsetof(GPUCullingData, cameraForward) == 592, "GPUCullingData.cameraForward offset drift");
 static_assert(offsetof(GPUCullingData, firstInstance) == 608, "GPUCullingData.firstInstance offset drift");
 static_assert(offsetof(GPUCullingData, passFlags) == 624, "GPUCullingData.passFlags offset drift");
@@ -285,21 +352,17 @@ inline constexpr float kCullMarginTightCascade = 1.05f;
 /**
  * @brief Per-frame GPUScene resources
  *
- * This struct groups the subset of GPUScene buffers that may need to
- * vary per frame once true multi-frame-in-flight support is enabled.
- *
- * Initially, all frames alias a single shared physical buffer for each
- * resource type (see docs/contributing/gpu-buffers-and-frames-in-flight.mdx).
- * This keeps behavior backward compatible while providing a clear
- * extension point for future per-frame buffers.
+ * The buffers of one frame-in-flight slot. The CPU writes a slot only behind
+ * its BeginFrame (see docs/contributing/gpu-buffers-and-frames-in-flight.mdx).
+ * Each slot grows its instance-sized buffers on its own turn.
  */
 struct GPUSceneFrameResources
 {
     BufferHandle instanceBuffer;
-    BufferHandle scatterHotBuffer; // 32 B/instance coalesced mirror (scatter fetch)
+    BufferHandle scatterHotBuffer; // 40 B/instance coalesced mirror (scatter fetch)
     BufferHandle meshBuffer;
-    BufferHandle visibilityBuffer;
     BufferHandle indirectArgsBuffer;
+    uint32_t instanceCapacity = 0; // rows that instanceBuffer and scatterHotBuffer hold
 };
 
 /**
@@ -353,7 +416,13 @@ class GPUScene
     GPUScene(IDevice* device);
     ~GPUScene();
 
-    // Scene management
+    /**
+     * @brief Creates the GPU buffers.
+     * @param maxInstances The most instances the GPU holds. The instance buffers start at
+     *        16,384 rows (or maxInstances when smaller) and grow by powers of two to this limit
+     *        as the scene grows; rows above it are reported and do not reach the GPU.
+     * @param maxMeshes The rows of the mesh table, allocated at once.
+     */
     bool Initialize(uint32_t maxInstances = 1000000, uint32_t maxMeshes = 100000);
     void Shutdown();
 
@@ -569,7 +638,7 @@ class GPUScene
     struct GPUSceneFrameRG
     {
         RenderGraph::RGBuffer Instances{};
-        // Coalesced 32 B/instance scatter-hot mirror. Invalid when the compact
+        // Coalesced 40 B/instance scatter-hot mirror. Invalid when the compact
         // scatter fetch is disabled (GE_SCATTER_COMPACT=0) — the scatter then
         // binds Instances directly, exactly as before.
         RenderGraph::RGBuffer ScatterHot{};
@@ -592,19 +661,14 @@ class GPUScene
                                             const CullDeformationMargins& margins, uint64_t groupStableKey);
 
     // Resource access (current-frame views)
-    BufferHandle GetInstanceBuffer() const
-    {
-        const BufferHandle& handle = m_Frames[m_FrameSlot].instanceBuffer;
-        return handle.IsValid() ? handle : m_InstanceBuffer;
-    }
+    BufferHandle GetInstanceBuffer() const { return m_Frames[m_FrameSlot].instanceBuffer; }
     // Coalesced scatter-hot mirror for the current frame slot. Invalid when the
     // compact scatter fetch is disabled — callers fall back to the full
     // instance buffer (GetInstanceBuffer) for the scatter's binding 1.
-    BufferHandle GetScatterHotBuffer() const
-    {
-        const BufferHandle& handle = m_Frames[m_FrameSlot].scatterHotBuffer;
-        return handle.IsValid() ? handle : m_ScatterHotBuffer;
-    }
+    BufferHandle GetScatterHotBuffer() const { return m_Frames[m_FrameSlot].scatterHotBuffer; }
+    /// Rows that the current slot's instance and scatter-hot buffers hold. A binding range over
+    /// GetInstanceBuffer() reads this in the same frame, because a slot's buffers grow with the scene.
+    uint32_t GetInstanceCapacity() const { return m_Frames[m_FrameSlot].instanceCapacity; }
     // True when the compact scatter-hot mirror is maintained + uploaded this
     // session (GE_SCATTER_COMPACT != 0, the default). Fixed for the process.
     bool IsScatterHotEnabled() const { return m_ScatterHotEnabled; }
@@ -612,11 +676,6 @@ class GPUScene
     {
         const BufferHandle& handle = m_Frames[m_FrameSlot].meshBuffer;
         return handle.IsValid() ? handle : m_MeshBuffer;
-    }
-    BufferHandle GetVisibilityBuffer() const
-    {
-        const BufferHandle& handle = m_Frames[m_FrameSlot].visibilityBuffer;
-        return handle.IsValid() ? handle : m_VisibilityBuffer;
     }
     BufferHandle GetIndirectArgsBuffer() const
     {
@@ -629,21 +688,11 @@ class GPUScene
     // index; it is modulo-reduced into the internal frame slot.
     BufferHandle GetInstanceBufferForFrame(uint32_t frameIndex) const
     {
-        uint32_t slot = frameIndex % m_FramesInFlight;
-        const BufferHandle& handle = m_Frames[slot].instanceBuffer;
-        return handle.IsValid() ? handle : m_InstanceBuffer;
+        return m_Frames[frameIndex % m_FramesInFlight].instanceBuffer;
     }
     BufferHandle GetScatterHotBufferForFrame(uint32_t frameIndex) const
     {
-        uint32_t slot = frameIndex % m_FramesInFlight;
-        const BufferHandle& handle = m_Frames[slot].scatterHotBuffer;
-        return handle.IsValid() ? handle : m_ScatterHotBuffer;
-    }
-    BufferHandle GetVisibilityBufferForFrame(uint32_t frameIndex) const
-    {
-        uint32_t slot = frameIndex % m_FramesInFlight;
-        const BufferHandle& handle = m_Frames[slot].visibilityBuffer;
-        return handle.IsValid() ? handle : m_VisibilityBuffer;
+        return m_Frames[frameIndex % m_FramesInFlight].scatterHotBuffer;
     }
     BufferHandle GetIndirectArgsBufferForFrame(uint32_t frameIndex) const
     {
@@ -656,18 +705,17 @@ class GPUScene
 	    	    // Freed slots are tombstoned and kept in the vector so stable
 	    	    // MeshGPUData::instanceIndex values remain valid.
 	    	    uint32_t GetInstanceCount() const { return static_cast<uint32_t>(m_Instances.size()); }
-	    	    uint32_t GetMaxInstances() const { return m_MaxInstances; }
 	    	    uint32_t GetLiveInstanceCount() const { return m_InstanceCount; }
 	    	    uint32_t GetMeshCount() const { return m_MeshCount; }
 	    	    uint32_t GetFrameIndex() const { return m_FrameIndex; }
 
     // Cumulative bytes uploaded to the instance buffer FAMILY since creation:
     // the authoritative 240 B GPUInstance buffer plus, when the compact scatter
-    // fetch is enabled, its 32 B/instance scatter-hot mirror (uploaded on the
-    // same dirty-instance runs, so the mirror adds exactly 32/240 of the instance
+    // fetch is enabled, its 40 B/instance scatter-hot mirror (uploaded on the
+    // same dirty-instance runs, so the mirror adds exactly 40/240 of the instance
     // bytes). Monotonic; diff across frames for per-frame upload bandwidth
     // (R1.1 metric). Enabling the mirror re-baselines this metric upward by
-    // 32/240 (see baselines/scatter-fetch-lever1 note).
+    // 40/240 (see baselines/scatter-fetch-lever1 note).
     uint64_t GetInstanceUploadBytesTotal() const
     {
         return m_InstanceUploadBytesTotal.load(std::memory_order_relaxed);
@@ -687,7 +735,7 @@ class GPUScene
 
     // Debug / test accessors: the free-slot reuse pool and the coalesced
     // scatter-hot mirror. Used by the batched-removal state-equivalence tests
-    // to assert the free-list set and the 32 B mirror stay in lockstep with the
+    // to assert the free-list set and the 40 B mirror stay in lockstep with the
     // single-index path.
     const std::vector<uint32_t>& GetFreeInstanceSlots() const { return m_FreeInstanceSlots; }
     const std::vector<GPUInstanceScatterHot>& GetScatterHot() const { return m_ScatterHot; }
@@ -722,11 +770,11 @@ class GPUScene
     IDevice* m_Device;
     std::string m_DebugName;
 
+    // Rows of each slot's instance buffers before the scene grows them.
+    static constexpr uint32_t kInitialInstanceCapacity = 16384u;
+
     // GPU buffers
-    BufferHandle m_InstanceBuffer;     // All instance data
-    BufferHandle m_ScatterHotBuffer;   // Coalesced scatter-hot mirror (fallback)
     BufferHandle m_MeshBuffer;         // All mesh metadata
-    BufferHandle m_VisibilityBuffer;   // Legacy single-buffer (demo paths only)
     BufferHandle m_IndirectArgsBuffer; // Legacy single-buffer (demo paths only)
 
     // CPU-side data (for updates)
@@ -793,7 +841,7 @@ class GPUScene
     bool m_MeshesDirtySlots[kMaxFramesInFlight]{};
 
     // Latched capacity diagnostic: set on the first flush that finds more CPU
-    // rows than the declared capacity (which is what sizes each GPU table),
+    // rows than the declared capacity (the limit of each GPU table),
     // so the clamped upload is reported once instead of every frame.
     bool m_InstanceCapacityErrorLogged = false;
     bool m_MeshCapacityErrorLogged = false;
@@ -886,6 +934,11 @@ class GPUScene
 
     // Helper methods
     void CreateBuffers();
+    // Creates the slot's instance and scatter-hot buffers at the slot's instanceCapacity.
+    void CreateInstanceBuffers(uint32_t slot);
+    // Replaces the current slot's instance buffers with ones that hold rowCount rows
+    // (the next power of two, at most m_MaxInstances) and marks the slot for a full upload.
+    void GrowInstanceBuffers(uint32_t rowCount);
     void UpdateGPUBuffers();
     bool EnsureCullingShaderBytes();
     void CreateCullingPipeline();

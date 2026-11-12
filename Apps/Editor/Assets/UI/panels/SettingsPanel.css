@@ -231,14 +231,8 @@ button.trash-icon,
 }
 
 .trash-icon:hover,
-button.trash-icon:hover,
-.button.trash-icon:hover,
 .trash-icon:active,
-button.trash-icon:active,
-.button.trash-icon:active,
-.trash-icon.pressed,
-button.trash-icon.pressed,
-.button.trash-icon.pressed {
+.trash-icon.pressed {
     opacity: 1.0;
     background-color: transparent;
 }
@@ -671,8 +665,7 @@ button.trash-icon.pressed,
     box-sizing: border-box;
 }
 
-#settings-open-build-row > .settings-build-open-panel-button,
-#settings-open-build-row > button.settings-build-open-panel-button {
+#settings-open-build-row > .settings-build-open-panel-button {
     display: flex;
     flex-direction: row;
     align-items: center;
@@ -694,8 +687,7 @@ button.trash-icon.pressed,
     transition: opacity 0.2s ease;
 }
 
-#settings-open-build-row > .settings-build-open-panel-button:hover,
-#settings-open-build-row > button.settings-build-open-panel-button:hover {
+#settings-open-build-row > .settings-build-open-panel-button:hover {
     background-color: #333;
     opacity: 1;
 }
@@ -860,9 +852,7 @@ button.trash-icon.pressed,
     color: var(--ui_color_text);
 }
 
-.settings-vcs-refresh-button,
-button.settings-vcs-refresh-button,
-.button.settings-vcs-refresh-button {
+.settings-vcs-refresh-button {
     min-width: 56px;
     height: 22px;
     min-height: 22px;
@@ -1158,16 +1148,14 @@ button.settings-vcs-refresh-button,
     background-image-tint: var(--ui_color_accent);
 }
 
-.shortcut-remove-button {
-    color: rgba(200, 200, 200, 1.0);
+/* An icon button: Button.css draws its states; this rule sets only its size.
+   Named with .button.icon-button to outrank the variant's 24 px rule (0,2,0). */
+.button.icon-button.shortcut-remove-button {
     width: 22px;
     height: 22px;
     min-width: 22px;
     min-height: 22px;
+    padding: 0;
     font-size: 14px;
     font-weight: 600;
-}
-
-.shortcut-remove-button:hover {
-    color: var(--ui_color_accent);
 }

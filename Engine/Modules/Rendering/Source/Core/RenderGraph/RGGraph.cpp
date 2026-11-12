@@ -84,6 +84,19 @@ void RGGraph::EnsurePassAccessIndex()
     m_PassAccValid = true;
 }
 
+RGAccessInfo RGGraph::AccessInfo(const RGAccessRecord& access, RGQueue declaredQueue) const
+{
+    RGAccessInfo info = MapAccess(access.Access, declaredQueue);
+    // A texture whose sampled descriptors claim GENERAL (View.DepthResolved) is sampled in GENERAL:
+    // ShaderReadOnly would contradict the descriptor (VUID-vkCmdDraw-None-09600).
+    const bool sampledRead = access.Access == RGAccess::Sampled || access.Access == RGAccess::SampledCompute ||
+                             access.Access == RGAccess::SampledVertex;
+    if (sampledRead && m_Resources[access.Resource].SampledInGeneralLayout &&
+        m_Resources[access.Resource].Kind == RGResourceKind::Texture)
+        info.Layout = RGImageLayout::General;
+    return info;
+}
+
 RGResourceId RGGraph::CreateResource(const RGResourceDesc& desc)
 {
     const RGResourceId id = static_cast<RGResourceId>(m_Resources.size());

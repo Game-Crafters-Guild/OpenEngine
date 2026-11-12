@@ -1,12 +1,20 @@
 #include "Scene/KeptComponentResolver.h"
 
+#include "Assets/AssetManager.h"
+#include "Core/Engine.h"
 #include "ECS/UnresolvedComponentStore.h"
 #include "ECS/World.h"
 #include "Logger/Logger.h"
+#include "Scene/AssetManagerSceneResolver.h"
+#include "Scene/PrefabLibrary.h"
+#include "Scene/PrefabPlacement.h"
+#include "Scene/SceneEngineEmbedMaterializer.h"
 #include "Scene/SceneIOContext.h"
 #include "Scene/SceneSchemaRegistry.h"
 
+#include <span>
 #include <string>
+#include <vector>
 
 namespace GameEngine::Scene
 {
@@ -26,9 +34,10 @@ bool ApplyKeptComponent(ECS::World& world, ECS::EntityHandle entity, const IScen
     }
     return true;
 }
-} // namespace
 
-std::size_t ResolveKeptComponents(ECS::World& world)
+// Applies every kept component of `world` whose type is registered now. Adds each entity that got a
+// component to `entities` once. Returns the number of components applied.
+std::size_t ApplyRegisteredKeptComponents(ECS::World& world, std::vector<ECS::EntityHandle>& entities)
 {
     // A world without a store has kept nothing; GetUnresolvedComponents would create one.
     const ECS::UnresolvedComponentStore* existing = world.TryGetUnresolvedComponents();
@@ -48,6 +57,7 @@ std::size_t ResolveKeptComponents(ECS::World& world)
             continue;
         }
         auto& components = entityIt->second;
+        const std::size_t appliedBefore = applied;
         for (auto componentIt = components.begin(); componentIt != components.end();)
         {
             const ISceneComponentSchema* schema = SceneSchemaRegistry::Find(componentIt->Name);
@@ -68,6 +78,8 @@ std::size_t ResolveKeptComponents(ECS::World& world)
             componentIt = components.erase(componentIt);
             ++applied;
         }
+        if (applied > appliedBefore)
+            entities.push_back(entity);
         if (components.empty())
             entityIt = kept.Map().erase(entityIt);
         else
@@ -75,6 +87,37 @@ std::size_t ResolveKeptComponents(ECS::World& world)
     }
     if (applied > 0)
         world.ProcessCommands();
+    return applied;
+}
+
+// Holds in `library`, for `world`, the prefabs that the PrefabRef fields of `entities` name, through
+// the pass that a scene load uses.
+void HoldPrefabsNamedBy(PrefabLibrary& library, ECS::World& world, std::span<const ECS::EntityHandle> entities)
+{
+    EngineCore& engine = EngineCore::GetInstance();
+    AssetManagerSceneResolver resolver(engine.GetAssetManager(), engine.GetResolvedAssetRoot(),
+                                       AssetManagerSceneResolver::UnknownFile::AssignGuid);
+    SceneEngineEmbedMaterializer materializer(engine.GetAssetManager());
+    SceneLoadOptions options;
+    options.Read.AssetResolver = &resolver;
+    options.Read.AssetRootOverride = resolver.GetAssetRoot();
+    options.Read.ProjectRoot = engine.GetWorkspaceRoot();
+    options.EmbedMaterializer = &materializer;
+    HoldReferencedPrefabs(library, world, options, entities);
+}
+} // namespace
+
+std::size_t ResolveKeptComponents(ECS::World& world)
+{
+    std::vector<ECS::EntityHandle> entities;
+    const std::size_t applied = ApplyRegisteredKeptComponents(world, entities);
+    PrefabLibrary* library = EngineCore::GetInstance().TryGetPrefabLibrary();
+    if (!library)
+        return applied;
+    if (!entities.empty())
+        HoldPrefabsNamedBy(*library, world, entities);
+    // A template built before the type registered keeps the component in the library's world.
+    library->RebuildForRegisteredTypes();
     return applied;
 }
 } // namespace GameEngine::Scene

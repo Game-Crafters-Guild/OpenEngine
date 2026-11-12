@@ -39,13 +39,20 @@ class TextInput : public BaseField, public ITextMeasurable
     {
         (void)style;
         info.HasText = true;
-        info.Text = GetValue();
+        info.Text = GetTextContent();
         info.ExplicitFontSize = 0.0f; // use style.fontSize
     }
 
-    // Expose current editable text to generic UIElement helpers.
-    const std::string& GetTextContent() const override { return GetValue(); }
+    // The text the field draws: the value, or one bullet per code point when masked. The
+    // render path, the layout measure and the debug tree all read this, never GetValue().
+    const std::string& GetTextContent() const override { return m_Masked ? MaskedText() : GetValue(); }
     TextInput* GetAsTextInput() override { return this; }
+
+    /** Masked: the field draws one U+2022 per code point of the value, copy and cut do nothing
+        and a double click selects the whole value. The value, the caret and the selection keep
+        the byte offsets of the typed text. For a password or a key. */
+    void SetMasked(bool masked);
+    bool IsMasked() const { return m_Masked; }
 
     // Input hooks implemented by TextInput
     bool OnChar(unsigned int codepoint) override;
@@ -99,6 +106,11 @@ class TextInput : public BaseField, public ITextMeasurable
   private:
     // caret/selection in UTF-8 byte indices
     int m_CaretIndex = 0;
+
+    bool m_Masked = false;
+    // The bullets GetTextContent returns while masked: three bytes per code point of the value.
+    mutable std::string m_MaskedText;
+    const std::string& MaskedText() const;
     int m_SelectionStart = -1;
     int m_SelectionEnd = -1;
 
@@ -286,6 +298,24 @@ class TextFieldBase : public Field<T>
             this->RemoveClass("suffix-after-text");
     }
 
+    // Hint text the field shows while it holds no text. It never takes focus or the pointer,
+    // and the value never contains it. Empty text hides it. XML attribute: placeholder.
+    void SetPlaceholder(const std::string& placeholder)
+    {
+        if (!m_Placeholder)
+        {
+            if (placeholder.empty())
+                return;
+            auto label = std::make_unique<Label>();
+            m_Placeholder = label.get();
+            m_Placeholder->AddClass("field-placeholder");
+            m_Placeholder->RequestSubtreeStyleAssetPath(kPlaceholderStyleAssetPath, "editor");
+            this->AddChild(std::move(label));
+        }
+        m_Placeholder->SetText(placeholder);
+        SyncPlaceholderVisibility();
+    }
+
     // Forward commit notification (Enter / Escape / blur) to the inner TextInput.
     void SetOnCommit(const std::function<void()>& cb)
     {
@@ -308,13 +338,8 @@ class TextFieldBase : public Field<T>
         m_SuppressCallbacks = true;
         Field<T>::SetValue(v);
 
-        if (m_Text)
-        {
-            if (m_Format)
-            {
-                m_Text->SetValue(m_Format(this->m_Value));
-            }
-        }
+        if (m_Format)
+            WriteEditorText(m_Format(this->m_Value));
         m_SuppressCallbacks = false;
         RestoreCaptionIfItDescribesTheValue();
     }
@@ -325,8 +350,8 @@ class TextFieldBase : public Field<T>
         m_SuppressCallbacks = true;
         Field<T>::SetValueWithoutNotify(v);
         RestoreCaptionIfItDescribesTheValue();
-        if (m_Text && m_Format)
-            m_Text->SetValue(m_Format(this->m_Value));
+        if (m_Format)
+            WriteEditorText(m_Format(this->m_Value));
         m_SuppressCallbacks = false;
     }
 
@@ -526,12 +551,7 @@ class TextFieldBase : public Field<T>
     // layout (e.g. width-aware compacting in FloatField).
     void SetEditorText(const std::string& text)
     {
-        if (m_Text)
-        {
-            m_SuppressCallbacks = true;
-            m_Text->SetValue(text);
-            m_SuppressCallbacks = false;
-        }
+        SetTextSuppressed(text);
     }
 
     const std::string& GetEditorText() const
@@ -541,8 +561,11 @@ class TextFieldBase : public Field<T>
     }
 
   private:
+    static constexpr const char* kPlaceholderStyleAssetPath = "UI/controls/FieldPlaceholder/FieldPlaceholder.css";
+
     TextInput* m_Text = nullptr;
     Label* m_Suffix = nullptr;
+    Label* m_Placeholder = nullptr;
     SuffixAlignment m_SuffixAlignment = SuffixAlignment::FieldEnd;
     SuffixRole m_SuffixRole = SuffixRole::Unit;
     std::string m_SuffixText;
@@ -615,8 +638,29 @@ class TextFieldBase : public Field<T>
         if (!m_Text)
             return;
         m_SuppressCallbacks = true;
-        m_Text->SetValue(s);
+        WriteEditorText(s);
         m_SuppressCallbacks = false;
+    }
+
+    // Every write of the editor's text from this field goes here, so the placeholder follows it.
+    void WriteEditorText(const std::string& text)
+    {
+        if (!m_Text)
+            return;
+        m_Text->SetValue(text);
+        SyncPlaceholderVisibility();
+    }
+
+    // The hint shows only while the field holds no text; the mixed state's dash is text too.
+    void SyncPlaceholderVisibility()
+    {
+        if (!m_Placeholder)
+            return;
+        const bool shown = !m_Placeholder->GetText().empty() && m_Text && m_Text->GetValue().empty();
+        if (shown)
+            m_Placeholder->RemoveClass("hidden");
+        else
+            m_Placeholder->AddClass("hidden");
     }
 
     void InitializeTextInput()
@@ -666,11 +710,9 @@ class TextFieldBase : public Field<T>
         std::string filtered = m_Filter ? m_Filter(raw, false) : raw;
 
         if (filtered != raw)
-        {
-            m_SuppressCallbacks = true;
-            m_Text->SetValue(filtered);
-            m_SuppressCallbacks = false;
-        }
+            SetTextSuppressed(filtered);
+        else
+            SyncPlaceholderVisibility();
 
         T newValue = this->m_Value;
         bool hasNewValue = false;
@@ -705,6 +747,9 @@ class TextFieldBase : public Field<T>
     {
         if (m_SuppressCallbacks || !m_Text)
             return;
+
+        // Escape restores the editor's text before it calls here.
+        SyncPlaceholderVisibility();
 
         // Finalized while still showing the mixed placeholder (focused + blurred
         // without typing): keep it indeterminate, don't commit the placeholder.
@@ -746,9 +791,7 @@ class TextFieldBase : public Field<T>
                 display = filtered;
 
             if (m_Text->GetValue() != display)
-            {
-                m_Text->SetValue(display);
-            }
+                WriteEditorText(display);
         }
         m_SuppressCallbacks = false;
         if (m_CaptionHiddenWhileEditing && !(resolved == m_ValueCaptionDescribes))
@@ -790,6 +833,18 @@ class TextField : public TextFieldBase<std::string>
         // click's caret alone. An inspector field that wants the numeric-field
         // behaviour calls SetSelectsAllOnMouseFocus(true).
         SetSelectsAllOnMouseFocus(false);
+    }
+
+    /** Draws the value as bullets (TextInput::SetMasked); the `masked` attribute in a layout. */
+    void SetMasked(bool masked)
+    {
+        if (TextInput* input = GetTextInput())
+            input->SetMasked(masked);
+    }
+    bool IsMasked() const
+    {
+        const TextInput* input = GetTextInput();
+        return input && input->IsMasked();
     }
 };
 

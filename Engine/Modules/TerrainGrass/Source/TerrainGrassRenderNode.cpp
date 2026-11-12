@@ -66,6 +66,27 @@ class IdleOnEarlyReturn
 
 } // namespace
 
+void TerrainGrassRenderNode::RequestPausedViewPipelines(const Engine::Renderer::Pipeline::PausedViewPrewarm& prewarm)
+{
+    // The gates of DeclareForView: a device, an initialized terrain with active grass and an initialized
+    // grass feature. The placement pass of the live frame uses the three placement pipelines.
+    auto& rs = prewarm.Services;
+    auto* device = rs.GetDevice();
+    if (!device)
+        return;
+    auto* terrainFeature = rs.GetFeature<TerrainECS::TerrainRenderFeature>();
+    if (!terrainFeature || !terrainFeature->IsInitialized())
+        return;
+    const uint32 paramsSlot = terrainFeature->GetLastTerrainParamsSlot();
+    if (terrainFeature->GetTerrainParamsCount(paramsSlot) == 0 ||
+        terrainFeature->GetTerrainGrassActiveCount(paramsSlot) == 0)
+        return;
+    auto& grass = rs.EnsureFeature<TerrainGrassRenderFeature>();
+    if (!grass.IsInitialized() && !grass.Initialize(device))
+        return;
+    grass.RequestPlacementPipelines(rs);
+}
+
 void TerrainGrassRenderNode::DeclareForView(Engine::Renderer::Pipeline::ViewDeclare& d)
 {
     namespace RenderGraph = ::GameEngine::Rendering::RenderGraph;
@@ -274,10 +295,10 @@ void TerrainGrassRenderNode::DeclareForView(Engine::Renderer::Pipeline::ViewDecl
                     continue;
                 const auto& placement = row.Placed;
                 Logger::Log::Info(
-                    "TerrainGrass.PlacedCount view={} instances={} accepted={} cellsVisible={} "
-                    "candidates={} fittedRangeScale={}",
+                    "TerrainGrass.PlacedCount view={} instances={} accepted={} cellsCounted={} "
+                    "cellsPlaced={} candidates={} fittedRangeScale={}",
                     static_cast<uint32>(viewId), placed, placement.AcceptedBlades,
-                    placement.CellsVisible, placement.CandidatesConsidered,
+                    placement.CellsCounted, placement.CellsPlaced, placement.CandidatesConsidered,
                     placement.FittedRangeScale);
                 break;
             }

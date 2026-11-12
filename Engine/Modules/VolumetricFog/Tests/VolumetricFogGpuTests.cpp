@@ -3,7 +3,9 @@
 #include "Rendering/Core/CommandList.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/Pipeline/PipelineTypes.h"
+#include "Rendering/Core/ViewParamsLayout.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstring>
@@ -230,7 +232,7 @@ protected:
     struct Inputs
     {
         TextureHandle current{}, history{}, emission{}, spotMap{}, pointMap{}, sunMap{};
-        BufferHandle volumes{}, lights{}, spotData{}, pointData{}, lightIndices{}, lightClusters{}, sunData{};
+        BufferHandle volumes{}, lights{}, spotData{}, pointData{}, lightIndices{}, lightClusters{}, sunData{}, viewParams{};
         size_t lightBytes = sizeof(Lights);
         size_t pointBytes = sizeof(PointSlot);
     };
@@ -243,11 +245,11 @@ protected:
         std::vector<uint8_t> spv{std::istreambuf_iterator<char>(file), {}};
         if (spv.empty()) throw std::runtime_error("Missing production fog shader: " + path);
         DescriptorSetLayoutDesc layout{};
-        for (uint32_t binding = 0; binding <= 20; ++binding)
+        for (uint32_t binding = 0; binding <= 21; ++binding)
         {
             auto type = DescriptorType::CombinedImageSampler;
             if (binding == 0 || binding == 15) type = DescriptorType::StorageImage;
-            if (binding == 2 || binding == 4 || binding == 9 || binding == 10 || binding == 17)
+            if (binding == 2 || binding == 4 || binding == 9 || binding == 10 || binding == 17 || binding == 21)
                 type = DescriptorType::UniformBuffer;
             if (binding == 6 || binding == 7 || binding == 8 || binding == 12 || binding == 19)
                 type = DescriptorType::StorageBuffer;
@@ -282,6 +284,9 @@ protected:
                                     inputs.sunData.IsValid() ? 28 * sizeof(Vec4) : 1024);
         for (uint32_t binding : {9u, 10u})
             device->UpdateBufferBinding(set, binding, zero, 0, 1024);
+        // The view parameters: inputs.viewParams places the render origin, zeros put it at the world origin.
+        device->UpdateBufferBinding(set, 21, inputs.viewParams.IsValid() ? inputs.viewParams : zero, 0,
+                                    sizeof(ViewParamsUBO));
         device->UpdateBufferBinding(set, 17, inputs.spotData.IsValid() ? inputs.spotData : zero, 0, sizeof(SpotShadow));
         device->UpdateStorageBufferBinding(set, 6, inputs.lightIndices.IsValid() ? inputs.lightIndices : zero, 0,
                                            inputs.lightIndices.IsValid() ? 0 : 1024);
@@ -494,6 +499,44 @@ TEST_F(VolumetricFogGpu, SecondSpotLightUsesItsShadowAndHonorsCasterFlag)
     EXPECT_NEAR(Read(Dispatch("light", inputs).color)[center][1], lit[center][1], 0.001f);
 }
 
+// The light buffer and the spot shadow matrix hold positions relative to the view's render origin. With the
+// origin at sector (1, 0, 2), the light and its matrix given relative to it light the fog as the same light
+// and matrix at the world origin, lit and shadowed.
+TEST_F(VolumetricFogGpu, ARelativeLightAndSpotShadowLightTheFogAsAtTheWorldOrigin)
+{
+    Inputs inputs{};
+    inputs.current = VolumeTexture(std::vector<Vec4>(kVoxelCount, {1, 1, 1, 0.2f}));
+    auto lights = LocalLight(2);
+    inputs.lights = Buffer(&lights, sizeof(lights));
+    SpotShadow shadow{};
+    Identity(shadow.vp);
+    inputs.spotData = Buffer(&shadow, sizeof(shadow));
+    const auto atOrigin = Read(Dispatch("light", inputs).color);
+
+    constexpr float kSectorSize = 1024.0f;
+    const Vec4 origin{1.0f * kSectorSize, 0.0f, 2.0f * kSectorSize, 0.0f};
+    ViewParamsUBO viewParams{};
+    viewParams.ge_renderOrigin[0] = 1.0f;
+    viewParams.ge_renderOrigin[2] = 2.0f;
+    viewParams.ge_renderOrigin[3] = kSectorSize;
+    inputs.viewParams = Buffer(&viewParams, sizeof(viewParams));
+    for (size_t axis = 0; axis < 3; ++axis)
+        lights.lights[1].posRange[axis] -= origin[axis];
+    inputs.lights = Buffer(&lights, sizeof(lights));
+    // vp * translate(origin): the same projection for positions relative to the origin.
+    shadow.vp[12] = origin[0];
+    shadow.vp[14] = origin[2];
+    inputs.spotData = Buffer(&shadow, sizeof(shadow));
+    const auto relative = Read(Dispatch("light", inputs).color);
+    const size_t center = 4 + 4 * kSize + 4 * kSize * kSize;
+    ASSERT_GT(atOrigin[center][1], 0.01f);
+    for (size_t i = 0; i < atOrigin.size(); ++i)
+        EXPECT_NEAR(relative[i][1], atOrigin[i][1], 0.001f) << "voxel " << i;
+
+    inputs.spotMap = DepthTexture(1, 1);
+    EXPECT_NEAR(Read(Dispatch("light", inputs).color)[center][1], 0.0f, 0.0001f) << "the shadow still occludes";
+}
+
 TEST_F(VolumetricFogGpu, PointShadowUsesAssignedAtlasSlotAndRejectsMissingSlots)
 {
     Inputs inputs{};
@@ -693,6 +736,42 @@ TEST_F(VolumetricFogGpu, ZeroSunSkipsItsTapsAndADimSunKeepsThem)
     EXPECT_NEAR(Read(Dispatch("light", inputs).color)[center][0], 0.0f, unshadowed * 0.02f);
     params[3][2] = 5.0f / kSize - 0.5f;
     EXPECT_NEAR(Read(Dispatch("light", inputs).color)[center][0], unshadowed, unshadowed * 0.02f);
+}
+
+// The sun's cascade matrices hold positions relative to the view's render origin. With the origin at sector
+// (1, 0, 2), a cascade given relative to it shadows the fog as the same cascade at the world origin.
+TEST_F(VolumetricFogGpu, ARelativeSunCascadeShadowsTheFogAsAtTheWorldOrigin)
+{
+    Inputs inputs{};
+    inputs.current = VolumeTexture(std::vector<Vec4>(kVoxelCount, {1, 1, 1, 0.2f}));
+    params[10] = {1, 1, 1, 0};
+    std::array<Vec4, 28> shadow{};
+    for (size_t column = 0; column < 4; ++column)
+        shadow[column][column] = 1;
+    shadow[16] = {10, 10, 10, 10};
+    shadow[17] = {0, 0, 1, 10};
+    inputs.sunData = Buffer(shadow.data(), sizeof(shadow));
+    inputs.sunMap = DepthTexture(12, 0.5f);
+    params[3][2] = 4.0f / kSize - 0.5f;
+    const auto atOrigin = Read(Dispatch("light", inputs).color);
+    const size_t center = 4 + 4 * kSize + 4 * kSize * kSize;
+    const float brightest = std::max_element(atOrigin.begin(), atOrigin.end(),
+                                             [](const Vec4& a, const Vec4& b) { return a[0] < b[0]; })->at(0);
+    ASSERT_GT(brightest, 0.01f) << "the sun lights some of the fog";
+    ASSERT_LT(atOrigin[center][0], brightest * 0.02f) << "the cascade shadows the center of the fog";
+
+    constexpr float kSectorSize = 1024.0f;
+    ViewParamsUBO viewParams{};
+    viewParams.ge_renderOrigin[0] = 1.0f;
+    viewParams.ge_renderOrigin[2] = 2.0f;
+    viewParams.ge_renderOrigin[3] = kSectorSize;
+    inputs.viewParams = Buffer(&viewParams, sizeof(viewParams));
+    // vp * translate(origin): the same projection for positions relative to the origin.
+    shadow[3] = {1.0f * kSectorSize, 0.0f, 2.0f * kSectorSize, 1.0f};
+    inputs.sunData = Buffer(shadow.data(), sizeof(shadow));
+    const auto relative = Read(Dispatch("light", inputs).color);
+    for (size_t i = 0; i < atOrigin.size(); ++i)
+        EXPECT_NEAR(relative[i][0], atOrigin[i][0], brightest * 0.001f) << "voxel " << i;
 }
 
 TEST_F(VolumetricFogGpu, MovingLocalShadowsHavePartialCoverageWithinDepthCells)

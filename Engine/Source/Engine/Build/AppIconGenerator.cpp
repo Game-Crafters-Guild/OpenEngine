@@ -43,7 +43,7 @@ struct RgbaImage
 
 static bool LoadRgbaImage(const fs::path& path, RgbaImage& out, std::string& error)
 {
-    Vector<uint8> fileBytes;
+    ByteBuffer fileBytes;
     if (!ReadFileBytesShared(path, fileBytes))
     {
         error = "Failed to read icon image: " + path.string();

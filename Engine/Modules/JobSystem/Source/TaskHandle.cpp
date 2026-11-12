@@ -40,7 +40,7 @@ TaskHandle::TaskHandle(TaskId taskId, WorkStealingThreadPool* jobSystem)
     }
 }
 
-TaskHandle::TaskHandle(TaskId taskId, WorkStealingThreadPool* jobSystem, SharedPtr<TaskData> data)
+TaskHandle::TaskHandle(TaskId taskId, WorkStealingThreadPool* jobSystem, TaskDataRef data)
     : m_TaskId(taskId), m_JobSystem(jobSystem), m_Data(std::move(data)) {
 }
 
@@ -245,7 +245,7 @@ bool TaskHandle::Cancel() {
 // already performed by the caller with seq_cst — that store is both the
 // Dekker first-op AND the release edge for the outcome payload; this
 // function adds no ordering of its own beyond the C2 load.
-void TaskHandle::NotifyWaitersAfterTerminal(const SharedPtr<TaskData>& data) {
+void TaskHandle::NotifyWaitersAfterTerminal(const TaskDataRef& data) {
     if (data->Waiters.load(std::memory_order_seq_cst) == 0) { // (C2)
         // No waiter is registered. A concurrent Wait that has not yet
         // executed its W1 increment re-checks terminal state AFTER
@@ -312,7 +312,7 @@ void TaskHandle::MarkCancelled() {
     FireCancelledOn(data);
 }
 
-void TaskHandle::FireCancelledOn(const SharedPtr<TaskData>& data) {
+void TaskHandle::FireCancelledOn(const TaskDataRef& data) {
     // Gated waiter notify. Every caller performed the terminal transition
     // (C1) on this exact TaskData before calling in: MarkCancelled's
     // exchange, the F12 CAS in CancelPendingArbitrated / ProcessGraphActions
@@ -349,7 +349,7 @@ void TaskHandle::FireCancelledOn(const SharedPtr<TaskData>& data) {
 // PRIVATE HELPERS
 // ========================================
 
-SharedPtr<TaskHandle::TaskData> TaskHandle::GetTaskData() const {
+TaskHandle::TaskDataRef TaskHandle::GetTaskData() const {
     // TaskData comes from the pool's shared registry at construction.
     return m_Data;
 }
@@ -426,7 +426,7 @@ void TaskHandle::Wait() {
            "TaskHandle::Wait on a pool worker parks the worker while its producer may be queued "
            "behind it; register OnComplete or submit the continuation with Submit(fn, deps)");
 
-    // `data` (a SharedPtr copy) outlives the whole wait, including the
+    // `data` (a TaskDataRef copy) outlives the whole wait, including the
     // WaiterGuard below — locals destroy in reverse order, so the decrement
     // runs while the ref is still held (recycle-safety, see
     // TaskData::Waiters).

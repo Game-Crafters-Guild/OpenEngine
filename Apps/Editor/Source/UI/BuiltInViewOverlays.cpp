@@ -22,7 +22,7 @@ void RegisterBuiltInViewOverlays(const EditorContext& context)
     host.Register(std::make_unique<TerrainPageCookOverlay>());
     host.Register(std::make_unique<ShaderCompileProgressOverlay>(context));
     host.Register(std::make_unique<RenderPipelineStandInNotice>(context));
-    host.Register(std::make_unique<SceneViewNoticeOverlay>());
+    host.Register(std::make_unique<SceneViewNoticeOverlay>(context));
     host.Register(std::make_unique<SceneViewExposureHintOverlay>(context));
 }
 

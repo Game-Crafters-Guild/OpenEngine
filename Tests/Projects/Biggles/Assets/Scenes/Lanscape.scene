@@ -467,7 +467,7 @@ PhysicsCollider.overrideMaterial = false
 PhysicsCollider.materialFriction = 0.5
 PhysicsCollider.materialRestitution = 0.1
 Terrain.terrainAssetType = 0
-Terrain.baseSource = 0
+Terrain.baseSource = 2
 Terrain.enabled = true
 Terrain.sizeX = 512
 Terrain.sizeZ = 512
@@ -486,6 +486,14 @@ Transform.scale = (1, 1, 1)
 
 
 
+
+[entity id="terrain_noise"]
+Name.value = "Terrain Noise"
+Transform.position = (0, 0, 0)
+TerrainModifierVolume.shape = 4
+TerrainNoiseEffect.enabled = true
+TerrainNoiseEffect.mode = 1
+TerrainNoiseEffect.preset = 0
 
 [entity id="flat_middle" parent="terrain"]
 HierarchyOrder.order = 0

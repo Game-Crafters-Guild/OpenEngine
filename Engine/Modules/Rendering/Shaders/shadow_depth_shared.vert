@@ -32,10 +32,8 @@ void main()
     InstanceData inst = ge_FetchInstanceData();
     // Depth prepass shares the main view's CameraUBO, so the rebased clip position
     // matches adapter_vertex.glsl bit-for-bit. Shadow cascades bind their own
-    // CameraUBO carrying the SAME render origin (viewProjRel = rebased light VP,
-    // renderOriginSector = camera sector) so casters rasterize at fp32-of-small-
-    // magnitude at planetary distance. Origin inactive (sector 0) => full-world
-    // path, byte-identical to the pre-feature build.
+    // CameraUBO with the camera's sector (viewProjRel = rebased light VP); local
+    // light shadows bind one with the light's own sector.
     vec4 sectorLocalWorldPos = inst.modelMatrix * vec4(aPosition, 1.0);
     vec3 fullWorldPos;
     vec3 relWorldPos; // unused: depth-only pass writes gl_Position only

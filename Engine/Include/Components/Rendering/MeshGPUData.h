@@ -39,10 +39,8 @@ struct MeshGPUData {
     uint64 LastMeshUploadSequence { 0u };
 
     // Render-origin sector (camera-relative rendering) last packed into this
-    // entity's GPUInstance. Cached so the transform-only fast lanes preserve the
-    // sector instead of zeroing it; a WorldSectorCoord change escalates to a full
-    // pass (kEscalationProbeSectorCoord), which refreshes these. (0,0,0) for
-    // untagged entities, i.e. sector-local == world.
+    // entity's GPUInstance. Every extraction lane compares the new sector with it
+    // and moves the previous matrix into the new sector when they differ.
     int32 LastSectorX { 0 };
     int32 LastSectorY { 0 };
     int32 LastSectorZ { 0 };

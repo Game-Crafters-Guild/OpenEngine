@@ -1,4 +1,6 @@
 #include "AiAssistantSettings.h"
+#include "Providers/ClaudeSessionProvider.h"
+#include "Providers/CodexSessionProvider.h"
 #include "ScopedEnvironmentVariable.h"
 #include "ScopedPreferencesRoot.h"
 
@@ -7,75 +9,116 @@
 
 #include <gtest/gtest.h>
 
-#include <algorithm>
-#include <cctype>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <iterator>
 #include <string>
-#include <variant>
+#include <string_view>
+#include <vector>
 
 namespace GameEngine
 {
-namespace
+// The setup page asks for the assistant, then the method: Claude has two methods, Codex one,
+// and every connection's name reads "Assistant (Method)".
+TEST(AiAssistantSettingsTests, EachAssistantOffersItsMethodsUnderAssistantMethodNames)
 {
-using Field = Editor::SettingsFieldDescriptor;
+    std::vector<std::string_view> assistants;
+    for (const AiAssistantSettings::AssistantChoice& choice : AiAssistantSettings::AssistantChoices())
+        assistants.push_back(choice.Name);
+    EXPECT_EQ(assistants, (std::vector<std::string_view>{"Claude", "Codex"}));
 
-std::string Lowercase(std::string text)
-{
-    std::transform(text.begin(), text.end(), text.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return text;
-}
+    const std::vector<AiAssistantSettings::ProviderChoice> claude = AiAssistantSettings::MethodChoices("Claude");
+    ASSERT_EQ(claude.size(), 2u);
+    EXPECT_EQ(claude[0].Id, "claude-session") << "Subscription first: choosing Claude selects it";
+    EXPECT_EQ(claude[1].Id, "claude-api");
+    ASSERT_EQ(AiAssistantSettings::MethodChoices("Codex").size(), 1u);
+    EXPECT_TRUE(AiAssistantSettings::MethodChoices("Local LLM").empty());
 
-// Sets every value a row offers (each dropdown option, a path for the text rows)
-// and checks the row reads it back.
-void SetEveryValue(const Field& field)
-{
-    if (const auto* dropdown = std::get_if<Field::DropdownField>(&field.Control))
+    for (const AiAssistantSettings::ProviderChoice& choice : AiAssistantSettings::ProviderChoices())
     {
-        for (const Field::DropdownField::Option& option : dropdown->OptionsProvider())
-        {
-            dropdown->Set(option.Value);
-            EXPECT_EQ(dropdown->Get(), option.Value) << field.Label;
-        }
-    }
-    else if (const auto* text = std::get_if<Field::StringField>(&field.Control))
-    {
-        text->Set("gpt-fixture");
-        EXPECT_EQ(text->Get(), "gpt-fixture") << field.Label;
-    }
-    else if (const auto* path = std::get_if<Field::PathField>(&field.Control))
-    {
-        path->Set("C:/Tools/agent.exe");
-        EXPECT_EQ(path->Get(), "C:/Tools/agent.exe") << field.Label;
+        EXPECT_EQ(choice.Label, std::string(choice.Assistant) + " (" + std::string(choice.Method) + ")");
+        EXPECT_EQ(AiAssistantSettings::ProviderChoiceOf(choice.Id).Id, choice.Id);
     }
 }
-} // namespace
 
-TEST(AiAssistantSettingsTests, NoRowNamesAKey)
+// One stored value holds both choices: choosing an assistant stores its first method, and an
+// assistant without a connection changes nothing.
+TEST(AiAssistantSettingsTests, ChoosingAnAssistantStoresItsFirstMethod)
+{
+    ScopedPreferencesRoot preferences;
+    AiAssistantSettings::SetProvider("claude-api");
+    EXPECT_EQ(AiAssistantSettings::ProviderChoiceOf(AiAssistantSettings::Provider()).Assistant, "Claude");
+
+    AiAssistantSettings::SetAssistant("Claude");
+    EXPECT_EQ(AiAssistantSettings::Provider(), "claude-api") << "the shown assistant keeps its method";
+    AiAssistantSettings::SetAssistant("Codex");
+    EXPECT_EQ(AiAssistantSettings::Provider(), "codex-session");
+    const uint64_t generation = AiAssistantSettings::ProviderGeneration();
+    AiAssistantSettings::SetAssistant("Local LLM");
+    EXPECT_EQ(AiAssistantSettings::Provider(), "codex-session");
+    EXPECT_EQ(AiAssistantSettings::ProviderGeneration(), generation);
+    AiAssistantSettings::SetAssistant("Claude");
+    EXPECT_EQ(AiAssistantSettings::Provider(), "claude-session");
+}
+
+// The page's rows live in its layout, so the category's search words name them: a search for
+// a row's label still finds the page.
+TEST(AiAssistantSettingsTests, TheSearchWordsNameEveryRowOfThePage)
 {
     const Editor::SettingsCategoryDescriptor category = AiAssistantSettings::BuildCategory();
-    ASSERT_FALSE(category.Fields.empty());
-    for (const Field& field : category.Fields)
-    {
-        for (const std::string& text : {field.Label, field.Tooltip, field.PrefKey})
-        {
-            const std::string lower = Lowercase(text);
-            EXPECT_EQ(lower.find("key"), std::string::npos) << field.Label << ": " << text;
-            EXPECT_EQ(lower.find("token"), std::string::npos) << field.Label << ": " << text;
-        }
-    }
+    EXPECT_TRUE(category.CreateContent);
+    for (const char* row : {"claude code executable", "codex executable", "node executable", "model", "effort",
+                            "mode for new conversations", "hold the microphone to speak",
+                            "send when the microphone stops"})
+        EXPECT_NE(category.SearchKeywords.find(row), std::string::npos) << row;
 }
 
-TEST(AiAssistantSettingsTests, EveryRowPersistsAndPreferencesNeverHoldTheKey)
+// An executable changed on the page moves the setup generation once, so the page and the
+// panel check again; storing the same path again moves nothing.
+TEST(AiAssistantSettingsTests, ANewExecutableAsksForANewCheck)
+{
+    ScopedPreferencesRoot preferences;
+    AiAssistantSettings::SetClaudeExecutable("C:/Tools/claude.exe");
+    const uint64_t generation = AiAssistantSettings::SetupGeneration();
+    AiAssistantSettings::SetClaudeExecutable("C:/Tools/claude.exe");
+    EXPECT_EQ(AiAssistantSettings::SetupGeneration(), generation);
+    AiAssistantSettings::SetNodeExecutable("C:/Tools/node.exe");
+    EXPECT_EQ(AiAssistantSettings::SetupGeneration(), generation + 1);
+    EXPECT_EQ(AiAssistantSettings::NodeExecutable(), "C:/Tools/node.exe");
+    AiAssistantSettings::SetCodexExecutable("C:/Tools/codex.exe");
+    EXPECT_EQ(AiAssistantSettings::SetupGeneration(), generation + 2);
+    EXPECT_EQ(AiAssistantSettings::CodexExecutable(), "C:/Tools/codex.exe");
+}
+
+// An executable never set or cleared is the program's name, searched for on PATH.
+TEST(AiAssistantSettingsTests, AnEmptyExecutableIsTheProgramOnPath)
+{
+    ScopedPreferencesRoot preferences;
+    EXPECT_EQ(AiAssistantSettings::CodexExecutable(), CodexSessionProvider::kDefaultExecutable);
+    AiAssistantSettings::SetCodexExecutable("C:/Tools/codex.exe");
+    AiAssistantSettings::SetCodexExecutable("");
+    EXPECT_EQ(AiAssistantSettings::CodexExecutable(), CodexSessionProvider::kDefaultExecutable);
+    AiAssistantSettings::SetClaudeExecutable("");
+    EXPECT_EQ(AiAssistantSettings::ClaudeExecutable(), ClaudeSessionProvider::kDefaultExecutable);
+    AiAssistantSettings::SetNodeExecutable("C:/Tools/node.exe");
+    AiAssistantSettings::SetNodeExecutable("");
+    EXPECT_EQ(AiAssistantSettings::NodeExecutable(), "node");
+}
+
+// The subscription's needs line names the oldest Claude Code a turn works with.
+TEST(AiAssistantSettingsTests, TheClaudeSubscriptionNeedsLineNamesTheMinimumVersion)
+{
+    const auto& version = ClaudeSessionProvider::kMinimumVersion;
+    const std::string minimum = std::format("Claude Code {}.{}.{} or later", version[0], version[1], version[2]);
+    EXPECT_NE(AiAssistantSettings::ProviderChoiceOf(ClaudeSessionProvider::kId).MethodNeeds.find(minimum),
+              std::string_view::npos);
+}
+
+TEST(AiAssistantSettingsTests, TheConnectionPersistsAndPreferencesNeverHoldTheKey)
 {
     ScopedPreferencesRoot preferences;
     ScopedEnvironmentVariable key("ANTHROPIC_API_KEY", "sk-ant-fixture-not-a-key");
-
-    const Editor::SettingsCategoryDescriptor category = AiAssistantSettings::BuildCategory();
-    for (const Field& field : category.Fields)
-        SetEveryValue(field);
 
     AiAssistantSettings::SetProvider("claude-session");
     const uint64_t generation = AiAssistantSettings::ProviderGeneration();

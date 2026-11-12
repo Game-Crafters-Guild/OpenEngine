@@ -16,13 +16,18 @@
 #include "UIRgTestHarness.h"
 
 #include "Assets/AssetManager.h"
+#include "Mathematics/Rect.h"
+#include "UI/ITextMeasurable.h"
 #include "UI/Parsers/CSSParser.h"
 #include "UI/Registration/ElementRegistration.h"
 #include "UI/UIPrimitive.h"
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <string>
+#include <vector>
 
 using namespace GameEngine;
 
@@ -417,56 +422,159 @@ TEST(DropdownTests, HeaderIconPaintsItsImageWithNoInteraction)
     fs::remove_all(assetRoot, ec);
 }
 
-TEST(DropdownTests, ANarrowPanelPullsThePopupBackInside)
+namespace
 {
-    // A fit-content popup is anchored to the header's left edge, so in a panel
-    // narrower than the popup its right edge leaves the panel and the rows are
-    // clipped at the boundary instead of being readable.
-    UITesting::IsolatedUIFixture fixture;
-    const bool built = fixture.Build(
-        1.0f,
-        R"(<uielement id="root"><uielement id="pane" class="panel"><uielement id="label"/><uielement id="host"/></uielement></uielement>)",
-        R"(
+// An inspector row in a 150 px panel at the left of a 400 px window: the field sits in the right-hand
+// column, 90 px from the window's left edge. `#tail` sets the room after the panel, so a test can put the
+// field near the window's right edge. The list rules are the editor's (theme/widgets.css).
+constexpr const char* kPlacementXml =
+    R"(<uielement id="root"><uielement id="pane" class="panel"><uielement id="label"/><uielement id="host"/></uielement><uielement id="tail"/></uielement>)";
+constexpr const char* kPlacementCss = R"(
 #root { width: 400px; height: 300px; flex-direction: row; }
-/* An inspector row: the field sits in the right-hand column, so its popup
-   starts most of the way across an already narrow panel. */
 #pane { width: 150px; height: 300px; flex-direction: row; }
 #label { width: 90px; }
 #host { width: 60px; }
 .dropdown { min-width: 60px; }
 .dropdown-items { position: absolute; top: 100%; left: 0px; width: 100%; }
 .dropdown-items.fit-content { width: auto; min-width: 100%; }
-.dropdown-item { padding: 2px 10px 2px 24px; }
-)");
+.dropdown-item-fit-content { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dropdown-item { margin: 1px 4px; padding: 2px 10px 2px 24px; }
+)";
+constexpr float kWindowWidth = 400.0f;
+constexpr float kPlacementTolerance = 0.5f;
+// The list's room ends this far inside the window's edge (DropdownPopupPlacement.cpp).
+constexpr float kWindowClearance = 2.0f;
+
+// An auto-width dropdown in #host, opened and laid out.
+Dropdown* OpenAutoWidthDropdown(UITesting::IsolatedUIFixture& fixture, const std::vector<std::string>& labels)
+{
+    auto owned = std::make_unique<Dropdown>();
+    Dropdown* dropdown = owned.get();
+    fixture.Element("host")->AddChild(std::move(owned));
+    dropdown->SetAutoWidthPopup(true);
+    dropdown->SetOptionsFromLabels(labels, 0);
+    fixture.Settle();
+    dropdown->OpenMenuUi();
+    fixture.Settle();
+    return dropdown;
+}
+
+// The width of a list whose rows each show their whole text: the widest text with the row's padding and margin.
+float WidthOfWidestEntry(UITesting::IsolatedUIFixture& fixture, const UIElement& list)
+{
+    float widest = 0.0f;
+    for (const auto& child : list.GetChildren())
+    {
+        const auto* row = dynamic_cast<const Label*>(child.get());
+        if (!row)
+            continue;
+        const auto& layout = row->GetResolvedStyle().Layout;
+        const float chrome = layout.Padding.Left + layout.Padding.Right + layout.Margin.Left + layout.Margin.Right;
+        widest = std::max(widest, fixture.Manager().MeasureTextWidth(*row, row->GetText()) + chrome);
+    }
+    return widest;
+}
+} // namespace
+
+// The list is as wide as its widest entry and hangs from its header's left edge, also when that takes it
+// past the panel: a list draws over the next panel.
+TEST(DropdownTests, AListHangsFromItsHeaderAtTheWidthOfItsWidestEntry)
+{
+    UITesting::IsolatedUIFixture fixture;
+    const bool built = fixture.Build(1.0f, kPlacementXml, kPlacementCss);
     if (!fixture.DeviceAvailable())
         GTEST_SKIP() << "No Vulkan device available";
     ASSERT_TRUE(built) << fixture.Diagnostic();
 
-    UIElement* host = fixture.Element("host");
-    UIElement* pane = fixture.Element("pane");
-    ASSERT_NE(host, nullptr);
-    ASSERT_NE(pane, nullptr);
+    Dropdown* dropdown = OpenAutoWidthDropdown(fixture, {"Claude (Subscription)", "Claude (API key)", "Codex"});
+    const UIElement* list = dropdown->GetItemsContainer();
+    const Mathematics::Rect header = dropdown->GetWindowRect();
+    const Mathematics::Rect box = list->GetWindowRect();
+    const float widest = WidthOfWidestEntry(fixture, *list);
+    ASSERT_GT(widest, header.Width) << "the entries need more than the header";
+    EXPECT_NEAR(box.X, header.X, kPlacementTolerance) << "the list hangs from the header's left edge";
+    EXPECT_NEAR(box.Width, widest, kPlacementTolerance) << "the list is as wide as its widest entry";
+}
 
-    auto owned = std::make_unique<Dropdown>();
-    Dropdown* dropdown = owned.get();
-    host->AddChild(std::move(owned));
-    dropdown->SetOptions({{"a", "Physical (camera)", {}, "probe-icon"},
-                          {"b", "Manual (EV100)", {}, "probe-icon"},
-                          {"c", "Auto (metered)", {}, "probe-icon"}});
-    fixture.Settle();
-    dropdown->OpenMenuUi();
-    fixture.Settle();
+// A list that would leave the window from the header's left edge hangs from the header's right edge.
+TEST(DropdownTests, AListThatWouldLeaveTheWindowHangsFromTheHeadersRightEdge)
+{
+    UITesting::IsolatedUIFixture fixture;
+    const bool built = fixture.Build(1.0f, kPlacementXml,
+                                     std::string(kPlacementCss) +
+                                         "#root { justify-content: flex-end; }\n#tail { width: 20px; }\n");
+    if (!fixture.DeviceAvailable())
+        GTEST_SKIP() << "No Vulkan device available";
+    ASSERT_TRUE(built) << fixture.Diagnostic();
 
-    UIElement* items = dropdown->GetItemsContainer();
-    ASSERT_NE(items, nullptr);
-    const float paneLeft = pane->GetLayoutX();
-    const float paneRight = paneLeft + pane->GetLayoutWidth();
-    const float popupLeft = items->GetLayoutX();
-    const float popupRight = popupLeft + items->GetLayoutWidth();
-    EXPECT_LE(popupRight, paneRight + 0.5f)
-        << "popup right " << popupRight << " leaves the panel at " << paneRight;
-    EXPECT_GE(popupLeft, paneLeft - 0.5f)
-        << "popup left " << popupLeft << " starts before the panel at " << paneLeft;
+    Dropdown* dropdown = OpenAutoWidthDropdown(fixture, {"Claude (Subscription)", "Claude (API key)", "Codex"});
+    const UIElement* list = dropdown->GetItemsContainer();
+    const Mathematics::Rect header = dropdown->GetWindowRect();
+    const Mathematics::Rect box = list->GetWindowRect();
+    const float widest = WidthOfWidestEntry(fixture, *list);
+    ASSERT_GT(header.X + widest, kWindowWidth - kWindowClearance) << "the list does not fit right of the header";
+    EXPECT_NEAR(box.Right(), header.Right(), kPlacementTolerance) << "the list hangs from the header's right edge";
+    EXPECT_NEAR(box.Width, widest, kPlacementTolerance) << "the list is as wide as its widest entry";
+}
+
+// An entry wider than the room on both sides of the header: the list takes the larger room and the entry
+// ends in an ellipsis, with the whole text in the row's tooltip.
+TEST(DropdownTests, AnEntryWiderThanTheRoomEndsInAnEllipsisWithTheWholeTextInItsTooltip)
+{
+    UITesting::IsolatedUIFixture fixture;
+    const bool built = fixture.Build(1.0f, kPlacementXml, kPlacementCss);
+    if (!fixture.DeviceAvailable())
+        GTEST_SKIP() << "No Vulkan device available";
+    ASSERT_TRUE(built) << fixture.Diagnostic();
+
+    Dropdown* dropdown = OpenAutoWidthDropdown(fixture, {"Short", std::string(120, 'W')});
+    const UIElement* list = dropdown->GetItemsContainer();
+    const Mathematics::Rect header = dropdown->GetWindowRect();
+    const Mathematics::Rect box = list->GetWindowRect();
+    ASSERT_GT(WidthOfWidestEntry(fixture, *list), kWindowWidth) << "the entry is wider than the window";
+    EXPECT_NEAR(box.X, header.X, kPlacementTolerance) << "the room right of the header is the larger";
+    EXPECT_NEAR(box.Right(), kWindowWidth - kWindowClearance, kPlacementTolerance) << "the list takes that room";
+
+    ASSERT_EQ(list->GetChildren().size(), 2u);
+    const auto* row = dynamic_cast<const Label*>(list->GetChildren()[1].get());
+    ASSERT_NE(row, nullptr);
+    ASSERT_NE(row->GetTextMeasurable(), nullptr);
+    EXPECT_TRUE(row->GetTextMeasurable()->WasLastRunEllipsized()) << "the long entry ends in an ellipsis";
+    const Mathematics::Rect rowBox = row->GetWindowRect();
+    EXPECT_TRUE(HoverShowsTooltip(fixture, rowBox.X + 40.0f, rowBox.Y + rowBox.Height * 0.5f))
+        << "the cut entry shows its whole text in a tooltip";
+}
+
+// An open list is placed when it opens: while it stays open and nothing changes, a frame lays out nothing.
+TEST(DropdownTests, AnOpenListThatStaysOpenLaysOutNothing)
+{
+    UITesting::IsolatedUIFixture fixture;
+    const bool built = fixture.Build(1.0f, kPlacementXml, kPlacementCss);
+    if (!fixture.DeviceAvailable())
+        GTEST_SKIP() << "No Vulkan device available";
+    ASSERT_TRUE(built) << fixture.Diagnostic();
+
+    // A list that fits, and a list that takes the room and cuts an entry.
+    const std::vector<std::vector<std::string>> lists = {{"Claude (Subscription)", "Codex"},
+                                                         {"Short", std::string(120, 'W')}};
+    for (const std::vector<std::string>& labels : lists)
+    {
+        Dropdown* dropdown = OpenAutoWidthDropdown(fixture, labels);
+        ASSERT_TRUE(dropdown->IsMenuOpen());
+        fixture.Manager().SetUpdateProfilingEnabled(true);
+        for (int frame = 0; frame < 5; ++frame)
+        {
+            fixture.StepFrame();
+            UIManager::UpdateProfileFrame profile;
+            ASSERT_TRUE(fixture.Manager().GetLastUpdateProfileFrame(profile));
+            EXPECT_NE(profile.IdleFrame, 0u) << labels[0] << ": frame " << frame << " was not idle (decline "
+                                             << profile.IdleDecline << ")";
+        }
+        fixture.Manager().SetUpdateProfilingEnabled(false);
+        dropdown->CloseMenuUi();
+        fixture.Element("host")->RemoveChild(dropdown);
+        fixture.Settle();
+    }
 }
 
 TEST(DropdownTests, HeaderIconResolvesItsImageWithNoInteraction)
@@ -575,6 +683,44 @@ TEST(DropdownTests, AnIconBearingPopupFitsItsContent)
 
     dropdown.SetOptions({{"a", "First"}});
     EXPECT_FALSE(dropdown.GetItemsContainer()->HasClass("fit-content"));
+}
+
+namespace
+{
+// The rows of a list that have the one-line class of a list sized to its entries (theme/widgets.css).
+size_t CountOneLineRows(const UIElement& list)
+{
+    size_t count = 0;
+    for (const auto& row : list.GetChildren())
+    {
+        if (row->HasClass("dropdown-item-fit-content"))
+            ++count;
+    }
+    return count;
+}
+} // namespace
+
+TEST(DropdownTests, ATextRowHasTheOneLineClassOnlyWhileTheListFitsItsEntries)
+{
+    Dropdown dropdown;
+    const UIElement& list = *dropdown.GetItemsContainer();
+    dropdown.SetOptionsFromLabels({"One", "Two"});
+    EXPECT_EQ(CountOneLineRows(list), 0u);
+
+    dropdown.SetAutoWidthPopup(true);
+    EXPECT_EQ(CountOneLineRows(list), 2u);
+
+    // Rows built after the list is sized to its entries have the class too.
+    dropdown.SetOptionsFromLabels({"One", "Two", "Three"});
+    EXPECT_EQ(CountOneLineRows(list), 3u);
+
+    dropdown.SetAutoWidthPopup(false);
+    EXPECT_EQ(CountOneLineRows(list), 0u);
+
+    // An icon row keeps its text in a child that has a one-line rule of its own.
+    dropdown.SetOptions({{"a", "First", {}, "test-icon-first"}});
+    ASSERT_TRUE(list.HasClass("fit-content"));
+    EXPECT_EQ(CountOneLineRows(list), 0u);
 }
 
 TEST(DropdownTests, ClearingTheIconsRemovesTheHeaderSlot)

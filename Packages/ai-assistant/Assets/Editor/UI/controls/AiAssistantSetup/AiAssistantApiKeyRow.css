@@ -1,0 +1,28 @@
+/* The API key row (AiAssistantApiKeyRow.uxml). The row takes the settings panel's classes; the
+   line under it reads as the method's line above it (.ai-setup-method-needs). */
+
+.ai-setup-key {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+}
+
+.ai-setup-key-note {
+	padding-left: var(--ui_spacing_md);
+	padding-right: var(--ui_spacing_md);
+	padding-bottom: var(--ui_spacing_xs);
+	font-size: var(--ui_font_size_small);
+	color: var(--ui_color_text_dim);
+	white-space: normal;
+}
+
+/* The hint starts and ends where the typed text does: the horizontal padding of the
+   settings field's TextInput (SettingsPanel.css). */
+.ai-setup-key .settings-row-field {
+	--ui_field_placeholder_left: 12px;
+	--ui_field_placeholder_right: 12px;
+}
+
+.ai-setup-key-note-error {
+	color: var(--ui_color_error_text);
+}

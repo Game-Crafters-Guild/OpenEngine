@@ -7,6 +7,7 @@
 #include <gtest/gtest.h>
 
 #include "Rendering/Core/Device.h"
+#include "Rendering/Geometry/VertexAttributeFlags.h"
 #include "Rendering/Materials/MaterialBuildService.h"
 #include "Rendering/Materials/MaterialDocument.h"
 #include "Rendering/Materials/Shader/ShaderCompileService.h"
@@ -14,6 +15,13 @@
 #include "StagedTestPaths.h"
 #include "TestUtils.h"
 
+#if defined(__APPLE__)
+#include "Rendering/Materials/MaterialBuilder.h"
+#include "Rendering/Materials/Shader/ShaderReflection.h"
+#include "Source/Metal/MetalShaderTranslator.h"
+#endif
+
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <cstring>
@@ -123,6 +131,7 @@ struct CbtComposeOutcome
     bool success = false;
     bool vsEmpty = true;
     bool fsEmpty = true;
+    std::vector<uint8_t> fsSpv;
     std::vector<std::string> errors;
 };
 
@@ -199,6 +208,7 @@ CbtComposeOutcome ComposeCbtTerrainSurface(int forcedBlendMaterials)
     {
         out.vsEmpty = result.package->stageBytes.at("vs").empty();
         out.fsEmpty = result.package->stageBytes.at("fs").empty();
+        out.fsSpv = result.package->stageBytes.at("fs");
     }
     return out;
 }
@@ -273,11 +283,17 @@ struct GrassComposeOutcome
 constexpr uint32_t kSpvMagic = 0x07230203u;
 constexpr uint32_t kSpvOpKill = 252u;                  // `discard`, SPIR-V <= 1.5
 constexpr uint32_t kSpvOpTerminateInvocation = 4416u;  // `discard`, SPIR-V >= 1.6
+constexpr uint32_t kSpvOpDecorate = 71u;
+constexpr uint32_t kSpvDecorationBuiltIn = 11u;
+constexpr uint32_t kSpvBuiltInFrontFacing = 17u;      // gl_FrontFacing
+constexpr uint32_t kSpvDecorationNoContraction = 42u; // a `precise` operation
 
-struct SpvKillScan
+struct SpvFragmentScan
 {
-    bool Valid = false;   // the module parsed as SPIR-V from magic to last instruction
-    bool HasKill = false; // ... and carried OpKill / OpTerminateInvocation
+    bool Valid = false;            // the module parsed as SPIR-V from magic to last instruction
+    bool HasKill = false;          // ... and carried OpKill / OpTerminateInvocation
+    bool ReadsFrontFacing = false; // ... and decorated a variable as gl_FrontFacing
+    bool HasPrecise = false;       // ... and decorated an operation NoContraction
     std::string Error;
 };
 
@@ -288,9 +304,9 @@ struct SpvKillScan
 // Valid is reported separately from HasKill on purpose. A scanner that failed to parse would
 // otherwise answer "no kill found" and turn the absence gate green without having looked — the
 // exact false instrument this gate exists to rule out.
-SpvKillScan ScanFragmentKills(const std::vector<uint8_t>& spv)
+SpvFragmentScan ScanFragmentModule(const std::vector<uint8_t>& spv)
 {
-    SpvKillScan scan;
+    SpvFragmentScan scan;
     if (spv.size() < 20u || (spv.size() % 4u) != 0u)
     {
         scan.Error = "not a whole number of SPIR-V words (" + std::to_string(spv.size()) + " bytes)";
@@ -314,15 +330,71 @@ SpvKillScan ScanFragmentKills(const std::vector<uint8_t>& spv)
             return scan;
         }
         if (opcode == kSpvOpKill || opcode == kSpvOpTerminateInvocation)
-        {
-            scan.Valid = true;
             scan.HasKill = true;
-            return scan;
-        }
+        if (opcode == kSpvOpDecorate && wordCount >= 4u && words[i + 2] == kSpvDecorationBuiltIn &&
+            words[i + 3] == kSpvBuiltInFrontFacing)
+            scan.ReadsFrontFacing = true;
+        if (opcode == kSpvOpDecorate && wordCount >= 3u && words[i + 2] == kSpvDecorationNoContraction)
+            scan.HasPrecise = true;
         i += wordCount;
     }
     scan.Valid = true;
     return scan;
+}
+
+// The CBT surface computes the terrain's outward normal from its own geometry, so the normal is right
+// for either facet winding. The forward fragment must keep it on a back face (every planet facet
+// reaches the rasterizer back-facing, #6681), so it must not read gl_FrontFacing.
+TEST(ShippedSurfaceCompose, CbtTerrainSurfaceKeepsItsNormalOnBackFacingFacets)
+{
+    const CbtComposeOutcome out = ComposeCbtTerrainSurface(0);
+    if (out.shadercMissing)
+        GTEST_SKIP() << "shaderc not built into this target";
+    for (const auto& e : out.errors)
+        ADD_FAILURE() << "Build error: " << e;
+    ASSERT_TRUE(out.success);
+    const SpvFragmentScan scan = ScanFragmentModule(out.fsSpv);
+    ASSERT_TRUE(scan.Valid) << "could not parse the fragment module: " << scan.Error;
+    EXPECT_FALSE(scan.ReadsFrontFacing)
+        << "the CBT terrain fragment reads gl_FrontFacing, so its shading depends on the facet winding "
+           "(the forward adapter negates the terrain normal on a back face); define "
+           "GE_TWO_SIDED_KEEP_NORMAL in cbt_surface.glsl";
+}
+
+// SPIRV-Cross turns a precise operation into a helper marked [[clang::optnone]]. Metal cannot inline it,
+// and on Apple GPUs a fragment with a call costs many times more under MSAA. The parallax relief-depth
+// fragments (parallax_depth.glsl) keep `precise` on purpose.
+TEST(ShippedSurfaceCompose, CbtTerrainFragmentCompilesToMetalWithoutAFunctionCall)
+{
+    const CbtComposeOutcome out = ComposeCbtTerrainSurface(0);
+    if (out.shadercMissing)
+        GTEST_SKIP() << "shaderc not built into this target";
+    for (const auto& e : out.errors)
+        ADD_FAILURE() << "Build error: " << e;
+    ASSERT_TRUE(out.success);
+    const SpvFragmentScan scan = ScanFragmentModule(out.fsSpv);
+    ASSERT_TRUE(scan.Valid) << "could not parse the fragment module: " << scan.Error;
+    EXPECT_FALSE(scan.HasPrecise) << "a function the CBT terrain fragment calls uses `precise`; keep it out of "
+                                     "the fragment stage with #if !defined(GE_STAGE_FRAGMENT)";
+#if defined(__APPLE__)
+    // Translate as a pipeline does: with the set layouts the material builder makes from the reflection.
+    StageReflectionResult reflected{};
+    std::string reflectError;
+    ASSERT_TRUE(ReflectSpirv(ShaderStageKind::Fragment, reinterpret_cast<const uint32_t*>(out.fsSpv.data()),
+                             out.fsSpv.size() / 4u, ReflectionOptions{}, reflected, &reflectError))
+        << reflectError;
+    const std::vector<DescriptorSetLayoutDesc> layouts = MaterialBuilder::BuildSetLayouts(MergeStages({reflected}));
+    std::vector<const DescriptorSetLayoutDesc*> layoutPointers;
+    for (const DescriptorSetLayoutDesc& layout : layouts)
+        layoutPointers.push_back(&layout);
+    const MetalShaderTranslation translation =
+        TranslateSpirvToMsl(out.fsSpv, MetalShaderStage::Fragment, layoutPointers, nullptr);
+    ASSERT_TRUE(translation.Success) << "translation error: " << translation.Error;
+    EXPECT_EQ(translation.Msl.find("optnone"), std::string::npos)
+        << "the CBT terrain fragment's MSL has a helper that Metal cannot inline";
+    EXPECT_EQ(translation.Msl.find("noinline"), std::string::npos)
+        << "the CBT terrain fragment's MSL has a function that Metal must not inline";
+#endif
 }
 
 // withVertexModifier = false composes the SURFACE alone. That is not the shipped document, and it
@@ -476,7 +548,7 @@ TEST(ShippedSurfaceCompose, TerrainGrassOpaqueSurfaceCompilesNoFragmentKill)
     ASSERT_TRUE(out.success);
     ASSERT_FALSE(out.fsEmpty) << "the opaque grass surface produced no fragment SPIR-V";
 
-    const SpvKillScan scan = ScanFragmentKills(out.fsSpv);
+    const SpvFragmentScan scan = ScanFragmentModule(out.fsSpv);
     ASSERT_TRUE(scan.Valid) << "could not parse the fragment module: " << scan.Error;
     EXPECT_FALSE(scan.HasKill)
         << "the GRASS_OPAQUE fragment module still carries OpKill/OpTerminateInvocation, so the "
@@ -499,7 +571,7 @@ TEST(ShippedSurfaceCompose, TerrainGrassDefaultSurfaceStillCompilesTheCardCutout
     ASSERT_TRUE(out.success);
     ASSERT_FALSE(out.fsEmpty) << "the default grass surface produced no fragment SPIR-V";
 
-    const SpvKillScan scan = ScanFragmentKills(out.fsSpv);
+    const SpvFragmentScan scan = ScanFragmentModule(out.fsSpv);
     ASSERT_TRUE(scan.Valid) << "could not parse the fragment module: " << scan.Error;
     EXPECT_TRUE(scan.HasKill)
         << "the keyword-free grass surface compiled no fragment kill: either the card cutout has "
@@ -587,4 +659,64 @@ TEST(ShippedSurfaceCompose, TerrainGrassPlacementComputeCompilesThroughRealPipel
     const auto it = result.stageBytes.find("cs");
     ASSERT_NE(it, result.stageBytes.end()) << "no compute stage in the compiled program";
     EXPECT_FALSE(it->second.empty()) << "the placement compute produced no SPIR-V";
+}
+
+namespace
+{
+// The standard surface on a mesh with a second UV, a vertex color and tangents, as the spline
+// paving's seam band draws it.
+MaterialBuildResult ComposeStandardOnSeamBand(MaterialKeyword materialKeywords)
+{
+    MaterialDocument doc{};
+    doc.materialName = "SeamBandProbe";
+    doc.lightingModel = "StandardPBR";
+    doc.surfaceShader = "Surfaces/standard_pbr.glsl";
+
+    MaterialBuildContext ctx{};
+    ctx.AdapterShaderDir = GameEngine::Rendering::Tests::GetAdapterShaderDir();
+    ctx.CacheRoot = MakeTempCacheRoot();
+    const VertexAttributeFlags band = VertexAttributeFlags::HasPosition | VertexAttributeFlags::HasNormal |
+                                      VertexAttributeFlags::HasUV0 | VertexAttributeFlags::HasTangent |
+                                      VertexAttributeFlags::HasUV1 | VertexAttributeFlags::HasColor;
+    auto result = BuildMaterialToShaderPackage(
+        doc, TestPaths::StagedEngineAssetsDir() / "Materials" / "SeamBandProbe.material", "SeamBandProbe", ctx,
+        ShaderSourceKind::SpirV,
+        MaterialKeyword::ForwardPlus | MaterialKeyword::Shadows | MaterialKeyword::IBL | materialKeywords, band);
+    std::error_code ec;
+    fs::remove_all(ctx.CacheRoot, ec);
+    return result;
+}
+
+// shaderc runs at optimization level zero, so a GLSL function name survives as an OpName.
+bool FragmentNames(const MaterialBuildResult& result, const std::string& needle)
+{
+    if (result.package == nullptr)
+        return false;
+    const auto stage = result.package->stageBytes.find("fs");
+    if (stage == result.package->stageBytes.end())
+        return false;
+    return std::search(stage->second.begin(), stage->second.end(), needle.begin(), needle.end()) !=
+           stage->second.end();
+}
+} // namespace
+
+// The crossfade variant of the standard surface compiles, and only it samples the normal map in the
+// frame of uv1.
+TEST(ShippedSurfaceCompose, StandardSurfaceCompilesTheUV1CrossfadeOnASeamBand)
+{
+    const MaterialBuildResult plain = ComposeStandardOnSeamBand(MaterialKeyword::None);
+    const MaterialBuildResult crossfade = ComposeStandardOnSeamBand(MaterialKeyword::UV1Crossfade);
+    for (const MaterialBuildResult* result : {&plain, &crossfade})
+    {
+        for (const auto& e : result->errors)
+        {
+            if (e.find("shaderc is not available") != std::string::npos)
+                GTEST_SKIP() << "shaderc not built into this target";
+            ADD_FAILURE() << "Build error: " << e;
+        }
+        ASSERT_TRUE(result->success);
+        ASSERT_NE(result->package, nullptr);
+    }
+    EXPECT_FALSE(FragmentNames(plain, "GE_StandardUV1NormalWS"));
+    EXPECT_TRUE(FragmentNames(crossfade, "GE_StandardUV1NormalWS"));
 }

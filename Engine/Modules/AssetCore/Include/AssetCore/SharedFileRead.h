@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Types/ByteBuffer.h"
 #include "Types/Types.h"
 
 #include <filesystem>
@@ -62,10 +63,10 @@ private:
 #endif
 };
 
-/// Whole-file convenience wrappers over SharedFileReader. Return false when
-/// the file cannot be opened or a read fails; an empty file yields success
-/// with empty output.
-bool ReadFileBytesShared(const std::filesystem::path& path, Vector<uint8>& outBytes);
+/// Whole-file wrappers over SharedFileReader. A failed open or read returns false and empty
+/// output. Otherwise they return true and the bytes the read got: none for an empty file, and
+/// fewer for a file that shrinks during the read.
+bool ReadFileBytesShared(const std::filesystem::path& path, ByteBuffer& outBytes);
 bool ReadFileTextShared(const std::filesystem::path& path, String& outText);
 
 } // namespace GameEngine

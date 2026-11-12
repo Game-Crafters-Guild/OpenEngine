@@ -1,13 +1,20 @@
 #include "Engine/Rendering/SunGlareRenderFeature.h"
 
+#include "Engine/Rendering/RenderOrigin.h"
 #include "Logger/Logger.h"
+#include "Mathematics/Interpolation.h"
+#include "Mathematics/Vector3.h"
+#include "Rendering/Camera/CameraTypes.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/Pipeline/PipelineDescTranslator.h"
 #include "Rendering/Core/Pipeline/PipelineTypes.h"
 #include "Rendering/Materials/MaterialBuilder.h"
 #include "Rendering/Materials/MaterialHelper.h"
 #include "Rendering/ShaderCache/ShaderPackageIO.h"
+#include "Rendering/Sky/SkySettings.h"
 
+#include <algorithm>
+#include <cmath>
 #include <memory>
 #include <string>
 #include <utility>
@@ -185,6 +192,18 @@ bool SunGlareRenderFeature::Initialize(IDevice* device)
     return true;
 }
 
+SunGlareCastersPushConstants SunGlareRenderFeature::MakeCastersPushConstants(const CameraData& camera,
+                                                                             const Mathematics::Vector3& sunDir,
+                                                                             float discRadius)
+{
+    // The cascade matrices take positions relative to the view's render origin.
+    const Mathematics::Vector3 eye = CameraEyeRelativeToOrigin(camera);
+    SunGlareCastersPushConstants pc{};
+    pc.Eye = Mathematics::Vector4(eye.x, eye.y, eye.z, 0.0f);
+    pc.SunDirRadius = Mathematics::Vector4(sunDir.x, sunDir.y, sunDir.z, discRadius);
+    return pc;
+}
+
 // The cascade term's one-workgroup pass. Its absence is a warning rather than a failure: the
 // glare still runs on the screen probe and the skyline, and the node tells the vertex stage
 // so through Horizon[3].
@@ -240,12 +259,20 @@ void SunGlareRenderFeature::SetSkylines(const ViewSkyline* entries, size_t count
     m_Skyline.assign(entries, entries + count);
 }
 
-float SunGlareRenderFeature::GetSkylineTangent(uint32_t viewId) const
+float SunGlareRenderFeature::GetSkylineVisibility(uint32_t viewId, const Mathematics::Vector3& sunDir) const
 {
-    for (const ViewSkyline& e : m_Skyline)
-        if (e.ViewId == viewId)
-            return e.Tangent;
-    return kNoSkyline;
+    const auto entry = std::find_if(m_Skyline.begin(), m_Skyline.end(),
+                                    [viewId](const ViewSkyline& e) { return e.ViewId == viewId; });
+    // Written as !(a > b) so that a NaN tangent also reads as no skyline.
+    if (entry == m_Skyline.end() || !(entry->Tangent > kNoSkyline))
+        return 1.0f;
+
+    // Both sides as tangents of the elevation above the horizontal. sunDir is a unit vector, so its
+    // Y is the sine of the sun's elevation and its horizontal length is the cosine.
+    const float sunHoriz = std::sqrt(std::max(sunDir.x * sunDir.x + sunDir.z * sunDir.z, 1e-12f));
+    const float sunTangent = sunDir.y / sunHoriz;
+    const float radiusTangent = kSunAngularRadiusRad; // tan(r) == r at this size
+    return Math::SmoothStep(entry->Tangent - radiusTangent, entry->Tangent + radiusTangent, sunTangent);
 }
 
 void SunGlareRenderFeature::OnDeviceRebuilt(IDevice* device)

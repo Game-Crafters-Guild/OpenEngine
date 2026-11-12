@@ -939,6 +939,29 @@ static Toggle* AddMaterialToggleRow(UIElement* parent, const std::string& labelT
         }, tooltip);
 }
 
+// Writes the Pattern Symmetry row's pick into the material file as one undo step. A Spline Paving
+// that uses the material reads the new value at its next rebuild.
+static void CommitPatternSymmetry(UIElement* root, MaterialAsset* mat, MaterialPatternSymmetry symmetry,
+                                  OpenColorPickerWindowFn openPicker, Editor::UndoRedoService* undo,
+                                  bool inlineEmbed, OpenAssetFn openAsset)
+{
+    MaterialDocument d = mat->GetDocument();
+    d.patternSymmetry = symmetry;
+    if (undo)
+    {
+        Editor::UndoRedoService::InteractiveEdit edit =
+            undo->BeginInteractiveEdit("Material patternSymmetry", MakeMaterialSnapshotTarget(mat, "patternSymmetry"));
+        if (edit)
+        {
+            SaveAndInvalidate(mat, d);
+            edit.Commit();
+            RequestRebuild(root, mat, openPicker, {}, undo, inlineEmbed, openAsset);
+            return;
+        }
+    }
+    SaveReloadRebuild(root, mat, d, openPicker, {}, undo, inlineEmbed, openAsset);
+}
+
 // How the document's surface takes its textures, decided from the document as it stands by the rule
 // registration applies (MaterialSystem::ResolveSurfaceTextureUse), so a material no open scene uses
 // lays out like a placed one and an edit shows its effect at the next rebuild. Empty without render
@@ -1416,6 +1439,12 @@ void BuildMaterialInspectorUI(UIElement* root, MaterialAsset* mat, OpenColorPick
             }
             SaveReloadRebuild(root, mat, d, openPicker, {}, undo, inlineEmbed, openAsset);
             PushRuntimeMaterialTextureBindings(mat);
+        });
+
+        Dropdown* symmetryDD = Editor::AddMaterialPatternSymmetryRow(content, doc.patternSymmetry);
+        symmetryDD->SetOnValueChanged([root, mat, openPicker, undo, inlineEmbed, openAsset](const std::string& value) {
+            CommitPatternSymmetry(root, mat, MaterialPatternSymmetryFromString(value), openPicker, undo, inlineEmbed,
+                                  openAsset);
         });
 
         root->AddChild(std::move(section));

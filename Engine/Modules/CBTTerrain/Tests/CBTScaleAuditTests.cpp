@@ -9,6 +9,7 @@
 #include "CBTTestHarness.h"
 #include "Mathematics/MatrixOps.h"
 #include "Mathematics/Vector3.h"
+#include "Mathematics/WorldPosition.h"
 #include "Rendering/Core/CommandList.h"
 
 #include <algorithm>
@@ -32,7 +33,7 @@ constexpr uint32_t kGridBits = 50;
 constexpr uint64_t kGrid = uint64_t{1} << kGridBits;
 constexpr uint32_t kVertexWords = sizeof(CBTVertexData) / sizeof(uint32_t);
 // The 1024 m world-sector grid of the deep store, as a double for the reference arithmetic.
-constexpr double kSectorSizeM = DeepDecode::kSectorSizeMeters;
+constexpr double kSectorSizeM = GameEngine::Mathematics::kWorldSectorSize;
 // A few ulps of fp32 (2^-24 is 6e-8): the rounding a stored corner accrues through the decode,
 // applied to a unit direction and, scaled by the radius, to the shell error.
 constexpr double kFp32RelativeTolerance = 4e-7;
@@ -548,7 +549,7 @@ TEST_P(CBTSphereScaleAudit, ScreenSpaceTeleportRebaseAndDistanceLodKeepActualCov
             kNearPlaneM, radius*kFarPlaneRadii);
         const auto vp = proj*MakeLookAtLH(relative, relative+direction, Vector3(0,1,0));
         std::memcpy(p.ViewProjRel, &vp.GetGLM()[0][0], sizeof(p.ViewProjRel));
-        p.CameraPos[3] = 1; p.RenderOriginSector[3] = DeepDecode::kSectorSizeMeters;
+        p.CameraPos[3] = 1; p.RenderOriginSector[3] = static_cast<float>(GameEngine::Mathematics::kWorldSectorSize);
         p.Screen[0] = kScreenWidthPixels; p.Screen[1] = kScreenHeightPixels;
         p.Screen[2] = kSplitThresholdPixels; p.Screen[3] = kMergeThresholdPixels;
         p.TerrainOrigin[2] = float(c.TargetDepth);

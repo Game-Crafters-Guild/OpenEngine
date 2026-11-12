@@ -25,11 +25,6 @@ public:
     static String GetPlatformName();
 
     /**
-     * @brief Get number of CPU cores
-     */
-    static uint32 GetCPUCoreCount();
-
-    /**
      * @brief Get total system memory in bytes
      */
     static uint64 GetTotalSystemMemory();

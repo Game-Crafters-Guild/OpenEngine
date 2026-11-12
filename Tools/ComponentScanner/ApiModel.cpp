@@ -25,6 +25,7 @@ std::string_view ApiKindName(ApiKind kind)
     case ApiKind::Vec4: return "Vec4";
     case ApiKind::Quat: return "Quat";
     case ApiKind::Mat4: return "Mat4";
+    case ApiKind::WorldPosition: return "WorldPosition";
     case ApiKind::ColorLinear: return "ColorLinear";
     case ApiKind::Entity: return "Entity";
     case ApiKind::RenderLayerMask: return "RenderLayerMask";

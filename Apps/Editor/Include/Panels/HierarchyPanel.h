@@ -10,6 +10,7 @@
 #include "Editor/Hierarchy/HierarchyEntity/HierarchyEntityRename.h"
 #include "Editor/Hierarchy/HierarchyRowActivity.h"
 #include "EditorChangeNotifications.h"
+#include "Scene/SceneDocumentManager.h"
 #include "Scene/SceneIO.h"
 #include "VersionControl/SceneDiff/SceneDiff.h"
 
@@ -80,7 +81,7 @@ public:
     void RefreshSceneDiffDecorations();
 
     /// Supplies embedded [hierarchy_ui] snapshot from the last scene load (consumed once per refresh).
-    void SetPendingHierarchyUiProvider(std::function<std::optional<Scene::SceneHierarchyUiFromFile>()> fn)
+    void SetPendingHierarchyUiProvider(std::function<std::optional<Editor::SceneHierarchyUiFromFile>()> fn)
     {
         m_PendingHierarchyUiProvider = std::move(fn);
     }
@@ -358,7 +359,7 @@ private:
     /** Entity IDs currently locked in the hierarchy (editor-only, not serialized). */
     std::unordered_set<std::uint32_t> m_LockedEntityIds;
 
-    std::function<std::optional<Scene::SceneHierarchyUiFromFile>()> m_PendingHierarchyUiProvider;
+    std::function<std::optional<Editor::SceneHierarchyUiFromFile>()> m_PendingHierarchyUiProvider;
 
     // Shared flag so detached background threads can detect panel destruction.
     std::shared_ptr<std::atomic<bool>> m_Alive = std::make_shared<std::atomic<bool>>(true);

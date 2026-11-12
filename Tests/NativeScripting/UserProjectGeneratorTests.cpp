@@ -189,6 +189,23 @@ TEST(UserProjectGenerator, GccArmDisablesChangesMeaning)
     EXPECT_LT(flag, content.find("endif()", otherArm));
 }
 
+// A user module compiles the engine's inline maths too, so the non-MSVC arm turns off
+// contraction for the same languages as the engine and its SDK.
+TEST(UserProjectGenerator, NonMsvcArmTurnsOffContraction)
+{
+    const auto config = MakeSdkConfig("/geproj", "/editor/SDK");
+    const std::string content = ns::UserProjectGenerator::BuildCMakeListsContent(config);
+
+    const std::size_t otherArm = content.find("else()", content.find("if(MSVC)"));
+    const std::size_t flag = content.find(
+        "target_compile_options(UserScripts PRIVATE "
+        "$<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-ffp-contract=off>)");
+    ASSERT_NE(otherArm, std::string::npos);
+    ASSERT_NE(flag, std::string::npos);
+    EXPECT_GT(flag, otherArm);
+    EXPECT_LT(flag, content.find("endif()", otherArm));
+}
+
 // EditorSDK phase 1: an Editor-kind module config links the EditorSDK import
 // lib and sees the staged editor headers; a runtime config emits neither.
 TEST(UserProjectGenerator, EditorModuleConfigLinksEditorSdk)
@@ -224,8 +241,18 @@ TEST(UserProjectGenerator, SourceGlobExcludesBuildTreesByTheAssetIgnoreRules)
     const std::size_t valueEnd = content.find('"', valueAt);
     ASSERT_NE(valueEnd, std::string::npos);
     const std::string names = ";" + content.substr(valueAt, valueEnd - valueAt) + ";";
-    for (const char* name : {".cache", ".git", "cmakefiles", "out", "obj", "bin", "build"})
+    for (const char* name : {".cache", ".git", "cmakefiles"})
         EXPECT_NE(names.find(";" + std::string(name) + ";"), std::string::npos) << name;
+
+    // Tool output names apply directly under the source root only, as path prefixes.
+    constexpr std::string_view kIgnoredPrefixesKey = "set(_ge_ignored_path_prefixes \"";
+    const std::size_t prefixesAt = content.find(kIgnoredPrefixesKey);
+    ASSERT_NE(prefixesAt, std::string::npos);
+    const std::size_t prefixesValueAt = prefixesAt + kIgnoredPrefixesKey.size();
+    const std::string prefixes =
+        ";" + content.substr(prefixesValueAt, content.find('"', prefixesValueAt) - prefixesValueAt) + ";";
+    for (const char* prefix : {"bin/", "build/", "obj/", "out/"})
+        EXPECT_NE(prefixes.find(";" + std::string(prefix) + ";"), std::string::npos) << prefix;
 
     // Build trees that name themselves after a configuration need a name prefix.
     EXPECT_NE(content.find("set(_ge_ignored_dir_prefixes \"cmake-build-\")"), std::string::npos);
@@ -237,6 +264,20 @@ TEST(UserProjectGenerator, SourceGlobExcludesBuildTreesByTheAssetIgnoreRules)
                            "\"${_ge_source}\")"),
               std::string::npos);
     EXPECT_NE(content.find("string(TOLOWER \"/${_ge_relative}\" _ge_relative_lower)"),
+              std::string::npos);
+}
+
+TEST(UserProjectGenerator, SourceGlobDropsAToolOutputFolderWithAMarkerAtAnyDepth)
+{
+    // The staleness digest skips a deep "build" that holds CMakeCache.txt, so the compile must
+    // skip it too, or a FetchContent _deps/*-src tree inside it compiles into the module.
+    const std::string content =
+        ns::UserProjectGenerator::BuildCMakeListsContent(MakeSdkConfig("/geproj", "/editor/SDK"));
+    EXPECT_NE(content.find("set(_ge_tool_output_dirs \"bin;build;generated;library;obj;out\")"), std::string::npos);
+    EXPECT_NE(content.find("set(_ge_tool_output_markers \"CMakeCache.txt;pyvenv.cfg\")"), std::string::npos);
+    EXPECT_NE(content.find("if(_ge_folder_name_lower IN_LIST _ge_tool_output_dirs)"), std::string::npos);
+    EXPECT_NE(content.find("if(EXISTS \"${_ge_folder}/${_ge_marker}\" AND NOT IS_DIRECTORY "
+                           "\"${_ge_folder}/${_ge_marker}\")"),
               std::string::npos);
 }
 
@@ -258,7 +299,9 @@ TEST(UserProjectGenerator, SourceGlobHonoursTheSourceRootsOwnAssetIgnoreFile)
     }
 
     const std::string content = ns::UserProjectGenerator::BuildCMakeListsContent(config);
-    EXPECT_NE(content.find("set(_ge_ignored_path_prefixes \"thirdparty/tests/\")"), std::string::npos);
+    EXPECT_NE(content.find("set(_ge_ignored_path_prefixes \"bin/;build/;generated/;library/;obj/;out/;"
+                           "thirdparty/tests/\")"),
+              std::string::npos);
     EXPECT_NE(content.find("string(FIND \"${_ge_relative_lower}\" \"/${_ge_ignored_path_prefix}\" "
                            "_ge_match)"),
               std::string::npos);
@@ -278,16 +321,18 @@ TEST(UserProjectGenerator, PackageModuleAtThePackageRootSkipsThePackagesTestsFol
     config.PackageRootDir = "/packages/helper-pack";
     config.SourceDir = config.PackageRootDir;
     const std::string atRoot = ns::UserProjectGenerator::BuildCMakeListsContent(config);
-    EXPECT_NE(atRoot.find("set(_ge_ignored_path_prefixes \"tests/\")"), std::string::npos);
+    // The default prefixes are the tool output folders directly under the source root.
+    constexpr std::string_view kDefaultPrefixes = "set(_ge_ignored_path_prefixes \"bin/;build/;generated/;library/;obj/;out/";
+    EXPECT_NE(atRoot.find(std::string(kDefaultPrefixes) + ";tests/\")"), std::string::npos);
 
     config.SourceDir = config.PackageRootDir / "Editor";
     const std::string belowRoot = ns::UserProjectGenerator::BuildCMakeListsContent(config);
-    EXPECT_NE(belowRoot.find("set(_ge_ignored_path_prefixes \"\")"), std::string::npos);
+    EXPECT_NE(belowRoot.find(std::string(kDefaultPrefixes) + "\")"), std::string::npos);
 
     config.PackageRootDir.clear();
     config.SourceDir = "/geproj/Assets";
     const std::string projectScripts = ns::UserProjectGenerator::BuildCMakeListsContent(config);
-    EXPECT_NE(projectScripts.find("set(_ge_ignored_path_prefixes \"\")"), std::string::npos)
+    EXPECT_NE(projectScripts.find(std::string(kDefaultPrefixes) + "\")"), std::string::npos)
         << "a project's own Tests folder is its business";
 }
 

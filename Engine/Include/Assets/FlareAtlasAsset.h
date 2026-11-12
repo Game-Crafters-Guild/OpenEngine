@@ -25,7 +25,7 @@ public:
     }
 
     bool Load() override;
-    bool LoadFromData(const Vector<uint8>& data) override;
+    bool LoadFromData(std::span<const uint8> data) override;
     void Unload() override;
 
     const std::string& GetTextureRef() const { return m_TextureRef; }

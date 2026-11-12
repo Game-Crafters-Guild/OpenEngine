@@ -1,12 +1,15 @@
 #include "TerrainECS/TerrainPageFeature.h"
 
 #include "PageStreaming/PageStore/PageStoreFormat.h"
+#include "Core/CpuProfiler.h"
 #include "Logger/Logger.h"
 #include "Rendering/Core/CommandList.h"
 #include "Rendering/Core/Device.h"
+#include "Rendering/Core/RenderGraph/RGFrame.h"
 
 #include <algorithm>
 #include <array>
+#include <span>
 
 namespace GameEngine::TerrainECS
 {
@@ -18,10 +21,20 @@ constexpr std::size_t kPageBytes = static_cast<std::size_t>(PageStreaming::kPage
 // A surface upload's bytes start on a 16-byte boundary in the staging: a BC5 copy's buffer offset is a
 // multiple of its 16-byte block, and an RG8 plane (33,800 bytes) breaks that alignment for the planes after it.
 constexpr std::size_t kSurfaceStagingAlignment = PageStreaming::kBc5BlockBytes;
+// The released snapshots a table keeps: the published, latched and committed sets hold the others.
+constexpr std::size_t kMaxFreeSnapshots = 2u;
 
 constexpr std::array<const char*, kSurfacePlanes.size()> kPlaneCacheNames = {
     "Terrain.SurfacePageCache.Splat", "Terrain.SurfacePageCache.Normal", "Terrain.SurfacePageCache.GrassControl",
     "Terrain.SurfacePageCache.Color"};
+
+// The feature owns its cache textures: the device frees each one after the frames in flight.
+void DestroyValidTextures(Rendering::IDevice& device, std::span<const Rendering::TextureHandle> textures)
+{
+    for (const Rendering::TextureHandle texture : textures)
+        if (texture.IsValid())
+            device.DestroyTexture(texture);
+}
 
 Rendering::TextureFormat PlaneTextureFormat(PageStreaming::PageFieldFormat format)
 {
@@ -64,19 +77,39 @@ TerrainPageFeature::~TerrainPageFeature()
     std::array<Rendering::TextureHandle, kSurfacePlanes.size() + 1u> textures{m_Cache};
     for (std::size_t plane = 0; plane < kSurfacePlanes.size(); ++plane)
         textures[plane + 1u] = m_Planes[plane].Texture;
-    for (Rendering::TextureHandle texture : textures)
-        if (texture.IsValid())
-            m_Device->DestroyTexture(texture);
+    DestroyValidTextures(*m_Device, textures);
 }
 
-void TerrainPageFeature::PublishTable(Table& table, const std::vector<uint32>* words, uint64 version,
-                                      uint32 planeMask)
+void TerrainPageFeature::PublishTable(Table& table, const PackedPageTable* source, uint32 planeMask)
 {
-    if (words == nullptr || (table.Version == version && table.Words))
+    if (source == nullptr || (table.Snapshot && table.Snapshot->Version() == source->Version()))
         return;
-    table.Words = std::make_shared<const std::vector<uint32>>(*words);
-    table.Version = version;
+    if (!table.Pool)
+        table.Pool = std::make_shared<TablePool>();
+    std::unique_ptr<PackedPageTable> snapshot;
+    {
+        std::lock_guard<std::mutex> lock(table.Pool->Mutex);
+        if (!table.Pool->Free.empty())
+        {
+            snapshot = std::move(table.Pool->Free.back());
+            table.Pool->Free.pop_back();
+        }
+    }
+    if (!snapshot)
+        snapshot = std::make_unique<PackedPageTable>();
+    snapshot->CopyFrom(*source);
+    table.Snapshot = std::shared_ptr<const PackedPageTable>(
+        snapshot.release(), [pool = table.Pool](const PackedPageTable* released) { ReturnSnapshot(pool, released); });
     table.PlaneMask = planeMask;
+}
+
+void TerrainPageFeature::ReturnSnapshot(const std::shared_ptr<TablePool>& pool, const PackedPageTable* snapshot)
+{
+    // Publish made the snapshot non-const; only the published sets see it as const.
+    std::unique_ptr<PackedPageTable> owned(const_cast<PackedPageTable*>(snapshot));
+    std::lock_guard<std::mutex> lock(pool->Mutex);
+    if (pool->Free.size() < kMaxFreeSnapshots)
+        pool->Free.push_back(std::move(owned));
 }
 
 void TerrainPageFeature::ForgetUnpaged(TableMap& tables, std::span<const uint32> paged)
@@ -92,6 +125,9 @@ void TerrainPageFeature::Publish(TerrainPages& pages)
     pages.PagedTerrains(paged);
     TerrainSurfacePages& surface = pages.Surface();
     surface.PagedTerrains(surfacePaged);
+    if (m_ReportRequested.exchange(false, std::memory_order_acq_rel))
+        PublishTableHashes(pages, paged);
+    GE_CPU_PROFILE_SCOPE("Terrain.PageTable.Publish");
     std::lock_guard<std::mutex> lock(m_Mutex);
     m_CacheDim = pages.Geometry().CacheDim;
     m_SurfaceSlotsPerRow = surface.Geometry().SlotsPerRow;
@@ -108,17 +144,12 @@ void TerrainPageFeature::Publish(TerrainPages& pages)
     ForgetUnpaged(m_PublishedTables.Height, paged);
     ForgetUnpaged(m_PublishedTables.Surface, surfacePaged);
     for (uint32 terrain : paged)
-    {
-        uint64 version = 0;
-        const std::vector<uint32>* words = pages.TableWords(terrain, version);
-        PublishTable(m_PublishedTables.Height[terrain], words, version, 0u);
-    }
+        PublishTable(m_PublishedTables.Height[terrain], pages.PackedTable(terrain), 0u);
     for (uint32 terrain : surfacePaged)
     {
-        uint64 version = 0;
         uint32 planeMask = 0;
-        const std::vector<uint32>* words = surface.TableWords(terrain, version, planeMask);
-        PublishTable(m_PublishedTables.Surface[terrain], words, version, planeMask);
+        const PackedPageTable* table = surface.PackedTable(terrain, planeMask);
+        PublishTable(m_PublishedTables.Surface[terrain], table, planeMask);
     }
 }
 
@@ -156,6 +187,14 @@ void TerrainPageFeature::Latch(Rendering::IDevice& device, uint64 rgFrame)
         m_LatchedCacheDim = m_CacheDim;
         m_LatchedSurfaceSlotsPerRow = m_SurfaceSlotsPerRow;
     }
+    // The field changed its slots (a planet came or went): its tables are empty, so no slot of the
+    // old textures is read. The device frees them after the frames in flight.
+    for (PlaneCache& plane : m_Planes)
+        if (plane.Texture.IsValid() && plane.SlotsPerRow != m_LatchedSurfaceSlotsPerRow)
+        {
+            DestroyValidTextures(device, std::span(&plane.Texture, 1));
+            plane = PlaneCache{};
+        }
     if (m_LatchedUploads.empty() && m_LatchedSurfaceUploads.empty())
     {
         m_CommittedTables = m_LatchedTables;
@@ -207,19 +246,110 @@ void TerrainPageFeature::RetireStaging()
 
 TerrainPageTableRing::Slot TerrainPageFeature::BindTableRing(uint32 terrain, uint32 generation)
 {
-    std::span<const uint32> heightWords;
-    std::span<const uint32> surfaceWords;
-    TerrainPageTableRing::Key key{terrain, generation, 0, 0};
-    if (m_Device == nullptr || !FindTable(m_CommittedTables.Height, terrain, heightWords, key.HeightVersion))
+    const PackedPageTable* height = FindTable(m_CommittedTables.Height, terrain);
+    if (m_Device == nullptr || height == nullptr)
         return {};
-    if (!FindTable(m_CommittedTables.Surface, terrain, surfaceWords, key.SurfaceVersion))
-        key.SurfaceVersion = 0;
+    const PackedPageTable* surface = FindTable(m_CommittedTables.Surface, terrain);
     Rendering::BufferHandle retired;
-    const TerrainPageTableRing::Slot slot =
-        m_TableRing.Bind(*m_Device, key, heightWords, surfaceWords, m_Device->GetFrameIndex(), retired);
+    const TerrainPageTableRing::Slot slot = m_TableRing.Bind(*m_Device, TerrainPageTableRing::Key{terrain, generation},
+                                                             *height, surface, m_Device->GetFrameIndex(), retired);
     if (retired.IsValid())
         m_Retiring.push_back({retired, m_LatchedFrame});
     return slot;
+}
+
+void TerrainPageFeature::RequestTableReport()
+{
+    m_ReportRequested.store(true, std::memory_order_release);
+}
+
+bool TerrainPageFeature::LastTableReport(TableReport& out) const
+{
+    std::lock_guard<std::mutex> lock(m_ReportMutex);
+    if (m_HasReport)
+        out = m_LastReport;
+    return m_HasReport;
+}
+
+void TerrainPageFeature::PublishTableHashes(const TerrainPages& pages, std::span<const uint32> paged)
+{
+    GE_CPU_PROFILE_SCOPE("Terrain.PageTable.ReportHashes");
+    std::vector<PublishedTable> hashes;
+    for (const uint32 terrain : paged)
+        if (const PackedPageTable* table = pages.PackedTable(terrain))
+            hashes.push_back(PublishedTable{terrain, table->Version(), static_cast<uint32>(table->Words().size()),
+                                       pages.WholeTableHash(terrain)});
+    std::lock_guard<std::mutex> lock(m_ReportMutex);
+    m_PublishedTableHashes = std::move(hashes);
+    m_TableHashesPublished = true;
+}
+
+void TerrainPageFeature::DeclareTableReport(Rendering::RenderGraph::RGFrame& frame)
+{
+    if (m_Device == nullptr)
+        return;
+    CompleteTableReport();
+    if (m_ReportCopy.Step != ReportCopy::Stage::None)
+        return;
+    {
+        std::lock_guard<std::mutex> lock(m_ReportMutex);
+        if (!m_TableHashesPublished)
+            return;
+        m_ReportCopy.Tables = std::move(m_PublishedTableHashes);
+        m_PublishedTableHashes.clear();
+        m_TableHashesPublished = false;
+    }
+    m_ReportCopy.Step = ReportCopy::Stage::Declared;
+    m_ReportCopy.FrameKey = &frame;
+    m_ReportCopy.Frame = frame.FrameIndex();
+    // The copy reads the slot that this frame binds; the slot's state is taken at the submit (SealSlotCopy).
+    frame.AddPass(
+        "Terrain.PageTableRing.Report", static_cast<int32_t>(Rendering::PassPhase::kFinalize),
+        [](Rendering::RenderGraph::RGPassBuilder& p) { p.PreventCulling(); },
+        [this](Rendering::RenderGraph::RGContext& ctx)
+        {
+            if (ctx.Cmd != nullptr)
+                m_ReportCopy.Recorded = m_TableRing.RecordSlotCopy(*m_Device, *ctx.Cmd, m_Device->GetFrameIndex());
+        });
+}
+
+void TerrainPageFeature::OnFrameSubmittedRG(Rendering::RenderGraph::RGFrame& frame,
+                                            const Rendering::IDevice::GpuSyncToken& token)
+{
+    if (m_ReportCopy.Step != ReportCopy::Stage::Declared || m_ReportCopy.FrameKey != &frame)
+        return;
+    // A frame begun again before its submit never recorded the copy.
+    if (m_ReportCopy.Frame != frame.FrameIndex() || !m_ReportCopy.Recorded || !m_TableRing.SealSlotCopy())
+    {
+        m_ReportCopy = {};
+        return;
+    }
+    m_ReportCopy.Token = token;
+    m_ReportCopy.Step = ReportCopy::Stage::Sealed;
+}
+
+void TerrainPageFeature::OnFrameStreamRetiredRG(Rendering::RenderGraph::RGFrame& frame)
+{
+    if (m_ReportCopy.Step == ReportCopy::Stage::Declared && m_ReportCopy.FrameKey == &frame)
+        m_ReportCopy = {};
+}
+
+void TerrainPageFeature::CompleteTableReport()
+{
+    if (m_ReportCopy.Step != ReportCopy::Stage::Sealed ||
+        m_Device->QueryGpuSyncToken(m_ReportCopy.Token) != Rendering::IDevice::GpuSyncStatus::Complete)
+        return;
+    GE_CPU_PROFILE_SCOPE("Terrain.PageTable.ReportRead");
+    TableReport report;
+    report.Frame = m_ReportCopy.Frame;
+    report.Tables = std::move(m_ReportCopy.Tables);
+    const bool read = m_TableRing.ReadSlotCopy(*m_Device, report.Slot);
+    m_ReportCopy = {};
+    if (!read)
+        return;
+    std::lock_guard<std::mutex> lock(m_ReportMutex);
+    m_LastReport = std::move(report);
+    m_HasReport = true;
 }
 
 void TerrainPageFeature::CommitLatch()
@@ -280,7 +410,8 @@ void TerrainPageFeature::EnsurePlaneCaches()
             continue;
         const PageStreaming::PageFieldFormat format = SurfacePlaneFormat(kSurfacePlanes[plane]);
         const uint32 dim = slotsPerRow * PageStreaming::PageStrideTexels(format);
-        m_Planes[plane] = PlaneCache{CreateCacheTexture(dim, PlaneTextureFormat(format), kPlaneCacheNames[plane])};
+        m_Planes[plane] =
+            PlaneCache{CreateCacheTexture(dim, PlaneTextureFormat(format), kPlaneCacheNames[plane]), slotsPerRow};
         if (!m_Planes[plane].Texture.IsValid())
             Logger::Log::Warning("Terrain pages: the {} surface page cache ({} x {}) was not created; the plane's "
                                  "pages do not upload",
@@ -382,25 +513,32 @@ void TerrainPageFeature::FlushUploads(Rendering::CommandList& cl)
     m_LatchedUploads.clear();
 }
 
-bool TerrainPageFeature::FindTable(const TableMap& tables, uint32 terrain, std::span<const uint32>& words,
-                                   uint64& version)
+const PackedPageTable* TerrainPageFeature::FindTable(const TableMap& tables, uint32 terrain)
 {
     const auto it = tables.find(terrain);
-    if (it == tables.end() || !it->second.Words || it->second.Words->empty())
-        return false;
-    words = *it->second.Words;
-    version = it->second.Version;
-    return true;
+    if (it == tables.end() || !it->second.Snapshot || it->second.Snapshot->Words().empty())
+        return nullptr;
+    return it->second.Snapshot.get();
 }
 
 bool TerrainPageFeature::LatchedTable(uint32 terrain, std::span<const uint32>& words, uint64& version) const
 {
-    return FindTable(m_CommittedTables.Height, terrain, words, version);
+    const PackedPageTable* table = FindTable(m_CommittedTables.Height, terrain);
+    if (table == nullptr)
+        return false;
+    words = table->Words();
+    version = table->Version();
+    return true;
 }
 
 bool TerrainPageFeature::LatchedSurfaceTable(uint32 terrain, std::span<const uint32>& words, uint64& version) const
 {
-    return FindTable(m_CommittedTables.Surface, terrain, words, version);
+    const PackedPageTable* table = FindTable(m_CommittedTables.Surface, terrain);
+    if (table == nullptr)
+        return false;
+    words = table->Words();
+    version = table->Version();
+    return true;
 }
 
 Rendering::TextureHandle TerrainPageFeature::SurfacePlaneTexture(uint32 terrain,
@@ -429,6 +567,7 @@ void TerrainPageFeature::OnDeviceRebuilt(Rendering::IDevice* device)
     m_Staging = {};
     m_Retiring.clear();
     m_TableRing.Release(nullptr);
+    m_ReportCopy = {};
     m_Planes = {};
     m_LatchedUploads.clear();
     m_LatchedSurfaceUploads.clear();

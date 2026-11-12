@@ -422,6 +422,21 @@ TEST(MetalDeviceCapabilities, BlockCompressionIsWhatTheGpuReports)
     device->Shutdown();
 }
 
+// The depth pyramid builds in two dispatches only when this size holds its finalize pass's
+// threadgroup memory. A device that reports 0 gets the per-mip chain on every frame.
+TEST(MetalDeviceCapabilities, ComputeSharedMemoryIsWhatTheGpuReports)
+{
+    auto device = CreateHeadlessMetalDevice();
+    if (!device)
+    {
+        GTEST_SKIP() << "Metal backend unavailable";
+    }
+    const uint32_t reported = device->GetCapabilities().maxComputeSharedMemorySize;
+    EXPECT_GT(reported, 0u);
+    EXPECT_EQ(reported, static_cast<MetalDevice&>(*device).GetMTLDevice()->maxThreadgroupMemoryLength());
+    device->Shutdown();
+}
+
 namespace
 {
 // A cooked BC level is tightly packed rows of 4x4 blocks (row pitch 0 in
@@ -722,6 +737,188 @@ TEST(MetalResources, PreviousFrameGraphicsCompleteFollowsTheNewestGraphicsSubmis
     device->DestroySemaphore(gate);
     device->DestroyBuffer(source);
     device->DestroyBuffer(mirror);
+    device->Shutdown();
+}
+
+// A frame slot is used again only after every command buffer stamped with it has completed,
+// on any queue, and the frame sync timings report that wait.
+TEST(MetalFrameSync, ASlotIsReusedOnlyAfterItsCommandBuffersComplete)
+{
+    static constexpr std::chrono::milliseconds kHold{60};
+    auto device = CreateHeadlessMetalDevice();
+    if (!device)
+    {
+        GTEST_SKIP() << "Metal backend unavailable";
+    }
+    // The compute submit worker holds `held` until `gate` opens. The frame pacing waits only
+    // for graphics work, so only the wait for the slot's command buffers can hold for it.
+    SemaphoreHandle gate = device->CreateTimelineSemaphore(0);
+    ASSERT_TRUE(gate.IsValid());
+    auto held = device->CreateCommandList(IDevice::QueueType::Compute);
+    held->Begin();
+    held->End();
+    auto open = device->CreateCommandList(IDevice::QueueType::Graphics);
+    open->Begin();
+    open->End();
+    ASSERT_TRUE(device->BeginFrame());
+    ASSERT_TRUE(device->QueueSubmit(IDevice::QueueType::Compute, {held.get()}, {{gate, 1}}, {}));
+    device->FinalizeFrame();
+
+    std::thread opener(
+        [&device, &open, gate]
+        {
+            std::this_thread::sleep_for(kHold);
+            device->QueueSubmit(IDevice::QueueType::Graphics, {open.get()}, {}, {{gate, 1}});
+        });
+    // The end of frame GetFramesInFlight() - 1 recycles the held buffer's slot and publishes its wait.
+    for (uint32_t frame = 1; frame < device->GetFramesInFlight(); ++frame)
+    {
+        EXPECT_TRUE(device->BeginFrame());
+        device->FinalizeFrame();
+    }
+    opener.join();
+    device->WaitForIdle();
+
+    IDevice::FrameSyncTimings sync{};
+    ASSERT_TRUE(device->GetLastFrameSyncTimings(sync));
+    const double holdMs = std::chrono::duration<double, std::milli>(kHold).count();
+    EXPECT_GE(sync.beginFrameWaitMs, holdMs / 2);
+    device->DestroySemaphore(gate);
+    device->Shutdown();
+}
+
+// Work submitted between two frames (an upload, a late view) is stamped with the next frame's
+// slot. The next BeginFrame must not wait for it: the GPU would idle while the frame records.
+TEST(MetalFrameSync, BeginFrameDoesNotWaitForWorkSubmittedBetweenFrames)
+{
+    static constexpr std::chrono::milliseconds kHold{200};
+    auto device = CreateHeadlessMetalDevice();
+    if (!device)
+    {
+        GTEST_SKIP() << "Metal backend unavailable";
+    }
+    SemaphoreHandle gate = device->CreateTimelineSemaphore(0);
+    ASSERT_TRUE(gate.IsValid());
+    auto between = device->CreateCommandList(IDevice::QueueType::Graphics);
+    between->Begin();
+    between->End();
+    auto open = device->CreateCommandList(IDevice::QueueType::Compute);
+    open->Begin();
+    open->End();
+    ASSERT_TRUE(device->BeginFrame());
+    device->FinalizeFrame();
+    // The graphics submit worker holds `between` until `gate` opens.
+    ASSERT_TRUE(device->QueueSubmit(IDevice::QueueType::Graphics, {between.get()}, {{gate, 1}}, {}));
+
+    // Opens the gate late, so a BeginFrame that waits for `between` fails and does not hang.
+    std::thread opener(
+        [&device, &open, gate]
+        {
+            std::this_thread::sleep_for(kHold);
+            device->QueueSubmit(IDevice::QueueType::Compute, {open.get()}, {}, {{gate, 1}});
+        });
+    const auto beginStart = std::chrono::steady_clock::now();
+    const bool begun = device->BeginFrame();
+    const double beginMs =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - beginStart).count();
+    device->FinalizeFrame();
+    opener.join();
+    device->WaitForIdle();
+
+    EXPECT_TRUE(begun);
+    const double holdMs = std::chrono::duration<double, std::milli>(kHold).count();
+    EXPECT_LT(beginMs, holdMs / 2) << "BeginFrame waited for work submitted after the previous frame ended";
+    device->DestroySemaphore(gate);
+    device->Shutdown();
+}
+
+namespace
+{
+// The wall time of one FinalizeFrame call, in milliseconds.
+double FinalizeFrameMs(IDevice& device)
+{
+    const auto start = std::chrono::steady_clock::now();
+    device.FinalizeFrame();
+    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+}
+} // namespace
+
+// A frame's end waits until the frame before it completes on the GPU, and never for its own
+// frame: the main thread records the next frame while one frame runs on the GPU.
+TEST(MetalFrameSync, AFrameEndWaitsOnlyForTheFrameBeforeIt)
+{
+    static constexpr std::chrono::milliseconds kHold{200};
+    auto device = CreateHeadlessMetalDevice();
+    if (!device)
+    {
+        GTEST_SKIP() << "Metal backend unavailable";
+    }
+    auto& metal = static_cast<MetalDevice&>(*device);
+    // A command buffer that waits for the gate holds every later frame on the graphics queue.
+    MTL::SharedEvent* gate = metal.GetMTLDevice()->newSharedEvent();
+    ASSERT_NE(gate, nullptr);
+    MTL::CommandBuffer* held = metal.GetQueue(IDevice::QueueType::Graphics)->commandBuffer();
+    held->encodeWait(gate, 1);
+    held->commit();
+    std::thread opener(
+        [gate]
+        {
+            std::this_thread::sleep_for(kHold);
+            gate->setSignaledValue(1);
+        });
+
+    // No frame is on the GPU, so the first frame's end does not wait.
+    EXPECT_TRUE(device->BeginFrame());
+    const double firstEndMs = FinalizeFrameMs(*device);
+    // The first frame stays on the GPU behind the gate, so the second frame's end waits for it.
+    EXPECT_TRUE(device->BeginFrame());
+    const double secondEndMs = FinalizeFrameMs(*device);
+    opener.join();
+    device->WaitForIdle();
+
+    const double holdMs = std::chrono::duration<double, std::milli>(kHold).count();
+    EXPECT_LT(firstEndMs, holdMs / 2) << "the frame end waited for its own frame";
+    EXPECT_GE(secondEndMs, holdMs / 2) << "the frame end did not wait for the frame before it";
+    gate->release();
+    device->Shutdown();
+}
+
+// A buffer destroyed between two frames keeps the device's reference past the next BeginFrame,
+// until the frame end that recycles its slot: work enqueued between the frames can still read it.
+TEST(MetalFrameSync, ABufferDestroyedBetweenFramesStaysAliveUntilItsSlotIsRecycled)
+{
+    auto device = CreateHeadlessMetalDevice();
+    if (!device)
+    {
+        GTEST_SKIP() << "Metal backend unavailable";
+    }
+    auto& metal = static_cast<MetalDevice&>(*device);
+    BufferDesc desc{};
+    desc.size = 256;
+    desc.usage = static_cast<uint32_t>(BufferUsage::TransferSrc | BufferUsage::TransferDst);
+    BufferHandle buffer = device->CreateBuffer(desc);
+    ASSERT_TRUE(buffer.IsValid());
+    // The test keeps its own reference, so the count shows whether the device still holds its own.
+    MTL::Buffer* object = metal.GetMetalBuffer(buffer)->buffer;
+    ASSERT_NE(object, nullptr);
+    object->retain();
+    const NS::UInteger withDevice = object->retainCount();
+
+    ASSERT_TRUE(device->BeginFrame());
+    device->FinalizeFrame();
+    device->DestroyBuffer(buffer);
+    ASSERT_TRUE(device->BeginFrame());
+    EXPECT_EQ(object->retainCount(), withDevice) << "BeginFrame released a buffer destroyed between frames";
+    device->FinalizeFrame();
+
+    // Every slot is recycled once within GetFramesInFlight() frame ends.
+    for (uint32_t frame = 0; frame < device->GetFramesInFlight(); ++frame)
+    {
+        ASSERT_TRUE(device->BeginFrame());
+        device->FinalizeFrame();
+    }
+    EXPECT_EQ(object->retainCount(), withDevice - 1) << "the device kept a buffer destroyed between frames";
+    object->release();
     device->Shutdown();
 }
 
@@ -3182,6 +3379,140 @@ TEST(MetalDescriptorSets, BindingSetsOnANewComputeEncoderAllocatesNothingOnceWar
     device->Shutdown();
 }
 
+// Metal allocates for each resource that a command buffer declares writable. A pass binds sets whose shaders only
+// read their storage buffers and storage images in every frame, so a warm frame must not allocate for them.
+TEST(MetalDescriptorSets, BindingReadOnlyStorageAllocatesNothingOnceWarm)
+{
+    auto device = CreateHeadlessMetalDevice();
+    if (!device)
+    {
+        GTEST_SKIP() << "Metal backend unavailable";
+    }
+    // The pipeline only opens the compute encoder. The binds pass no pipeline, so nothing checks the sets against it.
+    PipelineHandle pipeline = CreateUniformStoragePipeline(*device, MakeUniformStorageLayout());
+    ASSERT_TRUE(pipeline.IsValid());
+
+    DescriptorSetLayoutDesc layout{};
+    DescriptorBinding bufferBinding{};
+    bufferBinding.binding = 0;
+    bufferBinding.type = DescriptorType::StorageBuffer;
+    bufferBinding.shaderStages = kShaderStageCompute;
+    bufferBinding.flags = kDescriptorBindingReadOnlyStorage;
+    layout.bindings.push_back(bufferBinding);
+    DescriptorBinding imageBinding{};
+    imageBinding.binding = 1;
+    imageBinding.type = DescriptorType::StorageImage;
+    imageBinding.shaderStages = kShaderStageCompute;
+    imageBinding.storageReadOnly = true;
+    layout.bindings.push_back(imageBinding);
+
+    TextureDesc textureDesc{};
+    textureDesc.width = 4;
+    textureDesc.height = 4;
+    textureDesc.format = static_cast<uint32_t>(TextureFormat::RGBA8_UNORM);
+    textureDesc.usage = static_cast<uint32_t>(TextureUsage::ShaderResource | TextureUsage::UnorderedAccess);
+    constexpr uint32_t kSets = 4;
+    std::vector<BufferHandle> buffers;
+    std::vector<TextureHandle> textures;
+    std::vector<DescriptorSetHandle> sets;
+    for (uint32_t i = 0; i < kSets; ++i)
+    {
+        buffers.push_back(CreateBindingBuffer(*device, static_cast<uint32_t>(BufferUsage::Storage)));
+        textures.push_back(device->CreateTexture(textureDesc));
+        ASSERT_TRUE(buffers.back().IsValid() && textures.back().IsValid());
+        DescriptorSetDesc setDesc{};
+        setDesc.layout = layout;
+        sets.push_back(device->CreateDescriptorSet(setDesc));
+        ASSERT_TRUE(sets.back().IsValid());
+        device->UpdateStorageBufferBinding(sets.back(), 0, buffers.back(), 0, kBindingBufferSize);
+        device->UpdateStorageImageBinding(sets.back(), 1, textures.back());
+    }
+
+    auto cl = device->CreateCommandList(IDevice::QueueType::Graphics);
+    constexpr uint32_t kMeasuredFrames = 2;
+    const uint32_t warmUpFrames = device->GetFramesInFlight();
+    for (uint32_t frame = 0; frame < warmUpFrames + kMeasuredFrames; ++frame)
+    {
+        ASSERT_TRUE(device->BeginFrame());
+        cl->Begin();
+        cl->SetPipeline(pipeline);
+        uint64_t allocations = 0;
+        {
+            const GameEngine::Memory::AllocationCountScope scope(GameEngine::Memory::CountWindow::ThisThread);
+            for (DescriptorSetHandle set : sets)
+            {
+                cl->BindDescriptorSet(0, set, PipelineHandle{});
+            }
+            allocations = scope.Count();
+        }
+        cl->End();
+        device->ExecuteCommandLists({cl.get()});
+        device->FinalizeFrame();
+        if (frame >= warmUpFrames)
+        {
+            EXPECT_EQ(allocations, 0u) << "frame " << frame << ": binding " << kSets
+                                       << " sets of read-only storage allocated " << allocations << " times";
+        }
+    }
+    device->WaitForIdle();
+
+    for (DescriptorSetHandle set : sets)
+    {
+        device->DestroyDescriptorSet(set);
+    }
+    for (TextureHandle texture : textures)
+    {
+        device->DestroyTexture(texture);
+    }
+    for (BufferHandle buffer : buffers)
+    {
+        device->DestroyBuffer(buffer);
+    }
+    device->Shutdown();
+}
+
+// A set that declares read-only a storage buffer that the pipeline's shader writes must not be bound with
+// that pipeline: the bind declares the buffer with Read usage, so Metal does not order the write.
+TEST(MetalDescriptorSetsDeathTest, BindingASetThatDeclaresAWrittenBufferReadOnlyAsserts)
+{
+#ifdef NDEBUG
+    GTEST_SKIP() << "the check runs in debug builds only";
+#else
+    GTEST_FLAG_SET(death_test_style, "threadsafe");
+    auto device = CreateHeadlessMetalDevice();
+    if (!device)
+    {
+        GTEST_SKIP() << "Metal backend unavailable";
+    }
+    DescriptorSetLayoutDesc layout = MakeUniformStorageLayout();
+    for (DescriptorBinding& binding : layout.bindings)
+    {
+        if (binding.type == DescriptorType::StorageBuffer)
+        {
+            binding.flags |= kDescriptorBindingReadOnlyStorage;
+        }
+    }
+    const PipelineHandle pipeline = CreateUniformStoragePipeline(*device, layout);
+    ASSERT_TRUE(pipeline.IsValid());
+    DescriptorSetDesc setDesc{};
+    setDesc.layout = layout;
+    const DescriptorSetHandle set = device->CreateDescriptorSet(setDesc);
+    ASSERT_TRUE(set.IsValid());
+
+    auto cl = device->CreateCommandList(IDevice::QueueType::Graphics);
+    ASSERT_TRUE(device->BeginFrame());
+    cl->Begin();
+    cl->SetPipeline(pipeline);
+    EXPECT_DEATH(cl->BindDescriptorSet(0, set, pipeline), "declares read-only a storage binding");
+    cl->End();
+    device->ExecuteCommandLists({cl.get()});
+    device->FinalizeFrame();
+    device->WaitForIdle();
+    device->DestroyDescriptorSet(set);
+    device->Shutdown();
+#endif
+}
+
 // An encoder declares a bound resource when a set first uses it, and again with the union of the usages
 // when a set needs more. A known usage declares nothing. A new encoder declares every resident again.
 TEST(MetalDescriptorSets, EncoderDeclaresAResidentOnlyWhenItIsNewOrItsUsageGrows)
@@ -3429,7 +3760,11 @@ TEST(MetalDescriptorSets, TransientTableSurvivesLaterFramesWhileItsCommandBuffer
     ASSERT_TRUE(device->QueueSubmit(IDevice::QueueType::Compute, {heldList.get()}, {{gate, 1}}, {}));
     device->FinalizeFrame();
 
-    // Every other frame slot serves a frame of transient sets meanwhile.
+    // Every other frame slot serves a frame of transient sets meanwhile. The last of those frames
+    // ends by recycling the held slot, which waits for the held dispatch, so the gate opens first.
+    auto release = device->CreateCommandList(IDevice::QueueType::Graphics);
+    release->Begin();
+    release->End();
     constexpr uint32_t kOtherLength = 16;
     constexpr uint32_t kSetsPerFrame = 64;
     for (uint32_t frame = 1; frame < device->GetFramesInFlight(); ++frame)
@@ -3444,13 +3779,12 @@ TEST(MetalDescriptorSets, TransientTableSurvivesLaterFramesWhileItsCommandBuffer
             ASSERT_TRUE(set.IsValid());
             device->UpdateStorageBufferBinding(set, 0, other, 0, kOtherLength * sizeof(uint32_t));
         }
+        if (frame + 1 == device->GetFramesInFlight())
+        {
+            ASSERT_TRUE(device->QueueSubmit(IDevice::QueueType::Graphics, {release.get()}, {}, {{gate, 1}}));
+        }
         device->FinalizeFrame();
     }
-
-    auto release = device->CreateCommandList(IDevice::QueueType::Graphics);
-    release->Begin();
-    release->End();
-    ASSERT_TRUE(device->QueueSubmit(IDevice::QueueType::Graphics, {release.get()}, {}, {{gate, 1}}));
     device->WaitForIdle();
 
     const uint32_t* mapped = static_cast<const uint32_t*>(device->MapBuffer(held));
@@ -3799,6 +4133,127 @@ TEST(MetalDescriptorSets, TransientSetsAllocateNoMetalMemoryOnceWarm)
     device->WaitForIdle();
     device->DestroyBuffer(storage);
     device->DestroyBuffer(uniform);
+    device->Shutdown();
+}
+
+// The device computes the argument-buffer layout of a set layout once. Later sets made from that
+// layout allocate nothing for it.
+TEST(MetalDescriptorSets, TransientSetsFromOneLayoutAllocateNothingOnceWarm)
+{
+    auto device = CreateHeadlessMetalDevice();
+    if (!device)
+    {
+        GTEST_SKIP() << "Metal backend unavailable";
+    }
+    // More bindings than a layout keeps inline, and fewer slots than a set's residents keep inline.
+    DescriptorSetDesc setDesc{};
+    setDesc.transient = true;
+    for (uint32_t binding = 0; binding < 6; ++binding)
+    {
+        DescriptorBinding bufferBinding{};
+        bufferBinding.binding = binding;
+        bufferBinding.type = binding % 2 == 0 ? DescriptorType::UniformBuffer : DescriptorType::StorageBuffer;
+        bufferBinding.shaderStages = kShaderStageFragment;
+        setDesc.layout.bindings.push_back(bufferBinding);
+    }
+
+    constexpr uint32_t kSetsPerFrame = 64;
+    constexpr uint32_t kMeasuredFrames = 2;
+    const uint32_t warmUpFrames = device->GetFramesInFlight();
+    for (uint32_t frame = 0; frame < warmUpFrames + kMeasuredFrames; ++frame)
+    {
+        ASSERT_TRUE(device->BeginFrame());
+        uint64_t allocations = 0;
+        {
+            const GameEngine::Memory::AllocationCountScope scope(GameEngine::Memory::CountWindow::ThisThread);
+            for (uint32_t i = 0; i < kSetsPerFrame; ++i)
+            {
+                ASSERT_TRUE(device->CreateDescriptorSet(setDesc).IsValid());
+            }
+            allocations = scope.Count();
+        }
+        device->FinalizeFrame();
+        if (frame >= warmUpFrames)
+        {
+            EXPECT_EQ(allocations, 0u) << "frame " << frame << ": " << kSetsPerFrame << " transient sets allocated "
+                                       << allocations << " times";
+        }
+    }
+    device->WaitForIdle();
+    device->Shutdown();
+}
+
+// A pass creates, writes and binds the same transient sets in every frame. The residents and the
+// name of a set use storage that an earlier frame's set released, so a warm frame allocates nothing.
+TEST(MetalDescriptorSets, TransientSetsWithManySlotsAndALongNameAllocateNothingOnceWarm)
+{
+    auto device = CreateHeadlessMetalDevice();
+    if (!device)
+    {
+        GTEST_SKIP() << "Metal backend unavailable";
+    }
+    // More slots than a set keeps its residents inline, and a name longer than a short string keeps inline.
+    constexpr uint32_t kBindings = 12;
+    DescriptorSetDesc setDesc{};
+    setDesc.transient = true;
+    setDesc.debugName = "MetalDescriptorSets.TransientSetWithTwelveBufferSlots";
+    std::vector<BufferHandle> buffers;
+    std::vector<DescriptorWrite> writes;
+    for (uint32_t binding = 0; binding < kBindings; ++binding)
+    {
+        const bool uniform = binding % 2 == 0;
+        DescriptorBinding layoutBinding{};
+        layoutBinding.binding = binding;
+        layoutBinding.type = uniform ? DescriptorType::UniformBuffer : DescriptorType::StorageBuffer;
+        layoutBinding.shaderStages = kShaderStageCompute;
+        setDesc.layout.bindings.push_back(layoutBinding);
+        buffers.push_back(CreateBindingBuffer(
+            *device, static_cast<uint32_t>(uniform ? BufferUsage::Uniform : BufferUsage::Storage)));
+        ASSERT_TRUE(buffers.back().IsValid());
+        DescriptorWrite write{};
+        write.Binding = binding;
+        write.Type = layoutBinding.type;
+        write.Buffer = buffers.back();
+        write.Range = kBindingBufferSize;
+        writes.push_back(write);
+    }
+
+    constexpr uint32_t kSetsPerFrame = 8;
+    constexpr uint32_t kMeasuredFrames = 2;
+    const uint32_t warmUpFrames = device->GetFramesInFlight();
+    for (uint32_t frame = 0; frame < warmUpFrames + kMeasuredFrames; ++frame)
+    {
+        ASSERT_TRUE(device->BeginFrame());
+        auto cl = device->CreateCommandList(IDevice::QueueType::Graphics);
+        cl->Begin();
+        uint64_t allocations = 0;
+        {
+            const GameEngine::Memory::AllocationCountScope scope(GameEngine::Memory::CountWindow::ThisThread);
+            for (uint32_t i = 0; i < kSetsPerFrame; ++i)
+            {
+                const DescriptorSetHandle set = device->CreateDescriptorSet(setDesc);
+                ASSERT_TRUE(set.IsValid());
+                device->WriteDescriptorSet(set, writes);
+                // No encoder is open, so the bind only rebuilds the compact residents of the set.
+                cl->BindDescriptorSet(0, set, PipelineHandle{});
+            }
+            allocations = scope.Count();
+        }
+        cl->End();
+        device->ExecuteCommandLists({cl.get()});
+        device->FinalizeFrame();
+        if (frame >= warmUpFrames)
+        {
+            EXPECT_EQ(allocations, 0u) << "frame " << frame << ": " << kSetsPerFrame
+                                       << " transient sets with " << kBindings << " slots allocated "
+                                       << allocations << " times";
+        }
+    }
+    device->WaitForIdle();
+    for (BufferHandle buffer : buffers)
+    {
+        device->DestroyBuffer(buffer);
+    }
     device->Shutdown();
 }
 
@@ -4186,7 +4641,7 @@ TEST(MetalTimestampSpans, RenderGraphFoldsOneEncoderSharedByTwoPassesIntoOneMeas
         pool->BeginFrame(device->GetFrameIndex());
     }
 
-    const auto timings = frame.LastFrameTimings();
+    const auto timings = frame.LastFrameProfiling().Passes;
     const auto stats = frame.LastResolveStats();
     ASSERT_EQ(frame.TimingSemantics(), TimestampSemantics::EncoderSpan);
     ASSERT_EQ(timings.size(), 2u);
@@ -4458,6 +4913,109 @@ TEST(MetalDebugLayer, WrapsTheDeviceExactlyWhenRequested)
     EXPECT_EQ(deviceClass.find("Debug") != std::string::npos, layerRequested) << "device class " << deviceClass;
     device->Shutdown();
 }
+
+#if RENDERING_HAS_SHADERC
+
+// A pass on a combined depth-stencil target also binds that target as its
+// stencil attachment, so a pipeline drawn there must name the same stencil
+// format. Under the MetalDebugLayer ctest entry, a mismatch aborts the bind.
+TEST(MetalDebugLayer, APipelineDrawsIntoACombinedDepthStencilTarget)
+{
+    auto device = CreateHeadlessMetalDevice();
+    if (!device)
+    {
+        GTEST_SKIP() << "Metal backend unavailable";
+    }
+
+    static const char* kVert = R"(
+#version 450
+void main()
+{
+    const vec2 positions[3] = vec2[3](
+        vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0));
+    gl_Position = vec4(positions[gl_VertexIndex], 0.5, 1.0);
+}
+)";
+    static const char* kFrag = R"(
+#version 450
+layout(location = 0) out vec4 outColor;
+void main() { outColor = vec4(0.0, 1.0, 0.0, 1.0); }
+)";
+    const std::vector<uint8_t> vertSpv = CompileGlsl(kVert, shaderc_vertex_shader, "depth-stencil-pass.vert");
+    const std::vector<uint8_t> fragSpv = CompileGlsl(kFrag, shaderc_fragment_shader, "depth-stencil-pass.frag");
+    ASSERT_FALSE(vertSpv.empty());
+    ASSERT_FALSE(fragSpv.empty());
+
+    constexpr uint32_t kRtDim = 16;
+    TextureDesc rtDesc{};
+    rtDesc.width = kRtDim;
+    rtDesc.height = kRtDim;
+    rtDesc.format = static_cast<uint32_t>(TextureFormat::BGRA8_UNORM);
+    rtDesc.usage = static_cast<uint32_t>(TextureUsage::RenderTarget | TextureUsage::TransferSrc);
+    const TextureHandle rt = device->CreateTexture(rtDesc);
+    ASSERT_TRUE(rt.IsValid());
+    TextureDesc depthDesc = rtDesc;
+    depthDesc.format = static_cast<uint32_t>(TextureFormat::D32_SFLOAT_S8_UINT);
+    depthDesc.usage = static_cast<uint32_t>(TextureUsage::DepthStencil);
+    const TextureHandle depth = device->CreateTexture(depthDesc);
+    ASSERT_TRUE(depth.IsValid());
+
+    PipelineDesc pipelineDesc{};
+    pipelineDesc.type = PipelineType::Graphics;
+    pipelineDesc.vertexShader = vertSpv;
+    pipelineDesc.pixelShader = fragSpv;
+    pipelineDesc.colorAttachmentFormats = {static_cast<uint32_t>(TextureFormat::BGRA8_UNORM)};
+    pipelineDesc.depthAttachmentFormat = static_cast<uint32_t>(TextureFormat::D32_SFLOAT_S8_UINT);
+    pipelineDesc.rasterizationState.cullMode = CullModeFlagBits::None;
+    pipelineDesc.depthStencilState.depthTestEnable = true;
+    pipelineDesc.depthStencilState.depthWriteEnable = true;
+    pipelineDesc.debugName = "MetalCombinedDepthStencilTriangle";
+    const PipelineHandle pipeline = device->CreatePipeline(pipelineDesc);
+    ASSERT_TRUE(pipeline.IsValid());
+
+    BufferDesc readbackDesc{};
+    readbackDesc.size = static_cast<size_t>(kRtDim) * kRtDim * 4;
+    readbackDesc.usage = static_cast<uint32_t>(BufferUsage::TransferDst);
+    BufferHandle readback = device->CreateBuffer(readbackDesc);
+    ASSERT_TRUE(readback.IsValid());
+
+    auto cl = device->CreateCommandList(IDevice::QueueType::Graphics);
+    cl->Begin();
+    RenderPassDesc pass{};
+    pass.colorTargets[0] = rt;
+    pass.colorTargetCount = 1;
+    pass.clearColor[0] = true;
+    pass.clearColorValue[0][0] = 1.0f;
+    pass.clearColorValue[0][3] = 1.0f;
+    pass.depthTarget = depth;
+    pass.clearDepth = true;
+    pass.clearDepthValue = ReverseZ::kClearFar;
+    pass.depthLoadOp = RenderPassDesc::LoadOp::Clear;
+    pass.depthStoreOp = RenderPassDesc::StoreOp::Store;
+    cl->BeginRenderPass(pass);
+    cl->SetPipeline(pipeline);
+    cl->SetViewport(0.0f, 0.0f, static_cast<float>(kRtDim), static_cast<float>(kRtDim));
+    cl->SetScissor(0, 0, kRtDim, kRtDim);
+    cl->Draw(3);
+    cl->EndRenderPass();
+    cl->CopyTextureToBuffer(rt, readback, kRtDim, kRtDim);
+    cl->End();
+    device->ExecuteCommandLists({cl.get()});
+    device->WaitForIdle();
+
+    const uint8_t* mapped = static_cast<const uint8_t*>(device->MapBuffer(readback));
+    ASSERT_NE(mapped, nullptr);
+    const uint8_t* center = mapped + ((kRtDim / 2) * kRtDim + kRtDim / 2) * 4;
+    EXPECT_EQ(center[1], 255u) << "the triangle did not pass the depth test of the combined target";
+    EXPECT_EQ(center[2], 0u) << "red clear remained";
+
+    device->DestroyBuffer(readback);
+    device->DestroyTexture(depth);
+    device->DestroyTexture(rt);
+    device->Shutdown();
+}
+
+#endif // RENDERING_HAS_SHADERC
 
 #if RENDERING_HAS_SHADERC && RENDERING_ENABLE_SPIRV_REFLECTION
 

@@ -3,6 +3,7 @@
 #include "Components/Transform.h"
 #include "ECS/ECSTemplates.h"
 #include "ECS/World.h"
+#include "Mathematics/Angle.h"
 #include "Physics/PhysicsWorld.h"
 #include "PhysicsECS/Components/CharacterController.h"
 #include "PhysicsECS/Components/PhysicsBody.h"
@@ -75,13 +76,42 @@ static CharacterSettings StandingCapsule(const Vector3& position, CharacterMotor
 {
     CharacterSettings s{};
     s.motor = motor;
-    s.position = position;
+    s.position = WorldPosition::FromVector3(position);
     s.radius = 0.4f;
     s.height = 1.8f;
     s.maxSlopeAngleDegrees = 45.0f;
     s.maxStepHeight = 0.4f;
     s.layer = (motor == CharacterMotor::Dynamic) ? Layers::Dynamic : Layers::Kinematic;
     return s;
+}
+
+// A plane through the origin that rises toward +X at the given angle.
+static BodyHandle AddSlopePlane(PhysicsWorld& world, float32 degrees)
+{
+    const float32 radians = GameEngine::Mathematics::ToRadians(degrees);
+    PlaneShapeDef plane{};
+    plane.normal = Vector3(-std::sin(radians), std::cos(radians), 0.0f);
+    plane.halfExtent = 2000.0f;
+    BodySettings ground{};
+    ground.shape = world.CreateShape(plane);
+    ground.motionType = MotionType::Static;
+    ground.layer = Layers::Static;
+    return world.CreateBody(ground);
+}
+
+// Sets the horizontal velocity and keeps the vertical velocity, as the character controller system does.
+static void StepWalking(PhysicsWorld& world, CharacterHandle character, float32 velocityX, float32 seconds)
+{
+    constexpr float32 dt = 1.0f / 60.0f;
+    const int steps = static_cast<int>(seconds / dt);
+    for (int i = 0; i < steps; ++i)
+    {
+        Vector3 v = world.GetCharacterLinearVelocity(character);
+        v.x = velocityX;
+        v.z = 0.0f;
+        world.SetCharacterLinearVelocity(character, v);
+        world.Step(dt, 1);
+    }
 }
 
 static void StepSeconds(PhysicsWorld& world, float32 seconds)
@@ -105,8 +135,8 @@ TEST(CharacterController, KinematicLandsOnPlaneAndReportsGrounded)
     StepSeconds(world, 2.0f);
 
     const Transform t = world.GetCharacterTransform(ch);
-    EXPECT_LT(t.position.y, 0.2f);
-    EXPECT_GT(t.position.y, -0.05f);
+    EXPECT_LT(t.position.Y, 0.2f);
+    EXPECT_GT(t.position.Y, -0.05f);
     EXPECT_TRUE(world.IsCharacterGrounded(ch));
 }
 
@@ -136,8 +166,8 @@ TEST(CharacterController, KinematicLandsOnHeightField)
     StepSeconds(world, 3.0f);
 
     const Transform t = world.GetCharacterTransform(ch);
-    EXPECT_GT(t.position.y, 9.5f) << "y=" << t.position.y;
-    EXPECT_LT(t.position.y, 11.0f) << "y=" << t.position.y;
+    EXPECT_GT(t.position.Y, 9.5f) << "y=" << t.position.Y;
+    EXPECT_LT(t.position.Y, 11.0f) << "y=" << t.position.Y;
     EXPECT_TRUE(world.IsCharacterGrounded(ch));
 }
 
@@ -188,7 +218,7 @@ TEST(CharacterController, StepsUpOntoBox)
     step.motionType = MotionType::Static;
     step.layer = Layers::Static;
     // Platform x in [0.8, 20.8], top at y = 0.2 so a 3 s walk stays on it.
-    step.position = Vector3(10.8f, 0.1f, 0.0f);
+    step.position = WorldPosition{10.8f, 0.1f, 0.0};
     ASSERT_TRUE(world.CreateBody(step).IsValid());
 
     CharacterSettings desc = StandingCapsule(Vector3(0.0f, 0.05f, 0.0f));
@@ -209,8 +239,110 @@ TEST(CharacterController, StepsUpOntoBox)
     }
 
     const Transform t = world.GetCharacterTransform(ch);
-    EXPECT_GT(t.position.x, 1.0f) << "x=" << t.position.x;
-    EXPECT_GT(t.position.y, 0.15f) << "y=" << t.position.y << " x=" << t.position.x;
+    EXPECT_GT(t.position.X, 1.0f) << "x=" << t.position.X;
+    EXPECT_GT(t.position.Y, 0.15f) << "y=" << t.position.Y << " x=" << t.position.X;
+}
+
+// Returns how far a grounded kinematic character moves in 5 s on a slope with no input.
+static double StandStillDrift(float32 slopeDegrees)
+{
+    PhysicsWorld world(SmallDeterministicSettings());
+    EXPECT_TRUE(AddSlopePlane(world, slopeDegrees).IsValid());
+    const CharacterHandle ch = world.CreateCharacter(StandingCapsule(Vector3(0.0f, 0.1f, 0.0f)));
+    EXPECT_TRUE(ch.IsValid());
+    StepWalking(world, ch, 0.0f, 1.0f);
+    EXPECT_TRUE(world.IsCharacterGrounded(ch));
+    const Transform start = world.GetCharacterTransform(ch);
+
+    StepWalking(world, ch, 0.0f, 5.0f);
+
+    EXPECT_TRUE(world.IsCharacterGrounded(ch));
+    const Transform end = world.GetCharacterTransform(ch);
+    const double dx = end.position.X - start.position.X;
+    const double dy = end.position.Y - start.position.Y;
+    const double dz = end.position.Z - start.position.Z;
+    return std::sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+TEST(CharacterController, KinematicStandsStillOnAGentleSlope)
+{
+    EXPECT_LT(StandStillDrift(3.0f), 0.001);
+}
+
+TEST(CharacterController, KinematicStandsStillOnTheSteepestWalkableSlope)
+{
+    EXPECT_LT(StandStillDrift(44.0f), 0.001);
+}
+
+TEST(CharacterController, KinematicJumpsFromAGentleSlope)
+{
+    PhysicsWorld world(SmallDeterministicSettings());
+    ASSERT_TRUE(AddSlopePlane(world, 3.0f).IsValid());
+    const CharacterHandle ch = world.CreateCharacter(StandingCapsule(Vector3(0.0f, 0.1f, 0.0f)));
+    ASSERT_TRUE(ch.IsValid());
+    StepWalking(world, ch, 0.0f, 1.0f);
+    ASSERT_TRUE(world.IsCharacterGrounded(ch));
+    const Transform start = world.GetCharacterTransform(ch);
+
+    world.SetCharacterLinearVelocity(ch, Vector3(0.0f, 5.0f, 0.0f));
+    StepWalking(world, ch, 0.0f, 0.3f);
+
+    const Transform end = world.GetCharacterTransform(ch);
+    EXPECT_GT(end.position.Y - start.position.Y, 0.8) << "y=" << end.position.Y;
+}
+
+TEST(CharacterController, KinematicInTheAirFallsWithGravity)
+{
+    PhysicsWorld world(SmallDeterministicSettings());
+    ASSERT_TRUE(AddSlopePlane(world, 3.0f).IsValid());
+    const CharacterHandle ch = world.CreateCharacter(StandingCapsule(Vector3(0.0f, 10.0f, 0.0f)));
+    ASSERT_TRUE(ch.IsValid());
+
+    StepWalking(world, ch, 0.0f, 0.5f);
+
+    const Transform t = world.GetCharacterTransform(ch);
+    EXPECT_FALSE(world.IsCharacterGrounded(ch));
+    EXPECT_NEAR(10.0 - t.position.Y, 0.5 * 9.81 * 0.5 * 0.5, 0.1) << "y=" << t.position.Y;
+}
+
+TEST(CharacterController, KinematicWalksUpAGentleSlope)
+{
+    PhysicsWorld world(SmallDeterministicSettings());
+    ASSERT_TRUE(AddSlopePlane(world, 3.0f).IsValid());
+    const CharacterHandle ch = world.CreateCharacter(StandingCapsule(Vector3(0.0f, 0.1f, 0.0f)));
+    ASSERT_TRUE(ch.IsValid());
+    StepWalking(world, ch, 0.0f, 1.0f);
+    const Transform start = world.GetCharacterTransform(ch);
+
+    StepWalking(world, ch, 2.0f, 3.0f);
+
+    const Transform end = world.GetCharacterTransform(ch);
+    const double climbed = end.position.Y - start.position.Y;
+    const double walked = end.position.X - start.position.X;
+    EXPECT_GT(walked, 5.5) << "x=" << end.position.X;
+    EXPECT_NEAR(climbed, walked * std::tan(GameEngine::Mathematics::ToRadians(3.0f)), 0.05) << "y=" << end.position.Y;
+    EXPECT_TRUE(world.IsCharacterGrounded(ch));
+}
+
+TEST(CharacterController, KinematicWalksDownASlopeWithoutStepHeight)
+{
+    PhysicsWorld world(SmallDeterministicSettings());
+    ASSERT_TRUE(AddSlopePlane(world, 20.0f).IsValid());
+    CharacterSettings desc = StandingCapsule(Vector3(0.0f, 0.1f, 0.0f));
+    desc.maxStepHeight = 0.0f;
+    const CharacterHandle ch = world.CreateCharacter(desc);
+    ASSERT_TRUE(ch.IsValid());
+    StepWalking(world, ch, 0.0f, 1.0f);
+    ASSERT_TRUE(world.IsCharacterGrounded(ch));
+
+    int groundedSteps = 0;
+    for (int i = 0; i < 120; ++i)
+    {
+        StepWalking(world, ch, -2.0f, 1.0f / 60.0f);
+        groundedSteps += world.IsCharacterGrounded(ch) ? 1 : 0;
+    }
+
+    EXPECT_GE(groundedSteps, 118);
 }
 
 TEST(CharacterController, ModeSwitchRecreates)
@@ -231,7 +363,7 @@ TEST(CharacterController, ModeSwitchRecreates)
     StepSeconds(world, 1.5f);
     EXPECT_TRUE(world.IsCharacterValid(ch));
     const Transform t = world.GetCharacterTransform(ch);
-    EXPECT_LT(t.position.y, 2.0f);
+    EXPECT_LT(t.position.Y, 2.0f);
 }
 
 TEST(CharacterController, InvalidCapsuleRejected)
@@ -262,12 +394,12 @@ TEST(CharacterController, EcsWritebackAndPhysicsBodyRefusal)
     world.EnableComponentDirtyFeed(GameEngine::ECS::GetComponentTypeId<WorldTransform>());
 
     Transform pose = Transform::FromTRS(
-        GameEngine::Mathematics::Vector3(0.0f, 3.0f, 0.0f),
+        GameEngine::Mathematics::WorldPosition{0.0, 3.0, 0.0},
         GameEngine::Mathematics::Quaternion::Identity(),
         GameEngine::Mathematics::Vector3(1.0f, 1.0f, 1.0f));
     WorldTransform wt{};
-    for (int i = 0; i < 16; ++i)
-        wt.matrix[i] = pose.matrix[i];
+    wt.Position = pose.Position;
+    wt.Basis = pose.Basis;
 
     auto e = world.CreateEntity();
     world.AddComponentImmediate<Transform>(e, pose);
@@ -293,7 +425,7 @@ TEST(CharacterController, EcsWritebackAndPhysicsBodyRefusal)
     EXPECT_TRUE(cc->grounded);
     const auto* t = world.GetComponent<Transform>(e);
     ASSERT_NE(t, nullptr);
-    EXPECT_LT(t->GetPosition().y, 0.2f);
+    EXPECT_LT(t->GetPosition().Y, 0.2);
 
     auto blocked = world.CreateEntity();
     world.AddComponentImmediate<Transform>(blocked, pose);
@@ -306,6 +438,71 @@ TEST(CharacterController, EcsWritebackAndPhysicsBodyRefusal)
     EXPECT_FALSE(blockedCc->initialized);
     EXPECT_TRUE(blockedCc->refusedBecausePhysicsBody);
     EXPECT_FALSE(pw.IsCharacterValid(blockedCc->character));
+}
+
+// A character 300 km from the origin walks at 1 m/s for 600 steps of 1/60 s.
+// Its double position ends exactly 10 m from where it started.
+TEST(CharacterController, CharacterFarFromTheOriginWalksAnExactDistance)
+{
+    using GameEngine::Components::CharacterController;
+    using GameEngine::Components::Transform;
+    using GameEngine::Components::WorldTransform;
+    constexpr double kStartX = 300000.0;
+
+    ScopedPhysicsWorldService svc(SmallDeterministicSettings());
+    auto& pw = GameEngine::PhysicsECS::PhysicsWorldService::Get();
+    BoxShapeDef groundBox{};
+    groundBox.halfExtents = Vector3(100.0f, 0.5f, 100.0f);
+    BodySettings ground{};
+    ground.shape = pw.CreateShape(groundBox);
+    ground.motionType = MotionType::Static;
+    ground.layer = Layers::Static;
+    ground.position = WorldPosition{kStartX, -0.5, 0.0};
+    ASSERT_TRUE(pw.CreateBody(ground).IsValid());
+
+    GameEngine::ECS::World world;
+    GameEngine::PhysicsECS::RegisterPhysicsWorldHooks(world);
+    const Transform pose = Transform::FromTRS(WorldPosition{kStartX, 0.05, 0.0},
+                                              GameEngine::Mathematics::Quaternion::Identity(),
+                                              GameEngine::Mathematics::Vector3(1.0f, 1.0f, 1.0f));
+    WorldTransform wt{};
+    wt.Position = pose.Position;
+    wt.Basis = pose.Basis;
+    CharacterController cc{};
+    cc.desiredVelocityX = 1.0f;
+    auto e = world.CreateEntity();
+    world.AddComponentImmediate<Transform>(e, pose);
+    world.AddComponentImmediate<WorldTransform>(e, wt);
+    world.AddComponentImmediate<CharacterController>(e, cc);
+
+    GameEngine::PhysicsECS::CharacterControllerSystem motor;
+    GameEngine::PhysicsECS::PhysicsStepSystem step;
+    GameEngine::PhysicsECS::CharacterControllerWritebackSystem writeback;
+    constexpr float32 dt = 1.0f / 60.0f;
+    for (int i = 0; i < 600; ++i)
+    {
+        motor.Update(world, dt);
+        step.Update(world, dt);
+        writeback.Update(world, dt);
+    }
+
+    ASSERT_TRUE(world.GetComponent<CharacterController>(e)->grounded) << "the character is not on the ground";
+    const WorldPosition walked = world.GetComponent<Transform>(e)->Position;
+    EXPECT_NEAR(walked.X, kStartX + 10.0, 1.0e-4) << "the character did not walk exactly 10 m";
+    EXPECT_NEAR(walked.Z, 0.0, 1.0e-4);
+}
+
+// A teleport 300 km from the origin puts the character at the exact position it was given.
+TEST(CharacterController, SetCharacterPositionPutsTheCharacterAtTheExactPosition)
+{
+    ScopedPhysicsWorldService svc(SmallDeterministicSettings());
+    auto& pw = GameEngine::PhysicsECS::PhysicsWorldService::Get();
+    const CharacterHandle character = pw.CreateCharacter(StandingCapsule(Vector3(0.0f, 1.0f, 0.0f)));
+    ASSERT_TRUE(pw.IsCharacterValid(character));
+
+    const WorldPosition target{300000.0001, 1.0, -2.0};
+    pw.SetCharacterPosition(character, target);
+    EXPECT_EQ(pw.GetCharacterTransform(character).position, target);
 }
 
 // The character writeback follows the body writeback's rule: a character at rest is not re-composed
@@ -328,7 +525,7 @@ TEST(CharacterController, WritebackSkipsARestingCharacterAndSnapsAnEditedTransfo
 
     GameEngine::ECS::World world;
     auto e = world.CreateEntity();
-    world.AddComponentImmediate<Transform>(e, Transform::FromTRS(GameEngine::Mathematics::Vector3(2.0f, 3.0f, -1.0f),
+    world.AddComponentImmediate<Transform>(e, Transform::FromTRS(GameEngine::Mathematics::WorldPosition{2.0, 3.0, -1.0},
                                                                  GameEngine::Mathematics::Quaternion::Identity(),
                                                                  GameEngine::Mathematics::Vector3(1.5f, 2.5f, 0.75f)));
     world.AddComponentImmediate<WorldTransform>(e, WorldTransform{});
@@ -345,11 +542,11 @@ TEST(CharacterController, WritebackSkipsARestingCharacterAndSnapsAnEditedTransfo
             << "frame " << frame << ": the resting character was re-composed";
     }
 
-    const float32 characterX = pw.GetCharacterTransform(cc.character).position.x;
-    world.GetComponentForWrite<Transform>(e)->matrix[12] += 3.0f;
+    const double characterX = pw.GetCharacterTransform(cc.character).position.X;
+    world.GetComponentForWrite<Transform>(e)->Position.X += 3.0;
     writeback.Update(world, dt);
     EXPECT_EQ(PhysicsWorldService::GetLastCharactersComposed(), 1u);
-    EXPECT_EQ(world.GetComponent<Transform>(e)->matrix[12], characterX) << "the edited Transform kept its edit";
+    EXPECT_EQ(world.GetComponent<Transform>(e)->Position.X, characterX) << "the edited Transform kept its edit";
     writeback.Update(world, dt);
     EXPECT_EQ(PhysicsWorldService::GetLastCharactersComposed(), 0u);
 }
@@ -414,12 +611,12 @@ TEST(CharacterController, AnimationDisplacementOverridesWishVelocity)
     world.EnableComponentDirtyFeed(GameEngine::ECS::GetComponentTypeId<WorldTransform>());
 
     Transform pose = Transform::FromTRS(
-        GameEngine::Mathematics::Vector3(0.0f, 1.0f, 0.0f),
+        GameEngine::Mathematics::WorldPosition{0.0, 1.0, 0.0},
         GameEngine::Mathematics::Quaternion::Identity(),
         GameEngine::Mathematics::Vector3(1.0f, 1.0f, 1.0f));
     WorldTransform wt{};
-    for (int i = 0; i < 16; ++i)
-        wt.matrix[i] = pose.matrix[i];
+    wt.Position = pose.Position;
+    wt.Basis = pose.Basis;
 
     CharacterController cc{};
     cc.desiredVelocityX = 99.0f;
@@ -461,12 +658,12 @@ TEST(CharacterController, NonFiniteDisplacementDoesNotPoisonVelocity)
     world.EnableComponentDirtyFeed(GameEngine::ECS::GetComponentTypeId<WorldTransform>());
 
     Transform pose = Transform::FromTRS(
-        GameEngine::Mathematics::Vector3(0.0f, 1.0f, 0.0f),
+        GameEngine::Mathematics::WorldPosition{0.0, 1.0, 0.0},
         GameEngine::Mathematics::Quaternion::Identity(),
         GameEngine::Mathematics::Vector3(1.0f, 1.0f, 1.0f));
     WorldTransform wt{};
-    for (int i = 0; i < 16; ++i)
-        wt.matrix[i] = pose.matrix[i];
+    wt.Position = pose.Position;
+    wt.Basis = pose.Basis;
 
     CharacterController cc{};
     cc.desiredVelocityX = 3.0f;

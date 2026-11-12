@@ -4,6 +4,7 @@
 
 #include "TerrainECS/TerrainModifierSystem.h"
 #include "TerrainRowBands.h"
+#include "TerrainECS/TerrainSurface/TerrainSurfaceStore.h"
 
 #include "Core/CpuProfiler.h"
 #include "PageStreaming/Height/HeightPageLayer.h"
@@ -25,6 +26,16 @@ namespace
 {
 
 using PageStreaming::PageSampleRect;
+
+// Adds `changed` of `planes` to the surface change record of `tiled`, whose reader has taken
+// the record when SurfaceChangedSince equals SurfaceVersion.
+void AddSurfaceChange(TiledTerrainData& tiled, const PageSampleRect& changed, uint8 planes)
+{
+    const bool taken = tiled.SurfaceChangedSince == tiled.SurfaceVersion;
+    tiled.SurfaceChanged = taken ? changed : PageStreaming::Union(tiled.SurfaceChanged, changed);
+    tiled.SurfaceChangedPlanes = taken ? planes : static_cast<uint8>(tiled.SurfaceChangedPlanes | planes);
+    ++tiled.SurfaceVersion;
+}
 
 // The terrain's global tile lattice: level 0 of its height pages.
 struct TileLattice
@@ -297,10 +308,23 @@ void TerrainModifierSystem::PublishSurfaceChanged(TiledTerrainData& tiled, bool 
     }
     if (!changed)
         return;
-    tiled.SurfaceChanged = *changed;
-    tiled.SurfaceChangedSince = tiled.SurfaceVersion;
     tiled.SurfaceRefresh = SurfaceRefreshReason::Edit;
-    ++tiled.SurfaceVersion;
+    AddSurfaceChange(tiled, *changed, kEverySurfacePlane);
+}
+
+void TerrainModifierSystem::PublishGrassSurfaceChanged(TiledTerrainData& tiled, bool entire, const DirtyUnion& dirty)
+{
+    const std::optional<TileLattice> lattice = MakeTileLattice(tiled);
+    if (!lattice)
+        return;
+    std::optional<PageSampleRect> changed;
+    if (entire)
+        changed = PageSampleRect{0u, 0u, lattice->SamplesX - 1u, lattice->SamplesZ - 1u};
+    else if (dirty.Any)
+        changed = LatticeRect(*lattice, dirty.MinX, dirty.MinZ, dirty.MaxX, dirty.MaxZ);
+    if (!changed)
+        return;
+    AddSurfaceChange(tiled, *changed, kGrassSurfacePlanes);
 }
 
 } // namespace GameEngine::TerrainECS

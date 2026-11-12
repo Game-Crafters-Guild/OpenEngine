@@ -89,7 +89,7 @@ vec4 SkyOutput(vec3 stored)
     vec3 viewDirWS = normalize(transpose(mat3(ViewParams.ge_view)) * normalize(farPoint.xyz));
     vec3 fogScattering;
     float fogTransmittance;
-    GE_HeightFogSky(ViewParams.ge_cameraPosWS.xyz, viewDirWS, ViewParams.ge_nearFar.y, vUV, fogScattering,
+    GE_HeightFogSky(ViewParams.ge_cameraPosWS.xyz, viewDirWS, ViewParams.ge_viewRanges.y, vUV, fogScattering,
                     fogTransmittance);
     return vec4(stored * fogTransmittance + fogScattering * GE_PreExposure(), 1.0);
 }
@@ -144,7 +144,7 @@ vec3 GradientSkyColor(vec3 dirWS)
 // Transmittance from the camera to the top of the atmosphere along dirWS; 0 below the horizon.
 vec3 TransmittanceAlongView(vec3 dirWS)
 {
-    vec3 planetCenter = vec3(0.0, -uAtmos.planetRadius, 0.0);
+    vec3 planetCenter = uAtmos.planetCenter;
     vec3 camPos = uSky.cameraPositionWS;
     float r = length(camPos - planetCenter);
     vec3 up = (camPos - planetCenter) / r;
@@ -166,7 +166,7 @@ vec3 SampleOrthoBackdropDirection(vec3 dirWS)
                hdriIntensity;
     }
 
-    vec3 planetCenter = vec3(0.0, -uAtmos.planetRadius, 0.0);
+    vec3 planetCenter = uAtmos.planetCenter;
     vec3 camPos = uSky.cameraPositionWS;
     vec3 up = normalize(camPos - planetCenter);
 
@@ -220,7 +220,7 @@ void RenderOrthoBackdrop(vec2 ndc)
     // Build a stable virtual horizon direction from the camera orientation.
     // Top/bottom views have a forward vector parallel to planet-up, so fall
     // back through the camera's up/right axes before using local north.
-    vec3 planetCenter = vec3(0.0, -uAtmos.planetRadius, 0.0);
+    vec3 planetCenter = uAtmos.planetCenter;
     vec3 planetUp = normalize(uSky.cameraPositionWS - planetCenter);
     vec3 horizonDir = uSky.cameraForwardWS -
                       planetUp * dot(uSky.cameraForwardWS, planetUp);
@@ -400,7 +400,7 @@ void main()
     }
 
     // Planet-relative up for stable zenith across camera movement
-    vec3 planetCenter = vec3(0.0, -uAtmos.planetRadius, 0.0);
+    vec3 planetCenter = uAtmos.planetCenter;
     vec3 camPos       = uSky.cameraPositionWS;
     float camR        = length(camPos - planetCenter);
     vec3 up           = (camPos - planetCenter) / max(camR, 1e-5);

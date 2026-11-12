@@ -191,3 +191,49 @@ TEST(InjectedInputRoutingTests, NonFinitePositionReachesNoSink)
     EXPECT_FLOAT_EQ(playPosition.x, 200.0f - kViewportLogicalX);
     EXPECT_FLOAT_EQ(playPosition.y, 150.0f - kViewportLogicalY);
 }
+
+// An injected wheel carries the modifier mask the platform reports with it, so a Ctrl
+// wheel reaches the UI as a Ctrl wheel (the item resize gesture) with no key press
+// first. A non-finite delta reaches no sink, the modifier state included.
+TEST(InjectedInputRoutingTests, InjectedScrollCarriesItsModifiersAndRefusesNonFiniteDeltas)
+{
+    InjectionFixture f;
+    if (!f.Init())
+    {
+        GTEST_SKIP() << "Device init failed";
+    }
+    ASSERT_EQ(f.ui->GetModifierKeys(), 0);
+
+    Editor::InjectScroll(f.config, f.ui.get(), 0.0f, std::numeric_limits<float>::quiet_NaN(), Input::kModControl);
+    EXPECT_EQ(f.ui->GetModifierKeys(), 0);
+
+    Editor::InjectScroll(f.config, f.ui.get(), 0.0f, 1.0f, Input::kModControl);
+    EXPECT_EQ(f.ui->GetModifierKeys(), Input::kModControl);
+}
+
+// One injected detent over the Game View is one frame's vertical scroll delta for gameplay,
+// as a real wheel is: a wheel zoom reads it on that frame and reads zero on the next.
+TEST(InjectedInputRoutingTests, InjectedDetentIsOneFrameOfGameplayScroll)
+{
+    InjectionFixture f;
+    if (!f.Init())
+    {
+        GTEST_SKIP() << "Device init failed";
+    }
+    constexpr Input::ContextId kGameplayContext = Input::HashInput("Test.Gameplay");
+    constexpr Input::ActionId kZoom = Input::HashInput("Test.Gameplay.Zoom");
+    Input::ActionDesc zoom{};
+    zoom.id = kZoom;
+    zoom.isAxis = true;
+    zoom.bindings.push_back({Input::DeviceType::Mouse, Input::kMouseScrollAxisY, 1.0f});
+    f.runtimeInput.RegisterAction(kGameplayContext, zoom);
+    f.runtimeInput.PushContext(kGameplayContext);
+
+    Editor::InjectMouseMove(f.config, /*window=*/nullptr, f.ui.get(), 200.0f, 150.0f);
+    Editor::InjectScroll(f.config, f.ui.get(), /*dx=*/0.0f, /*dy=*/1.0f, /*mods=*/0);
+    f.runtimeInput.Update(0.016f);
+    EXPECT_FLOAT_EQ(f.runtimeInput.GetActionState(kZoom).value, 1.0f);
+
+    f.runtimeInput.Update(0.016f);
+    EXPECT_FLOAT_EQ(f.runtimeInput.GetActionState(kZoom).value, 0.0f);
+}

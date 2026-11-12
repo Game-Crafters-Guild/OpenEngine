@@ -52,6 +52,7 @@ set(ECS_CORE_TEST_SOURCES
     ECSCoreTest.cpp
     OversizedChunkAllocationTest.cpp
     ChunkAllocationCounterTest.cpp
+    ChunkReuseTest.cpp
     RegisterComponentsTest.cpp
     QueryInvalidationAndOverflowTest.cpp
     ArchetypeMatchCacheTest.cpp
@@ -77,12 +78,14 @@ set(ECS_CORE_TEST_SOURCES
     QueryBenchmarks.cpp
     ComponentTypeNameTest.cpp
     ComponentReflectionTests.cpp
+    ComponentFieldRegistryNameTests.cpp
     FieldAccessTests.cpp
     ComponentMigrationTest.cpp
     ComponentLayoutReloadMigratorTests.cpp
     WorldClearStateTest.cpp
     WorldSnapshotIdentityTest.cpp
     SystemPlanTrailingWaveTest.cpp
+    SimulationClockTests.cpp
     SystemPerformanceMaximaTest.cpp
     SystemWaveThreadPinningTest.cpp
     SystemWaveTraceTest.cpp
@@ -157,13 +160,6 @@ ge_stage_runtime_dependencies(ECSCoreTests)
 add_executable(ECSAdvancedTests ${ECS_ADVANCED_TEST_SOURCES})
 
 target_compile_features(ECSAdvancedTests PUBLIC cxx_std_20)
-
-# Enable AVX2+FMA for SIMD benchmarks
-if(MSVC)
-    target_compile_options(ECSAdvancedTests PRIVATE /arch:AVX2)
-elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
-    target_compile_options(ECSAdvancedTests PRIVATE -mavx2 -mfma)
-endif()
 
 target_include_directories(ECSAdvancedTests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}

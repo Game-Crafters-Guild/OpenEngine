@@ -2,6 +2,7 @@
 #include "Core/Engine.h"
 #include "Rendering/Common/Utils.h"
 #include "Rendering/ShaderCache/ShaderPackageIO.h"
+#include "Rendering/ShaderCache/ShaderStageRecord.h"
 #include "TestTempDir.h"
 
 #include <filesystem>
@@ -113,4 +114,45 @@ TEST_F(EngineShaderHookLifetimeTest, EachLifetimeCapturesItsOwnHostIncludingNull
     ASSERT_TRUE(Engine.Initialize(Config));
     Engine.Shutdown();
     second.ExpectCurrent();
+}
+
+namespace
+{
+// The stage record of a run on the project at @p workspaceRoot. Only a Mac exports to Mac, so only a Mac records.
+fs::path StageRecordOnThisHost([[maybe_unused]] const fs::path& workspaceRoot)
+{
+#if defined(__APPLE__)
+    return Rendering::ShaderStageRecordFile(workspaceRoot);
+#else
+    return {};
+#endif
+}
+} // namespace
+
+// An editor that opens another project records the stage inputs in the new workspace, where an
+// export of that project reads them.
+TEST_F(EngineShaderHookLifetimeTest, WorkspaceSwitchMovesTheStageRecord)
+{
+    ASSERT_TRUE(Engine.Initialize(Config));
+    const fs::path first = Engine.GetWorkspaceRoot();
+    EXPECT_EQ(Rendering::GetPrecompiledShaderFiles().StageRecord, StageRecordOnThisHost(first));
+    fs::create_directories(Temporary.Path() / "Other" / "Assets");
+    Engine.SetWorkspaceRoot(Temporary.Path() / "Other");
+    ASSERT_NE(Engine.GetWorkspaceRoot(), first);
+    EXPECT_EQ(Rendering::GetPrecompiledShaderFiles().StageRecord, StageRecordOnThisHost(Engine.GetWorkspaceRoot()));
+}
+
+// No export reads the stages of a run without a project: the editor's staging workspace, or a test
+// in the executable's folder (the build output).
+TEST_F(EngineShaderHookLifetimeTest, ARunWithoutAProjectRecordsNoStages)
+{
+    Config.WorkspaceDirectoryIsFallback = true;
+    ASSERT_TRUE(Engine.Initialize(Config));
+    EXPECT_TRUE(Rendering::GetPrecompiledShaderFiles().StageRecord.empty()) << "staging workspace";
+    Engine.Shutdown();
+
+    Config.WorkspaceDirectoryIsFallback = false;
+    Config.WorkspaceDirectory = ".";
+    ASSERT_TRUE(Engine.Initialize(Config));
+    EXPECT_TRUE(Rendering::GetPrecompiledShaderFiles().StageRecord.empty()) << "the executable's folder";
 }

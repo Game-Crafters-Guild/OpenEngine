@@ -32,6 +32,7 @@
 
 #include <chrono>
 #include <initializer_list>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -411,7 +412,7 @@ ModelRenderResources TwoSubmeshResources(ModelAsset& model,
     ConvertedModelMaterial slot1{};
     slot1.materialIndex = 1;
     slot1.derivedGuid = embeddedSlot1;
-    resources.materials = {slot0, slot1};
+    resources.materials = std::make_shared<const std::vector<ConvertedModelMaterial>>(std::vector{slot0, slot1});
     return resources;
 }
 
@@ -521,7 +522,7 @@ ModelRenderResources SeededResources(const GUID& modelGuid, ModelAsset& model,
     ConvertedModelMaterial slot1{};
     slot1.materialIndex = 1;
     slot1.derivedGuid = outSlot1;
-    res.materials = {slot0, slot1};
+    res.materials = std::make_shared<const std::vector<ConvertedModelMaterial>>(std::vector{slot0, slot1});
     return res;
 }
 

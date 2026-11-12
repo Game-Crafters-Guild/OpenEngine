@@ -9,6 +9,7 @@
 #include <limits>
 #include <sstream>
 #include <string>
+#include <utility>
 
 #include "Types/FormatNumber.h"
 #include "Types/StringUtils.h"
@@ -62,13 +63,19 @@ public:
     // Public so the module-local formatting helpers below can reuse it.
     static std::string TrimTrailingZeros(std::string s);
 
-    // The value that "None" stands for, at the float limits. Clearing the text or typing
-    // "None" commits it, and editing it starts from empty text.
-    void SetNoneValue(float value)
+    // The display text of a value at the float limits.
+    static constexpr const char* kNoneText = "None";
+
+    // The value that `text` stands for, such as "None" at the float limits or "Auto" at 0. The field
+    // shows `text` for the value. Clearing the text or typing `text` commits it, and editing it starts
+    // from empty text.
+    void SetNoneValue(float value, std::string text)
     {
         m_HasNoneValue = true;
         m_NoneValue = value;
+        m_NoneText = std::move(text);
         SetEmptyValues(value, value);
+        SetValueWithoutNotify(GetValue());
     }
 
     // Click-drag the value box to scrub; click without a drag to edit.
@@ -117,8 +124,6 @@ public:
     void OnPostLayout() override;
 
 private:
-    // The display text of a value at the float limits, and the word that commits the None value.
-    static constexpr const char* kNoneText = "None";
 
     bool IsNoneValue(float value) const { return m_HasNoneValue && value == m_NoneValue; }
     bool TryParseNoneWord(const std::string& text, float& outValue) const;
@@ -150,12 +155,13 @@ private:
     float m_DragStartValue = 0.0f;
     bool m_HasNoneValue = false;
     float m_NoneValue = 0.0f;
+    std::string m_NoneText;
 };
 
 inline FloatField::FloatField()
 {
     AddClass("float-field");
-    // Control styling is an Editor-shipped UIStyle asset.
+    // Control styling is a UI module UIStyle asset.
     RequestSubtreeStyleAssetPath("UI/controls/FloatField.css", "editor");
     ConfigureEditorIdentity("float-input-", "float-field-input");
     if (TextInput* editor = GetTextInput())
@@ -272,10 +278,11 @@ inline void FloatField::OnPostLayout()
     // 4. Compact with 0 decimal places (50B)
     const float v = this->GetValue();
 
-    if (IsAtFloatLimit(v))
+    if (IsNoneValue(v) || IsAtFloatLimit(v))
     {
-        if (GetEditorText() != kNoneText)
-            SetEditorText(kNoneText);
+        const std::string none = FormatFloat(v, true);
+        if (GetEditorText() != none)
+            SetEditorText(none);
         return;
     }
 
@@ -456,6 +463,8 @@ static std::string FormatScientificTrimmed(float v)
 
 inline std::string FloatField::FormatFloat(float v, bool compact)
 {
+    if (compact && IsNoneValue(v))
+        return m_NoneText;
     if (compact && IsAtFloatLimit(v))
         return kNoneText;
     if (!compact && IsNoneValue(v))
@@ -520,7 +529,7 @@ static double SuffixToMultiplier(char c)
 
 inline bool FloatField::TryParseNoneWord(const std::string& text, float& outValue) const
 {
-    if (!m_HasNoneValue || !EqualsIgnoreCase(TrimWhitespaceView(text), kNoneText))
+    if (!m_HasNoneValue || !EqualsIgnoreCase(TrimWhitespaceView(text), m_NoneText))
         return false;
     outValue = m_NoneValue;
     return true;

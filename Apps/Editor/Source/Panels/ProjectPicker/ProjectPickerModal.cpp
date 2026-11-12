@@ -117,8 +117,6 @@ constexpr std::array<std::string_view, 3> kImportActionsRequiredIds = {
     "import-cancel",
     "import-project-button",
 };
-constexpr const char* kSearchPlaceholderLayoutAssetPath =
-    "UI/controls/ProjectPicker/ProjectPickerSearchPlaceholder.uxml";
 constexpr const char* kRecentGridLayoutAssetPath = "UI/controls/ProjectPicker/ProjectPickerRecentGrid.uxml";
 constexpr std::array<std::string_view, 1> kRecentGridRequiredIds = {"recent-projects-container"};
 constexpr float kLogoHueDegreesPerSecond = 360.0f / 12.0f;
@@ -742,12 +740,6 @@ void ProjectPickerModal::BuildTree()
 
     auto onProjectSearchChanged = [this](const std::string& value) {
             m_SearchQuery = value;
-            if (m_SearchPlaceholder)
-            {
-                m_SearchPlaceholder->Style().Set(
-                    Style::Display, value.empty() ? DisplayMode::Flex : DisplayMode::None);
-                m_SearchPlaceholder->MarkDirty(UIElement::LayoutDirty | UIElement::VisualDirty);
-            }
             // RefreshRecentProjectsList() replaces every card in the grid. When this
             // callback fires from the search bar's own clear-button click, that
             // rebuild runs synchronously inside UIManager's mouse-up dispatch and
@@ -763,7 +755,7 @@ void ProjectPickerModal::BuildTree()
         onProjectSearchChanged,
         onProjectSearchChanged);
     search.Root->SetId("project-search");
-    search.FieldPtr->AddClass("project-picker-small-text");
+    search.RootPtr->SetPlaceholder("Search projects");
     m_SearchField = search.FieldPtr;
     if (search.ClearButtonPtr)
     {
@@ -793,13 +785,6 @@ void ProjectPickerModal::BuildTree()
                 manager->FocusElement(m_SearchField);
         }
     });
-
-    std::unique_ptr<UIElement> searchPlaceholder =
-        Editor::ControlLayoutLoader::Load(kSearchPlaceholderLayoutAssetPath, {});
-    if (!searchPlaceholder)
-        return;
-    m_SearchPlaceholder = searchPlaceholder.get();
-    search.Root->AddChild(std::move(searchPlaceholder));
 
     // Appended after the title row and the spacer declared in the layout asset.
     projectHeader->AddChild(std::move(search.Root));
@@ -1156,9 +1141,13 @@ void ProjectPickerModal::Show()
     UpdateLayoutForRecentProjects();
 
     MarkDirty(UIElement::LayoutDirty | UIElement::VisualDirty);
-    if (auto* manager = GetOwnerManager())
+    if (GetOwnerManager())
     {
-        manager->PostToUI([manager, this]() { manager->FocusElement(this); });
+        PostSafeAction([this]()
+        {
+            if (UIManager* manager = GetOwnerManager())
+                manager->FocusElement(this);
+        });
     }
 }
 

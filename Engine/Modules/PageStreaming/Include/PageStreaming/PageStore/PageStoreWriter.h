@@ -44,10 +44,11 @@ public:
     std::string OpenForPatch(const std::filesystem::path& existing, const std::filesystem::path& target,
                              PageStoreLayout layout);
 
-    /// Adds the pages `present` marks to the store being written, unwritten, and moves the pages under
-    /// the longer index to the end of the store. Not while a page call runs. Returns an empty string,
-    /// else the reason (the store is dropped).
-    std::string AddPresentPages(std::span<const uint8> present);
+    /// Adds the pages of `added` (in any order; a page the store holds is skipped) to the store being
+    /// written, unwritten, and moves the pages under the longer index to the end of the store. Not while
+    /// a page call runs. Returns an empty string, else the reason (an address outside the store, a failed
+    /// move); the store is dropped then.
+    std::string AddPresentPages(std::span<const PageAddress> added);
 
     const PageStoreLayout& Layout() const { return m_Layout; }
 

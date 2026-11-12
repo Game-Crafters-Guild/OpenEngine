@@ -20,6 +20,8 @@
 #include "Engine/Rendering/RenderServices.h"
 #include "Logger/Logger.h"
 #include "Mathematics/Matrix4x4.h"
+#include "Mathematics/Vector3.h"
+#include "Mathematics/WorldPosition.h"
 #include "Rendering/Camera/CameraTypes.h"
 #include "Rendering/Core/RecomputeElision.h"
 #include "Rendering/Core/ReverseZ.h"
@@ -204,11 +206,8 @@ void ShadowMapRenderFeature::Declare(Rendering::RenderGraph::RGFrame& frame, Ren
         float pyramidKernelTexels = 0.0f;
         if (buildPyramid)
         {
-            // Import (and adopt) BEFORE reading the cached frame data — the
-            // ordering the cascade arms rely on, since a pooled-physical change
-            // makes the adopt invalidate the cache a pointer taken earlier would
-            // still be holding. The import also ADOPTS, so it stays inside this
-            // gate: never a side effect of an off pyramid.
+            // The import also ADOPTS, so it stays inside this gate: never a side
+            // effect of an off pyramid.
             pyramidSrc = rs.ImportShadowMapArrayRG(frame, ctx.View, ctx.Seam);
             // The RENDERED cascade count bounds the pyramid, not the pipeline's
             // configured maximum. A light asking for fewer cascades leaves the
@@ -267,9 +266,9 @@ void ShadowMapRenderFeature::PlanCascadeMotionFrame(Rendering::RenderGraph::RGFr
     }
 
     // Mirror the declare sites' gates so a slot they would bail on is never
-    // classified. Import (and adopt) FIRST — a pooled-physical change
-    // invalidates the cache + content fits, and both the peeks below and the
-    // later declares must see the post-adopt state.
+    // classified. Import (and adopt) FIRST: a pooled-physical change drops the
+    // retained-layer records and content fits but keeps the frame data, and both
+    // the peeks below and the later declares must see the post-adopt state.
     const RenderGraph::RGTexture shadowArr = rs.ImportShadowMapArrayRG(frame, viewId, ctx.Seam);
     const CascadeFrameData* frameData = GetCachedFrameData(viewId);
     if (!shadowArr.IsValid() || !frameData)
@@ -380,18 +379,22 @@ Rendering::RenderGraph::RGPass ShadowMapRenderFeature::DeclareCascadePass(
             "declare producers BEFORE the world pass",
             viewId, cascadeIndex);
 
-    // Import (and adopt) BEFORE fetching the cached frame data: a pooled-
-    // physical change makes AdoptPooledShadowMap invalidate the feature's
-    // cache, so a pointer taken earlier would dangle. A null cache after the
-    // adopt skips the pass for one frame — matching the old recreate
-    // semantics on config-change frames.
+    // Import (and adopt) before the cache reads below: on a pooled-physical change
+    // the adopt drops the retained-layer records and content fits. It keeps the
+    // frame data, so the cascade renders into the new physical on that frame.
     const RenderGraph::RGTexture shadowArr = rs.ImportShadowMapArrayRG(frame, viewId, ctx.Seam);
     if (!shadowArr.IsValid())
+    {
+        frame.NoteSkippedPass(passName, RenderGraph::RGFrame::RGSkippedPassState::MissingInput);
         return {};
+    }
 
     const CascadeFrameData* frameData = GetCachedFrameData(viewId);
     if (!frameData || cascadeIndex >= frameData->NumCascades)
+    {
+        frame.NoteSkippedPass(passName, RenderGraph::RGFrame::RGSkippedPassState::MissingInput);
         return {};
+    }
 
     const uint32_t res = GetConfig().Resolution;
 
@@ -431,6 +434,7 @@ Rendering::RenderGraph::RGPass ShadowMapRenderFeature::DeclareCascadePass(
         if (const auto it = m_CascadeContentFit.find(viewId);
             it != m_CascadeContentFit.end() && it->second[cascadeIndex].Valid)
             it->second[cascadeIndex].FrameStamp = frame.FrameIndex();
+        frame.NoteSkippedPass(passName, RenderGraph::RGFrame::RGSkippedPassState::Cached);
         return {};
     }
     // Motion round-robin deferral (GE_SHADOW_MOTION_CAP): the frame plan chose
@@ -438,14 +442,14 @@ Rendering::RenderGraph::RGPass ShadowMapRenderFeature::DeclareCascadePass(
     // OnRendered — the cache record and content fit keep describing the
     // retained content, and BuildShadowDataGPU samples it through that fit.
     if (IsCascadeDeferredThisFrame(viewId, frame.FrameIndex(), cascadeIndex))
+    {
+        frame.NoteSkippedPass(passName, RenderGraph::RGFrame::RGSkippedPassState::Deferred);
         return {};
+    }
 
-    // Cascade light VP as the camera, written at declaration. Both the world VP
-    // (viewProj, taken when the origin is inactive => byte-identical legacy path)
-    // and the camera-relative VP (viewProjRel + renderOriginSector, taken when the
-    // origin is active) are filled, so shadow_depth_shared.vert's GE_ClipFromSectorLocal
-    // rasterizes casters at fp32-of-small-magnitude at planetary distance (kills the
-    // self-shadow acne) while staying identical near the origin.
+    // Cascade light VP as the camera, written at declaration. An orthographic light has no
+    // eye: viewProjRel is the fit's rebased light VP in the main camera's sector, so
+    // shadow_depth_shared.vert projects casters from small relative positions at any distance.
     auto cam = frame.AllocUpload<CameraData>();
     if (cam.Valid())
     {
@@ -457,7 +461,7 @@ Rendering::RenderGraph::RGPass ShadowMapRenderFeature::DeclareCascadePass(
         shadowCam.renderOriginSector[0] = frameData->RenderOriginSector[0];
         shadowCam.renderOriginSector[1] = frameData->RenderOriginSector[1];
         shadowCam.renderOriginSector[2] = frameData->RenderOriginSector[2];
-        shadowCam.renderOriginSector[3] = static_cast<int32_t>(kSectorSize);
+        shadowCam.renderOriginSector[3] = static_cast<int32_t>(Mathematics::kWorldSectorSize);
         *cam.Ptr = shadowCam;
     }
 
@@ -582,11 +586,17 @@ Rendering::RenderGraph::RGPass ShadowMapRenderFeature::DeclareTransmittancePass(
     const RenderGraph::RGTexture shadowArr = rs.ImportShadowMapArrayRG(frame, viewId, ctx.Seam);
     const RenderGraph::RGTexture tintArr = rs.ImportTransmittanceShadowArrayRG(frame, viewId, ctx.Seam);
     if (!shadowArr.IsValid() || !tintArr.IsValid())
+    {
+        frame.NoteSkippedPass(passName, RenderGraph::RGFrame::RGSkippedPassState::MissingInput);
         return {};
+    }
 
     const CascadeFrameData* frameData = GetCachedFrameData(viewId);
     if (!frameData || cascadeIndex >= frameData->NumCascades)
+    {
+        frame.NoteSkippedPass(passName, RenderGraph::RGFrame::RGSkippedPassState::MissingInput);
         return {};
+    }
 
     const uint32_t res = GetConfig().Resolution;
 
@@ -620,6 +630,7 @@ Rendering::RenderGraph::RGPass ShadowMapRenderFeature::DeclareTransmittancePass(
         if (const auto it = m_TintContentFit.find(viewId);
             it != m_TintContentFit.end() && it->second[cascadeIndex].Valid)
             it->second[cascadeIndex].FrameStamp = frame.FrameIndex();
+        frame.NoteSkippedPass(passName, RenderGraph::RGFrame::RGSkippedPassState::Cached);
         return {};
     }
     // Motion round-robin deferral: the tint twin follows its depth cascade's
@@ -629,7 +640,10 @@ Rendering::RenderGraph::RGPass ShadowMapRenderFeature::DeclareTransmittancePass(
     // correctness-class cause or the families' content fits desynced
     // (transmission-visibility gap).
     if (IsCascadeDeferredThisFrame(viewId, frame.FrameIndex(), cascadeIndex))
+    {
+        frame.NoteSkippedPass(passName, RenderGraph::RGFrame::RGSkippedPassState::Deferred);
         return {};
+    }
 
     // Same cascade light VP as the depth pass — glass must rasterize to the exact
     // texels of the opaque depth it tests against, so it takes the identical
@@ -645,7 +659,7 @@ Rendering::RenderGraph::RGPass ShadowMapRenderFeature::DeclareTransmittancePass(
         shadowCam.renderOriginSector[0] = frameData->RenderOriginSector[0];
         shadowCam.renderOriginSector[1] = frameData->RenderOriginSector[1];
         shadowCam.renderOriginSector[2] = frameData->RenderOriginSector[2];
-        shadowCam.renderOriginSector[3] = static_cast<int32_t>(kSectorSize);
+        shadowCam.renderOriginSector[3] = static_cast<int32_t>(Mathematics::kWorldSectorSize);
         // C1.5 caustic focusing: the tint fragment refracts the light through the
         // glass normal, so it needs the cascade light direction. cameraPos is
         // unused for an ortho light shadow camera, so carry the (caller-resolved,
@@ -783,8 +797,14 @@ Rendering::RenderGraph::RGPass ShadowMapRenderFeature::DeclareAreaPass(
     auto data = frame.AllocUpload<AreaShadowDataGPU>();
     if (data.Valid())
     {
+        // The area map is a paraboloid around the light: the receiver reads the light's view alone, relative to
+        // the receiver view's render origin.
+        const Mathematics::Matrix4x4 lightViewRel = ComputeRebasedLightVP(
+            areaShadow.lightView, Mathematics::Matrix4x4::Identity(), areaShadow.lightView,
+            areaShadow.position,
+            CameraRenderOriginSector(rs.Views().ResolveCameraData(viewId)));
         AreaShadowDataGPU d{};
-        std::memcpy(d.areaShadowVP, areaShadow.lightView.Data(), sizeof(d.areaShadowVP));
+        std::memcpy(d.areaShadowVP, lightViewRel.Data(), sizeof(d.areaShadowVP));
         d.areaShadowParams[0] = 1.0f;
         d.areaShadowParams[1] = static_cast<float>(areaShadow.packedLightIndex);
         d.areaShadowParams[2] = 0.0005f;
@@ -804,10 +824,8 @@ Rendering::RenderGraph::RGPass ShadowMapRenderFeature::DeclareAreaPass(
         shadowCam.view = areaShadow.lightView;
         shadowCam.proj = areaShadow.lightProj;
         shadowCam.viewProj = areaShadow.lightVP;
-        shadowCam.cameraPos.x = areaShadow.position.x;
-        shadowCam.cameraPos.y = areaShadow.position.y;
-        shadowCam.cameraPos.z = areaShadow.position.z;
         shadowCam.cameraPos.w = -areaShadow.farPlane;
+        SetCameraEye(shadowCam, areaShadow.position);
         *cam.Ptr = shadowCam;
     }
 
@@ -901,8 +919,13 @@ Rendering::RenderGraph::RGPass ShadowMapRenderFeature::DeclareSpotPass(
     auto data = frame.AllocUpload<SpotShadowDataGPU>();
     if (data.Valid())
     {
+        // Relative to the receiver view's render origin, the frame of vPosRel and of the LightBuffer.
+        const Mathematics::Matrix4x4 lightVPRel = ComputeRebasedLightVP(
+            spotShadow.lightView, spotShadow.lightProj, spotShadow.lightVP,
+            spotShadow.position,
+            CameraRenderOriginSector(rs.Views().ResolveCameraData(viewId)));
         SpotShadowDataGPU d{};
-        std::memcpy(d.spotShadowVP, spotShadow.lightVP.Data(), sizeof(d.spotShadowVP));
+        std::memcpy(d.spotShadowVP, lightVPRel.Data(), sizeof(d.spotShadowVP));
         d.spotShadowParams[0] = 1.0f;
         d.spotShadowParams[1] = static_cast<float>(spotShadow.packedLightIndex);
         d.spotShadowParams[2] = 0.0005f;
@@ -922,10 +945,8 @@ Rendering::RenderGraph::RGPass ShadowMapRenderFeature::DeclareSpotPass(
         shadowCam.view = spotShadow.lightView;
         shadowCam.proj = spotShadow.lightProj;
         shadowCam.viewProj = spotShadow.lightVP;
-        shadowCam.cameraPos.x = spotShadow.position.x;
-        shadowCam.cameraPos.y = spotShadow.position.y;
-        shadowCam.cameraPos.z = spotShadow.position.z;
         shadowCam.cameraPos.w = spotShadow.farPlane;
+        SetCameraEye(shadowCam, spotShadow.position);
         *cam.Ptr = shadowCam;
     }
 
@@ -1075,6 +1096,7 @@ void ShadowMapRenderFeature::DeclarePointPasses(Rendering::RenderGraph::RGFrame&
     {
         auto* slots = static_cast<PointShadowSlotGPU*>(slotAlloc.Ptr);
         std::uninitialized_value_construct_n(slots, budget);
+        const Mathematics::Vector3Int receiverSector = CameraRenderOriginSector(rs.Views().ResolveCameraData(viewId));
         for (const PointShadowFrameInfo& fi : ctx.PointShadows)
         {
             if (fi.shadowSlot < 0 || static_cast<uint32_t>(fi.shadowSlot) >= budget)
@@ -1082,8 +1104,12 @@ void ShadowMapRenderFeature::DeclarePointPasses(Rendering::RenderGraph::RGFrame&
             const uint32_t slot = static_cast<uint32_t>(fi.shadowSlot);
             PointShadowSlotGPU& s = slots[slot];
             for (uint32_t face = 0; face < kPointShadowFaceCount; ++face)
-                std::memcpy(s.pointShadowVP[face], fi.lightVP[face].Data(),
-                            sizeof(s.pointShadowVP[face]));
+            {
+                const Mathematics::Matrix4x4 faceVPRel = ComputeRebasedLightVP(
+                    fi.lightView[face], fi.lightProj, fi.lightVP[face],
+                    fi.position, receiverSector);
+                std::memcpy(s.pointShadowVP[face], faceVPRel.Data(), sizeof(s.pointShadowVP[face]));
+            }
             s.pointShadowParams[0] = 1.0f; // enabled
             s.pointShadowParams[1] = static_cast<float>(PointShadowSlotFaceLayer(slot, 0)); // baseLayer
             s.pointShadowParams[2] = 0.0005f;                // depth bias
@@ -1137,10 +1163,8 @@ void ShadowMapRenderFeature::DeclarePointPasses(Rendering::RenderGraph::RGFrame&
                 shadowCam.view = fi.lightView[face];
                 shadowCam.proj = fi.lightProj;
                 shadowCam.viewProj = fi.lightVP[face];
-                shadowCam.cameraPos.x = fi.position.x;
-                shadowCam.cameraPos.y = fi.position.y;
-                shadowCam.cameraPos.z = fi.position.z;
                 shadowCam.cameraPos.w = fi.farPlane;
+                SetCameraEye(shadowCam, fi.position);
                 *cam.Ptr = shadowCam;
             }
 

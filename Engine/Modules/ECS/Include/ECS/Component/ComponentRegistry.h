@@ -45,7 +45,7 @@ public:
         // the newest mapped image); the loader's abort-purge and unload quiesce ledger
         // select entries by this stamp.
         ModuleRegistrationStamp Module;
-        // What the type declares about its on/off state (ComponentFlags.h).
+        // What the type declares about itself (ComponentFlags.h).
         ComponentFlags Flags = ComponentFlags::None;
         // Byte offset of the bool Enabled field a KeepsOwnEnabledField type switches
         // through; 0 for every other type.

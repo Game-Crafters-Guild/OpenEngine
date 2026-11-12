@@ -51,7 +51,8 @@ Transform.scale = (1, 1, 1)
 
 ; The ground is the engine's grid ground, Materials/GroundGrid.material in the engine content: a 1 m
 ; grid on this 6000 m plane, the same ground a new scene starts with. The Ground mesh splits the
-; plane into 50 m cells, so the grid lines hold still as the camera moves.
+; plane into 50 m cells, so the grid lines hold still as the camera moves. TemplateGroundPlaceholder
+; marks it: when the user creates a terrain, the editor switches the entity off.
 [entity id="plane"]
 HierarchyOrder.order = 50
 MeshRenderer.meshPrimitive = Ground
@@ -61,6 +62,7 @@ PhysicsBody.motionType = 0
 PhysicsBody.gravityScale = 0
 PhysicsCollider.layer = 0
 PlaneColliderShape.normal = (0, 1, 0)
+TemplateGroundPlaceholder
 Transform.position = (0, 0, 0)
 Transform.rotation = (0, 0, 0, 1)
 Transform.scale = (6000, 1, 6000)

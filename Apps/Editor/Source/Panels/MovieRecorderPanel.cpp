@@ -14,6 +14,7 @@
 #include "UI/Controls/Label.h"
 #include "UI/Controls/ScrollView.h"
 #include "UI/Controls/TextField.h"
+#include "UI/StyleUtil.h"
 #include "UI/UIManager.h"
 #include "UI/UIElement.h"
 #include "UI/UIEvents.h"
@@ -83,18 +84,6 @@ bool IsMoviePath(const std::filesystem::path& path)
 bool CodecUsesBitrate(const std::string& codec)
 {
     return codec == "h265" || codec == "h264";
-}
-
-void SetRowShown(UIElement* row, bool shown)
-{
-    if (shown)
-    {
-        row->RemoveClass("hidden");
-    }
-    else
-    {
-        row->AddClass("hidden");
-    }
 }
 
 void StyleOutputField(UIElement* el)
@@ -1147,8 +1136,8 @@ void MovieRecorderPanel::UpdateBitrateAvailability()
     // quality and rate from the profile, and Constant Quality sets no bitrate.
     const bool bitrateCodec = CodecUsesBitrate(SelectedCodec());
     const bool constantQuality = m_ConstantQualityToggle->GetValue();
-    SetRowShown(m_ConstantQualityRow, bitrateCodec);
-    SetRowShown(m_BitrateRow, bitrateCodec && !constantQuality);
+    UIUtil::SetShown(*m_ConstantQualityRow, bitrateCodec);
+    UIUtil::SetShown(*m_BitrateRow, bitrateCodec && !constantQuality);
 }
 
 void MovieRecorderPanel::RefreshRecentRecordings()

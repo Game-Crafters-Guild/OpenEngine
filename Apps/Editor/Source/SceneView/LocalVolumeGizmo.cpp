@@ -67,10 +67,9 @@ void DrawLocalVolume(GizmoRenderContext& context,
                      const Color& blendColor)
 {
     // Per-axis scale = WorldTransform column lengths.
-    const float* m = xf.matrix;
-    const Vector3 ax(m[0], m[1], m[2]);
-    const Vector3 ay(m[4], m[5], m[6]);
-    const Vector3 az(m[8], m[9], m[10]);
+    const Vector3 ax(xf.Basis[0]);
+    const Vector3 ay(xf.Basis[1]);
+    const Vector3 az(xf.Basis[2]);
     const float sx = std::sqrt(ax.LengthSquared());
     const float sy = std::sqrt(ay.LengthSquared());
     const float sz = std::sqrt(az.LengthSquared());
@@ -86,7 +85,7 @@ void DrawLocalVolume(GizmoRenderContext& context,
     const float hx = sx * 0.5f;
     const float hy = sy * 0.5f;
     const float hz = sz * 0.5f;
-    const Vector3 center(m[12], m[13], m[14]);
+    const Vector3 center = xf.GetPosition() - Mathematics::WorldPosition{};
 
     if (shape == VolumeShape::Sphere)
     {

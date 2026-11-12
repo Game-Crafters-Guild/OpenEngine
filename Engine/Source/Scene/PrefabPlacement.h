@@ -41,7 +41,7 @@ struct TemplateBuildLog
 struct ParsedPrefab
 {
     std::filesystem::path path;
-    SceneDoc doc;
+    std::shared_ptr<const SceneDoc> doc;
     SceneReadContext ctx;
 };
 
@@ -49,8 +49,12 @@ struct ParsedPrefab
 struct PrefabPlacement
 {
     ECS::World& world;
-    const SceneReadOptions& options;
+    const SceneLoadOptions& options;
     SceneDegradation* degradation = nullptr;
+
+    // The document a load instantiates: each prefab comes from its sources, and the placement reads no
+    // file. Null for a placement outside a load, which reads each prefab file.
+    const SceneDocumentFiles* files = nullptr;
 
     // Each prefab file parsed once, by its absolute path. A scene places thousands of instances
     // of a few hundred prefabs.
@@ -82,7 +86,7 @@ struct PrefabPlacement
     // Reused by every clone.
     ECS::EntityRemap remap;
 
-    PrefabPlacement(ECS::World& targetWorld, const SceneReadOptions& loadOptions, SceneDegradation* loadDegradation);
+    PrefabPlacement(ECS::World& targetWorld, const SceneLoadOptions& loadOptions, SceneDegradation* loadDegradation);
     ~PrefabPlacement();
 };
 
@@ -108,12 +112,12 @@ std::string PathAsSpelledOnDisk(const std::filesystem::path& file, const std::fi
 // new generation when it is resident; `source` is its asset GUID, or null. Null, with `error`
 // naming the file, the line and the fix, when the prefab cannot be placed.
 const PrefabTemplate* BuildTemplateFromFile(PrefabLibrary& library, const std::filesystem::path& path,
-                                            const GUID& source, const SceneReadOptions& options, std::string& error);
+                                            const GUID& source, const SceneLoadOptions& options, std::string& error);
 
 // Holds in `library`, for `world`, every prefab a PrefabRef field of `entities` (in `world`) names,
-// building the ones that are not resident through `options.assetResolver` (and, through their own
+// building the ones that are not resident through `options.Read.AssetResolver` (and, through their own
 // PrefabRef fields, the prefabs they name). A prefab that cannot be read is logged and skipped.
-void HoldReferencedPrefabs(PrefabLibrary& library, ECS::World& world, const SceneReadOptions& options,
+void HoldReferencedPrefabs(PrefabLibrary& library, ECS::World& world, const SceneLoadOptions& options,
                            std::span<const ECS::EntityHandle> entities);
 
 // Clones `prefab` into `world` with its root at `at` under `parent`, marked with `source`; the

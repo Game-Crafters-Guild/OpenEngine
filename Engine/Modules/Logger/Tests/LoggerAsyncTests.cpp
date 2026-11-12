@@ -8,11 +8,20 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <filesystem>
+#include <format>
 #include <fstream>
+#include <iostream>
 #include <iterator>
+#include <memory>
+#include <mutex>
+#include <sstream>
+#include <streambuf>
 #include <string>
+#include <string_view>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 
 namespace
@@ -232,11 +241,172 @@ TEST_F(LoggerAsyncTest, ExplicitFlushReachesTheFileImmediately)
 }
 #endif // LOGGER_ENABLE_FILE_LOGGING
 
-TEST(LoggerAsyncPreInitTest, LogBeforeInitialize_NoCrash)
+// With a level set and no Initialize, each line goes to std::cout as "[LEVEL] message".
+TEST(LoggerAsyncPreInitTest, LineBeforeInitializeGoesToStdout)
 {
-    // Logger is not initialized. Should not crash; output goes to stdout.
+    const LogLevel previousLevel = Log::GetLogLevel();
+    Log::SetLogLevel(LogLevel::Info);
+    std::stringbuf capture;
+    std::streambuf* const previousBuffer = std::cout.rdbuf(&capture);
+
     Log::Info("pre-init message");
     Log::Warning("another pre-init message");
+
+    std::cout.rdbuf(previousBuffer);
+    Log::SetLogLevel(previousLevel);
+    EXPECT_EQ(capture.str(), "[INFO] pre-init message\n[WARN] another pre-init message\n");
+}
+
+// Records the text std::cout receives. The first write of each thread waits, for at most kFirstWriteWait,
+// until a second thread writes: without a lock, the second write then starts while the first is in progress.
+class InterleaveProbeBuffer : public std::streambuf
+{
+  public:
+    std::string GetText() const
+    {
+        std::lock_guard<std::mutex> lock(m_Mutex);
+        return m_Text;
+    }
+
+    bool SawOverlappingWrites() const
+    {
+        std::lock_guard<std::mutex> lock(m_Mutex);
+        return m_SawOverlap;
+    }
+
+    // Returns false when no thread writes within kFirstWriteArrivalWait.
+    bool WaitForFirstWrite()
+    {
+        std::unique_lock<std::mutex> lock(m_Mutex);
+        return m_WriteArrived.wait_for(lock, kFirstWriteArrivalWait, [this] { return !m_Text.empty(); });
+    }
+
+  protected:
+    std::streamsize xsputn(const char* data, std::streamsize count) override
+    {
+        Record(std::string_view(data, static_cast<std::size_t>(count)));
+        return count;
+    }
+
+    int_type overflow(int_type ch) override
+    {
+        if (!traits_type::eq_int_type(ch, traits_type::eof()))
+        {
+            const char c = traits_type::to_char_type(ch);
+            Record(std::string_view(&c, 1));
+        }
+        return traits_type::not_eof(ch);
+    }
+
+  private:
+    static constexpr std::chrono::seconds kFirstWriteWait{1};
+    static constexpr std::chrono::seconds kFirstWriteArrivalWait{5};
+
+    void Record(std::string_view piece)
+    {
+        std::unique_lock<std::mutex> lock(m_Mutex);
+        m_SawOverlap = m_SawOverlap || m_WritesInProgress > 0;
+        ++m_WritesInProgress;
+        m_Text.append(piece);
+        const bool firstWrite = m_Writers.insert(std::this_thread::get_id()).second;
+        m_WriteArrived.notify_all();
+        if (firstWrite)
+            m_WriteArrived.wait_for(lock, kFirstWriteWait, [this] { return m_Writers.size() >= 2; });
+        --m_WritesInProgress;
+    }
+
+    mutable std::mutex m_Mutex;
+    std::condition_variable m_WriteArrived;
+    std::unordered_set<std::thread::id> m_Writers;
+    std::string m_Text;
+    int m_WritesInProgress = 0;
+    bool m_SawOverlap = false;
+};
+
+void LogLinesBeforeStart(int thread, int lineCount)
+{
+    for (int line = 0; line < lineCount; ++line)
+    {
+        // Each thread starts on a different fallback site: PushEntry, CriticalImpl or DispatchCritical.
+        const int site = (thread + line) % 3;
+        if (site == 0)
+            Log::Info("thread {} line {}", thread, line);
+        else if (site == 1)
+            Log::Critical("thread {} line {}", thread, line);
+        else
+            LOG_CRITICAL("thread {} line {}", thread, line);
+    }
+}
+
+TEST(LoggerAsyncPreInitTest, LinesFromSeveralThreadsArriveWhole)
+{
+    constexpr int kThreads = 4;
+    constexpr int kLinesPerThread = 20;
+    const LogLevel previousLevel = Log::GetLogLevel();
+    Log::SetLogLevel(LogLevel::Info);
+    InterleaveProbeBuffer probe;
+    std::streambuf* const previousBuffer = std::cout.rdbuf(&probe);
+
+    std::vector<std::thread> threads;
+    for (int thread = 0; thread < kThreads; ++thread)
+        threads.emplace_back(LogLinesBeforeStart, thread, kLinesPerThread);
+    for (auto& thread : threads)
+        thread.join();
+
+    std::cout.rdbuf(previousBuffer);
+    Log::SetLogLevel(previousLevel);
+
+    std::vector<std::string> expected;
+    for (int thread = 0; thread < kThreads; ++thread)
+    {
+        for (int line = 0; line < kLinesPerThread; ++line)
+            expected.push_back(std::format("[{}] thread {} line {}", (thread + line) % 3 == 0 ? "INFO" : "CRITICAL", thread, line));
+    }
+    std::vector<std::string> received;
+    std::istringstream text(probe.GetText());
+    for (std::string line; std::getline(text, line);)
+        received.push_back(line);
+    std::sort(expected.begin(), expected.end());
+    std::sort(received.begin(), received.end());
+    EXPECT_EQ(received, expected);
+    EXPECT_FALSE(probe.SawOverlappingWrites());
+}
+
+void LogOneLineBeforeStart()
+{
+    Log::Info("line before Initialize");
+}
+
+// The probe holds a fallback line while this thread starts the logger and logs. Initialize waits until the line
+// ends, so the line does not overlap the console sink's line.
+TEST(LoggerAsyncPreInitTest, InitializeWaitsForTheFallbackLineInProgress)
+{
+    const LogLevel previousLevel = Log::GetLogLevel();
+    Log::SetLogLevel(LogLevel::Info);
+    InterleaveProbeBuffer probe;
+    std::streambuf* const previousBuffer = std::cout.rdbuf(&probe);
+
+    std::thread writer(LogOneLineBeforeStart);
+    const bool fallbackLineArrived = probe.WaitForFirstWrite();
+    if (fallbackLineArrived)
+    {
+        Log::Config config;
+        config.GlobalMinLevel = LogLevel::Info;
+        config.EnableSourceLocation = false;
+        Log::Initialize(config);
+        Log::Info("line after Initialize");
+    }
+    writer.join();
+    Log::Shutdown();
+
+    std::cout.rdbuf(previousBuffer);
+    Log::SetLogLevel(previousLevel);
+
+    ASSERT_TRUE(fallbackLineArrived) << "the logger was initialized when the test started";
+    const std::string text = probe.GetText();
+    EXPECT_FALSE(probe.SawOverlappingWrites());
+    EXPECT_TRUE(text.starts_with("[INFO] line before Initialize\n")) << text;
+    EXPECT_NE(text.find("line after Initialize"), std::string::npos) << text;
 }
 
 TEST_F(LoggerAsyncTest, ReinitAfterShutdown)
@@ -259,6 +429,71 @@ TEST_F(LoggerAsyncTest, ReinitAfterShutdown)
     EXPECT_GE(spy2->GetCount(), 1u);
     const auto msgs = spy2->GetMessages({}).Messages;
     EXPECT_EQ(std::count_if(msgs.begin(), msgs.end(), [](const auto& m) { return m.Message.find("after re-init") != std::string::npos; }), 1);
+}
+
+// The drain thread can dispatch a record before ClearSinks or Initialize runs.
+// The tests repeat each pair so that some rounds meet a queued record.
+constexpr int kQueuedRecordRounds = 1000;
+
+TEST_F(LoggerAsyncTest, ClearSinksDeliversQueuedRecordsToTheRemovedSinks)
+{
+    // ClearSinks destroys the sinks, so the count lives on the heap.
+    auto delivered = std::make_shared<std::atomic<int>>(0);
+    for (int round = 0; round < kQueuedRecordRounds; ++round)
+    {
+        auto callbackSink = std::make_unique<CallbackSink>();
+        callbackSink->RegisterCallback([delivered](const LogMessage&)
+        {
+            delivered->fetch_add(1, std::memory_order_relaxed);
+        });
+        Log::AddSink(std::move(callbackSink));
+
+        Log::Info("logged before ClearSinks {}", round);
+        Log::ClearSinks();
+    }
+    m_Spy = nullptr;
+
+    EXPECT_EQ(delivered->load(), kQueuedRecordRounds);
+}
+
+TEST_F(LoggerAsyncTest, InitializeOnARunningLoggerKeepsQueuedRecords)
+{
+    for (int round = 0; round < kQueuedRecordRounds; ++round)
+    {
+        Log::Info("logged before Initialize {}", round);
+        Log::Initialize({});
+    }
+    Log::Flush();
+
+    EXPECT_EQ(m_Spy->GetCount(), static_cast<size_t>(kQueuedRecordRounds));
+}
+
+// Initialize runs in a loop on a second thread, so some rounds call Flush while Initialize runs.
+TEST_F(LoggerAsyncTest, FlushRacingInitializeWaitsForItsRecord)
+{
+    std::atomic<bool> stop{false};
+    std::thread initializer([&stop]
+    {
+        while (!stop.load())
+        {
+            Log::Initialize({});
+        }
+    });
+    int returnedEarly = 0;
+    for (int round = 0; round < kQueuedRecordRounds; ++round)
+    {
+        const size_t countBefore = m_Spy->GetCount();
+        Log::Info("logged before Flush {}", round);
+        Log::Flush();
+        if (m_Spy->GetCount() <= countBefore)
+        {
+            ++returnedEarly;
+        }
+    }
+    stop = true;
+    initializer.join();
+
+    EXPECT_EQ(returnedEarly, 0);
 }
 
 TEST_F(LoggerAsyncTest, CriticalBypassesQueue)

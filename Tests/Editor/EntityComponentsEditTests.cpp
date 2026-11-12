@@ -41,7 +41,7 @@ TEST(EntityComponentsEditTest, AChangedAndAnAddedComponentAreOneStep)
     const ECS::EntityHandle entity = world.CreateEntity();
     const Mathematics::Vector3 unitScale(1.0f, 1.0f, 1.0f);
     world.AddComponentImmediate(
-        entity, Components::Transform::FromTRS(Mathematics::Vector3(1.0f, 2.0f, 3.0f), Mathematics::Quaternion{}, unitScale));
+        entity, Components::Transform::FromTRS(Mathematics::WorldPosition{1.0, 2.0, 3.0}, Mathematics::Quaternion{}, unitScale));
 
     const bool applied = Editor::CommitEntityComponentsEdit(world, entity, &undo, &notifications, "Set Name", [&]() {
         world.GetComponentForWrite<Components::Transform>(entity)->Translate(3.0f, 3.0f, 3.0f);
@@ -53,11 +53,11 @@ TEST(EntityComponentsEditTest, AChangedAndAnAddedComponentAreOneStep)
     EXPECT_STREQ(undo.PeekUndoName(), "Set Name");
 
     undo.Undo();
-    EXPECT_EQ(world.GetComponent<Components::Transform>(entity)->GetPosition().x, 1.0f);
+    EXPECT_EQ(world.GetComponent<Components::Transform>(entity)->GetPosition().X, 1.0);
     EXPECT_FALSE(world.HasComponent<Components::Name>(entity));
 
     undo.Redo();
-    EXPECT_EQ(world.GetComponent<Components::Transform>(entity)->GetPosition().x, 4.0f);
+    EXPECT_EQ(world.GetComponent<Components::Transform>(entity)->GetPosition().X, 4.0);
     ASSERT_TRUE(world.HasComponent<Components::Name>(entity));
     EXPECT_EQ(world.GetComponent<Components::Name>(entity)->View(), "Tower");
 }

@@ -40,7 +40,7 @@
 /* Hover lifts the plate and draws the selected tile's edge, so the tile under the pointer reads as
    an outline before it is picked. */
 .picture-choice-tile:hover {
-	background-color: var(--ui_color_bg_hover);
+	background-color: var(--ui_color_bg_item_hover);
 	border-color: var(--ui_color_dropdown_outline_hover);
 }
 
@@ -70,6 +70,11 @@
 	background-repeat: no-repeat;
 	background-position: center;
 	pointer-events: none;
+}
+
+/* A choice without a picture class: the tile shows its name and its line only. */
+.picture-choice-picture-none {
+	display: none;
 }
 
 .picture-choice-text {

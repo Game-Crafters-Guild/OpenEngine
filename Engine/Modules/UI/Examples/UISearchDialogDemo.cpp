@@ -210,8 +210,8 @@ int main()
     // Load the SearchDialog stylesheet
     const char* cssCandidates[] = {
         "Assets/UI/controls/SearchDialog.css",
-        "../../../Apps/Editor/Assets/UI/controls/SearchDialog.css",
-        "../../Apps/Editor/Assets/UI/controls/SearchDialog.css",
+        "../../../Engine/Modules/UI/Assets/UI/controls/SearchDialog.css",
+        "../../Engine/Modules/UI/Assets/UI/controls/SearchDialog.css",
     };
     for (const char* p : cssCandidates)
     {

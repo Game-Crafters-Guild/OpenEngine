@@ -865,6 +865,8 @@ TEST_F(AssetLoadPipelineTest, CancelledDecodesReleaseTheDecodeGate) {
 #endif
     const auto localDir = TestUtils::MakeUniqueTempDirectory("decode_gate_cancel_test");
     std::filesystem::create_directories(localDir);
+    // Declared before the pool: a blocker can still read it after the release.
+    std::atomic<bool> release{false};
     auto localPool = std::make_unique<JobSystem::WorkStealingThreadPool>(4);
     auto localAm = std::make_unique<AssetManager>();
     localAm->Initialize(localDir, localPool.get());
@@ -889,7 +891,6 @@ TEST_F(AssetLoadPipelineTest, CancelledDecodesReleaseTheDecodeGate) {
     }
 
     // Occupy every pool worker so submitted decode tasks cannot start.
-    std::atomic<bool> release{false};
     std::vector<JobSystem::TaskHandle> blockers;
     for (int i = 0; i < 4; ++i) {
         blockers.push_back(localPool->Submit([&release] {

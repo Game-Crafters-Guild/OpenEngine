@@ -3,30 +3,31 @@ using System.Numerics;
 namespace GameEngine.Scripting
 {
     /// <summary>
-    /// The accessors <see cref="Transform"/> and <see cref="WorldTransform"/> share over the engine's 4x4 matrix: 16
-    /// floats in column-major order, columns 0 to 2 the X, Y and Z axes, column 3 the translation. Read as a
-    /// System.Numerics.Matrix4x4 the same 16 floats are its rows, with the translation in M41 to M43.
+    /// The accessors <see cref="Transform"/> and <see cref="WorldTransform"/> share over the engine's pose: a
+    /// position in doubles and a column-major 3x3 basis, columns 0 to 2 the X, Y and Z axes. Read as a
+    /// System.Numerics.Matrix4x4 the columns are its rows, with the translation in M41 to M43.
     /// </summary>
     internal static class ColumnMajorMatrix
     {
-        private const int kTranslationColumn = 3;
-
-        /// <summary>The translation.</summary>
-        public static Vector3 Position(ReadOnlySpan<float> m) => Column(m, kTranslationColumn);
-
         /// <summary>Axis <paramref name="column"/> (0 X, 1 Y, 2 Z), normalized.</summary>
-        public static Vector3 Axis(ReadOnlySpan<float> m, int column) => Vector3.Normalize(Column(m, column));
+        public static Vector3 Axis(in Matrix3x3 b, int column) => Vector3.Normalize(Column(b, column));
 
         /// <summary>The length of axis <paramref name="column"/>: the scale on that axis.</summary>
-        public static float AxisLength(ReadOnlySpan<float> m, int column) => Column(m, column).Length();
+        public static float AxisLength(in Matrix3x3 b, int column) => Column(b, column).Length();
 
-        /// <summary>The matrix as a System.Numerics.Matrix4x4: the 16 floats in order.</summary>
-        public static Matrix4x4 ToMatrix4x4(ReadOnlySpan<float> m) => new(
-            m[0], m[1], m[2], m[3],
-            m[4], m[5], m[6], m[7],
-            m[8], m[9], m[10], m[11],
-            m[12], m[13], m[14], m[15]);
+        /// <summary>The pose as a System.Numerics.Matrix4x4, with the position rounded to floats.</summary>
+        public static Matrix4x4 ToMatrix4x4(in Matrix3x3 b, in WorldPosition p)
+            => new(
+                b.Column0.X, b.Column0.Y, b.Column0.Z, 0f,
+                b.Column1.X, b.Column1.Y, b.Column1.Z, 0f,
+                b.Column2.X, b.Column2.Y, b.Column2.Z, 0f,
+                (float)p.X, (float)p.Y, (float)p.Z, 1f);
 
-        private static Vector3 Column(ReadOnlySpan<float> m, int column) => new(m[column * 4], m[column * 4 + 1], m[column * 4 + 2]);
+        private static Vector3 Column(in Matrix3x3 b, int column) => column switch
+        {
+            0 => b.Column0,
+            1 => b.Column1,
+            _ => b.Column2,
+        };
     }
 }

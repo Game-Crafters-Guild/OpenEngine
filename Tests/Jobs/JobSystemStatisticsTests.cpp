@@ -76,7 +76,9 @@ uint64 NowNs() {
         std::chrono::duration_cast<std::chrono::nanoseconds>(SteadyClock::now().time_since_epoch()).count());
 }
 
-// A latch the test opens; jobs park on it.
+// A latch the test opens; jobs park on it. Declare it before the pool: a
+// worker can still be inside Wait() after the gate opens, and only the pool's
+// destructor joins that worker.
 class Gate {
 public:
     void Open() {
@@ -96,7 +98,8 @@ private:
 };
 
 // Opens the gate on every exit path, so a failed assertion never leaves a
-// parked job holding a thread the pool's destructor joins.
+// parked job holding a thread the pool's destructor joins. Declare it after
+// the pool, so it opens the gate before that destructor runs.
 struct GateOpener {
     Gate& Target;
     ~GateOpener() { Target.Open(); }
@@ -181,10 +184,13 @@ TEST(JobSystemStatisticsTest, CountsAKnownWorkload) {
     constexpr uint64 kBackgroundHandles = 20;
     constexpr auto kHold = 60ms;
 
+    Gate gate;
+    // Declared before the pool: a queued job can still use them when an ASSERT returns early.
+    std::atomic<uint64> ran{0};
+    std::atomic<bool> firstStarted{false};
     WorkStealingThreadPool pool(4);
     JobChannel channel(pool, {.Name = kChannelName, .MaxRunning = 1});
 
-    std::atomic<uint64> ran{0};
     for (uint64 i = 0; i < kNormalBare; ++i) {
         pool.EnqueueWork([&ran] { ran.fetch_add(1); });
     }
@@ -199,9 +205,7 @@ TEST(JobSystemStatisticsTest, CountsAKnownWorkload) {
         handles.push_back(pool.Submit([&ran] { ran.fetch_add(1); }, JobPriority::Background));
     }
 
-    Gate gate;
     GateOpener opener{gate};
-    std::atomic<bool> firstStarted{false};
     std::vector<TaskHandle> channelJobs;
     channelJobs.push_back(channel.Submit([&] {
         firstStarted.store(true);
@@ -266,10 +270,12 @@ TEST(JobSystemStatisticsTest, CountsAKnownWorkload) {
 // Normal and three Background jobs wait behind them: each lane reports its
 // own queued and running jobs.
 TEST(JobSystemStatisticsTest, EachLaneReportsItsQueuedAndRunningJobs) {
-    WorkStealingThreadPool pool(2);
     Gate gate;
-    GateOpener opener{gate};
+    // Declared before the pool: a job can still use them when an ASSERT returns early.
     std::atomic<int> parked{0};
+    std::atomic<int> ran{0};
+    WorkStealingThreadPool pool(2);
+    GateOpener opener{gate};
     pool.EnqueueWork([&] {
         parked.fetch_add(1);
         gate.Wait();
@@ -283,7 +289,6 @@ TEST(JobSystemStatisticsTest, EachLaneReportsItsQueuedAndRunningJobs) {
         JobPriority::Background);
     ASSERT_TRUE(WaitUntil([&] { return parked.load() == 2; }));
 
-    std::atomic<int> ran{0};
     for (int i = 0; i < 5; ++i) {
         pool.EnqueueWork([&ran] { ran.fetch_add(1); });
     }
@@ -310,11 +315,12 @@ TEST(JobSystemStatisticsTest, EachLaneReportsItsQueuedAndRunningJobs) {
 // Background and channel jobs the time they started and the Normal job none,
 // and every thread reads idle once the jobs end.
 TEST(OccupancySnapshotTest, NamesWhatEveryThreadRunsWhileJobsAreParked) {
+    Gate gate;
+    // Declared before the pool: a queued job can still use it when an ASSERT returns early.
+    std::atomic<int> parked{0};
     WorkStealingThreadPool pool(2);
     JobChannel channel(pool, {.Name = kChannelName, .MaxRunning = 1});
-    Gate gate;
     GateOpener opener{gate};
-    std::atomic<int> parked{0};
     const auto park = [&] {
         parked.fetch_add(1);
         gate.Wait();
@@ -364,10 +370,11 @@ TEST(OccupancySnapshotTest, NamesWhatEveryThreadRunsWhileJobsAreParked) {
 
 // GetStatistics reports the same slots: its Threads are the snapshot.
 TEST(OccupancySnapshotTest, StatisticsCarryTheSnapshot) {
-    WorkStealingThreadPool pool(3);
     Gate gate;
-    GateOpener opener{gate};
+    // Declared before the pool: a queued job can still use it when an ASSERT returns early.
     std::atomic<bool> parked{false};
+    WorkStealingThreadPool pool(3);
+    GateOpener opener{gate};
     pool.EnqueueWork(
         [&] {
             parked.store(true);
@@ -388,12 +395,13 @@ TEST(OccupancySnapshotTest, StatisticsCarryTheSnapshot) {
 // slot names the body again, with the start time it had before the fork, not
 // idle and not the last nested job's start.
 TEST(OccupancySnapshotTest, ABodyThatRanNestedJobsReadsAsItselfWithItsOwnStartTime) {
-    WorkStealingThreadPool pool(1);
     Gate gate;
-    GateOpener opener{gate};
+    // Declared before the pool: a queued job can still use them when an ASSERT returns early.
     std::atomic<uint64> outerSinceNs{0};
     std::atomic<int> nestedRan{0};
     std::atomic<bool> parked{false};
+    WorkStealingThreadPool pool(1);
+    GateOpener opener{gate};
     pool.EnqueueWork(
         [&] {
             const std::vector<Occupancy> before = Snapshot(pool);
@@ -430,10 +438,11 @@ TEST(OccupancySnapshotTest, ABodyThatRanNestedJobsReadsAsItselfWithItsOwnStartTi
 // nested job runs, the slot keeps the body's start time, not the nested
 // job's: the hang watchdog reports how long the body has been running.
 TEST(OccupancySnapshotTest, ANestedJobOfTheBodysOwnClassKeepsTheBodysStartTime) {
-    WorkStealingThreadPool pool(1);
+    // Declared before the pool: a queued job can still use them when an ASSERT returns early.
     std::atomic<uint64> outerSinceNs{0};
     std::atomic<uint64> nestedSinceNs{0};
     std::atomic<bool> joined{false};
+    WorkStealingThreadPool pool(1);
     pool.EnqueueWork(
         [&] {
             const std::vector<Occupancy> before = Snapshot(pool);
@@ -479,12 +488,13 @@ TEST(OccupancySnapshotTest, AnInlinePoolHasNoSlots) {
 // so every job is found by the worker loop's own scan (the spinner's finds
 // have tests of their own below).
 TEST(CurrentJobContextTest, LanePopsRunAsTheirLanesClass) {
+    // Declared before the pool: a job can still use them when an ASSERT returns early.
+    Seen normal;
+    Seen background;
     WorkStealingThreadPool pool(2);
     pool.SetSpinConfigForTest(0, 0);
     EXPECT_FALSE(WorkStealingThreadPool::IsExecutingJob());
 
-    Seen normal;
-    Seen background;
     pool.EnqueueWork([&] { normal.Record(); });
     pool.Submit([&] { normal.Record(); }).Wait();
     pool.EnqueueWork([&] { background.Record(); }, JobPriority::Background);
@@ -498,9 +508,10 @@ TEST(CurrentJobContextTest, LanePopsRunAsTheirLanesClass) {
 // A graph task published on the only worker lands in its local queue and is
 // popped from there as Normal.
 TEST(CurrentJobContextTest, ALocalQueuePopRunsAsNormal) {
+    // Declared before the pool: a job can still use it when an ASSERT returns early.
+    Seen seen;
     WorkStealingThreadPool pool(1);
     const uint64 localPopsBefore = pool.GetStatistics().LocalPops;
-    Seen seen;
     pool.EnqueueWork(
         [&] {
             (void)pool.Submit([&] { seen.Record(); }, std::span<const TaskHandle>{});
@@ -514,10 +525,11 @@ TEST(CurrentJobContextTest, ALocalQueuePopRunsAsNormal) {
 // A graph task published on a worker that then stays busy is stolen by the
 // other worker, and runs there as Normal.
 TEST(CurrentJobContextTest, AStolenJobRunsAsNormal) {
-    WorkStealingThreadPool pool(2);
-    const uint64 stealPopsBefore = pool.GetStatistics().StealPops;
+    // Declared before the pool: a queued job can still use them when an ASSERT returns early.
     Seen seen;
     std::atomic<bool> publisherDone{false};
+    WorkStealingThreadPool pool(2);
+    const uint64 stealPopsBefore = pool.GetStatistics().StealPops;
     pool.EnqueueWork(
         [&] {
             (void)pool.Submit([&] { seen.Record(); }, std::span<const TaskHandle>{});
@@ -536,18 +548,19 @@ TEST(CurrentJobContextTest, AStolenJobRunsAsNormal) {
     EXPECT_EQ(pool.GetStatistics().StealPops - stealPopsBefore, 1u);
 }
 
-// A Background job published while the only worker spins (and none sleeps)
+// A Background job published while the only worker spins (a spinner sets no idle bit)
 // is found by the spin poll, which reports the lane it came from: the job
 // runs as Background.
 TEST(CurrentJobContextTest, ABackgroundJobFoundByTheSpinnerRunsAsBackground) {
+    // Declared before the pool: a job can still use it when an ASSERT returns early.
+    Seen seen;
     WorkStealingThreadPool pool(1);
     pool.SetSpinConfigForTest(5'000'000, 1);
     // Wake the worker; after this job it finds nothing and arms its spin.
     pool.EnqueueWork([] {});
     ASSERT_TRUE(WaitUntil(
-        [&] { return pool.GetSpinningCountForTests() == 1 && pool.GetSleepingCountForTests() == 0; }));
+        [&] { return pool.GetSpinningCountForTests() == 1 && pool.GetIdleCountForTests() == 0; }));
 
-    Seen seen;
     pool.EnqueueWork([&] { seen.Record(); }, JobPriority::Background);
     ASSERT_TRUE(WaitUntil([&] { return seen.Count() == 1; }));
     EXPECT_EQ(seen.Jobs()[0], "Background");
@@ -562,10 +575,11 @@ TEST(CurrentJobContextTest, ABackgroundJobFoundByTheSpinnerRunsAsBackground) {
 // before it has run, so the worker is spinning, not sleeping, when it lands.
 TEST(CurrentJobContextTest, BackgroundJobsFoundAsTheSpinnerRetiresRunAsBackground) {
     constexpr int kJobs = 100000;
-    WorkStealingThreadPool pool(1);
-    pool.SetSpinConfigForTest(1, 1);
+    // Declared before the pool: a queued job can still use them when an ASSERT returns early.
     std::atomic<int> ran{0};
     std::atomic<int> notBackground{0};
+    WorkStealingThreadPool pool(1);
+    pool.SetSpinConfigForTest(1, 1);
     for (int i = 0; i < kJobs; ++i) {
         pool.EnqueueWork(
             [&] {
@@ -588,9 +602,10 @@ TEST(CurrentJobContextTest, BackgroundJobsFoundAsTheSpinnerRetiresRunAsBackgroun
 // alike, and an Enqueue the shutdown gate refuses runs as its channel on the
 // caller.
 TEST(CurrentJobContextTest, AChannelJobRunsAsItsChannel) {
+    // Declared before the pool: a job can still use it when an ASSERT returns early.
+    Seen seen;
     auto pool = std::make_unique<WorkStealingThreadPool>(1);
     auto channel = std::make_unique<JobChannel>(*pool, JobChannelDesc{.Name = kChannelName, .MaxRunning = 2});
-    Seen seen;
     channel->Submit([&] { seen.Record(); }).Wait();
     channel->Enqueue([&] { seen.Record(); });
     ASSERT_TRUE(WaitUntil([&] { return seen.Count() == 2; }));
@@ -659,17 +674,18 @@ TEST(CurrentJobContextTest, AnInlineJobDeferredAtTheDepthBoundRunsAsTheClassGive
 // Enqueue job waits behind it. Destroying the channel hands the waiting job
 // on to the blocking threads, where it runs as the destroyed channel.
 TEST(CurrentJobContextTest, AJobADestroyedChannelHandedOnRunsAsItsChannel) {
+    Gate gate;
+    // Declared before the pool: a job can still use them when an ASSERT returns early.
+    std::atomic<bool> headRunning{false};
+    Seen handedOn;
     WorkStealingThreadPool pool(1);
     auto channel = std::make_unique<JobChannel>(pool, JobChannelDesc{.Name = kChannelName, .MaxRunning = 1});
-    Gate gate;
     GateOpener opener{gate};
-    std::atomic<bool> headRunning{false};
     TaskHandle head = channel->Submit([&] {
         headRunning.store(true);
         gate.Wait();
     });
     ASSERT_TRUE(WaitUntil([&] { return headRunning.load(); }));
-    Seen handedOn;
     channel->Enqueue([&] { handedOn.Record(); });
 
     channel.reset();
@@ -682,11 +698,15 @@ TEST(CurrentJobContextTest, AJobADestroyedChannelHandedOnRunsAsItsChannel) {
 // Jobs still queued when the pool shuts down run in the drain on the thread
 // that called Shutdown(), each as the lane it was queued in or as its channel.
 TEST(CurrentJobContextTest, TheShutdownDrainRunsEachJobAsItsLaneOrChannel) {
+    Gate gate;
+    // Declared before the pool: a queued job can still use them when an ASSERT returns early.
+    std::atomic<int> parked{0};
+    Seen background;
+    Seen normal;
+    Seen channelJob;
     auto pool = std::make_unique<WorkStealingThreadPool>(1);
     auto channel = std::make_unique<JobChannel>(*pool, JobChannelDesc{.Name = kChannelName, .MaxRunning = 1});
-    Gate gate;
     GateOpener opener{gate};
-    std::atomic<int> parked{0};
     pool->EnqueueWork([&] {
         parked.fetch_add(1);
         gate.Wait();
@@ -697,9 +717,6 @@ TEST(CurrentJobContextTest, TheShutdownDrainRunsEachJobAsItsLaneOrChannel) {
     });
     ASSERT_TRUE(WaitUntil([&] { return parked.load() == 2; }));
 
-    Seen background;
-    Seen normal;
-    Seen channelJob;
     pool->EnqueueWork([&] { background.Record(); }, JobPriority::Background);
     pool->EnqueueWork([&] { normal.Record(); });
     channel->Enqueue([&] { channelJob.Record(); });
@@ -719,9 +736,10 @@ TEST(CurrentJobContextTest, TheShutdownDrainRunsEachJobAsItsLaneOrChannel) {
 // A Background body on the only worker forks and waits: the worker
 // participates and runs every tagged job itself, as its own class.
 TEST(CurrentJobContextTest, AParticipatingWaitRunsTaggedJobsAsTheWaitersClass) {
-    WorkStealingThreadPool pool(1);
+    // Declared before the pool: a job can still use them when an ASSERT returns early.
     Seen seen;
     std::atomic<bool> joined{false};
+    WorkStealingThreadPool pool(1);
     pool.EnqueueWork(
         [&] {
             JobCounter counter;
@@ -769,13 +787,15 @@ TEST(CurrentJobContextTest, AForkUnitIsAJobBodyOnEveryThread) {
 // A completion callback is not a body: it runs after the context of the job
 // that completed has ended, on the worker and on a blocking thread.
 TEST(CurrentJobContextTest, CompletionCallbacksRunOutsideTheBody) {
+    Gate gates[2];
+    // Declared before the pool: a completion callback can still write it when an ASSERT returns early.
+    // -1 until the callback has run, then whether it ran as a job body.
+    std::atomic<int> callbackInBody[2] = {-1, -1};
     WorkStealingThreadPool pool(1);
     JobChannel channel(pool, {.Name = kChannelName, .MaxRunning = 1});
     Seen bodies;
-    // -1 until the callback has run, then whether it ran as a job body.
-    std::atomic<int> callbackInBody[2] = {-1, -1};
     for (int i = 0; i < 2; ++i) {
-        Gate gate;
+        Gate& gate = gates[i];
         GateOpener opener{gate};
         TaskHandle handle = i == 0 ? pool.Submit([&] {
             gate.Wait();
@@ -806,10 +826,11 @@ TEST(CurrentJobContextTest, CompletionCallbacksRunOutsideTheBody) {
 TEST(PublishCountScopeTest, CountsEveryJobTheThreadPublishes) {
     constexpr size_t kBatch = WorkStealingThreadPool::kBulkPublishThreshold;
     constexpr int kJobs = 4 + static_cast<int>(kBatch);
+    // Declared before the pool: a job can still use it when an ASSERT returns early.
+    std::atomic<int> ran{0};
     WorkStealingThreadPool pool(2);
     const uint64 publishedBefore = pool.GetPublishedJobCount();
     uint32 published = 0;
-    std::atomic<int> ran{0};
     {
         WorkStealingThreadPool::PublishCountScope scope(published);
         JobCounter counter;
@@ -852,10 +873,11 @@ TEST(PublishCountScopeTest, AGraphTaskAWorkerPublishesCounts) {
 // The inner scope takes the publishes made while it lives; the outer one
 // counts again once it ends; nothing is counted after both end.
 TEST(PublishCountScopeTest, TheInnermostScopeCounts) {
+    // Declared before the pool: a job can still use it when an ASSERT returns early.
+    std::atomic<int> ran{0};
     WorkStealingThreadPool pool(2);
     uint32 outer = 0;
     uint32 inner = 0;
-    std::atomic<int> ran{0};
     {
         WorkStealingThreadPool::PublishCountScope outerScope(outer);
         pool.EnqueueWork([&ran] { ran.fetch_add(1); });
@@ -876,10 +898,11 @@ TEST(PublishCountScopeTest, TheInnermostScopeCounts) {
 // publishes happen there, outside the test thread's scope: the scope counts
 // the job and not the jobs it publishes; the pool's total counts both.
 TEST(PublishCountScopeTest, OtherThreadsPublishesAreNotCounted) {
+    // Declared before the pool: a job can still use it when an ASSERT returns early.
+    std::atomic<int> ran{0};
     WorkStealingThreadPool pool(2);
     const uint64 publishedBefore = pool.GetPublishedJobCount();
     uint32 published = 0;
-    std::atomic<int> ran{0};
     {
         WorkStealingThreadPool::PublishCountScope scope(published);
         pool.EnqueueWork([&pool, &ran] {

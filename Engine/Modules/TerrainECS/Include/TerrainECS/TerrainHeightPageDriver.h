@@ -36,8 +36,8 @@ struct TiledRenderExtent;
 struct TerrainHandle;
 struct PageRequestCamera;
 
-/// The generated height lattice of a noise or flat tiled terrain: its tile grid and the tile fill's
-/// noise. The height pages and the surface pages read it.
+/// The evaluated height lattice of a tiled terrain: its tile grid and the tile fill's noise or decoded
+/// heightmap. The height pages and the surface pages read it.
 PageStreaming::GeneratedHeightLattice MakeGeneratedHeightLattice(const TiledTerrainData& tiled);
 
 /// The identity of a generated height lattice: equal for two lattices that make the same pages.
@@ -61,13 +61,18 @@ void RequestTiledTerrainPages(TerrainService& service, const Rendering::IDevice&
                               std::span<const Mathematics::Vector3> cameras, std::span<const PageRequestCamera> views,
                               float32 focalScale);
 
-/// Requests the height pages of planet entity `planet` at the world origin for world-space `cameras`. The wide
-/// arm draws the pages of render handle index `renderTerrain` (kNoRenderTerrain: none yet); the narrow arm
-/// streams them and draws the closed form. `focalScale` 0 requests none; an unrequested planet stops streaming.
+/// Requests the height pages of planet entity `planet` at the world origin for world-space `cameras`, with
+/// its page colliders' windows around the dynamic bodies placed relative to `center`, its world position,
+/// and its surface pages over the view wedges of `views`, the same cameras with their directions.
+/// The wide arm draws the pages of render handle index `renderTerrain` (kNoRenderTerrain: none yet); the
+/// narrow arm streams them and draws the closed form. `focalScale` 0 requests none; an unrequested planet
+/// stops streaming.
 void RequestPlanetHeightPages(TerrainService& service, const Rendering::IDevice& device, uint32 planet,
-                              uint32 renderTerrain, std::string_view name, const Components::Terrain& terrain,
+                              const Mathematics::Vector3& center, uint32 renderTerrain, std::string_view name,
+                              const Components::Terrain& terrain,
                               const Components::TerrainPlanetRelief& relief,
-                              std::span<const Mathematics::Vector3> cameras, float32 focalScale);
+                              std::span<const Mathematics::Vector3> cameras,
+                              std::span<const PageRequestCamera> views, float32 focalScale);
 
 /// After every terrain's requests: one residency frame (a terrain not requested this frame stops
 /// being paged), its uploads and page tables published to `pages`, and the rects whose height

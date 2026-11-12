@@ -10,6 +10,7 @@
 #include "Assets/TextureCook.h"
 #include "Assets/TextureCookWorkers.h"
 #include "JobSystem/WorkStealingThreadPool.h"
+#include "Memory/AllocationCountScope.h"
 #include "StagedTestPaths.h"
 #include "Types/Fnv1a.h"
 
@@ -29,6 +30,11 @@
 #include <thread>
 #include <utility>
 #include <vector>
+
+#if defined(GE_HAVE_KTX)
+#include <ktx.h>
+#include <vulkan/vulkan_core.h>
+#endif
 
 using namespace GameEngine;
 
@@ -329,6 +335,26 @@ TEST(TextureCookKey, SourceHashSeparatesContent)
     const uint8 b[] = {1, 2, 3, 5};
     EXPECT_NE(ComputeTextureCookSourceHash(a, sizeof(a)), ComputeTextureCookSourceHash(b, sizeof(b)));
     EXPECT_EQ(ComputeTextureCookSourceHash(a, sizeof(a)), ComputeTextureCookSourceHash(a, sizeof(a)));
+}
+
+// The file hash reads through a fixed buffer and keeps the cook key: the same FNV-1a-64 as the bytes, over
+// several buffers and a short tail. The literals pin the key that names every cooked artifact on disk.
+TEST(TextureCookKey, SourceFileHashEqualsTheBytesHash)
+{
+    const uint8 a[] = {'a'};
+    EXPECT_EQ(ComputeTextureCookSourceHash(a, sizeof(a)), 0xaf63dc4c8601ec8cull);
+    std::vector<uint8> bytes(3 * 64 * 1024 + 17);
+    for (size_t i = 0; i < bytes.size(); ++i)
+        bytes[i] = static_cast<uint8>(i * 131 + 7);
+    const std::filesystem::path file = std::filesystem::path(testing::TempDir()) / "TextureCookSourceFileHash.bin";
+    {
+        std::ofstream stream(file, std::ios::binary | std::ios::trunc);
+        stream.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    }
+    EXPECT_EQ(ComputeTextureCookSourceHash(bytes.data(), bytes.size()), 0x301b23bcec777fd6ull);
+    EXPECT_EQ(ComputeTextureCookSourceFileHash(file), std::optional<uint64>(0x301b23bcec777fd6ull));
+    std::filesystem::remove(file);
+    EXPECT_EQ(ComputeTextureCookSourceFileHash(file), std::nullopt);
 }
 
 #if defined(GE_HAVE_KTX)
@@ -1581,7 +1607,7 @@ TEST(TextureCookParallel, SpreadEncodeMatchesOneThread)
 
 // Opaque gradient with a cut-out lattice: BC7 encodes the transparent blocks
 // through the endpoint repair, which a spread encode runs per band too.
-std::vector<uint8> CutoutTga(uint32 width, uint32 height)
+std::vector<uint8> CutoutRgba(uint32 width, uint32 height)
 {
     std::vector<uint8> rgba(static_cast<size_t>(width) * height * 4);
     for (uint32 y = 0; y < height; ++y)
@@ -1595,7 +1621,12 @@ std::vector<uint8> CutoutTga(uint32 width, uint32 height)
             px[3] = ((x / 3 + y / 5) % 4 == 0) ? 0 : 255;
         }
     }
-    return MakeTga(width, height, rgba);
+    return rgba;
+}
+
+std::vector<uint8> CutoutTga(uint32 width, uint32 height)
+{
+    return MakeTga(width, height, CutoutRgba(width, height));
 }
 
 // The whole cook (decode, mips, every level, the KTX2 container) spread across
@@ -1696,6 +1727,178 @@ TEST(TextureCookParallel, CancelStopsSpreadEncode)
     EXPECT_TRUE(payload.empty());
     EXPECT_EQ(cancel.Polls, CancelOnThirdPoll::kPollsBeforeCancel)
         << "the encode must stop polling once it has been cancelled";
+}
+
+// ── Memory ───────────────────────────────────────────────────────────────────
+
+// A Radiance file whose texels ramp across both axes (one RGBE texel each, no RLE).
+std::vector<uint8> GradientHdr(uint32 size)
+{
+    const std::string header = "#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y " + std::to_string(size) + " +X " +
+                               std::to_string(size) + "\n";
+    std::vector<uint8> hdr(header.begin(), header.end());
+    for (uint32 y = 0; y < size; ++y)
+        for (uint32 x = 0; x < size; ++x)
+        {
+            // Mantissas 64..255 under exponents 2^-1..2^2: radiance 0.125 to 4.
+            const uint8 texel[4] = {static_cast<uint8>(64 + (x * 191) / (size - 1)),
+                                    static_cast<uint8>(64 + (y * 191) / (size - 1)), 128,
+                                    static_cast<uint8>(128 + ((x + y) * 4) / (2 * size))};
+            hdr.insert(hdr.end(), texel, texel + 4);
+        }
+    return hdr;
+}
+
+std::vector<uint8> ReadFixture(const char* name)
+{
+    const std::filesystem::path path = TestPaths::StagedRoot() / "Engine/Tests/Fixtures" / name;
+    std::ifstream in(path, std::ios::binary);
+    return std::vector<uint8>((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+}
+
+// One cook miss of a 256x256 source, and the most heap allocations a steady one takes: the
+// decoder's pixels, the arena's block and its block list, and the file. An uncompressed chain
+// is built in the file, so it takes no arena.
+struct SteadyCook
+{
+    const char* Name;
+    std::vector<uint8> Source;
+    const char* Extension;
+    TextureCookInputs Inputs;
+    TextureCookOutput Output;
+    uint64 MaxAllocations;
+};
+
+// The BC7 and uncompressed outputs only: the other formats encode through DirectXTex, which
+// allocates its own output for each band.
+std::vector<SteadyCook> SteadyCooks()
+{
+    const std::vector<uint8> albedo = ReadFixture("bc7_albedo_256.png");
+    TextureCookInputs coverage = MakeInputs(TextureCookUsage::Color, TextureColorSpace::SRGB);
+    coverage.Settings.PreserveAlphaCoverage = true;
+    return {
+        {"albedo BC7", albedo, ".png", MakeInputs(TextureCookUsage::Color, TextureColorSpace::SRGB),
+         TextureCookOutput::BC7, 4},
+        {"cutout BC7 with alpha coverage", ReadFixture("bc7_cutout_256.png"), ".png", coverage,
+         TextureCookOutput::BC7, 4},
+        {"albedo uncompressed", albedo, ".png", MakeInputs(TextureCookUsage::Auto, TextureColorSpace::SRGB),
+         TextureCookOutput::Uncompressed, 2},
+        {"radiance uncompressed", GradientHdr(256), ".hdr",
+         MakeInputs(TextureCookUsage::Auto, TextureColorSpace::Linear), TextureCookOutput::Uncompressed, 2},
+    };
+}
+
+// A cook miss keeps its levels in one arena, gathers each BC7 band in scratch and writes each payload
+// once, into the file. The first cook makes the encoder's tables and this thread's scratch. An image
+// without the allocation hook (a Windows Release Engine.dll) counts nothing, so the check is "at most".
+TEST(TextureCookMemory, ASteadyCookMissAllocatesOnlyTheDecodeTheArenaAndTheFile)
+{
+    if (!IsTextureCookEncoderAvailable())
+        GTEST_SKIP() << "no BC encoder compiled in";
+    for (const SteadyCook& c : SteadyCooks())
+    {
+        ASSERT_FALSE(c.Source.empty()) << c.Name << ": fixture not staged";
+        std::vector<uint8> first, steady;
+        std::string error;
+        ASSERT_TRUE(CookTexture(c.Source.data(), c.Source.size(), c.Name, c.Extension, c.Inputs, c.Output, first,
+                                error))
+            << c.Name << ": " << error;
+        uint64 allocations = 0;
+        {
+            Memory::AllocationCountScope scope(Memory::CountWindow::ThisThread);
+            ASSERT_TRUE(CookTexture(c.Source.data(), c.Source.size(), c.Name, c.Extension, c.Inputs, c.Output,
+                                    steady, error))
+                << c.Name << ": " << error;
+            allocations = scope.Count();
+        }
+        EXPECT_LE(allocations, c.MaxAllocations) << c.Name;
+        EXPECT_EQ(steady, first) << c.Name;
+    }
+}
+
+// The file libktx's own writer makes from the levels that the public mip and encode steps give:
+// the cook writes each payload in place, and its file must equal this one byte for byte.
+std::vector<uint8> LibktxWrittenFile(const std::vector<uint8>& rgba, uint32 width, uint32 height,
+                                     const TextureCookInputs& in, TextureCookOutput output, uint32 vkFormat)
+{
+    std::vector<TextureCookMipLevel> chain{{rgba, width, height}};
+    EXPECT_TRUE(BuildTextureCookMipChain(chain, ComputeTextureCookMipCount(width, height, in.Settings), false,
+                                         in.ColorSpace == TextureColorSpace::SRGB, in.Settings));
+    ktxTextureCreateInfo createInfo{};
+    createInfo.vkFormat = vkFormat;
+    createInfo.baseWidth = width;
+    createInfo.baseHeight = height;
+    createInfo.baseDepth = 1;
+    createInfo.numDimensions = 2;
+    createInfo.numLevels = static_cast<ktx_uint32_t>(chain.size());
+    createInfo.numLayers = 1;
+    createInfo.numFaces = 1;
+    ktxTexture2* texture = nullptr;
+    EXPECT_EQ(ktxTexture2_Create(&createInfo, KTX_TEXTURE_CREATE_ALLOC_STORAGE, &texture), KTX_SUCCESS);
+    if (!texture)
+        return {};
+    for (uint32 level = 0; level < chain.size(); ++level)
+    {
+        std::vector<uint8> payload = chain[level].Bytes;
+        std::string error;
+        if (output != TextureCookOutput::Uncompressed)
+        {
+            EXPECT_TRUE(CompressTextureCookLevel(chain[level], false, output, 0, payload, error)) << error;
+        }
+        EXPECT_EQ(ktxTexture_SetImageFromMemory(ktxTexture(texture), level, 0, 0, payload.data(), payload.size()),
+                  KTX_SUCCESS);
+    }
+    const char* writer = "GameEngine.TextureCook v1";
+    ktxHashList_AddKVPair(&texture->kvDataHead, KTX_WRITER_KEY, static_cast<ktx_uint32_t>(std::strlen(writer) + 1),
+                          writer);
+    ktx_uint8_t* bytes = nullptr;
+    ktx_size_t size = 0;
+    EXPECT_EQ(ktxTexture_WriteToMemory(ktxTexture(texture), &bytes, &size), KTX_SUCCESS);
+    ktxTexture_Destroy(ktxTexture(texture));
+    std::vector<uint8> file(bytes, bytes + size);
+    std::free(bytes);
+    return file;
+}
+
+TEST(TextureCookDeterminism, TheCookWritesTheFileLibktxWritesFromTheSameLevels)
+{
+    if (!IsTextureCookEncoderAvailable())
+        GTEST_SKIP() << "no BC encoder compiled in";
+    // Odd extents, so the tail levels hold partial blocks.
+    constexpr uint32 kWidth = 70;
+    constexpr uint32 kHeight = 38;
+    const std::vector<uint8> rgba = CutoutRgba(kWidth, kHeight);
+    const std::vector<uint8> tga = MakeTga(kWidth, kHeight, rgba);
+    TextureCookInputs coverage = MakeInputs(TextureCookUsage::Color, TextureColorSpace::SRGB);
+    coverage.Settings.PreserveAlphaCoverage = true;
+    struct Case
+    {
+        const char* Name;
+        TextureCookInputs Inputs;
+        TextureCookOutput Output;
+        uint32 VkFormat;
+    };
+    const Case cases[] = {
+        {"BC7", MakeInputs(TextureCookUsage::Color, TextureColorSpace::SRGB), TextureCookOutput::BC7,
+         VK_FORMAT_BC7_SRGB_BLOCK},
+        {"BC7 with alpha coverage", coverage, TextureCookOutput::BC7, VK_FORMAT_BC7_SRGB_BLOCK},
+        {"BC1", MakeInputs(TextureCookUsage::Color, TextureColorSpace::SRGB), TextureCookOutput::BC1,
+         VK_FORMAT_BC1_RGB_SRGB_BLOCK},
+        {"BC4", MakeInputs(TextureCookUsage::Mask, TextureColorSpace::Linear), TextureCookOutput::BC4,
+         VK_FORMAT_BC4_UNORM_BLOCK},
+        {"BC5", MakeInputs(TextureCookUsage::Normal, TextureColorSpace::Linear), TextureCookOutput::BC5,
+         VK_FORMAT_BC5_UNORM_BLOCK},
+        {"uncompressed", MakeInputs(TextureCookUsage::Auto, TextureColorSpace::SRGB),
+         TextureCookOutput::Uncompressed, VK_FORMAT_R8G8B8A8_SRGB},
+    };
+    for (const Case& c : cases)
+    {
+        std::vector<uint8> cooked;
+        std::string error;
+        ASSERT_TRUE(CookTexture(tga.data(), tga.size(), "fixture.tga", ".tga", c.Inputs, c.Output, cooked, error))
+            << c.Name << ": " << error;
+        EXPECT_EQ(cooked, LibktxWrittenFile(rgba, kWidth, kHeight, c.Inputs, c.Output, c.VkFormat)) << c.Name;
+    }
 }
 
 #endif // GE_HAVE_KTX

@@ -22,7 +22,7 @@ std::string DescribeManaged(const ScriptAssemblyStatus& managed)
         return "C# scripts loaded (" + std::to_string(managed.TypeCount) +
                (managed.TypeCount == 1 ? " type)" : " types)");
     case ScriptAssemblyState::Failed:
-        return "C# build failed - see Log";
+        return "C# scripts failed - see Log";
     case ScriptAssemblyState::Disabled:
         return "C# scripting is off in this build";
     case ScriptAssemblyState::NotLoaded:

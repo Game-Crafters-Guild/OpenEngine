@@ -55,13 +55,7 @@ class GameViewPanel : public DockPanel
 
     void OnPostLayout() override;
     void OnMountVisibilityChanged(bool isVisible) override;
-    void OnDockTabActivationArmed(float contentWidth, float contentHeight) override;
     void PrepareForFirstMount(UIManager* ui);
-
-    void SetActivationArmedCallback(std::function<void(float, float)> callback)
-    {
-        m_ActivationArmedCallback = std::move(callback);
-    }
 
   private:
     void BindFromAssetsDeferred();
@@ -112,7 +106,6 @@ class GameViewPanel : public DockPanel
     // to it while the panel is unmounted. Panels are app-owned and move between windows,
     // so the window that owns this manager can close while the panel lives on.
     UIManagerRef m_PreMountManager;
-    std::function<void(float, float)> m_ActivationArmedCallback;
 };
 
 } // namespace GameEngine

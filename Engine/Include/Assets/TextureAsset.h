@@ -14,6 +14,7 @@
 namespace GameEngine {
 
 class AssetRegistry;
+class ByteBuffer;
 struct AssetDecodeInputs;
 
 /**
@@ -186,7 +187,13 @@ public:
      * The AssetIOService reads them next to the source, so the decode adopts an artifact without reading the disk. */
     static AssetDecodeInputs ResolveCookDecodeInputs(const AssetRegistry& registry, const GUID& guid,
                                                      const String& extensionLower,
-                                                     const Vector<uint8>& sourceBytes);
+                                                     std::span<const uint8> sourceBytes);
+
+    /** The decode inputs of a cook hit, resolved before `source` is read: the plan keys the artifacts by the
+     * source's content hash, read through a fixed buffer. When the AssetIOService reads every file named, it
+     * does not read the source, and the decode adopts the artifact. Empty unless the import cook applies. */
+    static AssetDecodeInputs ResolveCookHitDecodeInputs(const AssetRegistry& registry, const GUID& guid,
+                                                        const std::filesystem::path& source);
 
     /** The normal-variance companion beside the packaged `payload` when the texture's settings call for one
      * (LoadPackagedTexture), so the AssetIOService reads it with the payload; empty otherwise. */
@@ -201,7 +208,7 @@ public:
     /**
      * @brief Load texture from memory data (for async loading)
      */
-    bool LoadFromData(const Vector<uint8>& data) override;
+    bool LoadFromData(std::span<const uint8> data) override;
 
     /**
      * @brief Unload texture from memory
@@ -335,8 +342,9 @@ private:
      * back to the raw decode) outside an AssetManager context, for authored
      * containers, or when the cook would be byte-identical to the raw path. Invalid policy forbids fallback; enabled policy requires actual
      * decoded pixels and forbids placeholder success. See Assets/TextureCook.h.
+     * Empty `sourceBytes` only adopts: the plan comes from the file (or the reader's plan), and a miss returns false.
      */
-    bool TryLoadViaCook(const Vector<uint8>& sourceBytes, const String& extensionLower,
+    bool TryLoadViaCook(std::span<const uint8> sourceBytes, const String& extensionLower,
                         AlphaCoveragePolicy& coveragePolicy);
 
     /**
@@ -346,7 +354,7 @@ private:
     bool DecodeSourceFile();
 
     // Nullopt for authored input; packaged input succeeds or fails without raw fallback.
-    std::optional<bool> LoadPackagedTexture(const Vector<uint8>* data);
+    std::optional<bool> LoadPackagedTexture(const std::span<const uint8>* data);
 
     // Replace a loaded block-compressed payload with its decode, every level, for a CPU reader
     // of a package (whose source the export removed): RGBA32F for BC6H, RGBA8 otherwise.
@@ -356,7 +364,7 @@ private:
      * @brief Loads the source image file's bytes through the cook, or decodes them with
      * the Image module (the file's own channels; float for .hdr).
      */
-    bool DecodeSourceBytes(const Vector<uint8>& data);
+    bool DecodeSourceBytes(std::span<const uint8> data);
 
     /**
      * @brief Load DDS texture
@@ -366,7 +374,7 @@ private:
     /**
      * @brief Load DDS texture from memory data
      */
-    bool LoadDDSFromData(const Vector<uint8>& data);
+    bool LoadDDSFromData(std::span<const uint8> data);
 
 #if defined(GE_HAVE_KTX)
     /**
@@ -377,7 +385,12 @@ private:
     /**
      * @brief Load KTX/KTX2 texture from memory data
      */
-    bool LoadWithKTXFromData(const Vector<uint8>& data);
+    bool LoadWithKTXFromData(std::span<const uint8> data);
+
+    /// Loads the KTX2 file in `data`. A container with no Basis payload, no supercompression and no
+    /// gaps between its levels puts them in place inside `data`, which becomes the payload with no
+    /// copy. Any other container copies its levels into a new payload.
+    bool LoadWithKTXFromOwnedData(ByteBuffer data);
 
     /// Read (ReadAssetDecodeInputFile) and load a cooked normal-variance companion; null when it
     /// is absent or not BC4.
@@ -396,11 +409,11 @@ private:
                            bool swizzleBaked);
 
     /**
-     * @brief Shared tail of both KTX loaders: transcode (per the process-wide
-     * GPU target), adopt the container's full mip chain and DFD color space.
-     * Takes ownership semantics of nothing; caller destroys the ktx texture.
+     * @brief Shared tail of the KTX loaders: transcode, adopt the mip chain and DFD color space.
+     * The caller destroys the ktx texture. A non-null `file` holds the image data
+     * (LoadWithKTXFromOwnedData) and becomes the payload in place when its levels have no gaps.
      */
-    bool PopulateFromKtxTexture(void* ktxTexture2Ptr, const char* sourceName);
+    bool PopulateFromKtxTexture(void* ktxTexture2Ptr, const char* sourceName, ByteBuffer* file);
 #endif
 
 

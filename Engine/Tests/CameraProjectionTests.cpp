@@ -5,10 +5,16 @@
 
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <cmath>
+#include <memory>
+#include <string>
 
 #include "Components/Rendering/Camera.h"
+#include "ECS/ECS.h"
 #include "Engine/Rendering/Camera.h"
+#include "Logger/CallbackSink.h"
+#include "Logger/Logger.h"
 #include "Mathematics/MatrixOps.h"
 
 using GameEngine::Engine::Renderer::Camera;
@@ -169,4 +175,53 @@ TEST(CameraProjection, ZeroAspect_Clamped)
         for (int row = 0; row < 4; ++row)
             EXPECT_TRUE(std::isfinite(proj[col][row]))
                 << "Non-finite at [" << col << "][" << row << "]";
+}
+
+TEST(CameraProjection, RangesPassValidNearAndFarThrough)
+{
+    Camera cam{};
+    cam.params.NearZ = 0.3f;
+    cam.params.FarZ = 250.0f;
+
+    const GameEngine::Rendering::CameraRanges ranges = cam.ToCameraRanges();
+    EXPECT_FLOAT_EQ(ranges.Near, 0.3f);
+    EXPECT_FLOAT_EQ(ranges.CullingRange, 250.0f);
+}
+
+// A far below the near, or a near at zero, never reaches the views: the error names the
+// entity and the camera gets the component's default near and far.
+TEST(CameraProjection, RangesRefuseFarBelowNearWithOneErrorAndTheDefaults)
+{
+    Logger::Log::Initialize({});
+    auto sink = std::make_unique<Logger::CallbackSink>();
+    auto* sinkPtr = sink.get();
+    auto errorCount = std::make_shared<std::atomic<int>>(0);
+    const std::uint64_t callbackId = sinkPtr->RegisterCallback(
+        [errorCount](const Logger::LogMessage& message)
+        {
+            if (message.Level == Logger::LogLevel::Error && message.Message.find("FarZ") != std::string::npos)
+                errorCount->fetch_add(1);
+        });
+    Logger::Log::AddSink(std::move(sink));
+
+    const GameEngine::Components::Camera defaults{};
+    Camera cam{};
+    cam.entity = GameEngine::ECS::EntityHandle(7u, 1u);
+    cam.params.NearZ = 5.0f;
+    cam.params.FarZ = 1.0f;
+
+    const GameEngine::Rendering::CameraRanges first = cam.ToCameraRanges();
+    const GameEngine::Rendering::CameraRanges second = cam.ToCameraRanges();
+    Logger::Log::Flush();
+    sinkPtr->UnregisterCallback(callbackId);
+
+    EXPECT_FLOAT_EQ(first.Near, defaults.NearZ);
+    EXPECT_FLOAT_EQ(first.CullingRange, defaults.FarZ);
+    EXPECT_FLOAT_EQ(second.Near, defaults.NearZ);
+    EXPECT_FLOAT_EQ(second.CullingRange, defaults.FarZ);
+    EXPECT_EQ(errorCount->load(), 1) << "one error per camera, not one per frame";
+
+    cam.params.NearZ = 0.0f;
+    cam.params.FarZ = 100.0f;
+    EXPECT_FLOAT_EQ(cam.ToCameraRanges().Near, defaults.NearZ);
 }

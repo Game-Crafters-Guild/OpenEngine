@@ -1,5 +1,6 @@
 // Slug text rendering functions for the UI fragment shader.
-// Ported from Eric Lengyel's reference HLSL (MIT license).
+// Ported from Eric Lengyel's Slug reference HLSL (MIT); the license and the
+// upstream revision: ThirdParty/Slug/.
 // Evaluates quadratic Bezier curves per-pixel via horizontal/vertical
 // ray casting with band-based spatial acceleration.
 //

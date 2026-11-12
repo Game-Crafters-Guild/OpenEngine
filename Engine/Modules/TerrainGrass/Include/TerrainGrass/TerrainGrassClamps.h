@@ -51,6 +51,7 @@ inline void ClampFields(Components::TerrainGrass& grass)
         std::clamp(grass.BladesPerSquareMeter, 0.0f, kGrassMaxBladesPerSquareMeter);
     grass.Range = std::max(0.0f, grass.Range);
     grass.DensityFalloff = std::max(0.0f, grass.DensityFalloff);
+    grass.FarThinning = Math::Clamp01(grass.FarThinning);
     grass.ClumpSize = std::max(0.0f, grass.ClumpSize);
     grass.ClumpHeightVariance = Math::Clamp01(grass.ClumpHeightVariance);
     grass.ClumpAlignment = Math::Clamp01(grass.ClumpAlignment);

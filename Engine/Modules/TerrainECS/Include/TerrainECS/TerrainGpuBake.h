@@ -13,9 +13,8 @@
 namespace GameEngine::TerrainECS
 {
 
-// Kill switch: GE_TERRAIN_GPU_BAKE arms the planar GPU height bake, default ON (=0 disables),
-// mirroring the DeferSplatResplatEnabled convention. Defined
-// in TerrainGpuBake.cpp (not header-inline) so the test override below is one instance across the
+// Kill switch: GE_TERRAIN_GPU_BAKE arms the planar GPU height bake, default ON (=0 disables).
+// Defined in TerrainGpuBake.cpp (not header-inline) so the test override below is one instance across the
 // Engine-dll / test-exe boundary — a DATA symbol does not export reliably under the auto-export.
 bool IsGpuHeightBakeEnabled();
 
@@ -268,7 +267,7 @@ inline SurfaceRuleBindingSizes ComputeSurfaceRuleBindingSizes(size_t ruleCount,
 }
 
 // Push constants for one tile's bake dispatch (mirror PushConstants in
-// terrain_height_bake.comp). 84 bytes, under the 128-byte guaranteed minimum.
+// terrain_height_bake.comp). 80 bytes, under the 128-byte guaranteed minimum.
 struct TerrainHeightBakePush
 {
     int32  RectMinX;   // tile-local interior sample rect (inclusive origin)
@@ -281,8 +280,8 @@ struct TerrainHeightBakePush
     float TileSize;    // tile world size (square)
     float HeightScale;
 
-    float  BaseFreq;   // base value-noise fill params (kTileNoise*)
-    float  BaseAmp;
+    float  BaseFreq;   // the base value noise's stack (Terrain::TerrainNoiseStack)
+    float  BaseGain;
     uint32 BaseOctaves;
     uint32 BaseSeed;
 
@@ -292,13 +291,6 @@ struct TerrainHeightBakePush
     uint32 SlotStride;
 
     uint32 SlotsPerRow;
-    // Committed global height range for the SPLAT kernel's altitude classification (KERNEL_SPLAT
-    // only; left 0 for the height/normal dispatches, which ignore them). Set per-bake from the
-    // tiled terrain's committed SplatBakeMinH/MaxH so the mid-stroke GPU splat normalizes against
-    // the SAME range the CPU region-splat would — a mid-stroke range extension makes the GPU splat
-    // a stale preview, re-splat CPU-side at settle (design §5 slice-3; no GPU-side renormalize).
-    float32 SplatMinH;
-    float32 SplatMaxH;
     // Surface rule rows in the row buffer (SPLAT kernel only; 0 for height/normal). Rules
     // composite on top of the procedural classification in buffer order.
     uint32 SurfaceRuleCount;
@@ -308,8 +300,9 @@ struct TerrainHeightBakePush
     // measures its world-space target against this, mirroring NormalizedHeightForWorldY on the
     // CPU arm.
     float TerrainOriginY;
+    float BaseAmplitude; // the base stack's Amplitude (Terrain::TerrainNoiseStack)
 };
-static_assert(sizeof(TerrainHeightBakePush) == 84, "TerrainHeightBakePush must match terrain_height_bake.comp push_constant layout");
+static_assert(sizeof(TerrainHeightBakePush) == 80, "TerrainHeightBakePush must match terrain_height_bake.comp push_constant layout");
 
 // One tile's GPU height-bake request. The TerrainModifierSystem records these (with the
 // tile-local sample rect it would have CPU-baked) onto the service when the GPU path is
@@ -350,19 +343,13 @@ struct GpuHeightBakeBatch
     // world-space targets the way the CPU bake does.
     float TerrainOriginY = 0.0f;
     float BaseFreq = 0.0f;
-    float BaseAmp = 0.0f;
+    float BaseGain = 0.0f;
     uint32 BaseOctaves = 0;
     uint32 BaseSeed = 0;
-    // Slice-3 GPU splat: the committed global height range the mid-stroke splat normalizes
-    // against, and whether the splat pass may run for this bake. SplatEligible is false when the
-    // bake carries a splat writer the kernel has no twin for — paint (PaintLayer / PaintZone /
-    // spline paint), or a surface-rules volume on a spline shape. The procedural GPU splat would
-    // drop their composited layers, so those keep the CPU splat (byte-identical) until settle. The
-    // committed range is always valid here: the recorder commits the deterministic resident band
-    // on the first GPU bake (before it, SplatBakeMin/MaxH are the [0,0] sentinel) rather than
-    // gating the splat off, so the GPU splat runs live from the first stroke.
-    float SplatMinH = 0.0f;
-    float SplatMaxH = 0.0f;
+    float BaseAmplitude = 0.0f;
+    // Whether the splat pass may run for this bake. False when the bake carries a splat writer
+    // the kernel has no twin for (paint, or a surface-rules volume on a spline shape): those keep
+    // the CPU splat until settle.
     bool SplatEligible = false;
     // Surface rule rows the splat kernel composites on top of the procedural classification,
     // already flattened into (modifier priority, then stack order) with each row carrying its
@@ -379,11 +366,10 @@ struct GpuHeightBakeBatch
         HeightScale = 0.0f;
         TerrainOriginY = 0.0f;
         BaseFreq = 0.0f;
-        BaseAmp = 0.0f;
+        BaseGain = 0.0f;
         BaseOctaves = 0;
         BaseSeed = 0;
-        SplatMinH = 0.0f;
-        SplatMaxH = 0.0f;
+        BaseAmplitude = 0.0f;
         SplatEligible = false;
         SurfaceRules.clear();
         SurfaceRuleConditions.clear();

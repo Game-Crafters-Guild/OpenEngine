@@ -14,6 +14,7 @@
 #include "Engine/Rendering/DrawBindings.h"
 #include "Engine/Rendering/MeshGPURegistry.h"
 #include "Rendering/Core/CommandList.h"
+#include "Rendering/Core/DrawProducerRegistry.h"
 #include "Rendering/Core/Handle.h"
 #include "Rendering/Core/Pipeline/PipelineIdentifiers.h"
 #include "Rendering/Geometry/VertexAttributeFlags.h"
@@ -109,6 +110,9 @@ struct DrawCommand
     // Optional GPU-driven draw source. When enabled, IndexCount/InstanceCount
     // are ignored and the pass records DrawIndexedIndirectCount instead.
     bool UseIndirect = false;
+    // The registered producer of this command (Rendering::DrawProducerRegistry); its name is the
+    // command's profiler scope inside a shared pass. It fills padding after UseIndirect.
+    ::GameEngine::Rendering::DrawProducerId Producer = ::GameEngine::Rendering::DrawProducerRegistry::kOther;
     ::GameEngine::Rendering::BufferHandle IndirectCommandBuffer{};
     ::GameEngine::Rendering::BufferHandle IndirectCountBuffer{};
     uint32_t IndirectMaxDrawCount = 0;

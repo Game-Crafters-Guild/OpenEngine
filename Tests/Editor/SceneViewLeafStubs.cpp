@@ -12,6 +12,7 @@
 #include "UI/Controls/ScenePostFxMenu.h"
 #include "Mathematics/Vector3.h"
 
+#include <functional>
 #include <string>
 #include <utility>
 
@@ -73,7 +74,24 @@ namespace GameEngine::Editor
         return s_Text;
     }
 
-    void ShowSceneViewNotice(std::string text) { TestStubs::LastSceneViewNotice() = std::move(text); }
+    TestStubs::RecordedNoticeAction& TestStubs::LastSceneViewNoticeAction()
+    {
+        static RecordedNoticeAction s_Action;
+        return s_Action;
+    }
+
+    void ShowSceneViewNotice(std::string text)
+    {
+        TestStubs::LastSceneViewNotice() = std::move(text);
+        TestStubs::LastSceneViewNoticeAction() = {};
+    }
+
+    void ShowSceneViewNoticeWithAction(std::string text, std::string actionLabel, std::string actionTooltip,
+                                       std::function<void()> onAction)
+    {
+        TestStubs::LastSceneViewNotice() = std::move(text);
+        TestStubs::LastSceneViewNoticeAction() = {std::move(actionLabel), std::move(actionTooltip), std::move(onAction)};
+    }
 }
 
 namespace GameEngine::Editor

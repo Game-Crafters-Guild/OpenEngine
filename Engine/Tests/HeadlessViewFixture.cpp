@@ -11,6 +11,7 @@
 #include "Rendering/Core/PassPhase.h"
 #include "Rendering/Passes/PixelPerfectUpscalePass.h"
 #include "Rendering/Passes/SRGBEncodePass.h"
+#include "TestCameraEye.h"
 #include "UI/Parsers/CSSParser.h"
 #include "UI/Parsers/XMLParser.h"
 #include "UI/UIElement.h"
@@ -500,7 +501,7 @@ HeadlessViewStatus HeadlessViewFixture::Up()
     cd.view = Mathematics::Matrix4x4::Identity();
     cd.proj = Mathematics::Matrix4x4::Identity();
     cd.viewProj = Mathematics::Matrix4x4::Identity();
-    m_Services->Views().SetCameraData(m_Camera, cd);
+    m_Services->Views().SetCameraData(m_Camera, ::GameEngine::Tests::TestCameraWithEye(cd), {0.1f, 1000.0f});
     m_View = m_Services->Views().AllocateView("HeadlessView", m_Camera);
     m_Services->Views().SetViewRenderLayerMask(m_View, GameEngine::Rendering::RenderLayerMask::Default());
 

@@ -22,6 +22,7 @@ namespace GameEngine::Editor
 
 class EditorChangeNotifications;
 class SceneDocumentManager;
+class UndoRedoService;
 struct HierarchyRowParts;
 
 /// What a Hierarchy row shows for prefabs: the root of an instance, an entity inside one, or
@@ -68,8 +69,10 @@ void SetShownText(Label& label, const std::string& text);
 /// Registers the prefab editor: the Scene View pick climb, the Hierarchy glyph, rows and menu, the Inspector's prefab
 /// bar, override marks and override menus (empty while `isInPlayMode` returns true), the drop on an Assets folder and
 /// the `.prefab` tile in `thumbnails` when there is one. The Overrides list reads the load report of the document that
-/// `document` returns, which may be null. Call once at startup.
-void RegisterPrefabEditor(EditorChangeNotifications& notifications, IThumbnailProvider* thumbnails,
-                          std::function<bool()> isInPlayMode, std::function<SceneDocumentManager*()> document);
+/// `document` returns, which may be null. The records an Inspector commit writes join its step in `undo`, which may be
+/// null. Call once at startup.
+void RegisterPrefabEditor(EditorChangeNotifications& notifications, UndoRedoService* undo,
+                          IThumbnailProvider* thumbnails, std::function<bool()> isInPlayMode,
+                          std::function<SceneDocumentManager*()> document);
 
 } // namespace GameEngine::Editor

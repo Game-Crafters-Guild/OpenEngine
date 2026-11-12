@@ -240,14 +240,17 @@ static std::string FindFocusedPanelId(const EditorWindowContext& ctx)
 }
 
 // Posted, not called: the settings read and the row rebuild must not stall the frame that shows the Build tab.
-static void PostBuildPanelVersionRefresh(EditorPanelManager& manager, EditorApplication::EditorWindowContext& ctx)
+static void PostBuildPanelVersionsAndRequirementsRefresh(EditorPanelManager& manager, EditorApplication::EditorWindowContext& ctx)
 {
     if (!ctx.ui)
         return;
     if (UIElement* root = ctx.ui->GetRootElement())
         root->PostAction([&manager]() {
             if (auto* buildPanel = manager.FindFirstPanelOfType<BuildPanel>())
+            {
                 buildPanel->RefreshVersionsFromSettings();
+                buildPanel->RecheckExportRequirements();
+            }
         });
 }
 
@@ -458,7 +461,7 @@ void EditorPanelManager::ShowOrActivateBuildPanel(EditorWindowContext* ctx)
     if (ActivateOpenPanel(ctx, EditorPanelIds::Build))
     {
         RefreshPanelUI(ctx, EditorPanelIds::Build);
-        PostBuildPanelVersionRefresh(*this, *ctx);
+        PostBuildPanelVersionsAndRequirementsRefresh(*this, *ctx);
         return;
     }
 
@@ -483,7 +486,7 @@ void EditorPanelManager::ShowOrActivateBuildPanel(EditorWindowContext* ctx)
             ctx->docking->ActivateTab(EditorPanelIds::Build);
             RebuildDockspace(ctx);
             RefreshPanelUI(ctx, EditorPanelIds::Build);
-            PostBuildPanelVersionRefresh(*this, *ctx);
+            PostBuildPanelVersionsAndRequirementsRefresh(*this, *ctx);
             return;
         }
         // Fallback: add to first available leaf
@@ -494,7 +497,7 @@ void EditorPanelManager::ShowOrActivateBuildPanel(EditorWindowContext* ctx)
             ctx->docking->ActivateTab(EditorPanelIds::Build);
             RebuildDockspace(ctx);
             RefreshPanelUI(ctx, EditorPanelIds::Build);
-            PostBuildPanelVersionRefresh(*this, *ctx);
+            PostBuildPanelVersionsAndRequirementsRefresh(*this, *ctx);
             return;
         }
     }
@@ -563,7 +566,7 @@ void EditorPanelManager::ShowOrActivateWebPanel(EditorWindowContext* ctx)
     }
 }
 
-void EditorPanelManager::ShowOrActivateHelpPanel()
+void EditorPanelManager::ShowOrActivateHelpPanel(std::string_view page)
 {
     if (!m_Windows || m_Windows->empty() || !m_Windows->front())
         return;
@@ -571,7 +574,7 @@ void EditorPanelManager::ShowOrActivateHelpPanel()
     EditorWindowContext* ctx = m_Windows->front().get();
     ShowOrActivateWebPanel(ctx);
     if (auto* webPanel = FindFirstPanelOfType<WebPanel>())
-        webPanel->Navigate(WebPanel::kHelpDocsURL);
+        webPanel->Navigate(std::string(WebPanel::kHelpDocsURL) + std::string(page));
 }
 
 // ---- Panel closing ----

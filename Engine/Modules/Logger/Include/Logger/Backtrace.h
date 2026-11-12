@@ -15,6 +15,13 @@ namespace Logger
 // then walk against dbghelp's half-mutated internal state.
 std::mutex& DbgHelpMutex();
 
+#if defined(_WIN32)
+// Starts the DbgHelp session of the process on the first call and refreshes its
+// module list on each later call. DbgHelp reads a PDB only from the folders of the
+// loaded modules, never from the PDB path in a binary. The caller holds DbgHelpMutex().
+void LoadDbgHelpModules();
+#endif
+
 struct BacktraceFrame
 {
     std::uintptr_t Address = 0;

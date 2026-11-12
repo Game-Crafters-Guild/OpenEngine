@@ -12,21 +12,17 @@
 #include "PageStreaming/PageStore/PageStoreFormat.h"
 #include "PageStreaming/PageTableEntry.h"
 #include "TerrainECS/PageTable.h"
+#include "TerrainECS/Planet/PlanetSurfacePageProvider.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <random>
 #include <string>
 #include <tuple>
 #include <vector>
-
-#if defined(_MSC_VER)
-#pragma fp_contract(off)
-#else
-#pragma STDC FP_CONTRACT OFF
-#endif
 
 namespace
 {
@@ -65,9 +61,10 @@ struct PlanetPageField
         GameEngine::PageStreaming::GeneratedPlanetLattice lattice;
         lattice.ReferenceRadius = kRadius;
         lattice.FaceSamples = kFaceSamples;
-        lattice.Height = [](const GameEngine::Mathematics::Vector3& direction, float minResolvedArc) {
-            return GameEngine::CBTTerrain::PlanetRelief(direction.x, direction.y, direction.z, kAmplitude, kFrequency,
-                                                        kOctaves, minResolvedArc);
+        lattice.HeightRow = [](std::span<const GameEngine::Mathematics::Vector3> directions, float minResolvedArc,
+                               std::span<float> outHeights) {
+            GameEngine::CBTTerrain::PlanetReliefRow(directions, kAmplitude, kFrequency, kOctaves, minResolvedArc,
+                                                    outHeights);
         };
         lattice.HeightRange = [](const GameEngine::Mathematics::Vector3&, float, float) {
             return GameEngine::PageStreaming::PageHeightRange{-2.0f * kAmplitude, 2.0f * kAmplitude};
@@ -125,12 +122,14 @@ namespace Shader
 #define precise
 using GameEngine::GlslShim::abs;
 using GameEngine::GlslShim::clamp;
+using GameEngine::GlslShim::cross;
 using GameEngine::GlslShim::dot;
 using GameEngine::GlslShim::exp2;
 using GameEngine::GlslShim::floor;
 using GameEngine::GlslShim::max;
 using GameEngine::GlslShim::min;
 using GameEngine::GlslShim::normalize;
+using GameEngine::GlslShim::sqrt;
 using GameEngine::GlslShim::uint;
 using GameEngine::GlslShim::vec3;
 #include "PageResolveTypesExtracted.h"
@@ -285,6 +284,9 @@ std::tuple<int, int, float, float> Anchor(uint32_t face, const Shader::vec3& eye
 // The bound on |GPU normal - central-difference normal|: the fragment's fp32 operations, ten times the worst
 // seen on this sweep.
 constexpr double kNormalTolerance = 1e-5;
+// The bound on |surface page normal - fragment normal|: the CPU twin builds the normal from fp32 sample
+// directions; 1/80 of the Rg8 encode step (1/127) the normal plane stores.
+constexpr double kSurfaceNormalTolerance = 1e-4;
 
 } // namespace
 
@@ -351,6 +353,90 @@ TEST(PlanetPageNormal, TheFragmentNormalAtALatticePointIsTheCentralDifferenceOfT
     RecordProperty("WorstNormalErrorNoAnchor", std::to_string(worst[0]));
     RecordProperty("WorstNormalErrorAnchored", std::to_string(worst[1]));
     s_Field = nullptr;
+}
+
+// The surface page's normal (PlanetWindowNormal, the CPU twin) against the fragment's normal from the
+// same heights on a sweep of lattice points on six faces (the planets note's risk 4).
+TEST(PlanetPageNormal, TheSurfacePageNormalIsTheFragmentNormalOnASweep)
+{
+    using namespace GameEngine::PageStreaming;
+    PlanetPageField field;
+    s_Field = &field;
+    const GameEngine::TerrainECS::PlanetSurfacePageProvider surface(
+        std::make_shared<const GeneratedHeightPageProvider>(PlanetPageField::MakeLattice()), {},
+        GameEngine::Components::TerrainSurfaceRulesEffect{}, kRadius);
+    std::mt19937 random(0x51A9u);
+    std::uniform_int_distribution<uint32_t> interior(1u, kFaceSamples - 2u);
+    GameEngine::TerrainECS::PlanetSurfaceWindow window;
+    double worst = 0.0;
+    uint32_t compared = 0;
+    for (uint32_t face = 0; face < GameEngine::Mathematics::kCubeFaceCount; ++face)
+        for (uint32_t i = 0; i < 12u; ++i)
+        {
+            const uint32_t x = interior(random);
+            const uint32_t z = interior(random);
+            field.Height(face, x - 1u, z);
+            field.Height(face, x + 1u, z);
+            field.Height(face, x, z - 1u);
+            field.Height(face, x, z + 1u);
+            const Shader::CBTPageField shape = FieldShape(field);
+            const Double3 d = Direction(face, x, z);
+            const double r = kRadius + double(field.Height(face, x, z));
+            const Shader::vec3 positionF(float(d.X * r), float(d.Y * r), float(d.Z * r));
+            const Shader::CBTPlanetPageSurface paged = Shader::CBT_PlanetPageSurfaceAt(
+                positionF, positionF, Shader::vec3(0.0f, 0.0f, 0.0f), Shader::CBT_PLANET_PAGE_NO_ANCHOR, 0, 0.0f, 0.0f,
+                0.0f, shape);
+            const Shader::vec3 dir = Shader::normalize(positionF);
+            const Shader::vec3 gpu = Shader::normalize(dir - paged.Gradient * (1.0f / (float(kRadius) + paged.Height)));
+
+            const uint32_t pageX = std::min(x / kOwned, 8u);
+            const uint32_t pageZ = std::min(z / kOwned, 8u);
+            ASSERT_TRUE(surface.FillWindow(PageAddress{uint8_t(face), 0u, pageX, pageZ}, window));
+            const GameEngine::Mathematics::Vector3 cpu = GameEngine::TerrainECS::PlanetWindowNormal(
+                window, x - pageX * kOwned + kPageSurfaceWindowMarginSamples,
+                z - pageZ * kOwned + kPageSurfaceWindowMarginSamples, kRadius);
+            const double error = std::sqrt(double(cpu.x - gpu.x) * double(cpu.x - gpu.x) +
+                                           double(cpu.y - gpu.y) * double(cpu.y - gpu.y) +
+                                           double(cpu.z - gpu.z) * double(cpu.z - gpu.z));
+            EXPECT_LE(error, kSurfaceNormalTolerance) << "face " << face << " texel (" << x << ", " << z << ")";
+            worst = std::max(worst, error);
+            ++compared;
+        }
+    EXPECT_EQ(compared, 72u);
+    RecordProperty("WorstSurfaceNormalError", std::to_string(worst));
+    s_Field = nullptr;
+}
+
+// The fragment decodes a surface page's normal in the frame the provider encodes it in: x along the face's
+// X axis made normal to the direction, z = x cross the direction, the rest along the direction.
+TEST(PlanetPageNormal, TheFragmentDecodesASurfacePageNormalInTheProvidersFaceFrame)
+{
+    using GameEngine::Mathematics::Vector3;
+    std::mt19937 random(0x7E57u);
+    std::uniform_int_distribution<uint32_t> interior(1u, kFaceSamples - 2u);
+    std::uniform_real_distribution<float> tilt(-0.4f, 0.4f);
+    double worst = 0.0;
+    for (uint32_t face = 0; face < GameEngine::Mathematics::kCubeFaceCount; ++face)
+        for (uint32_t i = 0; i < 16u; ++i)
+        {
+            const Double3 d = Direction(face, interior(random), interior(random));
+            const Vector3 direction(float(d.X), float(d.Y), float(d.Z));
+            const GameEngine::Mathematics::CubeFaceAxes& axes = GameEngine::Mathematics::kCubeFaceAxes[face];
+            Vector3 faceX(0.0f, 0.0f, 0.0f);
+            faceX[axes.XAxis] = float(axes.XSign);
+            const Vector3 tangentX = (faceX - direction * Vector3::Dot(faceX, direction)).Normalize();
+            const Vector3 tangentZ = Vector3::Cross(tangentX, direction);
+            const Vector3 world = (direction + tangentX * tilt(random) + tangentZ * tilt(random)).Normalize();
+            const Shader::vec3 at(direction.x, direction.y, direction.z);
+            const Shader::vec3 decoded = Shader::CBT_PlanetSurfaceNormal(
+                Vector3::Dot(world, tangentX), Vector3::Dot(world, tangentZ), at, Shader::CBT_PlanetFaceOf(at));
+            const double error = std::sqrt(double(decoded.x - world.x) * double(decoded.x - world.x) +
+                                           double(decoded.y - world.y) * double(decoded.y - world.y) +
+                                           double(decoded.z - world.z) * double(decoded.z - world.z));
+            EXPECT_LE(error, 1e-5) << "face " << face;
+            worst = std::max(worst, error);
+        }
+    RecordProperty("WorstDecodeError", std::to_string(worst));
 }
 
 // Inside one page the fragment walks the table once: it reads as many table words as one CBT_PageSamplePoint.

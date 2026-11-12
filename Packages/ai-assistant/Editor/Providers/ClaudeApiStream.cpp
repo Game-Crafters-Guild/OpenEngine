@@ -181,7 +181,8 @@ void ClaudeApiStream::Finish(const HttpClient::HttpResponse& response)
             result.Error = "The Claude API refused the request (HTTP " + std::to_string(response.statusCode) +
                            (detail.empty() ? std::string{} : ", " + detail) + ").";
             if (response.statusCode == 401)
-                result.Error += " Check the key in " + std::string(ClaudeApiProvider::kApiKeyVariable) + ".";
+                result.Error += " Check the key in Settings > AI Assistant, or " + std::string(ApiKeyStore::kVariable) +
+                                " when it is set.";
         }
         else
         {

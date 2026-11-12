@@ -206,23 +206,20 @@ std::string UserProjectGenerator::BuildCMakeListsContent(const NativeBuildConfig
     out << "file(GLOB_RECURSE _user_sources CONFIGURE_DEPENDS"
            " \"${GAMEENGINE_USER_SOURCE_DIR}/*.cpp\" \"${GAMEENGINE_USER_SOURCE_DIR}/*.cc\""
            " \"${GAMEENGINE_USER_SOURCE_DIR}/*.cxx\" \"${GAMEENGINE_USER_SOURCE_DIR}/*.c\")\n";
-    // Drop the build output and tool trees that can sit under the source dir. Opening the project
-    // folder in an IDE (e.g. Visual Studio's CMake "Open Folder") writes a build tree into out/ and
-    // .vs/, and globbing its generated CMakeFiles/CMakeCXXCompilerId.cpp (which defines main +
-    // info_*) would multiply-define symbols and break the link; a package whose sources sit at its
-    // root builds into a .Cache inside that root, so its own generated TUs are in the glob too.
-    // The directory rules are the asset ignore rules for this source root — names, name prefixes
-    // and root-relative path prefixes, including the root's own .assetignore — the same rules the
-    // staleness digest walks with, so what compiles and what invalidates the build cache cannot
-    // disagree on a directory. File-level rules (ignored file names and extensions) are not
-    // mirrored: the glob above is the compile's own statement of which files are sources. A
-    // package module also skips its package's top-level Tests folder.
+    // Skip the directories that the asset ignore rules of this source root skip. The staleness digest
+    // walks with the same rules, so the compile and the digest agree on each directory. An IDE build
+    // tree (out/, .vs/) holds CMakeCXXCompilerId.cpp, which defines main and breaks the link.
     AssetIgnoreRules ignoreRules = AssetIgnoreRules::LoadForAssetRoot(config.SourceDir);
     ignoreRules.IgnorePackageTestsFolder(config.SourceDir, config.PackageRootDir);
     out << "set(_ge_ignored_dirs \"" << CMakeList(SortedIgnoredDirectoryNames(ignoreRules)) << "\")\n";
     out << "set(_ge_ignored_dir_prefixes \"" << CMakeList(ignoreRules.ignoredDirNamePrefixesLower)
         << "\")\n";
     out << "set(_ge_ignored_path_prefixes \"" << CMakeList(ignoreRules.ignoredPrefixesLower) << "\")\n";
+    out << "set(_ge_tool_output_dirs \""
+        << CMakeList(std::vector<std::string>(ignoreRules.toolOutputDirNamesLower.begin(),
+                                              ignoreRules.toolOutputDirNamesLower.end()))
+        << "\")\n";
+    out << "set(_ge_tool_output_markers \"" << CMakeList(ignoreRules.toolOutputMarkerFileNames) << "\")\n";
     // Matched on the lower-cased path relative to the source dir: case-insensitively, so ".Cache"
     // and ".cache" both drop out, and blind to the directories above the source dir, whose names
     // are not this project's business.
@@ -250,6 +247,21 @@ std::string UserProjectGenerator::BuildCMakeListsContent(const NativeBuildConfig
     out << "        if(_ge_match EQUAL 0)\n";
     out << "            set(_ge_keep FALSE)\n";
     out << "            break()\n";
+    out << "        endif()\n";
+    out << "    endforeach()\n";
+    // A folder with a tool output name at any depth is tool output when it holds a marker file.
+    out << "    get_filename_component(_ge_folders \"${_ge_relative}\" DIRECTORY)\n";
+    out << "    string(REPLACE \"/\" \";\" _ge_folders \"${_ge_folders}\")\n";
+    out << "    set(_ge_folder \"${GAMEENGINE_USER_SOURCE_DIR}\")\n";
+    out << "    foreach(_ge_folder_name IN LISTS _ge_folders)\n";
+    out << "        set(_ge_folder \"${_ge_folder}/${_ge_folder_name}\")\n";
+    out << "        string(TOLOWER \"${_ge_folder_name}\" _ge_folder_name_lower)\n";
+    out << "        if(_ge_folder_name_lower IN_LIST _ge_tool_output_dirs)\n";
+    out << "            foreach(_ge_marker IN LISTS _ge_tool_output_markers)\n";
+    out << "                if(EXISTS \"${_ge_folder}/${_ge_marker}\" AND NOT IS_DIRECTORY \"${_ge_folder}/${_ge_marker}\")\n";
+    out << "                    set(_ge_keep FALSE)\n";
+    out << "                endif()\n";
+    out << "            endforeach()\n";
     out << "        endif()\n";
     out << "    endforeach()\n";
     out << "    if(_ge_keep)\n";
@@ -315,6 +327,10 @@ std::string UserProjectGenerator::BuildCMakeListsContent(const NativeBuildConfig
     // reuse type names as member names. The engine builds with the same flag.
     out << "    target_compile_options(" << config.ModuleName
         << " PRIVATE $<$<COMPILE_LANG_AND_ID:CXX,GNU>:-Wno-changes-meaning>)\n";
+    // A user module compiles the engine's inline maths too: no fused a * b + c outside Math::MulAdd.
+    // The languages and the MSVC test are the same as for the engine and its SDK.
+    out << "    target_compile_options(" << config.ModuleName
+        << " PRIVATE $<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-ffp-contract=off>)\n";
     out << "endif()\n\n";
 
     out << "target_include_directories(" << config.ModuleName << " PRIVATE\n";

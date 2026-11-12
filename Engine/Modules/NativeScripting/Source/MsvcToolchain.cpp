@@ -7,6 +7,7 @@
 #include "Logger/Logger.h"
 #include "Types/StringUtils.h" // ToLowerAscii / ContainsIgnoreCase
 
+#include <cassert>
 #include <chrono>
 #include <cstdlib>
 #include <fstream>
@@ -36,12 +37,16 @@ int CurrentProcessId()
 #endif
 }
 
-// Run a shell command and return its captured stdout (no cancellation).
-std::string RunCapture(const std::string& command)
+// Run a shell command and return its captured stdout. Once `cancel` is set, no child starts and
+// a running one is terminated; the output is then empty.
+std::string RunCapture(const std::string& command, const std::atomic<bool>& cancel)
 {
+    if (cancel.load(std::memory_order_acquire))
+        return {};
     CancellableShellProcess proc;
-    ShellProcessResult result = proc.Run(command, [] { return false; }, {});
-    return result.exitCode == 0 ? result.output : std::string{};
+    ShellProcessResult result =
+        proc.Run(command, [&cancel] { return cancel.load(std::memory_order_acquire); }, {});
+    return result.exitCode == 0 && !result.cancelled ? result.output : std::string{};
 }
 
 
@@ -65,14 +70,15 @@ std::filesystem::path FirstExistingPathLine(const std::string& text)
 
 #if defined(_WIN32)
 // The Visual Studio install path via vswhere (-latest), or empty.
-std::filesystem::path FindVisualStudio()
+std::filesystem::path FindVisualStudio(const std::atomic<bool>& cancel)
 {
     const std::filesystem::path vswhere =
         "C:/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe";
     std::error_code ec;
     if (!std::filesystem::exists(vswhere, ec))
         return {};
-    const std::string out = RunCapture("\"" + vswhere.generic_string() + "\" -latest -property installationPath");
+    const std::string out =
+        RunCapture("\"" + vswhere.generic_string() + "\" -latest -property installationPath", cancel);
     std::istringstream in(out);
     std::string line;
     if (std::getline(in, line))
@@ -92,9 +98,10 @@ std::filesystem::path FindVisualStudio()
 // incomplete capture (a partial vcvars run, or a value our quote-skip dropped) is rejected so the
 // Ninja build never runs against a half-set environment and fails with "cannot open crtdbg.h";
 // instead the build falls back to the default generator, which sets up its own complete env.
-bool CaptureMsvcEnvToBatch(const std::filesystem::path& vcvars, const std::filesystem::path& batchPath)
+bool CaptureMsvcEnvToBatch(const std::filesystem::path& vcvars, const std::filesystem::path& batchPath,
+                           const std::atomic<bool>& cancel)
 {
-    const std::string out = RunCapture("\"" + vcvars.generic_string() + "\" >nul 2>&1 && set");
+    const std::string out = RunCapture("\"" + vcvars.generic_string() + "\" >nul 2>&1 && set", cancel);
     if (out.empty())
         return false;
 
@@ -137,6 +144,12 @@ MsvcToolchain::~MsvcToolchain() = default;
 
 void MsvcToolchain::WarmAsync(JobSystem::WorkStealingThreadPool* jobSystem, std::filesystem::path cacheDir)
 {
+    assert(!m_WarmTask.IsValid() && "WarmAsync while a detection is in flight: call JoinWarm first");
+    // A warm after JoinWarm starts a new detection: clear the flags of the previous one.
+    m_CancelRequested.store(false, std::memory_order_release);
+    m_WarmStarted.store(false, std::memory_order_release);
+    m_DetectionComplete.store(false, std::memory_order_release);
+    m_NinjaReady.store(false, std::memory_order_release);
     if (!jobSystem)
     {
 #if defined(_WIN32)
@@ -169,6 +182,7 @@ void MsvcToolchain::WarmAsync(JobSystem::WorkStealingThreadPool* jobSystem, std:
 
 void MsvcToolchain::JoinWarm()
 {
+    m_CancelRequested.store(true, std::memory_order_release);
     if (m_WarmTask.IsValid() && !m_WarmTask.IsDone())
     {
         m_WarmTask.Wait();
@@ -212,8 +226,8 @@ void MsvcToolchain::Detect([[maybe_unused]] std::filesystem::path cacheDir) // t
     std::filesystem::create_directories(cacheDir, ec);
 
     // 1. Ninja: PATH, then the Visual Studio bundled copy.
-    ninja = FirstExistingPathLine(RunCapture("where ninja"));
-    const std::filesystem::path vs = FindVisualStudio();
+    ninja = FirstExistingPathLine(RunCapture("where ninja", m_CancelRequested));
+    const std::filesystem::path vs = FindVisualStudio(m_CancelRequested);
     if (ninja.empty() && !vs.empty())
     {
         const std::filesystem::path bundled =
@@ -229,7 +243,7 @@ void MsvcToolchain::Detect([[maybe_unused]] std::filesystem::path cacheDir) // t
         if (std::filesystem::exists(vcvars, ec))
         {
             const std::filesystem::path batch = cacheDir / "msvc_env.bat";
-            if (CaptureMsvcEnvToBatch(vcvars, batch))
+            if (CaptureMsvcEnvToBatch(vcvars, batch, m_CancelRequested))
                 envBatch = batch;
         }
     }
@@ -244,6 +258,8 @@ void MsvcToolchain::Detect([[maybe_unused]] std::filesystem::path cacheDir) // t
     const bool ready = !ninja.empty();
 #endif
 
+    // Read once, when the last probe is done: a cancel set later stopped no probe.
+    const bool canceled = m_CancelRequested.load(std::memory_order_acquire);
     {
         std::lock_guard<std::mutex> lock(m_Mutex);
         m_NinjaExe = ninja;
@@ -254,6 +270,8 @@ void MsvcToolchain::Detect([[maybe_unused]] std::filesystem::path cacheDir) // t
 
     if (ready)
         Logger::Log::Info("[NativeScripting] fast build toolchain ready: ninja={}", ninja.string());
+    else if (canceled)
+        Logger::Log::Debug("[NativeScripting] fast build toolchain detection canceled at shutdown");
     else
         Logger::Log::Info("[NativeScripting] no Ninja/MSVC env detected — user builds use the default generator");
 }

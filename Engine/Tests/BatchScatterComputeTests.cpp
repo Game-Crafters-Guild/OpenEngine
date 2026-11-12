@@ -81,7 +81,7 @@ uint32_t MakeRenderedEntry(uint32_t level, bool fading, bool continuous)
            | (continuous ? GPUDrawStreamBuilder::kRenderedHistoryContinuousBit : 0u);
 }
 
-// A scatter pipeline variant: the binding-1 fetch axis (compact 32 B mirror vs
+// A scatter pipeline variant: the binding-1 fetch axis (compact 40 B mirror vs
 // full-fat 240 B instance buffer) crossed with the instrumentation axis (the
 // per-slice drawnTriangles subgroup atomic, GE_SCATTER_STATS). Field names
 // match the GE_SCATTER_COMPACT / GE_SCATTER_STATS env knobs.
@@ -141,7 +141,7 @@ struct LodDispatchParams
 class BatchScatterComputeTest : public ::testing::TestWithParam<ScatterVariant>
 {
   protected:
-    // true = compact 32 B mirror at binding 1; false = full-fat 240 B buffer.
+    // true = compact 40 B mirror at binding 1; false = full-fat 240 B buffer.
     bool UseCompact() const { return GetParam().compact; }
     // true = the drawnTriangles subgroup atomic is compiled in (GE_SCATTER_STATS).
     bool UseStats() const { return GetParam().stats; }
@@ -159,7 +159,7 @@ class BatchScatterComputeTest : public ::testing::TestWithParam<ScatterVariant>
         m_Builder = std::make_unique<GPUDrawStreamBuilder>(m_Device.get());
         ASSERT_TRUE(m_Builder->Initialize());
 
-        // The compact variant binds GPUScene's 32 B mirror, which only exists
+        // The compact variant binds GPUScene's 40 B mirror, which only exists
         // when GE_SCATTER_COMPACT is on (the default). If the process forced it
         // off, skip the compact param; the full-fat param still runs.
         if (UseCompact() && !m_Scene->IsScatterHotEnabled())
@@ -450,7 +450,7 @@ class BatchScatterComputeTest : public ::testing::TestWithParam<ScatterVariant>
 
         m_Device->UpdateStorageBufferBinding(ds, 0, visibility, 0,
                                              std::max<size_t>(instanceCount, 1u) * sizeof(uint32_t));
-        // Binding 1 matches the pipeline variant under test: the coalesced 32 B
+        // Binding 1 matches the pipeline variant under test: the coalesced 40 B
         // mirror for the compact param, else the full 240 B instance buffer.
         // GPUScene maintains + uploads the mirror on the same mutators, so the
         // FlushGPUBuffers above populated it.
@@ -4072,16 +4072,16 @@ INSTANTIATE_TEST_SUITE_P(
     GroupCompactVariants, GroupCompactComputeTest,
     ::testing::Values(ScatterVariant{false, false}, ScatterVariant{true, false}),
     [](const ::testing::TestParamInfo<ScatterVariant>& info)
-    { return std::string(info.param.compact ? "Compact32B" : "FullFat240B"); });
+    { return std::string(info.param.compact ? "Compact40B" : "FullFat240B"); });
 
 std::string ScatterVariantName(const ::testing::TestParamInfo<ScatterVariant>& info)
 {
-    return std::string(info.param.compact ? "Compact32B" : "FullFat240B")
+    return std::string(info.param.compact ? "Compact40B" : "FullFat240B")
            + (info.param.stats ? "_StatsOn" : "_StatsOff");
 }
 
 // Every BatchScatterComputeTest body runs on the shipping package: the compact
-// 32 B mirror at binding 1, stats off.
+// 40 B mirror at binding 1, stats off.
 INSTANTIATE_TEST_SUITE_P(ScatterVariants, BatchScatterComputeTest,
                          ::testing::Values(ScatterVariant{true, false}), ScatterVariantName);
 

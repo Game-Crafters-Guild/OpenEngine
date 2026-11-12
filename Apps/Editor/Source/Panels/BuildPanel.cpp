@@ -1,4 +1,5 @@
 #include "Panels/BuildPanel.h"
+#include "Panels/BuildPanel/ExportRequirementsSection.h"
 #include "Editor/Registries/BuildExporterRegistry.h"
 #include "Editor/Settings/BuildFolderDefaults.h"
 #include "Editor/Settings/BuildRenderPipelineSettings.h"
@@ -12,6 +13,7 @@
 #include "Engine/Build/BuildPipeline.h"
 #include "Engine/Build/PlayerSourcePreparation.h"
 #include "Engine/Build/BuildPlatforms.h"
+#include "Engine/Build/ExportRequirements.h"
 #include "Engine/Build/GameConfig.h"
 #include "Engine/Build/PlayerBuildConfig.h"
 #include "JobSystem/JobChannel.h"
@@ -22,6 +24,7 @@
 #include "UI/Controls/ScrollView.h"
 #include "UI/Controls/Label.h"
 #include "UI/Controls/Button.h"
+#include "UI/Controls/ProgressBar.h"
 #include "UI/Controls/TextField.h"
 #include "UI/UIManager.h"
 #include "UI/UIStyle.h"
@@ -36,6 +39,7 @@
 #include <filesystem>
 #include <functional>
 #include <iomanip>
+#include <iterator>
 #include <sstream>
 
 namespace GameEngine {
@@ -80,6 +84,7 @@ BuildPanel::BuildPanel()
     m_Platforms = MakeDefaultPlatforms();
     LoadVersionsFromSettings();
     BuildUI();
+    ShowEnabledPlatformRequirements();
     s_OnBuildVersionChanged = [this]() { RefreshVersionsFromSettings(); };
 }
 
@@ -104,6 +109,30 @@ void BuildPanel::RefreshVersionsFromSettings()
 {
     LoadVersionsFromSettings();
     RebuildRows();
+}
+
+void BuildPanel::RecheckExportRequirements()
+{
+    if (m_RequirementsSection)
+        m_RequirementsSection->Recheck();
+}
+
+void BuildPanel::SetOnOpenDocsPage(std::function<void(std::string_view page)> onOpenDocsPage)
+{
+    if (m_RequirementsSection)
+        m_RequirementsSection->SetOnOpenDocsPage(std::move(onOpenDocsPage));
+}
+
+void BuildPanel::ShowEnabledPlatformRequirements()
+{
+    std::vector<const ExportRequirement*> requirements;
+    for (const BuildPlatformEntry& platform : m_Platforms)
+    {
+        if (platform.Enabled)
+            std::ranges::copy(ExportRequirementsForPlatform(platform.Name), std::back_inserter(requirements));
+    }
+    if (m_RequirementsSection)
+        m_RequirementsSection->ShowRequirements(std::move(requirements));
 }
 
 BuildPanel::~BuildPanel()
@@ -334,22 +363,16 @@ void BuildPanel::BuildUI()
         container->AddChild(std::move(outputRow));
     }
 
+    auto requirements = std::make_unique<ExportRequirementsSection>();
+    m_RequirementsSection = requirements.get();
+    container->AddChild(std::move(requirements));
+
     // Build status label
     {
-        auto statusRow = std::make_unique<UIElement>();
-        statusRow->Style()
-            .Set(Style::PaddingLeft, StyleLength::Px(12.0f))
-            .Set(Style::PaddingRight, StyleLength::Px(12.0f))
-            .Set(Style::PaddingBottom, StyleLength::Px(4.0f));
-
         auto statusLabel = std::make_unique<Label>();
         statusLabel->AddClass("build-panel-status-label");
-        statusLabel->Style()
-            .Set(Style::FontSize, StyleLength::Px(11.0f))
-            .Set(Style::Opacity, 0.6f);
         m_StatusLabel = statusLabel.get();
-        statusRow->AddChild(std::move(statusLabel));
-        container->AddChild(std::move(statusRow));
+        container->AddChild(std::move(statusLabel));
     }
 
     // Footer: Settings button (left), Build button (right)
@@ -615,6 +638,7 @@ void BuildPanel::RebuildRows()
                             box->RemoveClass("todo-checkbox-checked");
                     }
                     MarkDirty(UIElement::StyleDirty | UIElement::VisualDirty);
+                    ShowEnabledPlatformRequirements();
                     e.Stop();
                 });
                 cell->AddChild(std::move(enabledBox));
@@ -624,16 +648,10 @@ void BuildPanel::RebuildRows()
                 cell = std::make_unique<UIElement>();
                 cell->AddClass("build-panel-row-cell");
                 cell->AddClass("build-panel-col-progress");
-                auto track = std::make_unique<UIElement>();
-                track->AddClass("build-panel-progress-track");
-                auto fill = std::make_unique<UIElement>();
-                fill->AddClass("build-panel-progress-fill");
-                fill->Style()
-                    .Set(Style::Width, StyleLength::Percent(entry.Progress * 100.0f))
-                    .Set(Style::FlexGrow, 0.0f)
-                    .Set(Style::FlexShrink, 0.0f);
-                track->AddChild(std::move(fill));
-                cell->AddChild(std::move(track));
+                auto progress = std::make_unique<ProgressBar>();
+                progress->AddClass("build-panel-progress");
+                progress->SetValueWithoutNotify(entry.Progress);
+                cell->AddChild(std::move(progress));
                 break;
             }
             case kBuildColumnCompleted: {
@@ -1407,6 +1425,7 @@ bool BuildPanel::SetOnlyEnabledPlatform(const std::string& platformName)
     {
         RebuildRows();
         UpdateBuildButtonState();
+        ShowEnabledPlatformRequirements();
     }
     return found;
 }

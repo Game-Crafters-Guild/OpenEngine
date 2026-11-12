@@ -93,9 +93,9 @@ class AssetIOServiceTest : public ::testing::Test
         request.AssetGuid = metadata.Guid;
         request.Metadata = metadata;
         request.Priority = priority;
-        request.ProcessData = [bytesPromise = capture.BytesPromise](Vector<uint8> data) -> SharedPtr<Asset>
+        request.ProcessData = [bytesPromise = capture.BytesPromise](ByteBuffer data) -> SharedPtr<Asset>
         {
-            bytesPromise->set_value(std::move(data));
+            bytesPromise->set_value(Vector<uint8>(data.begin(), data.end()));
             return SharedPtr<Asset>{};
         };
         request.OnFailure = [failurePromise = capture.FailurePromise, failureCount = capture.FailureCount](const String& error)
@@ -294,7 +294,7 @@ TEST_F(AssetIOServiceTest, HigherPriorityReadsClaimedFirstUnderSaturatedQueue)
         request.AssetGuid = GUID::Generate();
         request.Metadata = MakeMetadata(path, content.size());
         request.Priority = priority;
-        request.ProcessData = [](Vector<uint8>) -> SharedPtr<Asset> { return SharedPtr<Asset>{}; };
+        request.ProcessData = [](ByteBuffer) -> SharedPtr<Asset> { return SharedPtr<Asset>{}; };
         request.OnSubmitted = [&orderMutex, &claimOrder, &submitted, priority](const JobSystem::TaskHandle&)
         {
             std::lock_guard<std::mutex> lock(orderMutex);
@@ -341,7 +341,7 @@ TEST_F(AssetIOServiceTest, StopFailsQueuedReadsAndJoinsThreads)
         AssetIOService::ReadRequest request;
         request.AssetGuid = GUID::Generate();
         request.Metadata = MakeMetadata(path, content.size());
-        request.ProcessData = [](Vector<uint8>) -> SharedPtr<Asset> { return SharedPtr<Asset>{}; };
+        request.ProcessData = [](ByteBuffer) -> SharedPtr<Asset> { return SharedPtr<Asset>{}; };
         request.OnSubmitted = [&submissions](const JobSystem::TaskHandle&) { submissions.fetch_add(1); };
         request.OnFailure = [&failures](const String&) { failures.fetch_add(1); };
         service->SubmitRead(std::move(request));
@@ -369,7 +369,7 @@ TEST_F(AssetIOServiceTest, SubmitAfterStopFailsInline)
     AssetIOService::ReadRequest request;
     request.AssetGuid = GUID::Generate();
     request.Metadata = MakeMetadata(path, 1);
-    request.ProcessData = [](Vector<uint8>) -> SharedPtr<Asset> { return SharedPtr<Asset>{}; };
+    request.ProcessData = [](ByteBuffer) -> SharedPtr<Asset> { return SharedPtr<Asset>{}; };
     request.OnFailure = [&failed](const String&) { failed = true; };
     service->SubmitRead(std::move(request));
 
@@ -504,16 +504,16 @@ TEST_F(AssetIOServiceTest, DecodeTakesItsInputFilesFromTheReaderNotTheDisk)
     auto seen = std::make_shared<std::promise<Seen>>();
     CapturedRead capture;
     auto request = MakeCapturedRequest(MakeMetadata(path, 7), capture);
-    request.ResolveDecodeInputs = [input, prefixed, missing](const Vector<uint8>&)
+    request.ResolveDecodeInputs = [input, prefixed, missing](std::span<const uint8>)
     { return AssetDecodeInputs{.Files = {{input, std::nullopt}, {prefixed, 4}, {missing, std::nullopt}}}; };
-    request.ProcessData = [seen, input, prefixed, missing, unnamed](Vector<uint8>) -> SharedPtr<Asset>
+    request.ProcessData = [seen, input, prefixed, missing, unnamed](ByteBuffer) -> SharedPtr<Asset>
     {
         std::filesystem::remove(input);
         Seen result;
-        Vector<uint8> storage;
-        if (const Vector<uint8>* bytes = ReadAssetDecodeInputFile({input, std::nullopt}, storage))
+        ByteBuffer storage;
+        if (const ByteBuffer* bytes = ReadAssetDecodeInputFile({input, std::nullopt}, storage))
             result.Input.assign(bytes->begin(), bytes->end());
-        if (const Vector<uint8>* bytes = ReadAssetDecodeInputFile({prefixed, 4}, storage))
+        if (const ByteBuffer* bytes = ReadAssetDecodeInputFile({prefixed, 4}, storage))
             result.Prefix.assign(bytes->begin(), bytes->end());
         result.MissingAbsent = ReadAssetDecodeInputFile({missing, std::nullopt}, storage) == nullptr;
         result.UnnamedAbsent = ReadAssetDecodeInputFile({unnamed, std::nullopt}, storage) == nullptr;
@@ -544,7 +544,7 @@ TEST_F(AssetIOServiceTest, CancelBeforeTheInputReadsDiscardsTheDecodeAndFreesIts
     auto request = MakeCapturedRequest(MakeMetadata(path, 7), capture);
     auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
     request.CancelRequested = cancelFlag;
-    request.ResolveDecodeInputs = [cancelFlag, input](const Vector<uint8>&)
+    request.ResolveDecodeInputs = [cancelFlag, input](std::span<const uint8>)
     {
         cancelFlag->store(true, std::memory_order_release);
         return AssetDecodeInputs{.Files = {{input, std::nullopt}}};
@@ -582,7 +582,7 @@ TEST_F(AssetIOServiceTest, CancelDuringAnInputReadStopsBeforeTheNextInput)
     request.CancelRequested = cancelFlag;
     auto resolving = std::make_shared<std::promise<void>>();
     std::future<void> resolved = resolving->get_future();
-    request.ResolveDecodeInputs = [resolving, first, second](const Vector<uint8>&)
+    request.ResolveDecodeInputs = [resolving, first, second](std::span<const uint8>)
     {
         resolving->set_value();
         return AssetDecodeInputs{.Files = {{first, std::nullopt}, {second, std::nullopt}}};
@@ -644,7 +644,7 @@ TEST_F(AssetIOServiceTest, CancelDuringTheLastInputReadWithdrawsTheDecode)
         request.CancelRequested = cancelFlag;
         auto resolving = std::make_shared<std::promise<void>>();
         std::future<void> resolved = resolving->get_future();
-        request.ResolveDecodeInputs = [resolving, fifo](const Vector<uint8>&)
+        request.ResolveDecodeInputs = [resolving, fifo](std::span<const uint8>)
         {
             resolving->set_value();
             return AssetDecodeInputs{.Files = {{fifo, std::nullopt}}};
@@ -711,7 +711,7 @@ TEST_F(AssetIOServiceTest, DecodeInputWhoseReadThrowsFailsTheRequestAndTheReader
 
     CapturedRead capture;
     auto request = MakeCapturedRequest(MakeMetadata(path, 7), capture);
-    request.ResolveDecodeInputs = [huge](const Vector<uint8>&)
+    request.ResolveDecodeInputs = [huge](std::span<const uint8>)
     { return AssetDecodeInputs{.Files = {{huge, std::nullopt}}}; };
     service->SubmitRead(std::move(request));
 
@@ -843,10 +843,11 @@ TEST(AssetIOServiceDecodeGate, ShortDecodeIsNotQueuedBehindTextureCooks)
             AssetIOService::ReadRequest request;
             request.AssetGuid = GUID::Generate();
             request.Metadata = MakeMetadata(path, content.size(), AssetType::Texture);
-            request.ProcessData = [&cooks](Vector<uint8>) { return HoldLikeACook(cooks); };
+            request.ProcessData = [&cooks](ByteBuffer) { return HoldLikeACook(cooks); };
             service.SubmitRead(std::move(request));
         }
-        ASSERT_TRUE(AwaitCount(cooks.Running, 2)) << "the texture decodes never started";
+        // Every check below runs after the release: an early return would leave the held decodes on a dead `cooks`.
+        const bool cooksStarted = AwaitCount(cooks.Running, 2);
 
         const std::string materialContent = "material document";
         const auto materialPath = testDir / "frame_waits_on.material";
@@ -855,13 +856,14 @@ TEST(AssetIOServiceDecodeGate, ShortDecodeIsNotQueuedBehindTextureCooks)
         AssetIOService::ReadRequest request;
         request.AssetGuid = GUID::Generate();
         request.Metadata = MakeMetadata(materialPath, materialContent.size(), AssetType::Material);
-        request.ProcessData = [decoded = material.Decoded](Vector<uint8>) { return SignalDecoded(*decoded); };
+        request.ProcessData = [decoded = material.Decoded](ByteBuffer) { return SignalDecoded(*decoded); };
         service.SubmitRead(std::move(request));
 
         const bool materialDecoded = material.Done.wait_for(kResultTimeout) == std::future_status::ready;
         const int cooksHeldMeanwhile = cooks.Running.load();
         cooks.Release.set_value();
 
+        EXPECT_TRUE(cooksStarted) << "the texture decodes never started";
         EXPECT_TRUE(materialDecoded) << "the material decode queued behind " << cooksHeldMeanwhile
                                      << " texture decodes holding the gate";
         EXPECT_GT(cooksHeldMeanwhile, 0) << "the texture decodes must still hold while the material decodes";
@@ -956,7 +958,7 @@ SharedPtr<Asset> ShortDecode(Occupancy& assetWork, std::atomic<int>& decoded)
 }
 
 void SubmitDecode(AssetIOService& service, const std::filesystem::path& path, AssetType type,
-                  Function<SharedPtr<Asset>(Vector<uint8>)> decode)
+                  Function<SharedPtr<Asset>(ByteBuffer)> decode)
 {
     const std::string content = "asset bytes";
     WriteFile(path, content);
@@ -993,7 +995,7 @@ TEST(AssetIOServiceDecodeGate, CookHelpersShareTheGateWithDecodes)
         constexpr int kCooks = 3;
         for (int i = 0; i < kCooks; ++i)
             SubmitDecode(service, testDir / ("albedo_" + std::to_string(i) + ".png"), AssetType::Texture,
-                         [&cooks](Vector<uint8>) { return CookLikeATextureDecode(cooks); });
+                         [&cooks](ByteBuffer) { return CookLikeATextureDecode(cooks); });
         // Every check below runs after the release: a held band left blocked would
         // hang the pool's shutdown instead of failing the test.
         const bool shareFilled = AwaitCount(cooks.TextureWork.Running, textureShare);
@@ -1002,7 +1004,7 @@ TEST(AssetIOServiceDecodeGate, CookHelpersShareTheGateWithDecodes)
         std::atomic<int> decoded{0};
         for (int i = 0; i < kShortDecodes; ++i)
             SubmitDecode(service, testDir / ("short_" + std::to_string(i) + ".material"), AssetType::Material,
-                         [&cooks, &decoded](Vector<uint8>) { return ShortDecode(cooks.AssetWork, decoded); });
+                         [&cooks, &decoded](ByteBuffer) { return ShortDecode(cooks.AssetWork, decoded); });
         const bool shortDecodesRan = AwaitCount(decoded, kShortDecodes);
         const int textureWorkMeanwhile = cooks.TextureWork.Running.load();
         cooks.Release.set_value();

@@ -7,21 +7,20 @@ namespace Mathematics {
 struct Vector3;
 }
 namespace Rendering {
+struct SkyPlanet;
 
-/// The camera altitudes the sky-view LUT is baked at. The dome a camera sees depends on its height
-/// above the ground (the horizon dips below the horizontal and the air above thins), so the LUT is
-/// baked for the altitude band the camera is in and rebaked only when the camera crosses into
-/// another band: a camera that stays inside one band never rebakes.
-///
-/// Bands are 250 m wide from the ground to 1 km, then a quarter of an octave each (1 km, 1.19 km,
-/// 1.41 km, ...): 31 bands from the ground to the top of a 100 km atmosphere, with the horizon's dip
-/// moving about one LUT row from one band to the next. Altitudes are metres above the planet
-/// surface; at or below the surface the band is 0.
+// The sky-view LUT is baked at the lower edge of the camera's altitude band. Bands are 250 m wide
+// to 1 km, then a quarter octave each, in Earth's atmosphere: a planet's altitude is divided by
+// SkyPlanet::AtmosphereScale first. At or below the surface the band is 0.
 
-/// The height above the planet surface, in meters, of the point at world `position`: the planet's
-/// center sits `planetRadius` below the world origin, as in the sky shaders. Negative below the
-/// surface.
-float AltitudeAbovePlanetMeters(const Mathematics::Vector3& position, float planetRadius);
+/// The height above the surface of `planet`, in meters, of the point at world `position`. Negative
+/// below the surface.
+float AltitudeAbovePlanetMeters(const Mathematics::Vector3& position, const SkyPlanet& planet);
+
+/// The world position the sky-view LUT is baked from for an eye at `eye` in `band`: on the flat
+/// planet (0, band altitude, 0), so the LUT's up is +Y; on a spherical planet the point at the band
+/// altitude, times the atmosphere scale, above the surface under the eye.
+Mathematics::Vector3 SkyViewLutEyePosition(const Mathematics::Vector3& eye, const SkyPlanet& planet, uint32_t band);
 
 /// The band a camera at `altitudeMeters` above the planet surface is in.
 uint32_t SkyViewLutAltitudeBand(float altitudeMeters);

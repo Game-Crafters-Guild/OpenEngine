@@ -1,0 +1,238 @@
+---
+title: AI agents
+description: How an entity decides with a utility program on the AI tick, and how game code gives the AI its inputs, tasks, sensors, and commands.
+---
+
+An **AI agent** is an entity with an `AiAgent` component. On each AI tick that it is due, it scores the options of its program, keeps the best one active, and runs that option's task. A task does not change the world. It issues commands, and the engine carries them out on the main thread, in entity order. The same inputs give the same commands on every run and for any number of job threads.
+
+## The AI tick
+
+The AI ticks on the world's fixed-step simulation clock. One AI tick is a fixed number of simulation steps: the step rate divided by `AiClock::RateHz`, rounded. The rate is 20 ticks per second by default, so at 60 steps per second the AI ticks on every third step. Every count in an agent (`NextTick`, `EnteredTick`, `Cadence`) is in AI ticks.
+
+An agent decides every `Cadence` AI ticks. Its first decision comes at its entity index modulo `Cadence`, so many agents with one cadence spread their decisions over the ticks.
+
+To make an agent react now, wake it. A woken agent decides on the next AI tick, whatever its cadence, and then decides every `Cadence` ticks again. Call `Wake` on the main thread, for example in a command or in a game system:
+
+```cpp
+world.GetComponentForWrite<Components::AiAgent>(guard)->Wake();
+```
+
+The engine runs four systems in the `Early` phase on the simulation cadence, in this order:
+
+| System | Work |
+|---|---|
+| `AiTickSystem` | Writes the `AiClock` singleton: the AI tick and whether this step starts one. On an AI tick, it delivers the posted [events](./ai-state-trees.mdx#events) and moves the agents of a saved state-tree file to the new program. |
+| `AiKnowledgeSystem` | Runs every registered sensor for each group, then forgets the group's old records. |
+| `AiDecideSystem` | Scores the options of each due agent, starts, runs, and stops tasks. Splits the due agents into jobs: each job reads the inputs, scores, and runs the tasks of its agents. |
+| `AiApplySystem` | Carries out the commands of the tick in entity order, on the main thread. |
+
+Each of the four systems runs alone: no other system runs at the same time. So a job-thread input or a task may read any component or singleton, and writes none.
+
+## Register what the AI uses
+
+Game code registers its functions in `AiRegistry` once, on the main thread, before the world runs. Each registration returns the id a program uses. A registration with a null function, or a task with no `Tick`, logs an error and returns `AiRegistry::kNoId`; `AddProgram` and `IssueCommand` refuse that id.
+
+Give a task (`AiTaskDefinition::Name`) or an input (the third argument of `RegisterInput`) a name when an [option set](./ai-option-sets.mdx) file names it. A second registration of a name logs an error and returns `AiRegistry::kNoId`, except from a reload of the module that registered it. After the engine removes a name's entry, any module can register the name again, and the name keeps its id.
+
+A game module's registrations belong to the module. When the module reloads, a name that the new code registers again keeps its id, so programs and agents run the new code with no change. The engine removes the inputs, tasks, sensors, and commands that the new code does not register again before it unloads the old code. When a module load fails, the engine removes what that load registered and gives back the entries it replaced. An agent whose program uses a removed task or input does not decide, and `AiDecideSystem` logs one error that names the program. `AiApplySystem` skips a command whose type was removed and logs one error for that type.
+
+| Function | Signature | Runs |
+|---|---|---|
+| Input | `void(const ECS::World&, std::span<const ECS::EntityHandle> agents, std::span<float32> out)` | Each AI tick, for the due agents of a program. Fills `out[i]` for `agents[i]`. `AiInputThreading` sets the thread. |
+| Task | `AiTaskDefinition`: `Enter`, `Tick`, and `Exit` | On a job thread, for one agent. `Tick` returns `Running`, `Succeeded`, or `Failed`. |
+| Sensor | `void(ECS::World&, ECS::EntityHandle group, AI::RecordStore& records, uint32 tick)` | Once per group per AI tick, on the main thread, before the decisions. Writes what the group sees into its records. |
+| Command | `void(ECS::World&, ECS::EntityHandle agent, const AiCommand&)` | On the main thread, in entity order. |
+
+Register an input with `AiInputThreading::JobThreads` when it is safe on a job thread. Then each job calls it for its own agents, beside the scoring, and many jobs call it at the same time. Such an input only reads. It does not add or remove entities or components, and it keeps no state of its own. Every registration names its threading. An input registered with `AiInputThreading::CallingThread` runs once for all due agents of the program, on the thread that runs `AiDecideSystem`, before the jobs start.
+
+A task reads the world through `AiTaskContext::GetWorld` and changes nothing but its own agent. Of the AI components (`AiAgent`, `AiStateTree`, the cells and `AiPathTrace`), a task or a `JobThreads` input reads only those of its own agents: the jobs of the other agents write theirs at the same time. It acts through `AiTaskContext::IssueCommand`, at most four commands per decision. `IssueCommand` drops a command whose `Type` is not an id that `RegisterCommand` returned, and logs one error for each such type. `AiApplySystem` skips the remaining commands of an agent that an earlier command destroyed; a command checks that its own target still exists.
+
+:::::tabs
+::::tab[C++]
+
+```cpp title="Eat when hungry, else idle"
+#include "AIECS/AiRegistry.h"
+#include "AIECS/AiTaskContext.h"
+#include "AIECS/Components/AiAgent.h"
+
+using namespace GameEngine;
+
+uint16 g_EatCommand = 0;
+
+void ReadHunger(const ECS::World& world, std::span<const ECS::EntityHandle> agents, std::span<float32> out)
+{
+    for (size_t index = 0; index < agents.size(); ++index)
+        out[index] = world.GetComponent<Hunger>(agents[index])->Value;
+}
+
+AIECS::AiTaskStatus TickEat(AIECS::AiTaskContext& context)
+{
+    context.IssueCommand({context.GetAgent(), 1, g_EatCommand});
+    return AIECS::AiTaskStatus::Running;
+}
+
+AIECS::AiTaskStatus TickIdle(AIECS::AiTaskContext&)
+{
+    return AIECS::AiTaskStatus::Running;
+}
+
+void ApplyEat(ECS::World& world, ECS::EntityHandle, const AIECS::AiCommand& command)
+{
+    world.GetComponentForWrite<Meals>(command.Target)->Count += command.Argument;
+}
+
+uint16 RegisterGatherer()
+{
+    AIECS::AiRegistry& registry = AIECS::AiRegistry::Get();
+    g_EatCommand = registry.RegisterCommand(&ApplyEat);
+
+    AIECS::AiProgram program;
+    // ReadHunger only reads a component, so it is safe on job threads.
+    program.ColumnInputs = {registry.RegisterInput(&ReadHunger, AIECS::AiInputThreading::JobThreads)};
+    program.Options.Curves.push_back(AI::ResponseCurve::FromPreset(AI::CurvePreset::Linear, 1.0f, 0.5f));
+    program.Options.Considerations.push_back({.Min = 0.0f, .Max = 1.0f, .Column = 0, .Curve = 0});
+    program.Options.Options.push_back({.Weight = 1.0f,
+                                       .FirstConsideration = 0,
+                                       .ConsiderationCount = 1,
+                                       .Action = registry.RegisterTask({nullptr, &TickEat, nullptr})});
+    program.Options.Options.push_back({.Weight = 0.5f, .Action = registry.RegisterTask({nullptr, &TickIdle, nullptr})});
+    return registry.AddProgram(std::move(program));
+}
+
+// Give an entity the program. An agent without one (AiAgent::kNoProgram) does not decide.
+Components::AiAgent agent;
+agent.Program = RegisterGatherer();
+agent.Cadence = 4; // decide every fourth AI tick
+world.Create(agent, Hunger{0.9f}, Meals{});
+```
+
+::::
+::::tab[C#]
+
+:::caution[C# binding pending]
+No managed call yet. Register inputs, tasks, sensors, and commands from native C++.
+:::
+
+::::
+:::::
+
+`AddProgram` checks every task, input, curve, consideration, and cooldown cell index in the program. It also checks that a program with an option that has `CooldownTicks` sets `CooldownCell`. When a check fails, it logs an error that names the index and the fix and returns `AiAgent::kNoProgram`, and an agent with that program does not decide. An agent whose `Program` is no id that `AddProgram` returned does not decide either, and `AiDecideSystem` logs one error for that id.
+
+## Groups and memory records
+
+A **group** is the agents that share one knowledge: a faction, a squad, or a herd. A group is an entity with an `AiGroup` component. Set the size of its knowledge on the component; the world keeps the knowledge. At the group's first AI tick, `AiKnowledgeSystem` gives it its knowledge. When you remove the component or destroy the entity, the world frees it. A copy of a group, in the same world or another, gets knowledge of its own.
+
+```cpp title="A faction that remembers what it saw"
+#include "AIECS/AiGroupKnowledge.h"
+#include "AIECS/Components/AiGroup.h"
+
+Components::AiGroup group;
+group.PlanCells = 8;
+group.RecordCapacity = 128;
+group.ForgetTicks = 100; // 5 seconds at 20 AI ticks per second
+const ECS::EntityHandle faction = world.Create(group).GetHandle();
+
+// After the faction's first AI tick:
+const AI::RecordStore* records = AIECS::FindGroupRecords(world, faction);
+std::span<uint32> plan = AIECS::FindGroupPlan(world, faction);
+```
+
+`FindGroupRecords` gives null, and `FindGroupPlan` an empty span, for an entity with no `AiGroup` or a group that had no AI tick yet. They stay valid until the next AI tick or the next entity removal.
+
+Call `FindGroupRecords` and `FindGroupPlan` on the main thread while no AI system runs, for example in a game system or a command. Each call takes a lock to find the world's knowledge. A task reads its group's records with `context.FindGroupRecords(group)`, which takes no lock: `AiDecideSystem` finds the knowledge once per update, and nothing changes it while the tasks run. A task cannot write the plan cells; a command does that.
+
+A world that runs the AI systems needs `AIECS::RegisterAiWorldHooks(world)` once, when the world is created. The engine's world and `AiTestWorld` have it.
+
+A group has two parts:
+
+- **Memory records**: one record per subject that a sensor saw, with its owner, kind, position, strength, two game values, and the first and last AI tick it was seen. A sensor writes a sighting with `RecordStore::Observe`. When the store is full, a new subject replaces the record seen longest ago.
+- **The plan**: 4-byte cells that the group's agents share, for example the gold that a build reserved, so two agents do not spend the same gold.
+
+On each AI tick, `AiKnowledgeSystem` runs every sensor for each group, in entity order, and then removes the records not seen for more than `ForgetTicks`. A sensor that sees an area can call `RecordStore::ClearSeenArea` after its sightings: the records in that area that no sighting renewed are removed, because the subject is not there now. Set `ClearOnSight` to false to keep them.
+
+A sensor reads only what its group may know. For example, a faction's sensor reads the units that its own units can see, not every unit in the world.
+
+## Agent cells
+
+An agent keeps its own memory in **cells**: 4-byte values that its tasks read and write through `AiTaskContext::GetCells`. Give the agent one of three components, by how much it must remember:
+
+| Component | Cells | Bytes | For |
+|---|---|---|---|
+| `AiCellsSmall` | 8 | 32 | an animal or a simple unit |
+| `AiCellsMedium` | 20 | 80 | a unit with a target and a few timers |
+| `AiCellsLarge` | 64 | 256 | a commander or a first-person enemy |
+
+An agent has at most one of the three. An agent with none gets an empty span. A task writes the order it issued into a cell, so the next decision knows what it asked for without reading the component it asked to change. Store a `float32` with `std::bit_cast<uint32>` and an `ECS::EntityHandle` in one cell.
+
+## How an option is chosen
+
+A program is an option set. Each option has a weight, a rank, and a list of considerations. A consideration maps one input from `[Min, Max]` to `[0, 1]` and then through a response curve.
+
+- The score of an option is its weight times the product of its considerations. Each consideration first moves up by `(1 - value) * (1 - 1 / count) * value`, so an option with many considerations is not scored lower only because it has more of them.
+- An option with no considerations scores its weight.
+- The agent takes the highest rank that has an option above zero, then the best score in that rank. A tie goes to the option that comes first.
+- When no option scores above zero, the agent has no active option and runs no task.
+
+Three values on the option set keep an agent from switching back and forth. All three are 0 by default.
+
+- `CommitmentMargin`: an option of the same rank as the active option replaces it only when it scores more than the active score plus this margin.
+- `MinimumTicks`: the active option holds against an option of the same rank for this number of AI ticks after it starts.
+- `NoiseMargin`: the options of the winning rank that score above zero and within this margin of the best share a random draw. The draw comes from `AiClock::Seed`, the agent and the AI tick, so one seed gives the same choices on every run. Use it to make an easy difficulty less exact.
+
+An option of a higher rank replaces the active option at once; the margin and the minimum time do not hold against it.
+
+An option with `CooldownTicks` cannot be chosen for that number of AI ticks after it stops (it is replaced, or its task succeeds or fails). The agent keeps the tick each option is ready again in its cells: set `AiProgram::CooldownCell` to the first of one cell per option, and give the agent a cell class large enough to hold them. An agent whose cells cannot hold them does not decide, and `AiDecideSystem` logs one error for each program and cell class.
+
+A response curve is baked to 64 samples, from a preset (`Linear`, `Polynomial`, `Logistic`, `Logit`, `Step`) or from curve keys. The AI reads the table and interpolates with no math library call, so one table gives the same scores on every compiler. A preset is baked with the platform's math library when the program is built.
+
+## The task lifecycle
+
+When the chosen option changes, the task of the old option gets `Exit` with `Preempted`, and the task of the new option gets `Enter`. `Tick` then runs on each decision while the option is active. When `Tick` returns `Succeeded` or `Failed`, the task gets `Exit` with `Completed` or `Failed`, and the agent chooses again at its next decision. When `AiAgent::Program` changes, the next decision gives the active option's task `Exit` with `Preempted`, then chooses from the options of the new program. To make the agent choose again at its next decision, set `AiAgent::RestartRequested`: that decision gives the active option's task `Exit` with `Preempted`, chooses again and clears the request. The next decision can come up to `Cadence` AI ticks later; call `AiAgent::Wake` as well to make it come on the next AI tick. `AiAgent::PathProgram` records the program of the active option; the engine writes it, and a game never does.
+
+## The decision trace
+
+Add `AiTrace` to an agent to keep its last 64 decisions. The trace works in every build, also in the Player. Each record holds:
+
+- the AI tick of the decision and the tick the chosen option started;
+- the option that was active before the decision, the option the decision chose, and its score;
+- what the task did on that tick: `Running`, `Succeeded`, or `Failed`, or `None` when no option scored above zero;
+- the number of orders the task issued, and the first two orders.
+
+`AiTrace::Records` is a ring: record `n` is at `Records[n % 64]`, and the newest is record `Count - 1`. One trace takes about 2.5 KB, so trace the agents you want to read: a commander or a mission agent always, a unit only while the player selects it. Remove the component to stop.
+
+The records have no padding, so two traces compare byte for byte. A determinism test runs a world twice with one seed and compares the traces.
+
+In the editor, the `get_ai_trace` tool reads the trace of an agent in the open scene: `node mcp/ge.mjs get_ai_trace --entity-id 42 --ticks 8`. `ticks` is the number of newest decisions to return, from 1 to 64 (64 when you omit it). The reply holds `entityId`, `recorded` (the decisions since `AiTrace` was added), and `records`, oldest first. Each record has `tick`, `enteredTick`, `program`, `previous` and `chosen` (option indices, `null` when there is none), `score`, `outcome` (`none`, `running`, `succeeded`, or `failed`), `commandCount`, and `commands` (the first two orders, each with `type`, `targetEntityId`, and `argument`). The trace keeps the chosen option's score only, so the reply does not hold the scores of the other options. The tool refuses an entity that has no `AiTrace` and tells you to add the component.
+
+## Save and load
+
+A scene save keeps the AI state of each entity, and a load into a cleared world continues from it. A game keeps the save in a save slot ([Save files](../scripting/save-files.mdx)). The save keeps:
+
+- `AiAgent`: the program, `NextTick`, `EnteredTick`, `Cadence`, the active option with its score and its program (`PathProgram`), and the draw seed. The save does not keep `RestartRequested`. Each program saves as its `AiProgram::StableId`: the GUID of its option-set asset, so compile the option set with `AiRegistry::CompileProgram` before the scene loads. A program you build in code and add with `AddProgram` has no stable id unless you set `StableId` to a fixed GUID first; the save does not keep a program with no stable id, logs one warning for it, and its agents do not decide after the load. When the option set has fewer options than the saved active option needs, the agent chooses again at its next decision. A copy of an agent keeps its draw seed: set `DrawSeed` to 0 on the copy to give it its own.
+- The agent cells. The cells in the option set's `entityCells` save as entity references.
+- `AiGroup`: its settings, the plan cells, and the memory records in their order, with their first and last AI tick. Set `IdsAreEntities` on a group whose record subjects and owners are entity ids: they then save as entity references. Without it, a record's subject and owner save as numbers, and a load keeps the numbers as they are. A load keeps at most `RecordCapacity` records and logs a warning when the save has more.
+
+Save with `SceneWriteOptions::writeSimulationTick`, so the AI ticks in the save stay correct after the load. A load into a world that is not cleared keeps the world's tick; an agent whose saved ticks are past it gets its ticks set to the current AI tick, with one warning, and decides within its cadence. Each cooldown of that agent ends at most `CooldownTicks` after the current AI tick. A cell or a record owner that refers to an entity that is not in the save loads as an invalid handle, and the load drops a record whose subject is not in the save. The save does not keep `AiClock`: set `Seed` and `RateHz` again after the load. With the same seed, a loaded agent makes the same decisions as the saved agent, also with a `NoiseMargin`.
+
+## Test a program
+
+`AiTestWorld` is a headless world that runs only the four AI systems. Create the agents in `GetWorld()`, call `Step(count)` to run that number of AI ticks, and read the agents' components, cells, and traces after each step. Pass a job system to run the decisions on its workers, or none to run them on the calling thread.
+
+```cpp title="Two runs with one seed make the same decisions"
+#include "AIECS/AiTestWorld.h"
+#include "AIECS/Components/AiTrace.h"
+
+AIECS::AiRegistry& registry = AIECS::AiRegistry::Get();
+Components::AiAgent agent;
+agent.Program = RegisterGatherer();
+AIECS::AiTestWorld first(registry, 7);
+AIECS::AiTestWorld second(registry, 7, &jobs);
+const ECS::EntityHandle a = first.GetWorld().Create(agent, Components::AiTrace{}).GetHandle();
+const ECS::EntityHandle b = second.GetWorld().Create(agent, Components::AiTrace{}).GetHandle();
+first.Step(48);
+second.Step(48);
+EXPECT_TRUE(AIECS::AiTestWorld::SameTrace(*first.GetWorld().GetComponent<Components::AiTrace>(a),
+                                          *second.GetWorld().GetComponent<Components::AiTrace>(b)));
+```
+
+A run of at most 64 ticks fits in one trace, so the comparison covers every decision. One seed, one registry, and one set of agents give the same decisions with any number of workers: the AI orders the due agents and the commands by entity, and a draw depends only on the seed, the agent, and the tick.

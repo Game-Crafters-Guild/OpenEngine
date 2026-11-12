@@ -17,6 +17,7 @@
 #include <string>
 
 #include "Engine/Rendering/Pipeline/RenderPipelineNodes.h"
+#include "Rendering/Core/DrawProducerRegistry.h"
 
 namespace GameEngine::CBTTerrainECS
 {
@@ -27,6 +28,9 @@ class CBTRenderNode final : public Engine::Renderer::Pipeline::IRenderPipelineNo
     const char* GetTypeName() const override { return "CBTRender"; }
     bool Initialize(std::string nodeId, std::string nodeJson, std::string* outError) override;
     void DeclareForView(Engine::Renderer::Pipeline::ViewDeclare& d) override;
+
+  private:
+    Rendering::DrawProducerId m_DrawProducer = Rendering::DrawProducerRegistry::kOther; // "Terrain"
 };
 
 } // namespace GameEngine::CBTTerrainECS

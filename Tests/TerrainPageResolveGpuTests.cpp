@@ -4,11 +4,21 @@
 // The CPU oracles prove the GLSL text is the mirror bit for bit; this proves the device runs it
 // as written, with the hardware's bilinear filter in the cache tap. Two field shapes: a unified
 // tiled terrain's (the DEM's 8193 x 2049 lattice) and an atlas tiled terrain's (16 x 4 tiles of
-// 1025 samples, 16385 x 4097).
+// 1025 samples, 16385 x 4097). A Function terrain's pages, fetched as the page loader fetches them,
+// resolve on the device to the function's height.
 
 #include "TerrainPagedField.h"
+#include "TerrainECS/TerrainHeightFunction/ITerrainHeightFunction.h"
+#include "TerrainECS/TerrainHeightFunction/RevocableTerrainHeightFunction.h"
+#include "TerrainECS/PackedPageTable.h"
+#include "TerrainECS/TerrainHeightPageDriver.h"
 #include "TerrainECS/TerrainPageTableRing.h"
+#include "TerrainECS/TerrainService.h"
 
+#include "Components/Terrain/Terrain.h"
+#include "Mathematics/Vector2.h"
+#include "PageStreaming/PageLoader.h"
+#include "PageStreaming/PageTableEntry.h"
 #include "Rendering/Core/CommandList.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/Pipeline/PipelineTypes.h"
@@ -21,7 +31,10 @@
 #include <cstring>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <memory>
+#include <random>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -148,7 +161,8 @@ std::vector<QueryPoint> QueryPoints(const FieldShape& shape)
     return points;
 }
 
-class TerrainPageResolveGpu : public ::testing::TestWithParam<FieldShape>
+// The probe kernel on a Vulkan device: the cache upload and the dispatch over a driven field.
+class PageResolveProbe : public ::testing::Test
 {
 protected:
     void SetUp() override
@@ -305,6 +319,10 @@ protected:
     std::vector<BufferHandle> m_Buffers;
 };
 
+class TerrainPageResolveGpu : public PageResolveProbe, public ::testing::WithParamInterface<FieldShape>
+{
+};
+
 } // namespace
 
 TEST_P(TerrainPageResolveGpu, TheDeviceResolveIsTheMirrorWithinTheSubTexelQuantum)
@@ -347,6 +365,114 @@ INSTANTIATE_TEST_SUITE_P(FieldShapes, TerrainPageResolveGpu,
 
 namespace
 {
+
+// A tilted plane plus a paraboloid in terrain-local meters: no transcendental, so the expected
+// height is exact on every platform.
+class PlaneParaboloid final : public ITerrainHeightFunction
+{
+public:
+    static constexpr float32 kCurvature = 1.0e-5f; ///< per square meter
+
+    static float32 Height(float32 x, float32 z)
+    {
+        const float32 dx = x - 300.0f;
+        const float32 dz = z - 700.0f;
+        return 20.0f + 0.05f * x + 0.03f * z + kCurvature * (dx * dx + dz * dz);
+    }
+
+    void HeightRow(float32 z, std::span<const float32> x, float32, std::span<float32> outMeters) const override
+    {
+        for (std::size_t i = 0; i < x.size(); ++i)
+            outMeters[i] = Height(x[i], z);
+    }
+
+    TerrainHeightRange HeightRange(float32, float32, float32, float32, float32) const override
+    {
+        return {0.0f, 256.0f};
+    }
+};
+
+// A Function terrain of 2 x 2 tiles of 513 samples a meter apart (1025 x 1025 level-0 samples),
+// away from the world origin: the function reads terrain-local meters.
+TiledTerrainData FunctionTerrain(std::shared_ptr<const RevocableTerrainHeightFunction> function)
+{
+    TiledTerrainData tiled;
+    tiled.Config.Base.Source = Components::TerrainBaseSource::Function;
+    tiled.Config.Base.HeightFunction = std::move(function);
+    tiled.Config.HeightScale = 256.0f;
+    tiled.Config.TileWorldSize = 512.0f;
+    tiled.Config.TileConfig.HeightmapWidth = 513;
+    tiled.Config.TilesPerAxisX = 2;
+    tiled.Config.TilesPerAxisZ = 2;
+    tiled.WorldOriginX = -4000.0f;
+    tiled.WorldOriginZ = 2500.0f;
+    return tiled;
+}
+
+// The samples the page loader fetches for page `address` of `source`: the bytes the renderer
+// uploads into the cache texture. NaN when the fetch fails, so every probe that reads it fails.
+std::vector<float32> FetchedPageSamples(const PageStreaming::PageSource& source, const PageAddress& address)
+{
+    const PageStreaming::PageFetchOutcome fetched = PageStreaming::FetchPage(source, address);
+    if (!fetched.Bytes)
+        return std::vector<float32>(PageStreaming::kPageSampleCount, std::numeric_limits<float32>::quiet_NaN());
+    const std::span<const float32> samples = PageStreaming::HeightSamples(*fetched.Bytes);
+    return std::vector<float32>(samples.begin(), samples.end());
+}
+
+class TerrainFunctionPagesGpu : public PageResolveProbe
+{
+};
+
+} // namespace
+
+TEST_F(TerrainFunctionPagesGpu, TheDrawnHeightIsTheFunctionWithinTheBilinearAndSubTexelError)
+{
+    const TiledTerrainData tiled =
+        FunctionTerrain(std::make_shared<RevocableTerrainHeightFunction>(std::make_unique<PlaneParaboloid>()));
+    const float32 band = FunctionBaseHeightBand(tiled.Config);
+    PageStreaming::PageSource source;
+    source.Generated = std::make_shared<const PageStreaming::GeneratedHeightPageProvider>(MakeGeneratedHeightLattice(tiled));
+    const std::span<const PageStreaming::PageStoreLevel> levels = source.Generated->Levels();
+    ASSERT_FALSE(levels.empty());
+
+    PagedField field(256, 0.4f, levels.front().SamplesX, levels.front().SamplesZ);
+    ASSERT_EQ(field.Table.Levels().size(), levels.size());
+    field.Samples = [&source](const PageStreaming::PageStoreLevel&, const PageAddress& address) {
+        return FetchedPageSamples(source, address);
+    };
+    for (int frame = 0; frame < 3; ++frame)
+        field.Step(field.AllPages(), 0.5f, 1024);
+    for (const PageAddress& page : field.AllPages())
+        ASSERT_NE(field.Cache.SlotOf(PagedField::Page(page)), PageStreaming::kNoResidentSlot);
+
+    UploadCache(field);
+    const float32 spacing = tiled.Config.TileWorldSize / float32(tiled.Config.TileConfig.HeightmapWidth - 1u);
+    const float32 extentX = float32(levels.front().SamplesX - 1u) * spacing;
+    const float32 extentZ = float32(levels.front().SamplesZ - 1u) * spacing;
+    const Mathematics::Vector2 probes[] = {{100.37f, 200.61f}, {511.5f, 512.25f}, {900.9f, 33.3f}};
+    std::vector<QueryPoint> points;
+    for (const Mathematics::Vector2& probe : probes)
+        points.push_back({probe.x / extentX, probe.y / extentZ, 0.0f, 0.0f});
+    const std::vector<float32> device = Dispatch(field, points);
+    ASSERT_EQ(device.size(), points.size());
+
+    // The bilinear tap of the paraboloid errs by up to curvature x texel^2 / 2 (a quarter per axis);
+    // the hardware's weights by the sub-texel quantum of the steepest texel step.
+    const float32 bound = band * 2.0f * kSubTexelQuantum * LargestNeighborDifference(field) +
+                          PlaneParaboloid::kCurvature * spacing * spacing * 0.5f + 1.0e-4f;
+    for (std::size_t i = 0; i < points.size(); ++i)
+    {
+        const float32 drawn = device[i] * band;
+        const float32 expected = PlaneParaboloid::Height(probes[i].x, probes[i].y);
+        EXPECT_NEAR(drawn, expected, bound) << "probe (" << probes[i].x << ", " << probes[i].y << ") m";
+        std::printf("[ Function ] probe (%.2f, %.2f) m: drawn %.6f m, function %.6f m, bound %.6g m\n", probes[i].x,
+                    probes[i].y, drawn, expected, bound);
+    }
+}
+
+namespace
+{
 std::vector<uint32> ReadRingWords(IDevice& device, const TerrainPageTableRing::Slot& slot, std::size_t count)
 {
     std::vector<uint32> words(count);
@@ -356,6 +482,25 @@ std::vector<uint32> ReadRingWords(IDevice& device, const TerrainPageTableRing::S
     std::memcpy(words.data(), mapped + slot.Offset, count * sizeof(uint32));
     device.UnmapBuffer(slot.Buffer);
     return words;
+}
+
+// The words a slot holds when every word of `height`, then of `surface`, is written.
+std::vector<uint32> WholeSlotWords(std::span<const uint32> height, std::span<const uint32> surface)
+{
+    std::vector<uint32> words(height.begin(), height.end());
+    words.insert(words.end(), surface.begin(), surface.end());
+    return words;
+}
+
+// A dense table of a 257 x 257 field with page (0, 0) of level 0 in `slot`, packed as `version`.
+PackedPageTable SmallPackedTable(PageTable& table, uint32 slot, uint64 version)
+{
+    constexpr uint32 kSlots = 4u;
+    table.Reset(257, 257, 1u, kSlots, kDenseFieldTable);
+    table.SetEntry(PageAddress{0, 0, 0, 0}, PageStreaming::PackPageEntry(slot, 0));
+    PackedPageTable packed;
+    packed.Update(table, MakePageCacheGeometry(kSlots), version);
+    return packed;
 }
 } // namespace
 
@@ -371,46 +516,219 @@ TEST(TerrainPageTableRing, TheDrawAndTheGrassBindOneSlotAndAChangedKeyRewritesIt
         GTEST_SKIP() << "no Vulkan device";
 
     TerrainPageTableRing ring;
-    const std::vector<uint32> height(40u, 7u);
-    const std::vector<uint32> surface(24u, 9u);
-    const TerrainPageTableRing::Key key{3u, 1u, 5u, 2u};
+    PageTable heightTable;
+    PageTable surfaceTable;
+    const PackedPageTable height = SmallPackedTable(heightTable, 1u, 5u);
+    PackedPageTable surface = SmallPackedTable(surfaceTable, 2u, 2u);
+    const uint32 heightWords = static_cast<uint32>(height.Words().size());
+    const std::size_t slotWords = heightWords + surface.Words().size();
+    const TerrainPageTableRing::Key key{3u, 1u};
     BufferHandle retired;
-    const TerrainPageTableRing::Slot draw = ring.Bind(*device, key, height, surface, 1u, retired);
+    const TerrainPageTableRing::Slot draw = ring.Bind(*device, key, height, &surface, 1u, retired);
     ASSERT_TRUE(draw.Buffer.IsValid());
     EXPECT_FALSE(retired.IsValid());
-    const TerrainPageTableRing::Slot grass = ring.Bind(*device, key, height, surface, 1u, retired);
+    const TerrainPageTableRing::Slot grass = ring.Bind(*device, key, height, &surface, 1u, retired);
     EXPECT_EQ(grass.Buffer, draw.Buffer) << "the grass binds the buffer the draw binds";
     EXPECT_EQ(grass.Offset, draw.Offset) << "the grass binds the draw's slot";
-    EXPECT_EQ(grass.SurfaceBase, 40u) << "the surface table follows the height table";
-    std::vector<uint32> words = ReadRingWords(*device, grass, 64u);
-    ASSERT_EQ(words.size(), 64u);
-    EXPECT_EQ(words[0], 7u);
-    EXPECT_EQ(words[40], 9u);
-    const TerrainPageTableRing::Slot other = ring.Bind(*device, key, height, surface, 2u, retired);
+    EXPECT_EQ(grass.SurfaceBase, heightWords) << "the surface table follows the height table";
+    EXPECT_EQ(ReadRingWords(*device, grass, slotWords), WholeSlotWords(height.Words(), surface.Words()));
+    const TerrainPageTableRing::Slot other = ring.Bind(*device, key, height, &surface, 2u, retired);
     EXPECT_NE(other.Offset, draw.Offset) << "each frame slot has its own words";
 
     // A destroy-and-recreate that reuses the terrain index and the table versions: the generation differs.
-    const std::vector<uint32> recreated(40u, 11u);
+    PageTable recreatedTable;
+    PackedPageTable recreated = SmallPackedTable(recreatedTable, 3u, 5u);
+    ASSERT_EQ(recreated.Version(), height.Version());
     TerrainPageTableRing::Key next = key;
     next.Generation = 2u;
-    ring.Bind(*device, next, recreated, surface, 1u, retired);
-    EXPECT_EQ(ReadRingWords(*device, draw, 1u).at(0), 11u) << "a new generation rewrites the slot";
-    const std::vector<uint32> republished(40u, 13u);
-    next.HeightVersion = 6u;
-    ring.Bind(*device, next, republished, surface, 1u, retired);
-    EXPECT_EQ(ReadRingWords(*device, draw, 1u).at(0), 13u) << "a height table change rewrites the slot";
-    const std::vector<uint32> resurfaced(24u, 15u);
-    next.SurfaceVersion = 3u;
-    ring.Bind(*device, next, republished, resurfaced, 1u, retired);
-    EXPECT_EQ(ReadRingWords(*device, draw, 41u).at(40), 15u) << "a surface table change rewrites the slot";
+    ring.Bind(*device, next, recreated, &surface, 1u, retired);
+    EXPECT_EQ(ReadRingWords(*device, draw, slotWords), WholeSlotWords(recreated.Words(), surface.Words()))
+        << "a new generation rewrites the slot";
+    recreatedTable.SetEntry(PageAddress{0, 0, 0, 0}, PageStreaming::PackPageEntry(0, 0));
+    recreated.Update(recreatedTable, MakePageCacheGeometry(4u), 6u);
+    ring.Bind(*device, next, recreated, &surface, 1u, retired);
+    EXPECT_EQ(ReadRingWords(*device, draw, slotWords), WholeSlotWords(recreated.Words(), surface.Words()))
+        << "a height table change rewrites the slot";
+    surfaceTable.SetSlotFade(1u, 0.5f);
+    surface.Update(surfaceTable, MakePageCacheGeometry(4u), 7u);
+    ring.Bind(*device, next, recreated, &surface, 1u, retired);
+    EXPECT_EQ(ReadRingWords(*device, draw, slotWords), WholeSlotWords(recreated.Words(), surface.Words()))
+        << "a surface table change rewrites the slot";
 
     // A table past the slot grows the ring; the previous buffer is retired for the caller to destroy.
-    const std::vector<uint32> large(draw.Bytes / sizeof(uint32) + 1u, 17u);
-    const TerrainPageTableRing::Slot grown = ring.Bind(*device, next, large, {}, 1u, retired);
+    PageTable largeTable;
+    largeTable.Reset(16385, 16385, 1u, 4u, kDenseFieldTable);
+    PackedPageTable large;
+    large.Update(largeTable, MakePageCacheGeometry(4u), 8u);
+    ASSERT_GT(large.Words().size(), draw.Bytes / sizeof(uint32));
+    const TerrainPageTableRing::Slot grown = ring.Bind(*device, next, large, nullptr, 1u, retired);
     ASSERT_TRUE(grown.Buffer.IsValid());
     EXPECT_EQ(retired, draw.Buffer);
     EXPECT_NE(grown.Buffer, draw.Buffer);
-    EXPECT_EQ(ReadRingWords(*device, grown, 1u).at(0), 17u);
+    EXPECT_EQ(ReadRingWords(*device, grown, large.Words().size()), WholeSlotWords(large.Words(), {}));
     device->DestroyBuffer(retired);
+    ring.Release(device.get());
+}
+
+namespace
+{
+
+constexpr std::size_t kDifferentSizes = std::numeric_limits<std::size_t>::max();
+
+// The first word where `a` and `b` differ: their size when they are equal, kDifferentSizes when their
+// sizes differ.
+std::size_t FirstDifferentWord(std::span<const uint32> a, std::span<const uint32> b)
+{
+    if (a.size() != b.size())
+        return kDifferentSizes;
+    return static_cast<std::size_t>(std::ranges::mismatch(a, b).in1 - a.begin());
+}
+
+// A random page of a one-face `table`.
+PageAddress RandomPage(const PageTable& table, std::mt19937& random)
+{
+    const std::span<const PageStreaming::PageStoreLevel> levels = table.Levels();
+    const uint32 level = static_cast<uint32>(random() % levels.size());
+    return PageAddress{0, static_cast<uint8>(level), static_cast<uint32>(random() % levels[level].PagesX),
+                       static_cast<uint32>(random() % levels[level].PagesZ)};
+}
+
+// One version's random changes: entries set (a block taken when a tier's page is new), entries removed
+// (a block released when its last page goes), and fades.
+void ChangeRandomly(PageTable& table, uint32 slots, std::vector<PageAddress>& set, std::mt19937& random)
+{
+    const uint32 changes = 1u + random() % 24u;
+    for (uint32 change = 0; change < changes; ++change)
+    {
+        const uint32 kind = random() % 10u;
+        if (kind < 5u || set.empty())
+        {
+            const PageAddress page = RandomPage(table, random);
+            table.SetEntry(page, PageStreaming::PackPageEntry(random() % slots, page.Level));
+            set.push_back(page);
+        }
+        else if (kind < 9u)
+        {
+            const std::size_t at = random() % set.size();
+            table.SetEntry(set[at], PageStreaming::kNoPage);
+            set[at] = set.back();
+            set.pop_back();
+        }
+        else
+        {
+            table.SetSlotFade(random() % slots, static_cast<float32>(random() % 16u) / 16.0f);
+        }
+    }
+}
+
+} // namespace
+
+// After random changes, a slot that takes only the changed words equals a whole write of both tables, and its
+// reported hash equals a whole pack's. The changes cover entries, blocks taken and released, fades, a reset,
+// the run and write caps, and a slot whose version fell out of the history.
+TEST(TerrainPageTableRing, ASlotThatTakesOnlyTheChangedWordsHoldsWhatAWholeWriteWould)
+{
+    DeviceDesc desc{};
+    desc.preferredAPI = GraphicsAPI::Vulkan;
+    std::unique_ptr<IDevice> device = DeviceFactory::CreateDevice(desc);
+    if (!device || !device->Initialize(desc))
+        GTEST_SKIP() << "no Vulkan device";
+
+    constexpr uint32 kSlots = 64u;
+    constexpr uint32 kSteps = 72u;
+    constexpr uint32 kResetAt = 12u;
+    // Frame slot 3 and the snapshot skip the steps [kLagFrom, kLagTo): more versions than the history.
+    constexpr uint32 kLagFrom = 28u;
+    constexpr uint32 kLagTo = 46u;
+    constexpr uint32 kManyRunsAt = 56u;
+    constexpr uint32 kManyWritesAt = 60u;
+    const PageCacheGeometry geometry = MakePageCacheGeometry(kSlots);
+    // A tiered height table with small pools: pages wait for blocks, and blocks free and refill.
+    const PageTableBudget tiered{4u, 8u, 8u};
+    PageTable height;
+    height.Reset(16385, 4097, 1u, kSlots, tiered);
+    ASSERT_GT(height.TierCount(), 0u);
+    const uint32 topLevel = static_cast<uint32>(height.Levels().size() - 1u);
+    PageTable surface;
+    surface.Reset(8193, 8193, 1u, kSlots, kDenseFieldTable);
+    ASSERT_EQ(surface.TierCount(), 0u);
+    ASSERT_GE(surface.Levels().front().PagesX, 32u);
+    PackedPageTable heightPacked;
+    PackedPageTable surfacePacked;
+    PackedPageTable snapshot;
+    uint64 version = 0;
+    heightPacked.Update(height, geometry, ++version);
+    surfacePacked.Update(surface, geometry, ++version);
+
+    TerrainPageTableRing ring;
+    const TerrainPageTableRing::Key key{3u, 1u};
+    std::mt19937 random(0x13A9u);
+    std::vector<PageAddress> heightSet;
+    std::vector<PageAddress> surfaceSet;
+    std::vector<uint32> whole;
+    std::vector<uint32> wholeSurface;
+    for (uint32 step = 0; step < kSteps; ++step)
+    {
+        if (step == kResetAt)
+        {
+            height.Reset(16385, 4097, 1u, kSlots, tiered);
+            heightSet.clear();
+        }
+        ChangeRandomly(height, kSlots, heightSet, random);
+        if (step == kManyWritesAt)
+            for (uint32 write = 0; write < 1100u; ++write) // past the 1024 writes a table records
+                height.SetEntry(PageAddress{0, static_cast<uint8>(topLevel), 0, 0},
+                                PageStreaming::PackPageEntry(write % kSlots, topLevel));
+        heightPacked.Update(height, geometry, ++version);
+        if (step % 3u != 1u || step == kManyRunsAt)
+        {
+            ChangeRandomly(surface, kSlots, surfaceSet, random);
+            if (step == kManyRunsAt)
+                for (uint32 page = 0; page < 300u; ++page) // 300 disjoint runs: past the 256 a version records
+                    surface.SetEntry(PageAddress{0, 0, (page * 2u) % 32u, (page * 2u) / 32u},
+                                     PageStreaming::PackPageEntry(page % kSlots, 0));
+            surfacePacked.Update(surface, geometry, ++version);
+        }
+
+        PackPageTableWords(height, geometry, whole);
+        PackPageTableWords(surface, geometry, wholeSurface);
+        ASSERT_EQ(FirstDifferentWord(heightPacked.Words(), whole), whole.size())
+            << "step " << step << ": the patched height words differ from a whole pack";
+        ASSERT_EQ(FirstDifferentWord(surfacePacked.Words(), wholeSurface), wholeSurface.size())
+            << "step " << step << ": the patched surface words differ from a whole pack";
+
+        const bool lagging = step >= kLagFrom && step < kLagTo;
+        const uint32 frameSlot = lagging ? step % 3u : step % TerrainPageTableRing::kSlots;
+        if (frameSlot == 3u)
+        {
+            snapshot.CopyFrom(heightPacked);
+            ASSERT_EQ(FirstDifferentWord(snapshot.Words(), whole), whole.size())
+                << "step " << step << ": the snapshot differs from its source";
+        }
+        BufferHandle retired;
+        const TerrainPageTableRing::Slot slot =
+            ring.Bind(*device, key, heightPacked, &surfacePacked, frameSlot, retired);
+        ASSERT_TRUE(slot.Buffer.IsValid());
+        if (retired.IsValid())
+            device->DestroyBuffer(retired);
+        const std::vector<uint32> expected = WholeSlotWords(whole, wholeSurface);
+        ASSERT_EQ(FirstDifferentWord(ReadRingWords(*device, slot, expected.size()), expected), expected.size())
+            << "step " << step << " frame slot " << frameSlot << ": the ring's words differ from a whole write";
+        auto list = device->CreateCommandList(IDevice::QueueType::Graphics);
+        list->Begin();
+        ASSERT_TRUE(ring.RecordSlotCopy(*device, *list, frameSlot)) << "step " << step;
+        list->End();
+        device->ExecuteCommandLists({list.get()});
+        device->WaitForIdle();
+        ASSERT_TRUE(ring.SealSlotCopy()) << "step " << step;
+        TerrainPageTableRing::SlotReport report;
+        ASSERT_TRUE(ring.ReadSlotCopy(*device, report)) << "step " << step;
+        EXPECT_FALSE(ring.ReadSlotCopy(*device, report)) << "step " << step << ": a sealed copy is read once";
+        EXPECT_EQ(report.Slot, frameSlot);
+        EXPECT_EQ(report.HeightVersion, heightPacked.Version());
+        EXPECT_EQ(report.HeightWords, whole.size());
+        EXPECT_EQ(report.HeightHash, PackedPageTable::HashWords(whole))
+            << "step " << step << " frame slot " << frameSlot << ": the copied slot's hash differs from a whole pack's";
+    }
     ring.Release(device.get());
 }

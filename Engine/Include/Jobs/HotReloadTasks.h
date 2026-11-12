@@ -65,6 +65,7 @@ enum class HotReloadResult
     SwapFailed = -30,
     SwapTimeout = -31,
     SwapRollbackFailed = -32,
+    SwapBusy = -33, // Another swap was running, so this swap did not start.
 
     // System errors
     OutOfMemory = -40,
@@ -124,6 +125,8 @@ inline const char* HotReloadResultToString(HotReloadResult result)
         return "Swap Timeout";
     case HotReloadResult::SwapRollbackFailed:
         return "Swap Rollback Failed";
+    case HotReloadResult::SwapBusy:
+        return "Swap Busy";
     case HotReloadResult::OutOfMemory:
         return "Out Of Memory";
     case HotReloadResult::ThreadPoolExhausted:
@@ -478,6 +481,7 @@ class AssemblySwapTask : public HotReloadTask
     void* m_OldContext{nullptr};
     std::chrono::milliseconds m_SwapDuration{0};
     bool m_SwapCompleted{false};
+    bool m_OtherSwapRunning{false};
     std::shared_ptr<PreloadSync> m_PreloadSync;
 };
 

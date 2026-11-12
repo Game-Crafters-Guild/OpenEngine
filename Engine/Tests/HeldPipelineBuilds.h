@@ -15,7 +15,8 @@ class HeldPipelineBuilds
   public:
     explicit HeldPipelineBuilds(Rendering::IDevice& device) : m_Device(device)
     {
-        m_Device.SetPipelineBuildDispatcher([this](std::function<void()> job) { Jobs.push_back(std::move(job)); });
+        m_Device.SetPipelineBuildDispatcher(
+            {.Dispatch = [this](std::function<void()> job, Rendering::PipelineBuildPriority) { Jobs.push_back(std::move(job)); }});
     }
     ~HeldPipelineBuilds() { m_Device.SetPipelineBuildDispatcher({}); }
     HeldPipelineBuilds(const HeldPipelineBuilds&) = delete;

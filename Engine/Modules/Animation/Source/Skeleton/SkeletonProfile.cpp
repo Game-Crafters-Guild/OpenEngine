@@ -49,7 +49,7 @@ bool SkeletonProfile::Load()
     return ParseJson(text);
 }
 
-bool SkeletonProfile::LoadFromData(const Vector<uint8>& data)
+bool SkeletonProfile::LoadFromData(std::span<const uint8> data)
 {
     SetState(AssetState::Loading);
     const std::string text(reinterpret_cast<const char*>(data.data()), data.size());

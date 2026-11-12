@@ -454,7 +454,9 @@ GE_API GE_Result GE_CDECL GE_ECSABI_GetTransform(GE_Handle world, GE_ECS_Entity 
         if (!t)
             return GE_Result_NotFound;
 
-        std::memcpy(outTransform->matrix, t->matrix, sizeof(outTransform->matrix));
+        const GameEngine::Mathematics::Matrix4x4 matrix =
+            t->ToMatrix4x4(t->GetPosition() - GameEngine::Mathematics::WorldPosition{});
+        std::memcpy(outTransform->matrix, matrix.Data(), sizeof(outTransform->matrix));
         return GE_Result_Ok;
     }
     GE_ECSABI_CATCH_ALL_FAIL
@@ -479,16 +481,12 @@ GE_API GE_Result GE_CDECL GE_ECSABI_SetTransform(GE_Handle world, GE_ECS_Entity 
         if (!w->IsValid(h))
             return GE_Result_InvalidArg;
 
+        const GameEngine::Components::Transform t = GameEngine::Components::Transform::FromMatrix4x4(
+            GameEngine::Mathematics::Matrix4x4::FromColumnMajor(transform->matrix));
         if (auto* existing = w->GetComponentForWrite<GameEngine::Components::Transform>(h))
-        {
-            std::memcpy(existing->matrix, transform->matrix, sizeof(transform->matrix));
-        }
+            *existing = t;
         else
-        {
-            GameEngine::Components::Transform t{};
-            std::memcpy(t.matrix, transform->matrix, sizeof(transform->matrix));
             w->AddComponentImmediate(h, t);
-        }
         return GE_Result_Ok;
     }
     GE_ECSABI_CATCH_ALL_FAIL
@@ -1401,8 +1399,8 @@ GE_API GE_Result GE_CDECL GE_ECSABI_SpawnPrefab(GE_Handle world, const uint8_t* 
         if (parent != 0 && !w->IsValid(parentHandle))
             return GameEngine::ScriptingAbi::RefuseDeadParent(kFunction);
 
-        GameEngine::Components::Transform transform{};
-        std::memcpy(transform.matrix, at->matrix, sizeof(at->matrix));
+        const GameEngine::Components::Transform transform = GameEngine::Components::Transform::FromMatrix4x4(
+            GameEngine::Mathematics::Matrix4x4::FromColumnMajor(at->matrix));
         const GameEngine::ECS::EntityHandle root = GameEngine::Scene::SpawnPrefab(
             *w, GameEngine::ScriptingAbi::GuidFromAbiBytes(prefabGuid), transform, parentHandle);
         if (!root.IsValid())

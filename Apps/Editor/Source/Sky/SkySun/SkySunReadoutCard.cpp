@@ -11,6 +11,7 @@
 #include "Engine/Rendering/RenderServices.h"
 #include "Engine/Rendering/SkyRenderFeature.h"
 #include "InspectorRegistry.h"
+#include "Mathematics/Angle.h"
 #include "Sky/SkySun/SkySunReadoutText.h"
 #include "Rendering/Sky/SkySettings.h"
 #include "Rendering/Sky/SolarPath.h"
@@ -30,7 +31,6 @@ namespace SunIlluminance = Components::SkySunIlluminance;
 namespace SunPath = Components::SkySunPath;
 
 constexpr const char* kHiddenClass = "hidden";
-constexpr float kRadiansToDegrees = 57.29577951f;
 constexpr float kNoonHours = 12.0f;
 constexpr const char* kCardTooltip =
     "Times are solar time: 12:00 is when the sun is highest, wherever the scene is, with no time zone. "
@@ -91,7 +91,7 @@ bool TryCurrentSunElevationDegrees(float& outDegrees)
     if (!sky || !sky->HasActiveSettings())
         return false;
     const float up = std::clamp(sky->GetSettings().scatteringSunDir[1], -1.0f, 1.0f);
-    outDegrees = std::asin(up) * kRadiansToDegrees;
+    outDegrees = Mathematics::ToDegrees(std::asin(up));
     return true;
 }
 

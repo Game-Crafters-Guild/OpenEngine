@@ -1,9 +1,12 @@
 #include "UI/Controls/Widgets/ViewportRotationGizmo.h"
 
 #include "Editor/Settings/SceneViewSettings.h"
-#include "SceneView/SceneViewPanel.h"
+#include "Mathematics/Rect.h"
 #include "Rendering/Text/FontAtlas.h"
 #include "SceneView/SceneViewController.h"
+#include "SceneView/SceneViewport/SceneViewport.h"
+#include "SceneView/SceneViewport/SceneViewportBinding.h"
+#include "SceneView/SceneViewport/SceneViewportHost.h"
 #include "UI/Registration/ElementRegistration.h"
 #include "UI/ResolvedStyle.h"
 #include "UI/UIEvents.h"
@@ -73,14 +76,26 @@ ViewportRotationGizmo::ViewportRotationGizmo()
     RegisterEventHandler(kEventMouseLeave, [this](UIEvent& e) { OnMouseLeave(e); });
 }
 
+SceneViewportHost* ViewportRotationGizmo::Host() const
+{
+    return m_Pane ? m_Pane->GetBinding().Host : nullptr;
+}
+
 void ViewportRotationGizmo::Tick()
 {
     // Honor the SceneView "Show Rotation Gizmo" preference. Toggling the
     // "hidden" class removes the element from layout and hit testing so it
     // neither draws nor steals mouse events when disabled.
     const auto& settings = Editor::SceneViewSettings::Get();
+    // The 2D rulers cover the pane's edges: the rulers-visible class moves the gizmo in from them.
+    const bool rulersVisible = m_Controller && m_Controller->Is2DMode() && settings.GetShowRulers();
+    if (rulersVisible && !HasClass("rulers-visible"))
+        AddClass("rulers-visible");
+    else if (!rulersVisible && HasClass("rulers-visible"))
+        RemoveClass("rulers-visible");
     bool showForViewport = settings.GetShowRotationGizmoForViewport(m_ViewportIndex);
-    if (m_ViewportIndex == 0 && (!m_Panel || !m_Panel->IsQuadViewEnabled()))
+    const SceneViewportHost* host = Host();
+    if (m_ViewportIndex == 0 && (!host || !host->IsSplitView()))
         showForViewport = true;
     const bool show = settings.GetShowRotationGizmo() && showForViewport;
     if (!show)
@@ -113,48 +128,19 @@ void ViewportRotationGizmo::Tick()
         }
     }
 
-    // Shift the gizmo down only if the FPS/perf label overlaps its natural
-    // top-corner rect. Two guards against flicker:
-    //   1. Test against the *natural* (unshifted) gizmo rect. If we tested
-    //      against the current rect, applying fps-active would move the
-    //      gizmo out from under the label → remove class → overlap again →
-    //      oscillation every frame.
-    //   2. Hysteresis margin — require a small inward overlap to enter and
-    //      a small gap to exit, so pixel-thin grazing cases don't oscillate.
+    // The gizmo moves down (the fps-active class) when the host label over the pane (the FPS readout) meets the
+    // gizmo's unshifted box. The test uses the unshifted box, and a larger margin to leave than to enter, so the
+    // class does not flip each frame.
+    constexpr float kFpsActiveShiftPx = 32.0f; // SceneViewPanel.css: top 14 px, 46 px with fps-active
+    constexpr float kEnterMarginPx = 4.0f;
+    constexpr float kExitMarginPx = 8.0f;
     bool fpsOverlaps = false;
-    if (m_Panel && m_Panel->IsFpsVisible())
-    {
-        if (const UIElement* fps = m_Panel->GetFpsLabelElement())
-        {
-            float gx = GetLayoutX();
-            float gy = GetLayoutY();
-            const float gw = GetLayoutWidth();
-            const float gh = GetLayoutHeight();
-            const float fx = fps->GetLayoutX();
-            const float fy = fps->GetLayoutY();
-            const float fw = fps->GetLayoutWidth();
-            const float fh = fps->GetLayoutHeight();
-
-            // Undo the fps-active shift (CSS: top 10px → 42px) so the test
-            // is against the natural rect regardless of current state.
-            const bool currentlyActive = HasClass("fps-active");
-            if (currentlyActive)
-                gy -= 32.0f;
-
-            if (gw > 0.0f && gh > 0.0f && fw > 0.0f && fh > 0.0f)
-            {
-                // Margin: positive expands the gizmo rect (easier to enter
-                // / harder to exit — enter=4, exit=8 gives clean hysteresis).
-                const float margin = currentlyActive ? 8.0f : 4.0f;
-                const float rx = gx - margin;
-                const float ry = gy - margin;
-                const float rw = gw + margin * 2.0f;
-                const float rh = gh + margin * 2.0f;
-                fpsOverlaps = !(fx + fw <= rx || rx + rw <= fx
-                             || fy + fh <= ry || ry + rh <= fy);
-            }
-        }
-    }
+    const Mathematics::Rect fpsBox = m_Pane ? m_Pane->GetHostLabelBox() : Mathematics::Rect{};
+    const bool currentlyActive = HasClass("fps-active");
+    const Mathematics::Rect gizmoBox{GetLayoutX(), GetLayoutY() - (currentlyActive ? kFpsActiveShiftPx : 0.0f),
+                                     GetLayoutWidth(), GetLayoutHeight()};
+    if (!fpsBox.IsEmpty() && !gizmoBox.IsEmpty())
+        fpsOverlaps = gizmoBox.Inflated(currentlyActive ? kExitMarginPx : kEnterMarginPx).Overlaps(fpsBox);
     if (fpsOverlaps)
     {
         if (!HasClass("fps-active"))
@@ -394,8 +380,8 @@ void ViewportRotationGizmo::OnGeneratePrimitives(UI::PrimitiveEmitContext& ctx,
 void ViewportRotationGizmo::OnMouseDown(UIEvent& ev)
 {
     if (ev.Button != 0) return; // left button only
-    if (m_Panel)
-        m_Panel->ActivateViewportForController(m_Controller);
+    if (m_Pane)
+        m_Pane->Activate();
 
     const float lx = GetLayoutX();
     const float ly = GetLayoutY();
@@ -441,18 +427,17 @@ void ViewportRotationGizmo::OnMouseMove(UIEvent& ev)
         if (!m_Orbiting && (dxFromPress * dxFromPress + dyFromPress * dyFromPress) > 16.0f)
         {
             m_Orbiting = true;
-            if (m_Panel)
-                m_Panel->NotifyRotationGizmoOrbit(m_ViewportIndex);
+            if (SceneViewportHost* host = Host())
+                host->NotifyRotationGizmoOrbit(*m_Pane);
         }
 
-        if (m_Orbiting && m_Panel)
+        if (m_Orbiting && m_Pane)
         {
             const float dx = ev.X - m_LastX;
             const float dy = ev.Y - m_LastY;
-            // Route through SceneViewPanel so the panel's stored yaw/pitch
-            // stay in sync (the panel pushes SetCameraAnglesDeg every frame).
+            // The pane's camera gesture holds the yaw and pitch that the pane pushes to the camera each frame.
             const float sensitivity = 0.4f; // degrees per pixel
-            m_Panel->ApplyLookDelta(dx * sensitivity, dy * sensitivity);
+            m_Pane->ApplyLookDelta(dx * sensitivity, dy * sensitivity);
         }
 
         m_LastX = ev.X;
@@ -541,7 +526,7 @@ void ViewportRotationGizmo::ToggleGameProjection()
     }
 
     // Select a free 3D view so the preset can still be rotated afterward.
-    if (m_Panel) m_Panel->NotifyRotationGizmoOrbit(m_ViewportIndex);
+    if (SceneViewportHost* host = Host()) host->NotifyRotationGizmoOrbit(*m_Pane);
     m_Controller->SetFixedViewOrientation(SceneViewController::FixedViewOrientation::Free);
     m_Controller->Set2DMode(false);
     m_Controller->SetOrthographic(enteringOrtho);
@@ -573,8 +558,8 @@ void ViewportRotationGizmo::SnapToAxis(int axis)
 {
     if (!m_Controller) return;
     if (axis < 0 || axis > 5) return;
-    if (m_Panel)
-        m_Panel->NotifyRotationGizmoAxisSnap(m_ViewportIndex, axis);
+    if (SceneViewportHost* host = Host())
+        host->NotifyRotationGizmoAxisSnap(*m_Pane, axis);
 
     auto current = m_Controller->GetCameraPose();
 

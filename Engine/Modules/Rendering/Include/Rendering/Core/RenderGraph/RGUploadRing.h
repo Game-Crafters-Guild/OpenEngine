@@ -71,7 +71,6 @@ class RGUploadRing
     // frames-in-flight guarantee that makes the slot itself reusable.
     Alloc Allocate(uint64_t size, uint64_t align = 256);
 
-    uint32_t SlotCount() const { return static_cast<uint32_t>(m_Slots.size()); }
     uint32_t CurrentSlot() const { return m_CurSlot; }
     uint64_t SlotCapacity() const { return m_Slots.empty() ? 0 : m_Slots[m_CurSlot].Capacity; }
     uint64_t BytesUsedThisFrame() const { return m_FrameBytes; }

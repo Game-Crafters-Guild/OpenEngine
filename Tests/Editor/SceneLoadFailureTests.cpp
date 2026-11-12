@@ -50,23 +50,6 @@ using namespace GameEngine;
 using GameEngine::ECS::World;
 namespace fs = std::filesystem;
 
-// Parses and validates, then fails inside LoadParsedIntoWorld — after the clear — because the
-// prefab it instantiates cannot be read. ValidateDocument only checks that the [resource] id
-// exists, so nothing catches this until the world is already gone.
-//
-// This used to be an unknown component property. It cannot be any more: a component or field this
-// build cannot apply is now collected and skipped rather than aborting the load (that is what the
-// degraded-document tests below cover), so reaching the post-clear failure path takes a failure the
-// loader genuinely cannot continue past. "good_one" still precedes it, so it lands in the world.
-constexpr const char* kFailsAfterClear =
-    "[scene name=\"PartialLoad\" version=1]\n"
-    "[resource id=\"bp\" path=\"no_such_prefab.prefab\"]\n"
-    "\n"
-    "[entity id=\"good_one\"]\n"
-    "Transform.position = (1, 2, 3)\n"
-    "\n"
-    "[prefab id=\"bad_one\" source=\"bp\"]\n";
-
 // Loads, but one assignment cannot be applied: SplineFence.SpanGrade is a reflected enum whose
 // enumerator names this build knows (Racked/Stepped/Sheared), and "Cantilevered" is what a scene
 // written by a NEWER build looks like. The document is real and keeps its identity — it is simply
@@ -203,6 +186,27 @@ class SceneLoadFailureTests : public ::testing::Test
         return p;
     }
 
+    // Writes a scene that reads and validates, then fails inside LoadParsedIntoWorld, after the clear:
+    // its entity "bad_one" names "crate.no_such_child" as its parent, a member that the prefab does not
+    // have, and the placement refuses it. "good_one" precedes it, so it lands in the world. The path is
+    // absolute because the editor resolves a relative [resource] path against the asset root.
+    fs::path WriteSceneFailingAfterTheClear(const char* name) const
+    {
+        const fs::path crate = WriteScene("crate.prefab", "[prefab version=1]\n[entity id=\"root\"]\n");
+        const std::string text = "[scene name=\"PartialLoad\" version=1]\n"
+                                 "[resource id=\"bp\" path=\"" +
+                                 crate.generic_string() +
+                                 "\"]\n"
+                                 "\n"
+                                 "[entity id=\"good_one\"]\n"
+                                 "Transform.position = (1, 2, 3)\n"
+                                 "\n"
+                                 "[prefab id=\"crate\" source=\"bp\"]\n"
+                                 "\n"
+                                 "[entity id=\"bad_one\" parent=\"crate.no_such_child\"]\n";
+        return WriteScene(name, text.c_str());
+    }
+
     // A real, loadable scene minted through the save path.
     fs::path MintGoodScene(const char* name) const
     {
@@ -223,6 +227,27 @@ class SceneLoadFailureTests : public ::testing::Test
     fs::path m_Dir;
 };
 
+// A scene that fails its read leaves the open scene as it is: the read runs before the
+// scene-scoped state is released, so the release does not run.
+TEST_F(SceneLoadFailureTests, AReadFailureKeepsTheSceneScopedState)
+{
+    const fs::path good = MintGoodScene("outgoing.scene");
+    const fs::path unreadable = WriteScene("unreadable.scene", "this is not a scene file\n[[[\n");
+
+    World world;
+    Editor::SceneDocumentManager doc;
+    doc.SetWorld(&world);
+    ASSERT_TRUE(doc.OpenSceneReplace(good));
+    int releases = 0;
+    doc.SetSceneScopedGeneratorRelease([&releases] { ++releases; });
+
+    EXPECT_FALSE(doc.OpenSceneReplace(unreadable));
+    EXPECT_EQ(releases, 0);
+    ASSERT_TRUE(doc.GetLastLoadFailure().has_value());
+    EXPECT_FALSE(doc.GetLastLoadFailure()->WorldCleared);
+    EXPECT_EQ(doc.GetScenePath(), good);
+}
+
 // The core of it: after a failure that cleared the world, the document must not
 // go on naming a scene. An empty path is not a cosmetic detail — it is what
 // stops the title, the debug server and Save from all agreeing on a scene that
@@ -230,7 +255,7 @@ class SceneLoadFailureTests : public ::testing::Test
 TEST_F(SceneLoadFailureTests, FailureAfterClearLeavesNoScenePathAndRecordsWhy)
 {
     const fs::path good = MintGoodScene("outgoing.scene");
-    const fs::path bad = WriteScene("half.scene", kFailsAfterClear);
+    const fs::path bad = WriteSceneFailingAfterTheClear("half.scene");
 
     World world;
     Editor::SceneDocumentManager doc;
@@ -245,7 +270,7 @@ TEST_F(SceneLoadFailureTests, FailureAfterClearLeavesNoScenePathAndRecordsWhy)
     const auto& failure = *doc.GetLastLoadFailure();
     EXPECT_TRUE(failure.WorldCleared);
     EXPECT_EQ(failure.DocumentPath, bad);
-    EXPECT_NE(failure.Message.find("Prefab file not found"), std::string::npos) << failure.Message;
+    EXPECT_EQ(failure.Message, "Missing parent 'crate.no_such_child'") << failure.Message;
     EXPECT_GT(failure.EntitiesInWorld, 0u) << "the half-loaded entities are the whole problem";
 
     EXPECT_FALSE(doc.GetScenePath().has_value())
@@ -695,7 +720,7 @@ TEST_F(SceneLoadFailureTests, ACleanOpenClearsTheDegradedRecord)
 TEST_F(SceneLoadFailureTests, PostClearFailureClearsTheDegradedRecordOfTheSceneItDestroyed)
 {
     const fs::path degradedScene = WriteScene("degraded_before_fail.scene", kLoadsDegraded);
-    const fs::path failingScene = WriteScene("fails_after_clear.scene", kFailsAfterClear);
+    const fs::path failingScene = WriteSceneFailingAfterTheClear("fails_after_clear.scene");
 
     World world;
     Editor::SceneDocumentManager doc;
@@ -782,7 +807,7 @@ TEST_F(SceneLoadFailureTests, AnAcceptedSaveWritesThePreservedTextBackNotTheDefa
 TEST_F(SceneLoadFailureTests, FailureAfterClearCannotSaveOverTheOutgoingScene)
 {
     const fs::path good = MintGoodScene("precious.scene");
-    const fs::path bad = WriteScene("half.scene", kFailsAfterClear);
+    const fs::path bad = WriteSceneFailingAfterTheClear("half.scene");
     const std::vector<char> before = ReadAllBytes(good);
     ASSERT_FALSE(before.empty());
 
@@ -801,7 +826,7 @@ TEST_F(SceneLoadFailureTests, FailureAfterClearCannotSaveOverTheOutgoingScene)
 TEST_F(SceneLoadFailureTests, FailureAfterClearShowsInTheDisplayName)
 {
     const fs::path good = MintGoodScene("outgoing.scene");
-    const fs::path bad = WriteScene("half.scene", kFailsAfterClear);
+    const fs::path bad = WriteSceneFailingAfterTheClear("half.scene");
 
     World world;
     Editor::SceneDocumentManager doc;
@@ -828,7 +853,7 @@ TEST_F(SceneLoadFailureTests, FailureAfterClearShowsInTheDisplayName)
 TEST_F(SceneLoadFailureTests, FailureBeforeClearKeepsTheOpenDocument)
 {
     const fs::path good = MintGoodScene("kept.scene");
-    const fs::path cleared = WriteScene("half.scene", kFailsAfterClear);
+    const fs::path cleared = WriteSceneFailingAfterTheClear("half.scene");
     const fs::path bad = WriteScene("dupes.scene", kFailsBeforeClear);
 
     World world;
@@ -856,7 +881,7 @@ TEST_F(SceneLoadFailureTests, FailureBeforeClearKeepsTheOpenDocument)
 TEST_F(SceneLoadFailureTests, TheNextSuccessfulOpenClearsTheRecord)
 {
     const fs::path good = MintGoodScene("recover.scene");
-    const fs::path bad = WriteScene("half.scene", kFailsAfterClear);
+    const fs::path bad = WriteSceneFailingAfterTheClear("half.scene");
 
     World world;
     Editor::SceneDocumentManager doc;
@@ -872,7 +897,7 @@ TEST_F(SceneLoadFailureTests, TheNextSuccessfulOpenClearsTheRecord)
 
 TEST_F(SceneLoadFailureTests, NewSceneClearsTheRecord)
 {
-    const fs::path bad = WriteScene("half.scene", kFailsAfterClear);
+    const fs::path bad = WriteSceneFailingAfterTheClear("half.scene");
 
     World world;
     Editor::SceneDocumentManager doc;
@@ -890,7 +915,7 @@ TEST_F(SceneLoadFailureTests, NewSceneClearsTheRecord)
 TEST_F(SceneLoadFailureTests, AdditiveFailureRecordsWithoutTakingTheDocument)
 {
     const fs::path good = MintGoodScene("host.scene");
-    const fs::path bad = WriteScene("half.scene", kFailsAfterClear);
+    const fs::path bad = WriteSceneFailingAfterTheClear("half.scene");
 
     World world;
     Editor::SceneDocumentManager doc;
@@ -913,7 +938,7 @@ TEST_F(SceneLoadFailureTests, AdditiveFailureRecordsWithoutTakingTheDocument)
 // open must not clear either.
 TEST_F(SceneLoadFailureTests, AdditiveSuccessLeavesTheClearedWorldRecordStanding)
 {
-    const fs::path bad = WriteScene("half.scene", kFailsAfterClear);
+    const fs::path bad = WriteSceneFailingAfterTheClear("half.scene");
     const fs::path added = WriteScene("added.scene", kLoadsCleanly);
 
     World world;
@@ -973,7 +998,7 @@ TEST_F(SceneLoadFailureTests, AdditiveSuccessStillClearsAFailureThatKeptTheDocum
 TEST_F(SceneLoadFailureTests, ControllerSurfacesTheFailureThroughTheOpenFunnel)
 {
     const fs::path good = MintGoodScene("outgoing.scene");
-    const fs::path bad = WriteScene("half.scene", kFailsAfterClear);
+    const fs::path bad = WriteSceneFailingAfterTheClear("half.scene");
 
     World world;
     Editor::EditorChangeNotifications notifications;
@@ -1012,8 +1037,8 @@ TEST_F(SceneLoadFailureTests, ControllerSurfacesTheFailureThroughTheOpenFunnel)
 // path alone leaves the window naming the FIRST failed file indefinitely.
 TEST_F(SceneLoadFailureTests, ConsecutiveFailuresMoveTheDisplayNameNotThePath)
 {
-    const fs::path first = WriteScene("first_half.scene", kFailsAfterClear);
-    const fs::path second = WriteScene("second_half.scene", kFailsAfterClear);
+    const fs::path first = WriteSceneFailingAfterTheClear("first_half.scene");
+    const fs::path second = WriteSceneFailingAfterTheClear("second_half.scene");
 
     World world;
     Editor::SceneDocumentManager doc;
@@ -1059,7 +1084,7 @@ class NoopCommand final : public Editor::IEditorCommand
 TEST_F(SceneLoadFailureTests, FailureAfterClearClearsTheUndoStack)
 {
     const fs::path good = MintGoodScene("outgoing.scene");
-    const fs::path bad = WriteScene("half.scene", kFailsAfterClear);
+    const fs::path bad = WriteSceneFailingAfterTheClear("half.scene");
 
     World world;
     Editor::EditorChangeNotifications notifications;
@@ -1243,7 +1268,7 @@ TEST_F(SceneLoadFailureTests, FailedOpenShowsTheLoaderErrorAndSaysThePreviousSce
 TEST_F(SceneLoadFailureTests, FailedOpenAfterClearSaysThePreviousSceneIsGone)
 {
     const fs::path good = MintGoodScene("outgoing.scene");
-    const fs::path bad = WriteScene("half.scene", kFailsAfterClear);
+    const fs::path bad = WriteSceneFailingAfterTheClear("half.scene");
 
     World world;
     Editor::EditorChangeNotifications notifications;
@@ -1286,9 +1311,9 @@ TEST_F(SceneLoadFailureTests, FailedOpenAfterClearSaysThePreviousSceneIsGone)
 // outlives the next failure's record, so a third failed open still names it.
 TEST_F(SceneLoadFailureTests, FailedOpenAfterAPartialLoadNamesWhatTheWorldStillHolds)
 {
-    const fs::path half = WriteScene("half.scene", kFailsAfterClear);
+    const fs::path half = WriteSceneFailingAfterTheClear("half.scene");
     const fs::path dupes = WriteScene("dupes.scene", kFailsBeforeClear);
-    const fs::path halfAgain = WriteScene("half_again.scene", kFailsAfterClear);
+    const fs::path halfAgain = WriteSceneFailingAfterTheClear("half_again.scene");
 
     World world;
     Editor::EditorChangeNotifications notifications;

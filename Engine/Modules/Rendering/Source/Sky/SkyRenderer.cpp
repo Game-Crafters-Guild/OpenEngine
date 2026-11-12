@@ -677,26 +677,31 @@ void SkyRenderer::SetCamera(const CameraState& camera)
 // multiannual global mean is 0.13 to 0.14 over the oceans and 0.19 over land; MODIS, Remer et al.
 // 2008, JGR 113, D14S07). Per-metre coefficients at sea level, scale heights in metres, ozone as a
 // tent between 10 and 40 km.
-void SkyRenderer::FillDefaultAtmosphere(AtmosphereParametersGPU& atmo)
+// On a planet the heights scale by the atmosphere's height over Earth's and the coefficients by its
+// inverse, so every column's optical depth is Earth's. On the flat planet the scale is exactly 1.
+void SkyRenderer::FillDefaultAtmosphere(AtmosphereParametersGPU& atmo, const SkyPlanet& planet)
 {
-    atmo.planetRadius = 6360.0e3f;
-    atmo.atmosphereRadius = 6460.0e3f;
-    atmo.rayleighScaleHeight = 8000.0f;
-    atmo.mieScaleHeight = 1200.0f;
-    atmo.betaRayleigh[0] = 5.802e-6f;
-    atmo.betaRayleigh[1] = 13.558e-6f;
-    atmo.betaRayleigh[2] = 33.100e-6f;
+    const float scale = planet.AtmosphereScale();
+    atmo.planetRadius = planet.Radius;
+    atmo.atmosphereRadius = planet.Radius + planet.AtmosphereHeight;
+    atmo.planetCenter = planet.Center;
+    atmo.planetCenterStd140Pad = 0.0f;
+    atmo.rayleighScaleHeight = 8000.0f * scale;
+    atmo.mieScaleHeight = 1200.0f * scale;
+    atmo.betaRayleigh[0] = 5.802e-6f / scale;
+    atmo.betaRayleigh[1] = 13.558e-6f / scale;
+    atmo.betaRayleigh[2] = 33.100e-6f / scale;
     // Mie extinction 0.06 / 1200 m = 5e-5 per metre at 550 nm, at the paper's single-scattering
     // albedo, 0.9 (absorption is the extinction less the scattering), and falling with wavelength as
     // (lambda / 550 nm)^-1.6, the Angstrom exponent of an aerosol of mostly fine particles, sampled at
     // the 680, 550 and 440 nm the Rayleigh coefficients are given at. A grey aerosol greys the sky:
     // this one scatters blue 43 % more than green, red 29 % less.
-    atmo.betaMie[0] = 3.20463e-5f;
-    atmo.betaMie[1] = 4.5e-5f;
-    atmo.betaMie[2] = 6.43085e-5f;
-    atmo.mieAbsorption[0] = 3.56071e-6f;
-    atmo.mieAbsorption[1] = 5.0e-6f;
-    atmo.mieAbsorption[2] = 7.14539e-6f;
+    atmo.betaMie[0] = 3.20463e-5f / scale;
+    atmo.betaMie[1] = 4.5e-5f / scale;
+    atmo.betaMie[2] = 6.43085e-5f / scale;
+    atmo.mieAbsorption[0] = 3.56071e-6f / scale;
+    atmo.mieAbsorption[1] = 5.0e-6f / scale;
+    atmo.mieAbsorption[2] = 7.14539e-6f / scale;
     // Ozone per linear-sRGB channel. The paper samples the cross section at 680, 550 and 440 nm
     // (0.650, 1.881, 0.085)e-6, but the Chappuis band peaks at 600 nm, between the red and green
     // samples, so that under-weights red and turns the twilight zenith violet. These are the same
@@ -704,11 +709,11 @@ void SkyRenderer::FillDefaultAtmosphere(AtmosphereParametersGPU& atmo)
     // against the CIE 1931 functions and the sRGB primaries: what each channel of the sun loses
     // through the zenith column. From the zenith column to the horizon path red moves 0.9 % and
     // green 2.6 %; blue stays within -0.03..0.05e-6, so it is 0.
-    atmo.ozoneAbsorption[0] = 2.480e-6f;
-    atmo.ozoneAbsorption[1] = 1.795e-6f;
+    atmo.ozoneAbsorption[0] = 2.480e-6f / scale;
+    atmo.ozoneAbsorption[1] = 1.795e-6f / scale;
     atmo.ozoneAbsorption[2] = 0.0f;
-    atmo.ozoneCenterHeight = 25.0e3f;
-    atmo.ozoneHalfWidth = 15.0e3f;
+    atmo.ozoneCenterHeight = 25.0e3f * scale;
+    atmo.ozoneHalfWidth = 15.0e3f * scale;
     atmo.groundAlbedo[0] = kDefaultGroundAlbedo;
     atmo.groundAlbedo[1] = kDefaultGroundAlbedo;
     atmo.groundAlbedo[2] = kDefaultGroundAlbedo;

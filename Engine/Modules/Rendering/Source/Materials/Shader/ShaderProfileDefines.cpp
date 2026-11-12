@@ -12,6 +12,7 @@ namespace
 {
 std::atomic<bool> s_CompatShaderProfile{false};
 std::atomic<bool> s_InterpolationFunctionsAvailable{false};
+std::atomic<bool> s_ClipDistancesAvailable{false};
 }
 
 bool IsCompatShaderProfile()
@@ -34,10 +35,21 @@ void SetInterpolationFunctionsAvailable(bool available)
     s_InterpolationFunctionsAvailable.store(available, std::memory_order_relaxed);
 }
 
+bool AreClipDistancesAvailable()
+{
+    return s_ClipDistancesAvailable.load(std::memory_order_relaxed);
+}
+
+void SetClipDistancesAvailable(bool available)
+{
+    s_ClipDistancesAvailable.store(available, std::memory_order_relaxed);
+}
+
 void ApplyShaderCompileProfile(const RendererProfile& profile)
 {
     SetCompatShaderProfile(profile.IsCompat());
     SetInterpolationFunctionsAvailable(profile.UseInterpolationFunctions);
+    SetClipDistancesAvailable(profile.UseClipDistance);
 }
 
 } // namespace Rendering

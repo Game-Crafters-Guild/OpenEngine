@@ -615,6 +615,10 @@ PathStatus GridMap::FindPathPoints(const PathRequest& request, AStarSolver& solv
         point.Z = worldZ;
         outPoints.push_back(point);
     }
+    // The solve reached the walkable end cell, so the path ends at the requested point inside it.
+    // The cells between keep their centers.
+    outPoints.back().X = request.EndX;
+    outPoints.back().Z = request.EndZ;
 
     if (request.SmoothPath && outPoints.size() > 2)
     {
@@ -741,7 +745,8 @@ bool GridMap::ReadView::IsSegmentClear(float32 startX, float32 startZ, float32 e
     uint32 cellX = 0, cellZ = 0;
     if (!WorldToCell(startX, startZ, cellX, cellZ))
         return false;
-    if (IsCellBlocked(cellX, cellZ) && !(openCells && openCells->Contains(cellX, cellZ)))
+    if (IsCellBlocked(cellX, cellZ) &&
+        !(openCells && openCells->Contains(static_cast<int32>(cellX), static_cast<int32>(cellZ))))
         return false;
     if (radius <= 0.0f)
     {
@@ -750,7 +755,8 @@ bool GridMap::ReadView::IsSegmentClear(float32 startX, float32 startZ, float32 e
     }
 
     // Cell (x, z) is the rectangle WorldToCell maps to it: centred on CellToWorld, a cell wide and a
-    // row apart, odd rows of a hex grid shifted by `oddRowShift`. Off the grid counts as blocked.
+    // row apart, odd rows of a hex grid shifted by `oddRowShift`. Off the grid counts as blocked,
+    // except inside `openCells`.
     float32 firstX = 0.0f, firstZ = 0.0f, nextRowX = 0.0f, nextRowZ = 0.0f;
     CellToWorld(0, 0, firstX, firstZ);
     CellToWorld(0, 1, nextRowX, nextRowZ);
@@ -790,8 +796,9 @@ bool GridMap::ReadView::IsSegmentClear(float32 startX, float32 startZ, float32 e
         {
             const bool onGrid = row >= 0 && column >= 0 && row < static_cast<int32>(m_Settings.Depth) &&
                                 column < static_cast<int32>(m_Settings.Width);
-            if (onGrid && (!IsCellBlocked(static_cast<uint32>(column), static_cast<uint32>(row)) ||
-                           (openCells && openCells->Contains(static_cast<uint32>(column), static_cast<uint32>(row)))))
+            if (openCells && openCells->Contains(column, row))
+                continue;
+            if (onGrid && !IsCellBlocked(static_cast<uint32>(column), static_cast<uint32>(row)))
                 continue;
             CellRectangle cell;
             cell.MinX = m_Settings.OriginX + shift + static_cast<float32>(column) * cellSize;

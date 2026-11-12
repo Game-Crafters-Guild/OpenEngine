@@ -90,7 +90,8 @@ TEST(ParticleStackAsset, ARefusedEditKeepsTheStackAndSaysWhy)
 {
     ParticleStackAsset asset(GUID::Generate(), TempFile("ge_stack_edit.particlestack"));
     const std::string text = kStack;
-    ASSERT_TRUE(asset.LoadFromData({text.begin(), text.end()}));
+    const Vector<uint8> bytes(text.begin(), text.end());
+    ASSERT_TRUE(asset.LoadFromData(bytes));
     const auto running = asset.Compiled();
 
     auto invalid = *asset.Document();

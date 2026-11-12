@@ -1,4 +1,5 @@
 #include "AssetCore/EditorOnlyAssetPath.h"
+#include "Types/PathUtils.h"
 
 #include <cctype>
 #include <string>
@@ -11,7 +12,7 @@ bool IsEditorOnlyAssetPath(const std::filesystem::path& relativePath)
     constexpr size_t kEditorLength = 6; // "Editor"
     for (const auto& segment : relativePath)
     {
-        std::string name = segment.string();
+        std::string name = PathToUtf8(segment);
         if (name.size() != kEditorLength)
             continue;
         for (char& c : name)

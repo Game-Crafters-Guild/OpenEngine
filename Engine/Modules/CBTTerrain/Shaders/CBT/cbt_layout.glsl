@@ -146,14 +146,6 @@ const float CBT_NEAR_BIAS_CONTENTION_HI = 0.90;
 // the depth and the selector so the two halves cannot drift apart.
 const uint CBT_FRAME_RING = 4u;
 
-// Sphere sculpt page-table (planet editing v2) — the physical page POOL (binding 16) + per-face
-// page TABLE (binding 20) replace the flat 256^2 atlas; virtual resolution is radius-scaled, physical
-// storage content-scaled (cbt_sculpt.glsl / SphereSculptPaging.h). Sampled by sphere VertexEval only
-// when pc.sphereSculptEnabled. The paging constants live in cbt_sculpt.glsl (included below).
-const uint CBT_CUBE_FACE_COUNT6 = 6u;
-const uint CBT_SPHERE_SCULPT_BINDING = 16u;
-const uint CBT_SPHERE_SCULPT_PAGE_TABLE_BINDING = 20u;
-
 // Work-queue counter slots.
 const uint CBT_WQ_ALLOC_CURSOR = 0u;
 const uint CBT_WQ_FREE_COUNT = 1u;
@@ -198,6 +190,11 @@ const float CBT_OFF_FRUSTUM_KEEP_WIDEST_NDC = 1024.0;    // step 1's band
 const uint CBT_OFF_FRUSTUM_KEEP_STEPS_PER_OCTAVE = 2u;   // the band halves every two steps
 const uint CBT_OFF_FRUSTUM_KEEP_SATURATED_STRIDE = 2u;    // steps per update while occupancy is at
                                                          // or above CBT_PRESSURE_FULL_OCC
+// pc.behindEye (mirror CBTTerrain::BehindEyeRelease): the planar area metric's facets wholly behind the eye keep
+// their mirror image's depth, take the keep band at their distance excess, or take band 0 at every step.
+const uint CBT_BEHIND_EYE_ALWAYS_KEEP = 0u;
+const uint CBT_BEHIND_EYE_RELEASE_WHEN_NEEDED = 1u;
+const uint CBT_BEHIND_EYE_ALWAYS_RELEASE = 2u;
 // The live count the planar classify reads its occupancy from while the camera holds still
 // (pc.settle). Kernel_Reset copies the live count here on every update whose inputs moved; at rest it
 // follows only a move larger than the deadband (1/CBT_REST_LATCH_DEADBAND_DIVISOR of the pool), so the
@@ -216,18 +213,28 @@ const uint CBT_WQ_UNRESOLVED_PAGE_SAMPLES = 17u;
 const uint CBT_WQ_OFF_FRUSTUM_KEEP_FLOOR = 18u;
 const int CBT_KEEP_FLOOR_ARRIVING = -1;
 const int CBT_KEEP_FLOOR_PROBING = -2;
+// pc.settle when every input has matched for the probe's settle time (CBTLayout.h kSettleLasted).
+const uint CBT_SETTLE_LASTED = 2u;
 // The leaves the planar criterion wants to merge, counted only at rest. A leaf that does not want to merge at rest never
 // merges in that rest, so live minus this count is a lower bound on the quiet tree (Kernel_Reset's early up proof).
 // CBTLayout.h mirrors it.
 const uint CBT_WQ_MERGE_CANDIDATE_COUNTER = 19u;
-const uint CBT_WQ_COUNTER_SLOTS = 20u;
+// The rest search's memory of a failed probe. PROBE_BASE: the live count when the rest last stepped the keep step down,
+// 0 when no step down is open. FAILED_STEP: one past the step whose probe went over the keep ceiling, 0 for none (so the
+// zero-fill clears it). FAILED_ADDED: the leaves that probe added before it went over. CBTLayout.h mirrors the three.
+const uint CBT_WQ_KEEP_PROBE_BASE = 20u;
+const uint CBT_WQ_KEEP_FAILED_STEP = 21u;
+const uint CBT_WQ_KEEP_FAILED_ADDED = 22u;
+// A rest probes the failed step again only with the headroom it added plus 1/this of the pool.
+const uint CBT_KEEP_RETRY_MARGIN_DIVISOR = 64u;
+const uint CBT_WQ_COUNTER_SLOTS = 23u;
 
 // Work-queue payload lanes — 3 ALIASED physical lanes over the 6 logical queues (slot-diet r2;
 // mirror of CBTLayout.h WQ*Offset). The six queues' live spans over the per-frame kernel sequence
 // are pairwise disjoint within each lane (a proven interval-graph 3-colouring — full lane-lifetime
 // table + aliasing proof at the CBTLayout.h definition), and RecordDataBarrier fences every stage,
 // so a lane's next occupant fills from index 0 over drained-and-barriered old data. Each queue keeps
-// its own counter slot; the aliasing is purely at the payload offset. WQElementCount = 16 + 3*P.
+// its own counter slot; the aliasing is purely at the payload offset. WQElementCount = the counters + 3*P + the census.
 //   LANE 0: Split -> PropagateBisect -> Simplify   LANE 1: SimplifyClass -> PropagateSimplify   LANE 2: Allocate
 const uint CBT_WQ_SPLIT_QUEUE = CBT_WQ_COUNTER_SLOTS + 0u * CBT_POOL_SIZE;              // lane 0
 const uint CBT_WQ_PROPAGATE_BISECT_QUEUE = CBT_WQ_COUNTER_SLOTS + 0u * CBT_POOL_SIZE;   // lane 0
@@ -235,6 +242,20 @@ const uint CBT_WQ_SIMPLIFY_QUEUE = CBT_WQ_COUNTER_SLOTS + 0u * CBT_POOL_SIZE;   
 const uint CBT_WQ_SIMPLIFY_CLASS_QUEUE = CBT_WQ_COUNTER_SLOTS + 1u * CBT_POOL_SIZE;     // lane 1
 const uint CBT_WQ_PROPAGATE_SIMPLIFY_QUEUE = CBT_WQ_COUNTER_SLOTS + 1u * CBT_POOL_SIZE; // lane 1
 const uint CBT_WQ_ALLOCATE_QUEUE = CBT_WQ_COUNTER_SLOTS + 2u * CBT_POOL_SIZE;           // lane 2
+
+// The pool census after the lanes (CBTLayout.h kCensus*, CBTPoolCensus.h): per level the leaves in view at
+// BASE + 2 * level and off view at + 1, then the off-view leaves at CLASSES + CBT_CENSUS_CLASS_*.
+// Only an update with pc.census set clears and counts it.
+const uint CBT_CENSUS_LEVELS = 64u;
+const uint CBT_WQ_CENSUS_BASE = CBT_WQ_COUNTER_SLOTS + 3u * CBT_POOL_SIZE;
+const uint CBT_WQ_CENSUS_CLASSES = CBT_WQ_CENSUS_BASE + 2u * CBT_CENSUS_LEVELS;
+const uint CBT_CENSUS_CLASS_MERGE_WANTED = 0u;
+const uint CBT_CENSUS_CLASS_BEHIND_EYE = 1u;
+const uint CBT_CENSUS_CLASS_BESIDE_FRUSTUM = 2u;
+const uint CBT_CENSUS_CLASS_ACROSS_EYE_PLANE = 3u;
+const uint CBT_CENSUS_CLASS_IN_MARGIN_FRUSTUM = 4u;
+const uint CBT_CENSUS_CLASS_BEHIND_HORIZON = 5u;
+const uint CBT_CENSUS_CLASS_COUNT = 6u;
 
 // Far-field region reseed scratch (round-9 far-field-drain). The K_REGION_FREE_SEED kernel
 // records each freed root's newly-decoded physical slot here so K_REGION_FREE_LINK can wire the
@@ -497,17 +518,12 @@ layout(std430, set = CBT_DESCRIPTOR_SET, binding = 13) CBT_SSBO_QUAL buffer CBTV
     uint Validation[];
 } gValidation;
 
-// Analytic sphere-modifier math (struct + eval + footprint covers) — pure math, no bindings,
-// shared with the surface fragment. Included before CBTFrameParams so the params tail can carry
-// the placement array.
-#include "cbt_analytic.glsl"
-
 // -------- C4 per-frame params UBO + terrain height source (compute only) --------
 // Camera + terrain params consumed by Classify (screen-space error) and VertexEval
 // (world-space displacement). NOT declared in the graphics include: the vertex
 // modifier reads evaluated positions and needs neither (plan §8 C4). std140 mirror
-// of CBTFrameParams (CBTLayout.h) — mat4 + 13 vec4 + the 16 x 3 vec4 analytic set + the
-// height-chain vec4 = 1056 B; ring-buffered so the CPU can write frame N while the GPU reads frame N-1.
+// of CBTFrameParams (CBTLayout.h) — mat4 + 12 vec4 + the page vec4 + the height-chain vec4 = 288 B;
+// ring-buffered so the CPU can write frame N while the GPU reads frame N-1.
 struct CBTFrameParams
 {
     mat4 viewProjRel;   // REBASED world -> clip (reverse-Z LH): consumes render-origin-relative corners (slice 1b); == the full-world viewProj when the origin is inactive
@@ -552,39 +568,32 @@ struct CBTFrameParams
     //       saturation); w = keep-large off-frustum band (NDC) — a large just-off-frustum facet keeps
     //       depth even under saturation within this annulus (a glance away does not demote it).
     vec4 priorityParams;
-    // Water plane (mirror CBTLayout.h WaterPlane). Consumed by Kernel_Classify only, planar only:
-    // a bisector whose three corners all lie more than y below x, seen from a camera above x, is
-    // hidden by the water and has both its split and merge thresholds scaled by z instead of
-    // refining to the pixel target. z <= 1 (every field 0) => byte-identical to the metric.
+    // Water plane (mirror CBTLayout.h WaterPlane), Kernel_Classify only, planar only. Seen from a camera above x, a
+    // bisector whose corners all lie more than y below x is hidden: its split threshold and its children's merge
+    // threshold scale by z. z <= 1 (every field 0) => byte-identical to the metric.
     //   x = water surface height (world Y); y = submerged margin (m); z = coarsen factor;
     //   w = content-aware split threshold (px), planar Classify only; 0 = off.
     vec4 waterPlane;
-    // Analytic sphere modifiers (sculpt shape-accuracy S2 — mirror CBTLayout.h AnalyticParams /
-    // SphereAnalytic, math in cbt_analytic.glsl). x = flatten count, y = transient brush dab count
-    // (S3 — dabs occupy slots [x, x+y)); integers as float; z = the first word of this frame's page-table
-    // ring slot (CBT_PAGE_RING_BASE_LANE, wide arm); w reserved. Both 0 (the flag-off
-    // dark-ship) skips every analytic branch — no float op is added.
-    vec4 analyticParams;
-    CBTSphereAnalyticFlatten sphereAnalytic[CBT_MAX_SPHERE_ANALYTIC];
+    // The paged height resolve (mirror CBTLayout.h PageParams): x = the first word of this frame's
+    // page-table ring slot (CBT_PAGE_RING_BASE_LANE, wide arm), an integer as float; yzw = 0.
+    vec4 pageParams;
     // The draw's prefiltered height chain, for Classify's frustum cull (mirror CBTLayout.h HeightChain).
     // x = the level scale of the draw's rule lambda = log2(distance x scale), 0 = off; y = the top level.
     vec4 heightChain;
 };
 
-// One ring slot: the frame params PLUS the S3 per-cell placement-cull masks (mirror CBTLayout.h
-// AnalyticCellMask: a 16-bit placement mask per face cell on an 8x8 grid per cube face, 2 cells
-// per uint, low half = even cell, packed as uvec4[48] std140-tight; built by
-// BuildSphereAnalyticCellMasks over the same slot order as sphereAnalytic). The mask array is a
-// SIBLING of the frame struct, NOT a member: CBT_Frame() hands the params around BY VALUE per
-// thread, and folding the 768 B mask into that copy measured ~7x on CBT.Update (per-thread
-// local-memory spill). Mask lookups read the UBO directly instead.
+// One ring slot: the frame params and the face dirty rects. The rects are a sibling of the frame
+// struct, not a member: CBT_Frame() copies the params by value per thread, so a large member adds
+// per-thread local memory. Rect lookups read the UBO directly.
 struct CBTFrameSlot
 {
     CBTFrameParams frame;
-    uvec4 analyticCellMask[48];
     // Each cube face's dirty rect in face-local UV (minU, minV, maxU, maxV); empty when z <= x
     // (mirror CBTLayout.h SphereDirty).
     vec4 sphereDirty[6];
+    // xy = the terrain's authored size in terrain uv (mirror CBTLayout.h SurfaceExtent): planar Classify
+    // drops a triangle wholly past it from the VISIBLE stream.
+    vec4 surfaceExtent;
 };
 
 layout(std140, set = CBT_DESCRIPTOR_SET, binding = 14) uniform CBTFrameParamsBuffer
@@ -615,25 +624,6 @@ layout(std140, set = CBT_DESCRIPTOR_SET, binding = 14) uniform CBTFrameParamsBuf
 #endif
 
 layout(set = CBT_DESCRIPTOR_SET, binding = 15) uniform sampler2D gHeight CBT_TEX_RING_DECL;
-
-// Sphere sculpt physical page POOL (binding 16, compute only) — the editable per-cube-face additive
-// height layer, now paged (planet editing v2). Host-visible SSBO ring: the CPU writes slot
-// (frameIndex % ring) each frame from its authoritative page store, so the slot the shader reads this
-// frame was written before this frame's GPU work — same ring discipline as the params UBO, no
-// barrier/staging. Layout: float[ring][poolPageCount][CBT_SCULPT_PAGE_TEXELS]. Sampled with the paged
-// bilinear (CBT_SampleSphereSculpt below) only when pc.sphereSculptEnabled.
-layout(std430, set = CBT_DESCRIPTOR_SET, binding = 16) CBT_SSBO_QUAL buffer CBTSphereSculptBuffer
-{
-    float Sculpt[];
-} gSphereSculpt;
-
-// Sphere sculpt PAGE TABLE (binding 20, compute only). uint[ring][6*cap*cap]; each entry is a
-// physical page id in the pool above or CBT_SCULPT_NO_PAGE (unallocated -> additive 0). Same
-// host-visible ring discipline as binding 16.
-layout(std430, set = CBT_DESCRIPTOR_SET, binding = 20) CBT_SSBO_QUAL buffer CBTSphereSculptTableBuffer
-{
-    uint Table[];
-} gSphereSculptTable;
 
 #if !defined(CBT_DECODE_INT32)
 // Height-range pyramid (binding 21, compute only, wide arm only — mirror CBTLayout.h
@@ -680,20 +670,16 @@ float CBT_ChainLoad(uint word)
 }
 #endif
 
-// Paging index math (constants + CBTSculptGeom + CBT_SculptTableEntry / CBT_SculptPoolIndex). Pure
-// math, no bindings; the paged sampler CBT_SampleSphereSculpt below reads the two SSBOs around it.
-#include "cbt_sculpt.glsl"
-
 // Phase E resident-window atlas (design §3). The pure-math resolve (CBTTileAtlasSlot /
 // CBTAtlasParams / CBT_AtlasResolve) lives in cbt_atlas.glsl; pull it in here so the
 // SSBO row type is single-sourced and CBT_SampleHeight below can call the resolve. No
 // bindings inside it, so this is safe to include before the taps.
-#include "cbt_atlas.glsl" // defines CBT_ATLAS_MAX_TILES (single-sourced, shared with the surface)
+#include "cbt_atlas.glsl" // defines CBT_ATLAS_WINDOW_ROWS (single-sourced, shared with the surface)
 
 // Binding 17: the per-tile indirection table, host-visible ring. The CPU writes ring
 // slot (frameIndex % ring) each frame from the residency controller's table; the shader
-// reads Rows[frameSlot * CBT_ATLAS_MAX_TILES + tileIndex]. A CBT_ATLAS_NO_SLOT row -> the
-// tile is outside the resident window -> the coarse fallback (never a hole).
+// reads Rows[frameSlot * CBT_ATLAS_WINDOW_ROWS + CBT_AtlasRowIndex(tile)]. A CBT_ATLAS_NO_SLOT
+// row, or a row another tile owns -> the coarse fallback (never a hole).
 //
 // STALE-ROW PROOF (why CBTTileAtlasSlot.Generation stays RESERVED — no GPU stale-row check is
 // needed, referenced by the three RESERVED notes: cbt_atlas.glsl, TerrainAtlas.h, design §3.2):
@@ -742,14 +728,14 @@ float CBT_AtlasCoarseSample(vec2 uv, float coarseDim, uint frameSlot)
 
 #if !defined(CBT_DECODE_INT32)
 // The paged height resolve (cbt_page.glsl), wide arm only (mirror CBTLayout.h kCBTPageTableBinding):
-// the narrow arm's VertexEval already binds the WebGPU per-stage storage-buffer limit.
+// the narrow arm keeps the unified and atlas heights.
 // Binding 22: TerrainPageFeature's page-table ring, one slot per frame in flight; this frame's first
-// word rides its params (analyticParams lane CBT_PAGE_RING_BASE_LANE), never a word of another slot.
+// word rides its params (pageParams lane CBT_PAGE_RING_BASE_LANE), never a word of another slot.
 // Layout (mirror CBTLayout.h): [0, 4) CBTPageField's shape, [4] the cache's slot count, [5, 8) the
 // floor level, the tier count and the floor directory's offset (all 0 for a dense table),
 // [8, 8 + 4 * CBT_PAGE_MAX_LEVELS) one CBTPageLevel per level, then one arrival fade per cache slot
 // (float bits), then the table's words (TerrainECS PageTable). The word offsets are in cbt_page.glsl.
-#define CBT_PAGE_RING_BASE_LANE 2
+#define CBT_PAGE_RING_BASE_LANE 0
 layout(std430, set = CBT_DESCRIPTOR_SET, binding = 22) CBT_SSBO_QUAL buffer CBTPageTableBuffer
 {
     uint Words[];
@@ -764,7 +750,7 @@ layout(set = CBT_DESCRIPTOR_SET, binding = 23) uniform sampler2D gPageCache CBT_
 
 // ---------------------------------------------------------------------------
 // Push constants (compute only; the graphics adapter owns the sole PC block —
-// plan §9). 92 bytes, mirror of CBTPushConstants.
+// plan §9). 84 bytes, mirror of CBTPushConstants.
 // ---------------------------------------------------------------------------
 #ifndef CBT_GRAPHICS_INCLUDE
 layout(push_constant) uniform CBTPushConstants
@@ -787,17 +773,12 @@ layout(push_constant) uniform CBTPushConstants
     float dirtyMaxU;
     float dirtyMaxV;
     // The planar dirty rect above; the sphere's face rects are CBTFrameSlot.sphereDirty.
-    // sphereSculptEnabled gates the additive sculpt sample in VertexEval.
-    uint sphereSculptEnabled;
     // Quiescence gate for VertexEval (plan §planet-shading perf). 0 = evaluate the whole live
     // pool (the pre-slice behavior; used for the force-eval frame after init / a param change).
     // 1 = evaluate ONLY bisectors flagged CBT_FLAG_MODIFIED this frame (created / promoted /
     // edit-dirty) — unchanged bisectors keep their prior camera-independent corners, so a
     // quiescent frame re-evaluates ~0 vertices instead of the whole pool (the 35ms -> ~0 fix).
     uint gateVertexEval;
-    // Edit-driven retess A/B (round-8b): 1 = Classify's geometric-error crease term is live; 0 =
-    // area-only (the pre-slice metric). Only Classify reads it, on the sphere with sculpt enabled.
-    uint editRetessEnabled;
     // Near-field force-split occupancy gate A/B (round-8e): 1 = under pool pressure, stop the invisible
     // near-plane/behind-eye force-split treadmill that pins the pool at 100%; 0 = the pre-slice
     // unconditional force-split. Only Classify reads it, on the sphere with the screen-space metric.
@@ -815,10 +796,16 @@ layout(push_constant) uniform CBTPushConstants
     // Kernel_NormalChainBuild, blocks for Kernel_HeightRangeBuild. Only they read them.
     uint buildRegionMin;
     uint buildRegionExtent;
-    // The rest rule (mirror CBTPushConstants::Settle). 1 = every input matches the previous update's:
+    // The rest rule (mirror CBTPushConstants::Settle). Above 0 = every input matches the previous update's:
     // Kernel_Classify's planar split and merge use one threshold (CBT_PlanarClassify). Classify and
-    // Kernel_Reset's live-count latch read it.
+    // Kernel_Reset's live-count latch read it. CBT_SETTLE_LASTED lets the keep step's rest search step down.
     uint settle;
+    // 1 = this update counts the pool census (mirror CBTPushConstants::Census). Kernel_Reset and Kernel_Classify
+    // read it.
+    uint census;
+    // What Kernel_Classify's planar area metric keeps of a facet wholly behind the eye (CBT_BEHIND_EYE_*; mirror
+    // CBTPushConstants::BehindEye).
+    uint behindEye;
 } pc;
 #endif
 
@@ -965,10 +952,8 @@ uint CBT_DecodeFreeSlot(uint k)
 // the same slot so an in-flight frame never reads a half-written struct.
 CBTFrameParams CBT_Frame() { return gParams.Params[pc.frameIndex % CBT_FRAME_RING].frame; }
 
-// Meters per render-origin sector — the fixed engine constant (Components::kWorldSectorSize
-// == camera_relative.glsl GE_SECTOR_SIZE == 1024). Used to reconstruct the render origin
-// from the integer sector, NOT read from renderOriginSector.w, so this stays consistent
-// with the draw path even for a params fill that leaves .w zero (Earth-scale slice 1b).
+// Meters per sector, equal to Mathematics::kWorldSectorSize and GE_SECTOR_SIZE. A constant,
+// not renderOriginSector.w: a params fill can leave .w zero.
 const float CBT_SECTOR_SIZE = 1024.0;
 
 // World-space position of the render origin (sector * sector size). Zero when the origin is
@@ -982,7 +967,7 @@ const float CBT_SECTOR_SIZE = 1024.0;
 vec3 CBT_RenderOriginWorld(CBTFrameParams fp) { return fp.renderOriginSector.xyz * CBT_SECTOR_SIZE; }
 
 // One bisector's three corners in the frames every compute consumer needs: planet-center WORLD
-// (horizon cull, crease radius math; fp32 at planet magnitude) and render-origin-RELATIVE
+// (horizon cull; fp32 at planet magnitude) and render-origin-RELATIVE
 // (frustum cull, screen metric). deepTag.x selects the store of the slot:
 //   0 (world corners): world = the stored corner, rel = world - originW.
 //   1 (sector, local): rel = vec3(sector - originSector) * CBT_SECTOR_SIZE + local (an exact
@@ -1059,7 +1044,7 @@ vec2 CBT_TerrainToWorldXZ(vec2 uv, CBTFrameParams fp)
 uint CBT_PageRingBase()
 {
     uint slot = pc.frameIndex % CBT_FRAME_RING;
-    return uint(gParams.Params[slot].frame.analyticParams[CBT_PAGE_RING_BASE_LANE]);
+    return uint(gParams.Params[slot].frame.pageParams[CBT_PAGE_RING_BASE_LANE]);
 }
 
 uint CBT_PageTableWord(uint index)
@@ -1142,14 +1127,8 @@ float CBT_SampleHeight(vec2 uv, CBTFrameParams fp)
         ivec2 tile;
         vec2 localUV;
         CBT_AtlasTile(cuv, ap, tile, localUV);
-        uint tileIndex = CBT_AtlasTileIndex(tile, ap);
-        CBTTileAtlasSlot row;
-        row.Slot = CBT_ATLAS_NO_SLOT;
-        row.Generation = 0u;
-        row.LodBias = 0.0;
-        row.Fade = 1.0; // height resolve ignores Fade (fragment-only crossfade); keep the default settled
-        if (tileIndex < CBT_ATLAS_MAX_TILES)
-            row = gAtlasRows.Rows[frameSlot * CBT_ATLAS_MAX_TILES + tileIndex];
+        // The window index is below CBT_ATLAS_WINDOW_ROWS by construction.
+        CBTTileAtlasSlot row = gAtlasRows.Rows[frameSlot * CBT_ATLAS_WINDOW_ROWS + CBT_AtlasRowIndex(tile, ap)];
 
         AtlasResolve r = CBT_AtlasResolve(cuv, ap, row);
         // Out-of-window: the coarse field (binding 19), height-continuous with the resident
@@ -1164,275 +1143,6 @@ float CBT_SampleHeight(vec2 uv, CBTFrameParams fp)
     }
     precise float height = texel * fp.terrainSize.z + fp.terrainSize.w; // see CBT_TerrainToWorldXZ
     return height;
-}
-
-// Sphere sculpt geometry for THIS frame — on the spherical VertexEval path atlasParams0 is free
-// (the atlas is planar-only), so it carries the paged sculpt geometry: x=VirtualDim, y=Cap,
-// z=PagesPerAxis, w=PoolPageCount (mirror CBTRenderFeature BuildFrameParams). Integer geometry rides
-// as float (all < 2^23 -> exact).
-CBTSculptGeom CBT_SculptGeomFromFrame(CBTFrameParams fp)
-{
-    CBTSculptGeom g;
-    g.VirtualDim = uint(fp.atlasParams0.x);
-    g.Cap = uint(fp.atlasParams0.y);
-    g.PagesPerAxis = uint(fp.atlasParams0.z);
-    g.PoolPageCount = uint(fp.atlasParams0.w);
-    return g;
-}
-
-// Fine texel (jx, jy) of the block `entry` decodes to (level-aware pool index, S4).
-float CBT_SculptFineTexel(uint entry, uint jx, uint jy, uint poolBase)
-{
-    return gSphereSculpt.Sculpt[poolBase + CBT_SculptPoolIndexFine(entry, jx, jy)];
-}
-
-// Resolve one virtual texel to its additive height (0 for an unallocated page). poolBase/tableBase
-// are this frame's ring-slot bases. On an escalated page the base-ALIGNED fine texel is read
-// (local << level — base positions exist at every level by endpoint alignment). Bit-lock twin of
-// SphereSculptPaging.h SculptResolveTexel.
-float CBT_SculptResolveTexel(uint face, uint vtx, uint vty, CBTSculptGeom g, uint poolBase, uint tableBase)
-{
-    uint pageX = vtx / CBT_SCULPT_PAGE_DIM;
-    uint pageY = vty / CBT_SCULPT_PAGE_DIM;
-    uint entry = gSphereSculptTable.Table[tableBase + CBT_SculptTableEntry(face, pageX, pageY, g.Cap)];
-    if (entry == CBT_SCULPT_NO_PAGE)
-        return 0.0;
-    uint level = CBT_SculptEntryLevel(entry);
-    uint localX = vtx - pageX * CBT_SCULPT_PAGE_DIM;
-    uint localY = vty - pageY * CBT_SCULPT_PAGE_DIM;
-    return CBT_SculptFineTexel(entry, localX << level, localY << level, poolBase);
-}
-
-// Piecewise-linear evaluation of one page's edge COLUMN (fixed fine jx) at page-local base-texel
-// position tLocal, at the page's OWN level — the S4 seam-stitch primitive (mirror
-// SphereSculptPaging.h SculptEdgeColEval; unallocated page evaluates to 0).
-float CBT_SculptEdgeColEval(uint entry, uint jx, float tLocal, uint poolBase)
-{
-    if (entry == CBT_SCULPT_NO_PAGE)
-        return 0.0;
-    uint lstep = 1u << CBT_SculptEntryLevel(entry);
-    uint jmax = 127u * lstep;
-    float sv = tLocal * float(lstep);
-    uint k0 = min(uint(sv), jmax);
-    uint k1 = min(k0 + 1u, jmax);
-    float a = CBT_SculptFineTexel(entry, jx, k0, poolBase);
-    float b = CBT_SculptFineTexel(entry, jx, k1, poolBase);
-    return mix(a, b, sv - float(k0));
-}
-
-// Row twin (fixed fine jy, u varying).
-float CBT_SculptEdgeRowEval(uint entry, uint jy, float tLocal, uint poolBase)
-{
-    if (entry == CBT_SCULPT_NO_PAGE)
-        return 0.0;
-    uint lstep = 1u << CBT_SculptEntryLevel(entry);
-    uint jmax = 127u * lstep;
-    float su = tLocal * float(lstep);
-    uint k0 = min(uint(su), jmax);
-    uint k1 = min(k0 + 1u, jmax);
-    float a = CBT_SculptFineTexel(entry, k0, jy, poolBase);
-    float b = CBT_SculptFineTexel(entry, k1, jy, poolBase);
-    return mix(a, b, su - float(k0));
-}
-
-// Paged bilinear read of the sphere sculpt store for (face, face-local uv). Reads this frame's ring
-// slot. Level-aware since S4 (structure mirror of SphereSculptPaging.h SampleSculptFaceUVWith):
-//   * all four tap pages at level 0 -> the pre-S4 four-tap bilinear (each tap resolves its own
-//     page; an unallocated page reads 0), endpoint-exact, no apron sync;
-//   * cell interior to one escalated page -> fine bilinear at the page's level;
-//   * cell straddling a page seam -> lerp across the base cell between the two pages' edge
-//     functions, each at its OWN level (C0 with both interiors);
-//   * four-page corner cell -> bilinear of the four corner texels.
-// Returns the additive relief offset in metres. Only called when pc.sphereSculptEnabled.
-float CBT_SampleSphereSculpt(uint face, vec2 uv, CBTSculptGeom g)
-{
-    if (g.PoolPageCount == 0u || g.VirtualDim < 2u)
-        return 0.0;
-    uint frameSlot = pc.frameIndex % CBT_FRAME_RING;
-    uint poolBase = frameSlot * g.PoolPageCount * CBT_SCULPT_PAGE_TEXELS;
-    uint tableBase = frameSlot * CBT_CUBE_FACE_COUNT6 * CBT_SCULPT_PAGE_TABLE_FACE_STRIDE;
-    float dim = float(g.VirtualDim);
-    vec2 t = clamp(uv, 0.0, 1.0) * (dim - 1.0);
-    uint x0 = uint(floor(t.x));
-    uint y0 = uint(floor(t.y));
-    uint x1 = min(x0 + 1u, g.VirtualDim - 1u);
-    uint y1 = min(y0 + 1u, g.VirtualDim - 1u);
-    float fx = t.x - float(x0);
-    float fy = t.y - float(y0);
-    uint px0 = x0 / CBT_SCULPT_PAGE_DIM;
-    uint py0 = y0 / CBT_SCULPT_PAGE_DIM;
-    uint px1 = x1 / CBT_SCULPT_PAGE_DIM;
-    uint py1 = y1 / CBT_SCULPT_PAGE_DIM;
-    uint e00 = gSphereSculptTable.Table[tableBase + CBT_SculptTableEntry(face, px0, py0, g.Cap)];
-    uint e10 = gSphereSculptTable.Table[tableBase + CBT_SculptTableEntry(face, px1, py0, g.Cap)];
-    uint e01 = gSphereSculptTable.Table[tableBase + CBT_SculptTableEntry(face, px0, py1, g.Cap)];
-    uint e11 = gSphereSculptTable.Table[tableBase + CBT_SculptTableEntry(face, px1, py1, g.Cap)];
-    uint lv00 = e00 == CBT_SCULPT_NO_PAGE ? 0u : CBT_SculptEntryLevel(e00);
-    uint lv10 = e10 == CBT_SCULPT_NO_PAGE ? 0u : CBT_SculptEntryLevel(e10);
-    uint lv01 = e01 == CBT_SCULPT_NO_PAGE ? 0u : CBT_SculptEntryLevel(e01);
-    uint lv11 = e11 == CBT_SCULPT_NO_PAGE ? 0u : CBT_SculptEntryLevel(e11);
-    if ((lv00 | lv10 | lv01 | lv11) == 0u)
-    {
-        float s00 = e00 == CBT_SCULPT_NO_PAGE
-                        ? 0.0
-                        : CBT_SculptFineTexel(e00, x0 - px0 * CBT_SCULPT_PAGE_DIM,
-                                              y0 - py0 * CBT_SCULPT_PAGE_DIM, poolBase);
-        float s10 = e10 == CBT_SCULPT_NO_PAGE
-                        ? 0.0
-                        : CBT_SculptFineTexel(e10, x1 - px1 * CBT_SCULPT_PAGE_DIM,
-                                              y0 - py0 * CBT_SCULPT_PAGE_DIM, poolBase);
-        float s01 = e01 == CBT_SCULPT_NO_PAGE
-                        ? 0.0
-                        : CBT_SculptFineTexel(e01, x0 - px0 * CBT_SCULPT_PAGE_DIM,
-                                              y1 - py1 * CBT_SCULPT_PAGE_DIM, poolBase);
-        float s11 = e11 == CBT_SCULPT_NO_PAGE
-                        ? 0.0
-                        : CBT_SculptFineTexel(e11, x1 - px1 * CBT_SCULPT_PAGE_DIM,
-                                              y1 - py1 * CBT_SCULPT_PAGE_DIM, poolBase);
-        return mix(mix(s00, s10, fx), mix(s01, s11, fx), fy);
-    }
-    if (px0 == px1 && py0 == py1)
-    {
-        uint lstep = 1u << lv00;
-        uint jmax = 127u * lstep;
-        float sx = (t.x - float(px0 * CBT_SCULPT_PAGE_DIM)) * float(lstep);
-        float sy = (t.y - float(py0 * CBT_SCULPT_PAGE_DIM)) * float(lstep);
-        uint jx0 = min(uint(sx), jmax);
-        uint jy0 = min(uint(sy), jmax);
-        uint jx1 = min(jx0 + 1u, jmax);
-        uint jy1 = min(jy0 + 1u, jmax);
-        float gx = sx - float(jx0);
-        float gy = sy - float(jy0);
-        float s00 = CBT_SculptFineTexel(e00, jx0, jy0, poolBase);
-        float s10 = CBT_SculptFineTexel(e00, jx1, jy0, poolBase);
-        float s01 = CBT_SculptFineTexel(e00, jx0, jy1, poolBase);
-        float s11 = CBT_SculptFineTexel(e00, jx1, jy1, poolBase);
-        return mix(mix(s00, s10, gx), mix(s01, s11, gx), gy);
-    }
-    if (py0 == py1)
-    {
-        float tLoc = t.y - float(py0 * CBT_SCULPT_PAGE_DIM);
-        float colL = CBT_SculptEdgeColEval(e00, 127u * (1u << lv00), tLoc, poolBase);
-        float colR = CBT_SculptEdgeColEval(e10, 0u, tLoc, poolBase);
-        return mix(colL, colR, fx);
-    }
-    if (px0 == px1)
-    {
-        float tLoc = t.x - float(px0 * CBT_SCULPT_PAGE_DIM);
-        float rowB = CBT_SculptEdgeRowEval(e00, 127u * (1u << lv00), tLoc, poolBase);
-        float rowT = CBT_SculptEdgeRowEval(e01, 0u, tLoc, poolBase);
-        return mix(rowB, rowT, fy);
-    }
-    float c00 = e00 == CBT_SCULPT_NO_PAGE
-                    ? 0.0
-                    : CBT_SculptFineTexel(e00, 127u * (1u << lv00), 127u * (1u << lv00), poolBase);
-    float c10 = e10 == CBT_SCULPT_NO_PAGE ? 0.0
-                                          : CBT_SculptFineTexel(e10, 0u, 127u * (1u << lv10), poolBase);
-    float c01 = e01 == CBT_SCULPT_NO_PAGE ? 0.0
-                                          : CBT_SculptFineTexel(e01, 127u * (1u << lv01), 0u, poolBase);
-    float c11 = e11 == CBT_SCULPT_NO_PAGE ? 0.0 : CBT_SculptFineTexel(e11, 0u, 0u, poolBase);
-    return mix(mix(c00, c10, fx), mix(c01, c11, fx), fy);
-}
-
-// Is the sculpt page covering (face, face-local uv) RESIDENT — i.e. does user-authored content exist
-// there? The same page-table read CBT_SampleSphereSculpt does, WITHOUT the four bilinear pool fetches:
-// a page is allocated only when a modifier bake wrote to it, so a resident page means "an edit lands
-// here". The crease term uses this to decide whether to evaluate the split-edge midpoint (the #589
-// residency-gate pattern), replacing a corner-height-gradient early-exit that was blind to an edit
-// INTERIOR to a facet (both corners on the flat surround, the sculpt at the midpoint). Cost: one
-// Table[] load — cheaper than the two length() calls it supplants (no sqrt, no base-relief eval).
-// Nearest-texel page: a page is 128^2 texels; a uv within a texel of a page seam is covered by the
-// complementary corner/neighbour taps. An unconfigured pool -> false (the common untouched skip).
-bool CBT_SculptPageResident(uint face, vec2 uv, CBTSculptGeom g)
-{
-    if (g.PoolPageCount == 0u || g.VirtualDim < 2u)
-        return false;
-    uint frameSlot = pc.frameIndex % CBT_FRAME_RING;
-    uint tableBase = frameSlot * CBT_CUBE_FACE_COUNT6 * CBT_SCULPT_PAGE_TABLE_FACE_STRIDE;
-    vec2 t = clamp(uv, 0.0, 1.0) * (float(g.VirtualDim) - 1.0);
-    uint pageX = uint(floor(t.x)) / CBT_SCULPT_PAGE_DIM;
-    uint pageY = uint(floor(t.y)) / CBT_SCULPT_PAGE_DIM;
-    return gSphereSculptTable.Table[tableBase + CBT_SculptTableEntry(face, pageX, pageY, g.Cap)] !=
-           CBT_SCULPT_NO_PAGE;
-}
-
-// ---- Analytic sphere modifiers over the frame params (sculpt shape-accuracy S2/S3) ----
-// The bounded closed-form placement set the CPU publishes per frame (cbt_analytic.glsl math):
-// flattens at slots [0, count), transient brush dabs at [count, count+dabCount). Total 0 = the
-// dark-ship: every helper below is a no-op with no float op added to any height.
-
-uint CBT_SphereAnalyticCount(CBTFrameParams fp)
-{
-    return min(uint(fp.analyticParams.x), CBT_MAX_SPHERE_ANALYTIC);
-}
-
-uint CBT_SphereAnalyticTotal(CBTFrameParams fp)
-{
-    return min(uint(fp.analyticParams.x) + uint(fp.analyticParams.y), CBT_MAX_SPHERE_ANALYTIC);
-}
-
-// The 16-bit placement mask for the cell containing face-local `uv` (S3 per-cell culling; mirror
-// SphereAnalyticCellIndex). Placements whose support cannot reach the cell have their bit clear,
-// so the masked helpers below skip them without touching their slots — the facet-cost cure for
-// the all-N covers loop. Reads the UBO slot directly (never a by-value frame copy — see the
-// CBTFrameSlot note); a zero mask (the common far-from-every-edit case) costs one UBO read.
-uint CBT_AnalyticCellMask(uint face, vec2 uv)
-{
-    const uint kGrid = 8u; // CBT_ANALYTIC_CELL_GRID (kSphereAnalyticCellGrid twin)
-    uvec2 c = min(uvec2(clamp(uv, 0.0, 1.0) * float(kGrid)), uvec2(kGrid - 1u));
-    uint cell = face * kGrid * kGrid + c.y * kGrid + c.x;
-    uint word = gParams.Params[pc.frameIndex % CBT_FRAME_RING]
-                    .analyticCellMask[cell >> 3u][(cell >> 1u) & 3u];
-    return (cell & 1u) != 0u ? (word >> 16u) : (word & 0xFFFFu);
-}
-
-// Sum of the analytic placement offsets at UNIT world direction `dir` (metres), restricted to the
-// placements in `mask` (the sample point's cell mask — exact, since a contributing placement's
-// support contains the sample point and therefore its cell bit is set). reliefAtDir is the
-// closed-form base relief at that direction (flatten cancels it; dabs are additive). The compute
-// twin of the CPU chokepoint SampleSphereSculptComposed's analytic term: VertexEval and the
-// crease midpoint add this on top of the store sample so the rendered mesh, the retess demand,
-// physics and the cursor agree on one composed height by construction.
-float CBT_SphereAnalyticOffsetMasked(CBTFrameParams fp, uint mask, vec3 dir, float reliefAtDir)
-{
-    uint flatCount = CBT_SphereAnalyticCount(fp);
-    mask &= (1u << CBT_SphereAnalyticTotal(fp)) - 1u;
-    float sum = 0.0;
-    while (mask != 0u)
-    {
-        uint i = uint(findLSB(mask));
-        mask &= mask - 1u;
-        if (i < flatCount)
-            sum += CBT_EvalSphereAnalyticFlatten(fp.sphereAnalytic[i], fp.planetParams.x, dir,
-                                                 reliefAtDir);
-        else
-            sum += CBT_EvalSphereAnalyticDab(fp.sphereAnalytic[i], fp.planetParams.x, dir);
-    }
-    return sum;
-}
-
-// True when any placement in `mask` covers unit `dir` (footprint + falloff skirt) — the
-// crease-residency extension: an analytic placement allocates no sculpt pages, so the edit-driven
-// retess gate is page-resident OR this (without it the pad rim never crease-refines).
-bool CBT_SphereAnalyticCoversMasked(CBTFrameParams fp, uint mask, vec3 dir)
-{
-    uint flatCount = CBT_SphereAnalyticCount(fp);
-    mask &= (1u << CBT_SphereAnalyticTotal(fp)) - 1u;
-    while (mask != 0u)
-    {
-        uint i = uint(findLSB(mask));
-        mask &= mask - 1u;
-        if (i < flatCount)
-        {
-            if (CBT_SphereAnalyticFlattenCovers(fp.sphereAnalytic[i], fp.planetParams.x, dir))
-                return true;
-        }
-        else if (CBT_SphereAnalyticDabCovers(fp.sphereAnalytic[i], fp.planetParams.x, dir))
-        {
-            return true;
-        }
-    }
-    return false;
 }
 
 // Project a render-origin-relative point to viewport pixel coordinates through the rebased

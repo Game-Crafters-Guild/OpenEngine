@@ -544,8 +544,10 @@ TEST_F(HumanoidRetargetSystemTest, HotReloadRace_NoCrashNoTorn)
 //      by asset GUID, not by character.
 // =====================================================================
 
+#include "ECS/ECSTemplates.h"
 #include "ECS/World.h"
 #include "ECS/Entity.h"
+#include "ECS/Systems.h"
 
 namespace
 {
@@ -662,6 +664,36 @@ TEST_F(HumanoidRetargetSystemTest, EntityDestroy_FreesRuntimeAndPrunesCharacterE
     EXPECT_EQ(skStore.GetRuntimeHighWaterMark(), hwmAfterFree)
         << "ReleaseRuntime free list isn't recycling slot IDs — high-water mark grew";
     for (uint32 rt : reused) skStore.ReleaseRuntime(rt);
+}
+
+// The scheduler hands the retarget system a delta of 0 while the world clock is paused, so the
+// clip time of a retargeted AnimatorRef holds.
+TEST_F(HumanoidRetargetSystemTest, APausedClockHoldsTheAnimatorRefClipTime)
+{
+    const uint32 clipIndex = RegisterSyntheticClip();
+    ASSERT_NE(clipIndex, 0u);
+    ECS::World world(nullptr);
+    ECS::ComponentBundle bundle;
+    bundle.Add(GameEngine::Components::SkeletonRef{});
+    bundle.Add(GameEngine::Components::HumanoidRetargeterComponent{});
+    GameEngine::Components::AnimatorRef animatorRef{};
+    animatorRef.ClipIndex = clipIndex;
+    animatorRef.Flags = GameEngine::Components::AnimatorRef::kFlag_Loop;
+    bundle.Add(animatorRef);
+    const ECS::EntityHandle entity = world.CreateFromBundleHandle(bundle);
+    world.ProcessCommands();
+
+    ECS::SystemManager systems;
+    systems.AddSystem<GERender::HumanoidRetargetSystem>(nullptr);
+    systems.Update(world, 0.1f);
+    const float held = world.GetComponent<GameEngine::Components::AnimatorRef>(entity)->Time;
+    ASSERT_GT(held, 0.0f);
+
+    world.GetSimulationClock().SetTimeScale(0.0);
+    for (int frame = 0; frame < 5; ++frame)
+        systems.Update(world, 0.1f);
+    EXPECT_EQ(world.GetComponent<GameEngine::Components::AnimatorRef>(entity)->Time, held)
+        << "a paused clock holds the retargeted clip time";
 }
 
 TEST_F(HumanoidRetargetSystemTest, GPUDataStore_ReleaseOnAssetUnload)

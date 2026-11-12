@@ -10,6 +10,8 @@
 #include "Rendering/Materials/MaterialHelper.h"
 #include "Rendering/ShaderCache/ShaderPackageIO.h"
 
+#include <optional>
+
 #include <nlohmann/json.hpp>
 
 namespace GameEngine::Engine::Renderer { using namespace ::GameEngine::Rendering; }
@@ -44,6 +46,24 @@ void DepthResolveNode::Declare(RenderPipelineInstance& instance,
 {
     if (auto* dev = instance.GetRenderServices().GetDevice())
         LoadShaders(dev);
+}
+
+void DepthResolveNode::RequestPipeline(IDevice& device, uint32_t depthSampleCount)
+{
+    LoadShaders(&device);
+    const ComputePipelineId id = depthSampleCount > 1 ? m_ResolvePipelineId : m_CopyPipelineId;
+    if (id.IsValid())
+        device.RequestComputePipeline(id);
+}
+
+void DepthResolveNode::RequestPausedViewPipelines(const PausedViewPrewarm& prewarm)
+{
+    // The live declare copies the view depth when the view has one, as the world pass draws into it.
+    IDevice* device = prewarm.Services.GetDevice();
+    const std::optional<PipelineFormatKey> formats = prewarm.WorldColorTargetsKey();
+    if (!device || !formats || formats->DepthFormat == TextureFormat{})
+        return;
+    RequestPipeline(*device, formats->RasterizationSamples);
 }
 
 void DepthResolveNode::DeclareForView(ViewDeclare& d)

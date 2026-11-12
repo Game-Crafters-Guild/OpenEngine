@@ -72,12 +72,14 @@ class MetalQueryPool : public IQueryPool
                                uint64_t& outTicks) const override;
     uint32_t BeginOcclusionQuery(CommandList* commandList, const std::string& name = "") override;
     void EndOcclusionQuery(CommandList* commandList, uint32_t queryIndex) override;
+    // Metal has no per-pass pipeline-statistics query in the engine.
+    bool SupportsPipelineStatistics() const override { return false; }
     uint32_t BeginPipelineStats(CommandList* commandList, const std::string& name = "") override;
     void EndPipelineStats(CommandList* commandList, uint32_t queryIndex) override;
 
     bool GetTimestampResult(uint32_t queryIndex, QueryResult& outResult) override;
     bool GetOcclusionResult(uint32_t queryIndex, QueryResult& outResult) override;
-    bool GetPipelineStatsResult(uint32_t queryIndex, QueryResult& outResult) override;
+    bool GetPipelineStatsResult(uint32_t queryIndex, PipelineStatistics& outStatistics) const override;
 
     const ProfilingStats& GetProfilingStats() const override;
     double GetTimestampPeriod() const override;

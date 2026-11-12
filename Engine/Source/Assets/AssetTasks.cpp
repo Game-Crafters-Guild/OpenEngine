@@ -130,7 +130,7 @@ std::string GetAssetLogLabel(const GUID& assetGuid,
 // Asset::Reload, keeping initial-load and hot-reload paths in sync.
 
 SharedPtr<Asset> ProcessAudioAsset(AssetManager& assetManager,
-                                   const AssetMetadata& metadata, const Vector<uint8>& data)
+                                   const AssetMetadata& metadata, ByteBuffer data)
 {
     SharedPtr<Asset> asset = assetManager.CreateAsset(metadata);
     if (!asset)
@@ -179,7 +179,7 @@ SharedPtr<Asset> ProcessAudioAsset(AssetManager& assetManager,
             // ignore metadata issues; fall back to defaults
         }
 
-        if (!audio->LoadFromDataWithRuntimeSettings(data, s, metadata.FileSize))
+        if (!audio->LoadFromDataWithRuntimeSettings(std::move(data), s, metadata.FileSize))
         {
             LogDecodeFailure(CurrentAssetDecodeCancellation(), "AssetDecodeJob: Failed to load Audio data from '{}'",
                              metadata.Path.string());
@@ -202,7 +202,7 @@ SharedPtr<Asset> ProcessAudioAsset(AssetManager& assetManager,
 }
 
 SharedPtr<Asset> ProcessTypedAsset(AssetManager& assetManager,
-                                   const AssetMetadata& metadata, const Vector<uint8>& data)
+                                   const AssetMetadata& metadata, std::span<const uint8> data)
 {
     const std::string typeName{AssetTypeToString(metadata.Type)};
 
@@ -226,7 +226,7 @@ SharedPtr<Asset> ProcessTypedAsset(AssetManager& assetManager,
 }
 
 SharedPtr<Asset> ProcessGenericAsset(AssetManager& assetManager, const GUID& assetGuid,
-                                     const AssetMetadata& metadata, const Vector<uint8>& data)
+                                     const AssetMetadata& metadata, std::span<const uint8> data)
 {
     SharedPtr<Asset> asset = assetManager.CreateAsset(metadata);
     if (!asset)
@@ -293,7 +293,7 @@ SharedPtr<Asset> ProcessGenericAsset(AssetManager& assetManager, const GUID& ass
 }
 
 SharedPtr<Asset> ProcessAssetData(AssetManager& assetManager, const GUID& assetGuid,
-                                  const AssetMetadata& metadata, const Vector<uint8>& data)
+                                  const AssetMetadata& metadata, ByteBuffer data)
 {
     // Route to asset-type-specific processing based on metadata
     switch (metadata.Type)
@@ -304,14 +304,14 @@ SharedPtr<Asset> ProcessAssetData(AssetManager& assetManager, const GUID& assetG
     case AssetType::UIStyle:
         return ProcessTypedAsset(assetManager, metadata, data);
     case AssetType::Audio:
-        return ProcessAudioAsset(assetManager, metadata, data);
+        return ProcessAudioAsset(assetManager, metadata, std::move(data));
     default:
         return ProcessGenericAsset(assetManager, assetGuid, metadata, data);
     }
 }
 
 SharedPtr<Asset> ExecuteAssetDecodeJob(AssetManager& assetManager, const GUID& assetGuid,
-                                       const AssetMetadata& metadata, Vector<uint8> data,
+                                       const AssetMetadata& metadata, ByteBuffer data,
                                        const std::shared_ptr<std::atomic<bool>>& cancelRequested)
 {
     const auto isCancelled = [&cancelRequested]
@@ -323,8 +323,6 @@ SharedPtr<Asset> ExecuteAssetDecodeJob(AssetManager& assetManager, const GUID& a
     {
         return SharedPtr<Asset>{};
     }
-
-    std::string assetLabel = GetAssetLogLabel(assetGuid, metadata.Path, &assetManager);
 
     SharedPtr<Asset> asset;
     {
@@ -341,11 +339,14 @@ SharedPtr<Asset> ExecuteAssetDecodeJob(AssetManager& assetManager, const GUID& a
             AssetManager::ScopedThreadAssetManager ctx(&assetManager);
             ScopedAssetDecodeCancellation cancelCtx(cancelRequested);
 
-            asset = ProcessAssetData(assetManager, assetGuid, metadata, data);
+            asset = ProcessAssetData(assetManager, assetGuid, metadata, std::move(data));
 
             const auto duration = std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::high_resolution_clock::now() - startTime);
-            Logger::Log::Debug("AssetDecodeJob: processed {} in {}μs", assetLabel, duration.count());
+            // The label resolves the path against every asset root; build it only for a line that prints.
+            if (Logger::Log::ShouldLog(Logger::LogLevel::Debug))
+                Logger::Log::Debug("AssetDecodeJob: processed {} in {}μs",
+                                   GetAssetLogLabel(assetGuid, metadata.Path, &assetManager), duration.count());
             AssetTaskPerformanceMonitor::GetInstance().RecordTaskExecution(
                 "AssetProcessingTask", duration.count() / 1000.0, asset != nullptr);
         }
@@ -358,7 +359,7 @@ SharedPtr<Asset> ExecuteAssetDecodeJob(AssetManager& assetManager, const GUID& a
             const auto duration = std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::high_resolution_clock::now() - startTime);
             LogDecodeFailure(cancelRequested, "AssetDecodeJob: processing failed for {} after {}μs: {}",
-                             assetLabel, duration.count(), e.what());
+                             GetAssetLogLabel(assetGuid, metadata.Path, &assetManager), duration.count(), e.what());
             AssetTaskPerformanceMonitor::GetInstance().RecordTaskExecution(
                 "AssetProcessingTask", duration.count() / 1000.0, false);
 
@@ -394,7 +395,7 @@ SharedPtr<Asset> ExecuteAssetDecodeJob(AssetManager& assetManager, const GUID& a
         if (durationMs > 1.0)
         {
             Logger::Log::Warning("AssetDecodeJob: registration took {}ms, exceeding 1ms target for {}",
-                                 durationMs, assetLabel);
+                                 durationMs, GetAssetLogLabel(assetGuid, metadata.Path, &assetManager));
         }
         AssetTaskPerformanceMonitor::GetInstance().RecordTaskExecution(
             "AssetRegistrationTask", durationMs, true);
@@ -406,7 +407,7 @@ SharedPtr<Asset> ExecuteAssetDecodeJob(AssetManager& assetManager, const GUID& a
 } // namespace
 
 SharedPtr<Asset> DecodeAssetPayload(AssetManager& assetManager, const GUID& assetGuid,
-                                    const AssetMetadata& metadata, const Vector<uint8>& data,
+                                    const AssetMetadata& metadata, ByteBuffer data,
                                     const std::shared_ptr<std::atomic<bool>>& cancelRequested)
 {
     try
@@ -418,7 +419,7 @@ SharedPtr<Asset> DecodeAssetPayload(AssetManager& assetManager, const GUID& asse
         // reload stops its cook at the next block-row band boundary.
         AssetManager::ScopedThreadAssetManager ctx(&assetManager);
         ScopedAssetDecodeCancellation cancelCtx(cancelRequested);
-        return ProcessAssetData(assetManager, assetGuid, metadata, data);
+        return ProcessAssetData(assetManager, assetGuid, metadata, std::move(data));
     }
     catch (const std::exception& e)
     {
@@ -434,11 +435,18 @@ SharedPtr<Asset> DecodeAssetPayload(AssetManager& assetManager, const GUID& asse
     }
 }
 
-Function<AssetDecodeInputs(const Vector<uint8>&)> MakeDecodeInputResolver(AssetManager& assetManager,
+Function<AssetDecodeInputs(std::span<const uint8>)> MakeDecodeInputResolver(AssetManager& assetManager,
                                                                           const AssetMetadata& metadata)
 {
-    return [manager = &assetManager, metadata](const Vector<uint8>& bytes)
+    return [manager = &assetManager, metadata](std::span<const uint8> bytes)
     { return manager->GetParserRegistry().ResolveDecodeInputs(metadata, bytes, *manager); };
+}
+
+Function<AssetDecodeInputs()> MakeDecodeInputWithoutBytesResolver(AssetManager& assetManager,
+                                                                  const AssetMetadata& metadata)
+{
+    return [manager = &assetManager, metadata]
+    { return manager->GetParserRegistry().ResolveDecodeInputsWithoutBytes(metadata, *manager); };
 }
 
 // ========================================
@@ -524,11 +532,12 @@ void AssetBatchCoordinator::LoadAsset(const AssetMetadata& metadata, AssetLoadPr
     request.Priority = priority;
     request.CancelRequested = cancelRequested;
     request.ProcessData = [manager = &m_AssetManager, assetGuid, metadata,
-                           cancelRequested](Vector<uint8> data) -> SharedPtr<Asset>
+                           cancelRequested](ByteBuffer data) -> SharedPtr<Asset>
     {
         return ExecuteAssetDecodeJob(*manager, assetGuid, metadata, std::move(data), cancelRequested);
     };
     request.ResolveDecodeInputs = MakeDecodeInputResolver(m_AssetManager, metadata);
+    request.ResolveDecodeInputsWithoutBytes = MakeDecodeInputWithoutBytesResolver(m_AssetManager, metadata);
     request.OnSubmitted = [manager = &m_AssetManager, assetGuid,
                            onComplete = std::move(onComplete), onFailure](const JobSystem::TaskHandle& handle)
     {

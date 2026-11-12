@@ -369,10 +369,14 @@ void AssetIOService::ExecuteRead(ReadRequest& request, bool holdsDecodeSlot)
 
     const auto startTime = std::chrono::high_resolution_clock::now();
 
-    Vector<uint8> data;
+    AssetDecodeInputFiles inputs;
+    const bool readsWithoutBytes = ReadDecodeInputsWithoutBytes(request, inputs);
+    ByteBuffer data;
     String readError;
-    bool read = false;
+    bool read = readsWithoutBytes;
+    if (!readsWithoutBytes)
     {
+        inputs = {};
         AssetDbProfiler::StageScope profileScope(AssetDbProfiler::Bucket::StageFileIO);
         read = request.RangeBytes > 0 ? ReadFileRange(request, data, readError)
                                       : ReadFileWithRetry(request.Metadata, data, readError);
@@ -393,8 +397,12 @@ void AssetIOService::ExecuteRead(ReadRequest& request, bool holdsDecodeSlot)
 
     const auto duration = std::chrono::duration_cast<std::chrono::microseconds>(
         std::chrono::high_resolution_clock::now() - startTime);
-    Logger::Log::Debug("AssetIOService: read {} bytes for {} in {}μs",
-                       data.size(), request.AssetGuid.ToString(), duration.count());
+    // The level check comes first, so a read below Debug level builds no GUID string.
+    if (Logger::Log::ShouldLog(Logger::LogLevel::Debug))
+    {
+        Logger::Log::Debug("AssetIOService: read {} bytes for {} in {}μs",
+                           data.Size(), request.AssetGuid.ToString(), duration.count());
+    }
     AssetTaskPerformanceMonitor::GetInstance().RecordTaskExecution(
         "AssetFileIOTask", duration.count() / 1000.0, true);
 
@@ -409,14 +417,14 @@ void AssetIOService::ExecuteRead(ReadRequest& request, bool holdsDecodeSlot)
 
     // The files the parser names for the decode are read here too, so the decode job does
     // not block its worker on them; it takes them from the published inputs.
-    AssetDecodeInputFiles inputs;
-    if (request.ResolveDecodeInputs)
+    if (!readsWithoutBytes && request.ResolveDecodeInputs)
     {
         String inputError;
         bool inputsRead = false;
         {
             AssetDbProfiler::StageScope profileScope(AssetDbProfiler::Bucket::StageFileIO);
-            inputsRead = ReadDecodeInputs(request, data, inputs, inputError);
+            inputsRead = ReadDecodeInputs(
+                request, [&request, &data] { return request.ResolveDecodeInputs(data); }, inputs, inputError);
         }
         if (!inputsRead)
         {
@@ -449,13 +457,28 @@ void AssetIOService::ExecuteRead(ReadRequest& request, bool holdsDecodeSlot)
     InvokeOnSubmitted(request, handle);
 }
 
-bool AssetIOService::ReadDecodeInputs(const ReadRequest& request, const Vector<uint8>& bytes,
+bool AssetIOService::ReadDecodeInputsWithoutBytes(const ReadRequest& request, AssetDecodeInputFiles& outFiles)
+{
+    if (!request.ResolveDecodeInputsWithoutBytes || request.RangeBytes > 0)
+        return false;
+    String error;
+    {
+        AssetDbProfiler::StageScope profileScope(AssetDbProfiler::Bucket::StageFileIO);
+        if (!ReadDecodeInputs(request, [&request] { return request.ResolveDecodeInputsWithoutBytes(); }, outFiles,
+                              error))
+            return false;
+    }
+    return !outFiles.Files.empty() &&
+           std::ranges::all_of(outFiles.Files, [](const auto& file) { return file.second.has_value(); });
+}
+
+bool AssetIOService::ReadDecodeInputs(const ReadRequest& request, FunctionRef<AssetDecodeInputs()> resolve,
                                       AssetDecodeInputFiles& outFiles, String& outError)
 {
     AssetDecodeInputs named;
     try
     {
-        named = request.ResolveDecodeInputs(bytes);
+        named = resolve();
     }
     catch (const std::exception& e)
     {
@@ -482,7 +505,7 @@ bool AssetIOService::ReadDecodeInputs(const ReadRequest& request, const Vector<u
             continue;
         try
         {
-            if (Vector<uint8> fileBytes; ReadAssetDecodeInputFromDisk(input, fileBytes))
+            if (ByteBuffer fileBytes; ReadAssetDecodeInputFromDisk(input, fileBytes))
                 file->second = std::move(fileBytes);
         }
         catch (const std::exception& e)
@@ -501,7 +524,7 @@ bool AssetIOService::ReadDecodeInputs(const ReadRequest& request, const Vector<u
     return true;
 }
 
-bool AssetIOService::ReadFileRange(const ReadRequest& request, Vector<uint8>& outData, String& outError)
+bool AssetIOService::ReadFileRange(const ReadRequest& request, ByteBuffer& outData, String& outError)
 {
     SharedFileReader reader;
     if (!reader.Open(request.Metadata.Path))
@@ -517,11 +540,11 @@ bool AssetIOService::ReadFileRange(const ReadRequest& request, Vector<uint8>& ou
                    std::to_string(request.RangeOffset) + " lie past the end of " + request.Metadata.Path.string();
         return false;
     }
-    outData.resize(static_cast<size_t>(request.RangeBytes));
+    outData = ByteBuffer(static_cast<size_t>(request.RangeBytes));
     if (!reader.SeekTo(request.RangeOffset) ||
-        reader.Read(outData.data(), request.RangeBytes) != static_cast<int64>(request.RangeBytes))
+        reader.Read(outData.Data(), request.RangeBytes) != static_cast<int64>(request.RangeBytes))
     {
-        outData.clear();
+        outData = ByteBuffer();
         outError = "Short read of " + std::to_string(request.RangeBytes) + " bytes at offset " +
                    std::to_string(request.RangeOffset) + " of " + request.Metadata.Path.string();
         return false;
@@ -529,7 +552,7 @@ bool AssetIOService::ReadFileRange(const ReadRequest& request, Vector<uint8>& ou
     return true;
 }
 
-bool AssetIOService::ReadFileWithRetry(const AssetMetadata& metadata, Vector<uint8>& outData, String& outError)
+bool AssetIOService::ReadFileWithRetry(const AssetMetadata& metadata, ByteBuffer& outData, String& outError)
 {
     // Reads open with full sharing (see AssetCore/SharedFileRead.h), so an
     // external safe-save rename never fails against this handle. The retry
@@ -539,7 +562,7 @@ bool AssetIOService::ReadFileWithRetry(const AssetMetadata& metadata, Vector<uin
     constexpr int kMaxRetries = 5;
     constexpr int kRetrySleepMs = 10;
 
-    outData.clear();
+    outData = ByteBuffer();
     outError.clear();
 
     bool opened = false;
@@ -558,7 +581,7 @@ bool AssetIOService::ReadFileWithRetry(const AssetMetadata& metadata, Vector<uin
         return false;
     }
 
-    if (outData.empty())
+    if (outData.Size() == 0)
     {
         // A truncate-then-write save (VS Code style) can be observed opened
         // but empty. The retry loop above only tolerates open/read *failures*,
@@ -566,7 +589,7 @@ bool AssetIOService::ReadFileWithRetry(const AssetMetadata& metadata, Vector<uin
         // treating emptiness as a hard failure.
         std::this_thread::sleep_for(std::chrono::milliseconds(kRetrySleepMs));
         (void)ReadFileBytesShared(metadata.Path, outData);
-        if (outData.empty())
+        if (outData.Size() == 0)
         {
             outError = "Asset data is empty: " + metadata.Path.string();
             return false;
@@ -577,21 +600,21 @@ bool AssetIOService::ReadFileWithRetry(const AssetMetadata& metadata, Vector<uin
     // behind hot-reloaded or rebuilt assets. Accept the read when the on-disk
     // size confirms it, or when the asset is a text type that is commonly
     // edited in place (UI styles/layout).
-    if (outData.size() != metadata.FileSize)
+    if (outData.Size() != metadata.FileSize)
     {
         std::error_code ec;
         const auto currentSize = std::filesystem::file_size(metadata.Path, ec);
-        const bool sizeConfirmed = !ec && currentSize == outData.size();
+        const bool sizeConfirmed = !ec && currentSize == outData.Size();
         if (!sizeConfirmed && !IsTextBasedAssetType(metadata.Type))
         {
             outError = "File size mismatch for " + metadata.Path.string() +
                        ": expected " + std::to_string(metadata.FileSize) +
-                       ", got " + std::to_string(outData.size());
-            outData.clear();
+                       ", got " + std::to_string(outData.Size());
+            outData = ByteBuffer();
             return false;
         }
         Logger::Log::Debug("AssetIOService: accepting stale fileSize for {} (expected {}, got {})",
-                           metadata.Path.string(), metadata.FileSize, outData.size());
+                           metadata.Path.string(), metadata.FileSize, outData.Size());
     }
 
     return true;

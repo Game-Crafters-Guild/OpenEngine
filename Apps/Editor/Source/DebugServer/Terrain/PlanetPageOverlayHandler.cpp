@@ -9,7 +9,7 @@
 #include "Mathematics/Vector3.h"
 #include "Mathematics/VectorOps.h"
 #include "PageStreaming/PageStore/PageStoreFormat.h"
-#include "TerrainECS/PlanetPageRequester.h"
+#include "TerrainECS/Planet/PlanetPageRequester.h"
 #include "TerrainECS/TerrainService.h"
 
 #include <nlohmann/json.hpp>

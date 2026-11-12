@@ -7857,9 +7857,8 @@ void SettingsPanel::CreateCameraSettingsContent()
             "Native renders the world at full viewport resolution. Fixed renders it at the scale "
             "above and resamples back. Dynamic moves that scale automatically to hold the target "
             "below, and gives the resolution back when it measures that scaling is not buying "
-            "frames (a geometry-bound view, for instance). Both work with Anti-Aliasing off, "
-            "TAA, FXAA or SMAA; MSAA rules them out, because a multisampled view cannot be "
-            "scaled."));
+            "frames (a geometry-bound view, for instance). Both work with every anti-aliasing "
+            "mode."));
     }
 
     // Dynamic-mode target.
@@ -12490,14 +12489,6 @@ void SettingsPanel::CreateUserSettingsContent()
     placeholder->AddClass("settings-placeholder");
     placeholder->SetText("Global User-specific editor preferences");
     m_ContentBody->AddContent(std::move(placeholder));
-
-    CreateSettingsToggleRow(
-        SettingsToggleConfig{
-            "Auto-load last project",
-            /*defaultValue=*/true,
-            "startup.autoLoadLastProject",
-            /*onValueChanged=*/nullptr},
-        m_ContentBody);
 
     // Export / Import
     {

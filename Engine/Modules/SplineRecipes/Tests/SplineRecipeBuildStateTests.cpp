@@ -11,6 +11,7 @@
 #include "Components/Spline/SplineComponent.h"
 #include "Components/Spline/SplineExtrude.h"
 #include "Components/Spline/SplineFence.h"
+#include "Components/Spline/SplinePlacement.h"
 #include "Components/Terrain/Terrain.h"
 #include "Components/Transform.h"
 #include "ECS/ECSTemplates.h"
@@ -159,9 +160,7 @@ protected:
         const ECS::EntityHandle entity = m_World.CreateEntity();
         m_World.AddComponentImmediate(entity, Components::Terrain{});
         Components::WorldTransform transform{};
-        transform.matrix[12] = center.x;
-        transform.matrix[13] = center.y;
-        transform.matrix[14] = center.z;
+        transform.Position = Mathematics::WorldPosition::FromVector3(center);
         m_World.AddComponentImmediate(entity, transform);
         return entity;
     }
@@ -174,9 +173,7 @@ protected:
         renderer.modelAssetGuid.Set(model);
         m_World.AddComponentImmediate(entity, renderer);
         Components::WorldTransform transform{};
-        transform.matrix[12] = position.x;
-        transform.matrix[13] = position.y;
-        transform.matrix[14] = position.z;
+        transform.Position = Mathematics::WorldPosition::FromVector3(position);
         m_World.AddComponentImmediate(entity, transform);
         return entity;
     }
@@ -458,6 +455,67 @@ TEST_F(SplineRecipeBuildStateTests, AFencesPartBoundsFollowAPartsMeshChange)
     ASSERT_EQ(bounds.size(), 1u) << "the old mesh is still listed after the part changed its mesh";
     EXPECT_EQ(bounds[0].Mesh.ToGuid(), large);
     EXPECT_NEAR(bounds[0].Bounds.HalfExtents.y, kLargeHalfExtent, 1e-4f);
+}
+
+// A world snapshot restore (a play Stop, an undo) does not bring the generated pieces back: the
+// controllers build them again, so the world holds one entity per piece after each restore.
+TEST_F(SplineRecipeBuildStateTests, ASnapshotRestoreLeavesOneEntityPerGeneratedPiece)
+{
+    constexpr uint32 kMaxUpdates = 8;
+    constexpr uint32 kRestores = 2;
+    const ECS::EntityHandle road = CreateExtrude(4);
+    const ECS::EntityHandle fence = CreateFence(RegisterCubeModel(0.5f));
+    UpdateUntilBuilt(road, kMaxUpdates);
+    UpdateUntilBuilt(fence, kMaxUpdates);
+    ASSERT_EQ(StateOf(road), BuildState::Built);
+    ASSERT_EQ(StateOf(fence), BuildState::Built);
+    const uint32 pieces = ChunkCount();
+    ASSERT_GT(pieces, 0u);
+    const std::size_t built = m_World.GetEntityCount();
+    const auto snapshot = m_World.SerializeWorld();
+
+    for (uint32 restore = 1; restore <= kRestores; ++restore)
+    {
+        m_World.DeserializeWorld(snapshot);
+        m_World.ProcessCommands();
+        Update();
+        UpdateUntilBuilt(road, kMaxUpdates);
+        UpdateUntilBuilt(fence, kMaxUpdates);
+        ASSERT_EQ(StateOf(road), BuildState::Built);
+        ASSERT_EQ(StateOf(fence), BuildState::Built);
+        EXPECT_EQ(ChunkCount(), pieces) << "after restore " << restore;
+        EXPECT_EQ(m_World.GetEntityCount(), built) << "after restore " << restore;
+    }
+}
+
+// A world snapshot restore does not bring the placement tiles back: the placement controller builds
+// them again, so the world holds one entity per tile after each restore.
+TEST_F(SplineRecipeBuildStateTests, ASnapshotRestoreLeavesOneEntityPerPlacementTile)
+{
+    constexpr uint32 kMaxUpdates = 8;
+    constexpr uint32 kRestores = 2;
+    const ECS::EntityHandle path = CreateSplineEntity(2);
+    Components::SplinePlacement placement{};
+    placement.StraightPool[0].Set(RegisterCubeModel(0.5f));
+    placement.ConformMode = Components::SplinePlacementConform::None;
+    m_World.AddComponentImmediate(path, placement);
+    UpdateUntilBuilt(path, kMaxUpdates);
+    ASSERT_EQ(StateOf(path), BuildState::Built);
+    const uint32 tiles = ChunkCount();
+    ASSERT_GT(tiles, 0u);
+    const std::size_t built = m_World.GetEntityCount();
+    const auto snapshot = m_World.SerializeWorld();
+
+    for (uint32 restore = 1; restore <= kRestores; ++restore)
+    {
+        m_World.DeserializeWorld(snapshot);
+        m_World.ProcessCommands();
+        Update();
+        UpdateUntilBuilt(path, kMaxUpdates);
+        ASSERT_EQ(StateOf(path), BuildState::Built);
+        EXPECT_EQ(ChunkCount(), tiles) << "after restore " << restore;
+        EXPECT_EQ(m_World.GetEntityCount(), built) << "after restore " << restore;
+    }
 }
 
 // The spline's points move without a version bump, so only a rebuild can move the chunk.

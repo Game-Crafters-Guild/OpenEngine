@@ -119,6 +119,10 @@ class PrefabLibrary
     void RebuildChanged(std::span<const GUID> changed);
     /// RebuildChanged for the absolute paths `files`.
     void RebuildFiles(std::span<const std::filesystem::path> files);
+    /// Rebuilds, as a new generation, every resident template that keeps a component of a type that
+    /// is registered now (a module loaded after the build), and gives the instances of every world
+    /// that holds it the new generation.
+    void RebuildForRegisteredTypes();
 
     /// While `deferred` is true, a rebuild does not change the instances of `world`, also after a
     /// World::Clear. Setting it back to false gives them the newest generation of every prefab the world
@@ -160,6 +164,8 @@ class PrefabLibrary
 
     void AssertWritable() const;
     void RebuildKeys(std::span<const std::string> changedFiles);
+    // Builds each of `stale` again from its files and gives the worlds that hold it the new generation.
+    void RebuildTemplates(std::span<const PrefabTemplate* const> stale);
     // Gives the instances of the world `worldId` the newest generation of every prefab `holds` names.
     // Returns true when an instance changed. Does nothing when that world is destroyed or cleared.
     bool PropagateToHolder(std::uint64_t worldId, WorldHolds& holds);

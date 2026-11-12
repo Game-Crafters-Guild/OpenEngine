@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "LatencyBudget.h"
+#include "ScopedLogLevel.h"
 
 // Performance regression suite — re-baselined for the post-overhaul pool
 // (issue #242, slice 6).
@@ -52,12 +53,7 @@ constexpr double kPerWidthStorm10kBudgetMs = 100.0;   // measured ~10-30ms/width
 class PerformanceRegressionTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        Logger::Log::SetLogLevel(Logger::LogLevel::Error);
         m_Budget = GameEngine::Tests::ReadLatencyBudget();
-    }
-
-    void TearDown() override {
-        Logger::Log::SetLogLevel(Logger::LogLevel::Debug);
     }
 
     // True when the machine load skips the budgets. A test checks it after its correctness checks.
@@ -65,6 +61,9 @@ protected:
 
     // Read in SetUp, before the test starts its pool.
     GameEngine::Tests::LatencyBudget m_Budget;
+
+private:
+    GameEngine::Tests::ScopedLogLevel m_LogLevel{Logger::LogLevel::Error};
 };
 
 /**

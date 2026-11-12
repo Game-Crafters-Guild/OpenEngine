@@ -8,6 +8,7 @@
 #include "Mathematics/Matrix4x4.h"
 #include "Mathematics/Quaternion.h"
 #include "Mathematics/Vector3.h"
+#include "Mathematics/WorldPosition.h"
 #include "Rendering/RenderLayerMask.h"
 #include "Types/Color.h"
 #include "Types/ScriptCallback.h"
@@ -63,6 +64,7 @@ struct Hit
     Mathematics::Vector3 point;
     float distance = 0.0f;
     Mathematics::Quaternion facing;
+    Mathematics::WorldPosition at;
 };
 
 /// Two entities touched.
@@ -124,7 +126,7 @@ void SetSpeed(ProbeSystem& probe, ECS::EntityHandle entity, float speed);
 
 /// Finds the entity nearest to a point.
 // @ge-script @ge-script-try @ge-context
-bool TryNearest(ProbeSystem& probe, Mathematics::Vector3 point, ECS::EntityHandle& outEntity);
+bool TryNearest(ProbeSystem& probe, Mathematics::WorldPosition point, ECS::EntityHandle& outEntity);
 
 /// Keeps `text` as the probe's label, and answers it.
 // @ge-script @ge-context

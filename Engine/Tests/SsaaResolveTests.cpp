@@ -64,7 +64,7 @@ protected:
         device->Shutdown();
     }
 
-    void Check(const std::vector<Pixel>& source)
+    void Render(const std::vector<Pixel>& source, std::vector<Pixel>& actual)
     {
         const auto e = GetParam();
         ShaderPackage pkg{};
@@ -139,11 +139,19 @@ protected:
         device->ExecuteCommandLists({cl.get()});
         device->FinalizeFrame();
         device->WaitForIdle();
-        std::vector<Pixel> actual(e.outputW * e.outputH);
+        actual.resize(e.outputW * e.outputH);
         const auto* mapped = device->MapBuffer(readback);
         ASSERT_NE(mapped, nullptr);
         std::memcpy(actual.data(), mapped, actual.size() * sizeof(Pixel));
         device->UnmapBuffer(readback);
+    }
+
+    void Check(const std::vector<Pixel>& source)
+    {
+        const auto e = GetParam();
+        std::vector<Pixel> actual;
+        Render(source, actual);
+        if (HasFatalFailure()) return;
         // Hardware bilinear weights have `subTexelPrecisionBits` bits (8 on the
         // NVIDIA that failed this suite: 1/256). 0.3% of peak is tighter than
         // that at odd-extent scales: a 1/256 weight error on a 64-code texel
@@ -194,4 +202,50 @@ INSTANTIATE_TEST_SUITE_P(ScalesAndExtents, SsaaResolveTests, testing::Values(
     Extent{20,15,16,12}, Extent{24,18,16,12}, Extent{32,24,16,12},
     Extent{22,16,17,13}, Extent{26,20,17,13}, Extent{34,26,17,13},
     Extent{2,2,1,1}));
+
+// Magnification runs Catmull-Rom, not the tent, so it has its own extents and check.
+class SpatialUpscaleTests : public SsaaResolveTests {};
+
+TEST_P(SpatialUpscaleTests, StaysInsideSourceNeighborhoodBesideBrightAndDarkTexels)
+{
+    const auto e = GetParam();
+    constexpr float kBright = 64.f;
+    std::vector<Pixel> source(e.sourceW * e.sourceH, Pixel{1, 1, 1, 1});
+    // The bright texel can ring below 1.0; the dark corner texel can ring above 1.0.
+    source[(e.sourceH / 2) * e.sourceW + e.sourceW / 2] = Pixel{kBright, kBright, kBright, kBright};
+    source[0] = Pixel{0, 0, 0, 0};
+    std::vector<Pixel> actual;
+    Render(source, actual);
+    if (HasFatalFailure()) return;
+    // The bilinear fetches are convex blends, so only float rounding leaves the range.
+    constexpr float kRangeTolerance = 1e-3f;
+    for (uint32_t y = 0; y < e.outputH; ++y)
+        for (uint32_t x = 0; x < e.outputW; ++x)
+        {
+            // The 4x4 source footprint of the kernel, clamped at the border as the sampler does.
+            const int baseX = int(std::floor((x + .5) * e.sourceW / e.outputW - .5));
+            const int baseY = int(std::floor((y + .5) * e.sourceH / e.outputH - .5));
+            Pixel lowest{kBright, kBright, kBright, kBright};
+            Pixel highest{0, 0, 0, 0};
+            for (int iy = baseY - 1; iy <= baseY + 2; ++iy)
+                for (int ix = baseX - 1; ix <= baseX + 2; ++ix)
+                {
+                    const auto& p = source[std::clamp(iy, 0, int(e.sourceH) - 1) * e.sourceW +
+                                           std::clamp(ix, 0, int(e.sourceW) - 1)];
+                    for (int c = 0; c < 4; ++c)
+                    {
+                        lowest[c] = std::min(lowest[c], p[c]);
+                        highest[c] = std::max(highest[c], p[c]);
+                    }
+                }
+            for (int c = 0; c < 4; ++c)
+            {
+                const float value = actual[y * e.outputW + x][c];
+                EXPECT_GE(value, lowest[c] - kRangeTolerance) << x << ',' << y << " channel " << c;
+                EXPECT_LE(value, highest[c] + kRangeTolerance) << x << ',' << y << " channel " << c;
+            }
+        }
+}
+
+INSTANTIATE_TEST_SUITE_P(Upscale, SpatialUpscaleTests, testing::Values(Extent{8,6,16,12}));
 }

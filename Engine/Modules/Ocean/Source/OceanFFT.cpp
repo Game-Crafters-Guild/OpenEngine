@@ -186,6 +186,16 @@ bool OceanFFT::CreateButterflyTable()
     return true;
 }
 
+void OceanFFT::RequestPipelines(IDevice& device) const
+{
+    // The spectrum init runs only while the spectrum is dirty (RecordDispatch).
+    if (m_SpectrumDirty && m_InitPipe.IsValid())
+        device.RequestComputePipeline(m_InitPipe);
+    for (const ComputePipelineId id : {m_UpdatePipe, m_FFTHPipe, m_FFTVPipe})
+        if (id.IsValid())
+            device.RequestComputePipeline(id);
+}
+
 bool OceanFFT::CompilePipelines()
 {
     const fs::path shaderDir = OceanShaderDirectory("ocean_fft_spectrum_init.comp");

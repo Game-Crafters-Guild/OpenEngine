@@ -224,6 +224,7 @@ private:
     std::filesystem::path PromptSaveAsPath();
     void DiscardCurrentGraphChanges();
     void RefreshGraphViewAfterModelChange();
+    std::string SaveChangesPromptPrefix() const;
     void EnsureUnsavedChangesModal();
     void UpdateTitleLabel();
     void SyncViewportFromModel();

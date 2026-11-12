@@ -3,8 +3,8 @@
 #include "Types/Types.h"
 
 #include "Mathematics/Geometry.h"
-#include "Mathematics/Ray.h"
 #include "Mathematics/Types.h"
+#include "Mathematics/WorldPosition.h"
 
 #include "GenerationalVector/GenerationalHandle.h"
 
@@ -15,8 +15,8 @@ namespace GameEngine::Physics
 // Reuse canonical math types (no duplication)
 using Mathematics::AABB;
 using Mathematics::Quaternion;
-using Mathematics::Ray3D;
 using Mathematics::Vector3;
+using Mathematics::WorldPosition;
 
 // Reuse canonical scalar/primitive aliases
 using GameEngine::float32;
@@ -36,7 +36,7 @@ using CharacterHandle = GenerationalVector::Handle;
 // Physics transform (no scale; scale is baked into shapes)
 struct Transform
 {
-    Vector3 position{0.0f, 0.0f, 0.0f};
+    WorldPosition position{};
     Quaternion rotation = Quaternion::Identity();
 };
 
@@ -79,7 +79,7 @@ struct CharacterSettings
 {
     CharacterMotor motor = CharacterMotor::Kinematic;
 
-    Vector3 position{0.0f, 0.0f, 0.0f};
+    WorldPosition position{};
     Quaternion rotation = Quaternion::Identity();
 
     // Capsule: total height including caps. Must be greater than 2 * radius.
@@ -157,7 +157,7 @@ struct CollisionGroup
 struct BodySettings
 {
     // Pose
-    Vector3 position{0.0f, 0.0f, 0.0f};
+    WorldPosition position{};
     Quaternion rotation = Quaternion::Identity();
 
     // Shape
@@ -202,12 +202,8 @@ struct PhysicsWorldSettings
     // Global layer filtering (used by the backend's object-vs-object collision filter).
     LayerCollisionMatrix layerCollisionMatrix{};
 
-    // Simulation stepping policy (engine-side).
-    //
-    // If fixedTimeStep > 0: the engine should accumulate frame time and step physics in
-    // discrete substeps of fixedTimeStep (up to maxSubSteps per frame).
-    //
-    // If fixedTimeStep <= 0: step once per frame using the frame delta time.
+    // The step length in seconds and the most steps per frame of the world's SimulationClock,
+    // which steps physics. A value of 0 or less keeps the clock's value.
     float32 fixedTimeStep = 1.0f / 60.0f;
     int32 maxSubSteps = 4;
 

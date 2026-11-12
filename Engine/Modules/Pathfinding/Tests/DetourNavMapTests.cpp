@@ -95,7 +95,7 @@ NavMeshChart MakePlaneChart(const NavMeshSettings& settings)
 {
     const float32 tileSize = DetourNavMap::GetTileSize(settings);
     NavMeshChart chart;
-    chart.Origin = ChartOrigin::AtWorld(-tileSize, -1.0f, -tileSize);
+    chart.Origin = Mathematics::WorldPosition{-tileSize, -1.0, -tileSize};
     chart.Span = 2.0f * tileSize;
     return chart;
 }

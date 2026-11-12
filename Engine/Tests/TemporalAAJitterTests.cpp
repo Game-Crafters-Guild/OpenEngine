@@ -14,6 +14,7 @@
 #include "Engine/Rendering/AntiAliasing.h"
 #include "Engine/Rendering/ViewRegistry.h"
 #include "Mathematics/MatrixOps.h"
+#include "TestCameraEye.h"
 
 using GameEngine::Engine::Renderer::AntiAliasingMode;
 using GameEngine::Engine::Renderer::ApplyNdcJitter;
@@ -29,11 +30,12 @@ namespace
 {
 
 constexpr float kPi = 3.14159265358979323846f;
+constexpr GameEngine::Rendering::CameraRanges kTestCameraRanges{0.1f, 1000.0f};
 
 Matrix4x4 TestProj()
 {
-    return GameEngine::Mathematics::MakePerspectiveLH_ZO_ReverseZ(kPi / 3.0f, 16.0f / 9.0f, 0.1f,
-                                                                  1000.0f);
+    return GameEngine::Mathematics::MakePerspectiveLH_ZO_ReverseZ(
+        kPi / 3.0f, 16.0f / 9.0f, kTestCameraRanges.Near, kTestCameraRanges.CullingRange);
 }
 
 Matrix4x4 TestView()
@@ -126,7 +128,7 @@ TEST(TemporalAAJitter, RegistrySelectsTemporalFxaaModeAndTwoPhaseCycle)
     ViewRegistry reg;
     const auto cameraId = reg.AllocateCamera("tfxaa-camera");
     const auto viewId = reg.AllocateView("tfxaa-view", cameraId);
-    reg.SetCameraData(cameraId, MakeCameraData(1.0f));
+    reg.SetCameraData(cameraId, ::GameEngine::Tests::TestCameraWithEye(MakeCameraData(1.0f)), kTestCameraRanges);
     reg.SetViewAntiAliasing(viewId, true, AntiAliasingMode::TemporalFXAA, 16u);
 
     const auto* state = reg.AdvanceViewAntiAliasing(viewId, 1u);
@@ -143,7 +145,7 @@ TEST(TemporalAAJitter, SpatialFxaaRegistersStateButNeverJitters)
     ViewRegistry reg;
     const auto cameraId = reg.AllocateCamera("fxaa-camera");
     const auto viewId = reg.AllocateView("fxaa-view", cameraId);
-    reg.SetCameraData(cameraId, MakeCameraData(1.0f));
+    reg.SetCameraData(cameraId, ::GameEngine::Tests::TestCameraWithEye(MakeCameraData(1.0f)), kTestCameraRanges);
     reg.SetViewAntiAliasing(viewId, true, AntiAliasingMode::FXAA, 16u);
 
     for (uint64_t frame = 1; frame <= 4; ++frame)
@@ -254,7 +256,7 @@ TEST(TemporalAAJitter, RegistryRotatesOncePerFrameAndKeepsLogicDomainClean)
     ViewRegistry reg;
     const auto camId = reg.AllocateCamera("cam");
     const auto viewId = reg.AllocateView("view", camId);
-    reg.SetCameraData(camId, MakeCameraData(1.0f));
+    reg.SetCameraData(camId, ::GameEngine::Tests::TestCameraWithEye(MakeCameraData(1.0f)), kTestCameraRanges);
     reg.SetViewAntiAliasing(viewId, true, AntiAliasingMode::TAA, 8);
 
     // Two resolves in the same frame must produce identical matrices (one
@@ -289,13 +291,13 @@ TEST(TemporalAAJitter, RegistrySnapshotsPrevCameraAcrossFrames)
     const auto viewId = reg.AllocateView("view", camId);
     reg.SetViewAntiAliasing(viewId, true, AntiAliasingMode::TAA, 8);
 
-    reg.SetCameraData(camId, MakeCameraData(1.0f));
+    reg.SetCameraData(camId, ::GameEngine::Tests::TestCameraWithEye(MakeCameraData(1.0f)), kTestCameraRanges);
     (void)reg.ResolveJitteredCameraData(viewId, 100, 1920, 1080);
     const auto* s1 = reg.FindViewAntiAliasing(viewId);
     ASSERT_NE(s1, nullptr);
     EXPECT_FALSE(s1->PrevValid); // first rendered frame: no previous camera
 
-    reg.SetCameraData(camId, MakeCameraData(2.0f));
+    reg.SetCameraData(camId, ::GameEngine::Tests::TestCameraWithEye(MakeCameraData(2.0f)), kTestCameraRanges);
     (void)reg.ResolveJitteredCameraData(viewId, 101, 1920, 1080);
     const auto* s2 = reg.FindViewAntiAliasing(viewId);
     ASSERT_NE(s2, nullptr);
@@ -308,7 +310,7 @@ TEST(TemporalAAJitter, RegistrySnapshotsPrevCameraAcrossFrames)
     // reprojecting the surviving history needs. Whether the history physical
     // survived the gap is the render-graph pool's freshness arm, not this
     // pair's concern.
-    reg.SetCameraData(camId, MakeCameraData(3.0f));
+    reg.SetCameraData(camId, ::GameEngine::Tests::TestCameraWithEye(MakeCameraData(3.0f)), kTestCameraRanges);
     (void)reg.ResolveJitteredCameraData(viewId, 103, 1920, 1080);
     const auto* s3 = reg.FindViewAntiAliasing(viewId);
     ASSERT_NE(s3, nullptr);
@@ -333,7 +335,7 @@ TEST(TemporalAAJitter, NdcOffsetsFreezeAtFirstResolveOfFrame)
     ViewRegistry reg;
     const auto camId = reg.AllocateCamera("cam");
     const auto viewId = reg.AllocateView("view", camId);
-    reg.SetCameraData(camId, MakeCameraData(1.0f));
+    reg.SetCameraData(camId, ::GameEngine::Tests::TestCameraWithEye(MakeCameraData(1.0f)), kTestCameraRanges);
     reg.SetViewAntiAliasing(viewId, true, AntiAliasingMode::TAA, 8);
 
     const CameraData a = reg.ResolveJitteredCameraData(viewId, 7, 1920, 1080);

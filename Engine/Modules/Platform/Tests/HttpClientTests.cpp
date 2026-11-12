@@ -1,6 +1,7 @@
 #include "Platform/HttpClient.h"
 #include "HttpHeaderRules.h"
 #include "LoopbackServer.h"
+#include "Types/StringUtils.h"
 
 #include <gtest/gtest.h>
 
@@ -142,6 +143,46 @@ TEST(HttpClientTests, TimeoutEndsARequestTheServerNeverAnswers)
     EXPECT_LT(elapsed, 10s);
 }
 
+// The server accepts and never answers, so only the idle-time check can notice the flag; the
+// stall limit alone would hold the call for 30 s.
+TEST(HttpClientTests, GetReturnsCancelledWithinASecondWhileTheServerNeverAnswers)
+{
+    LoopbackServer server([](LoopbackServer& self, SocketHandle) { self.WaitForSignals(1, 60s); });
+
+    std::atomic<bool> cancellation{false};
+    std::future<HttpClient::HttpResponse> request = std::async(std::launch::async, [&] {
+        return HttpClient::Get(server.Url(), {}, {.Cancellation = &cancellation});
+    });
+    const auto sent = std::chrono::steady_clock::now();
+    while (server.RequestCount() == 0 && std::chrono::steady_clock::now() - sent < 10s)
+        std::this_thread::sleep_for(10ms);
+    ASSERT_EQ(server.RequestCount(), 1);
+
+    const auto start = std::chrono::steady_clock::now();
+    cancellation = true;
+    ASSERT_EQ(request.wait_for(5s), std::future_status::ready) << "cancellation did not stop the request";
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+    const HttpClient::HttpResponse response = request.get();
+
+    EXPECT_TRUE(response.cancelled) << response.error;
+    EXPECT_FALSE(response.success);
+    EXPECT_LT(elapsed, 2s);
+}
+
+TEST(HttpClientTests, GetTimeoutEndsARequestTheServerNeverAnswers)
+{
+    LoopbackServer server([](LoopbackServer& self, SocketHandle) { self.WaitForSignals(1, 60s); });
+
+    const auto start = std::chrono::steady_clock::now();
+    const HttpClient::HttpResponse response = HttpClient::Get(server.Url(), {}, {.Timeout = 300ms});
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+
+    EXPECT_FALSE(response.success);
+    EXPECT_FALSE(response.cancelled);
+    EXPECT_NE(response.error.find("timed out after 300 ms"), std::string::npos) << response.error;
+    EXPECT_LT(elapsed, 10s);
+}
+
 TEST(HttpClientTests, StreamDeliversEachChunkBeforeTheNextIsSent)
 {
     const std::vector<std::string> parts = {"data: one\n\n", "data: two\n\n", "data: three\n\n"};
@@ -255,7 +296,7 @@ TEST(HttpClientTests, HeadersWithLineBreaksAreRefusedBeforeAnythingIsSent)
         HttpClient::PostJson(server.Url(), {{"X-Test\r\nX-Injected", "value"}}, "{}", {});
     const HttpClient::HttpResponse badValue =
         HttpClient::PostJson(server.Url(), {{"X-Test", "value\r\nX-Injected: yes"}}, "{}", {});
-    const HttpClient::HttpResponse badGet = HttpClient::Get(server.Url(), {{"X-Test", "value\r\nX-Injected: yes"}});
+    const HttpClient::HttpResponse badGet = HttpClient::Get(server.Url(), {{"X-Test", "value\r\nX-Injected: yes"}}, {});
     const HttpClient::HttpResponse badForm =
         HttpClient::PostForm(server.Url(), {{"field", "value"}}, {{"X-Test", "value\r\nX-Injected: yes"}});
 
@@ -306,6 +347,90 @@ TEST(HttpClientTests, PostJsonReturnsARedirectInsteadOfFollowingIt)
         HttpClient::PostJson(server.Url(), {{"X-Api-Key", "key"}}, "{}", {});
 
     EXPECT_EQ(response.statusCode, 307) << response.error;
+    EXPECT_FALSE(response.success);
+    EXPECT_EQ(server.RequestCount(), 1);
+}
+
+std::string RedirectTo(const std::string& location)
+{
+    return "HTTP/1.1 302 Found\r\nLocation: " + location + "\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+}
+
+void SendOk(SocketHandle client)
+{
+    LoopbackServer::Send(client, OkHead(2) + "{}");
+}
+
+// "localhost" and "127.0.0.1" are two origins: the target answers on both.
+TEST(HttpClientTests, GetDropsACredentialHeaderOnARedirectToAnotherOrigin)
+{
+    LoopbackServer target([](LoopbackServer&, SocketHandle client) { SendOk(client); });
+    const std::string otherOrigin = "http://localhost:" + target.Url().substr(std::string("http://127.0.0.1:").size());
+    LoopbackServer origin([&otherOrigin](LoopbackServer&, SocketHandle client) { LoopbackServer::Send(client, RedirectTo(otherOrigin)); });
+
+    const HttpClient::HttpResponse response =
+        HttpClient::Get(origin.Url(), {{"X-Api-Key", "throwaway"}, {"Accept", "application/json"}}, {});
+
+    EXPECT_EQ(response.statusCode, 200) << response.error;
+    ASSERT_EQ(target.RequestCount(), 1);
+    const std::string forwarded = ToLowerAscii(target.LastRequest());
+    EXPECT_EQ(forwarded.find("x-api-key"), std::string::npos);
+    EXPECT_NE(forwarded.find("accept: application/json"), std::string::npos);
+}
+
+TEST(HttpClientTests, GetKeepsACredentialHeaderOnARedirectToTheSameOrigin)
+{
+    LoopbackServer server([](LoopbackServer& self, SocketHandle client) {
+        if (self.RequestCount() == 1)
+            LoopbackServer::Send(client, RedirectTo(self.Url("/elsewhere")));
+        else
+            SendOk(client);
+    });
+
+    const HttpClient::HttpResponse response = HttpClient::Get(server.Url(), {{"X-Api-Key", "throwaway"}}, {});
+
+    EXPECT_EQ(response.statusCode, 200) << response.error;
+    EXPECT_EQ(server.RequestCount(), 2);
+    EXPECT_NE(ToLowerAscii(server.LastRequest()).find("x-api-key: throwaway"), std::string::npos);
+}
+
+// The origin is the scheme (https or not), the host and the port. A '#', a '?' or an '@' in
+// the authority must not make another host read as the first one.
+TEST(HttpClientTests, SameOriginComparesTheSchemeTheHostAndThePort)
+{
+    constexpr std::string_view api = "https://api.example.com/v1/models";
+    EXPECT_FALSE(IsSameOrigin(api, "http://api.example.com/v1/models")) << "a downgrade to http";
+    EXPECT_FALSE(IsSameOrigin("http://api.example.com/", api)) << "an upgrade to https";
+    EXPECT_FALSE(IsSameOrigin(api, "https://api.example.com:8443/v1/models")) << "another port";
+    EXPECT_FALSE(IsSameOrigin(api, "https://evil.test#@api.example.com/"));
+    EXPECT_FALSE(IsSameOrigin(api, "https://evil.test?@api.example.com/"));
+    EXPECT_FALSE(IsSameOrigin(api, "https://api.example.com.evil.test/")) << "a host suffix";
+    EXPECT_FALSE(IsSameOrigin(api, "https://api.example.com@evil.test/")) << "user information";
+    EXPECT_TRUE(IsSameOrigin(api, "HTTPS://API.Example.com/other")) << "case and path do not change the origin";
+}
+
+TEST(HttpClientTests, GetStopsAfterFiveRedirects)
+{
+    LoopbackServer server(
+        [](LoopbackServer& self, SocketHandle client) { LoopbackServer::Send(client, RedirectTo(self.Url("/again"))); });
+
+    const HttpClient::HttpResponse response = HttpClient::Get(server.Url(), {}, {});
+
+    EXPECT_FALSE(response.success);
+    EXPECT_FALSE(response.error.empty());
+    EXPECT_EQ(server.RequestCount(), 6) << "the first request and five redirects";
+}
+
+TEST(HttpClientTests, PostFormWithACredentialReturnsARedirectInsteadOfFollowingIt)
+{
+    LoopbackServer server([](LoopbackServer& self, SocketHandle client) {
+        LoopbackServer::Send(client, RedirectTo(self.Url("/elsewhere")));
+    });
+
+    const HttpClient::HttpResponse response =
+        HttpClient::PostForm(server.Url(), {{"field", "value"}}, {{"Authorization", "Bearer throwaway"}});
+
+    EXPECT_EQ(response.statusCode, 302) << response.error;
     EXPECT_FALSE(response.success);
     EXPECT_EQ(server.RequestCount(), 1);
 }

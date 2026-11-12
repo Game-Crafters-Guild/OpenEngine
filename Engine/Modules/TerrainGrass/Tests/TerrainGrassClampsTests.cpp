@@ -68,6 +68,7 @@ constexpr BoundedField kNormalizedFields[] = {
     {"HueVariation", &Components::TerrainGrass::HueVariation},
     {"GroundingStrength", &Components::TerrainGrass::GroundingStrength},
     {"AlphaCutoff", &Components::TerrainGrass::AlphaCutoff},
+    {"FarThinning", &Components::TerrainGrass::FarThinning},
 };
 
 // The blade shape dials, each floored at zero and capped at its own ceiling.

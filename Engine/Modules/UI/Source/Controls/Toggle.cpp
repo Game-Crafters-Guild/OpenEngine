@@ -192,7 +192,7 @@ void ToggleBase::OnEvent(UIEvent& e)
 Toggle::Toggle()
 {
     AddClass("toggle");
-    // Control styling is an Editor-shipped UIStyle asset.
+    // Control styling is a UI module UIStyle asset.
     RequestSubtreeStyleAssetPath("UI/controls/Toggle.css", "editor");
     if (IsCheckmarkPresentationEnabled())
         AddClass("toggle-checkmark");

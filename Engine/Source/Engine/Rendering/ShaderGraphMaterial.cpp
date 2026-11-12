@@ -2,6 +2,7 @@
 
 #include "Graph/SgGraphModelBridge.h"
 #include "Rendering/Geometry/VertexAttributeFlags.h"
+#include "Rendering/Materials/Shader/ShaderComposer.h"
 #include "Rendering/ShaderGraph/SgGraphCompiler.h"
 #include "Rendering/ShaderGraph/SgGraphFileIO.h"
 #include "Rendering/ShaderGraph/SgPropertyBinding.h"
@@ -10,6 +11,7 @@
 #include "Rendering/ShaderGraph/SgPseudoNodes.h"
 #include "Rendering/ShaderGraph/SgTagParser.h"
 #include "Types/Fnv1a.h"
+#include "Types/PathUtils.h"
 #include "Types/StringUtils.h"
 
 #include <algorithm>
@@ -118,23 +120,21 @@ std::string BuildMaterializedBody(const ShaderGraph::SgGraphDocument& doc,
 // surface. Derived data, never project content.
 constexpr const char* kGeneratedSurfaceDirName = "Generated";
 
-// Generated surfaces are derived data outside watched project content. The
-// name reaches the composed include and so the shader-package key, so it hashes
-// the material's identity in the asset system's derived-identity spelling
-// (MaterialSourceIdentity), which stays the same when the project and its cache
-// move.
+// A generated surface's name comes from the material's identity key
+// (MaterialSourceIdentityKey). Every spelling of the path gives one name, and the
+// name does not change when the project or its cache moves.
 std::filesystem::path MaterializedSurfacePath(
     const std::filesystem::path& materialPath,
     const ::GameEngine::Rendering::MaterialBuildContext& context)
 {
-    const std::filesystem::path sourceIdentity = ::GameEngine::Rendering::MaterialSourceIdentity(materialPath, context);
-    if (sourceIdentity.empty())
+    const std::string identityKey = ::GameEngine::Rendering::MaterialSourceIdentityKey(materialPath, context);
+    if (identityKey.empty())
         return {};
 
     std::ostringstream name;
-    name << materialPath.stem().string() << '_' << std::hex << std::setw(16) << std::setfill('0')
-         << Hashing::Fnv1a64(sourceIdentity.generic_string()) << "_built.glsl";
-    return context.CacheRoot / kGeneratedSurfaceDirName / name.str();
+    name << PathToUtf8(PathFromUtf8(identityKey).stem()) << '_' << std::hex << std::setw(16) << std::setfill('0')
+         << Hashing::Fnv1a64(identityKey) << "_built.glsl";
+    return context.CacheRoot / kGeneratedSurfaceDirName / PathFromUtf8(name.str());
 }
 
 bool MaterializeShaderGraphSurface(const ShaderGraph::SgGraphDocument& doc,
@@ -201,7 +201,7 @@ bool WriteMaterializedShaderGraphSurface(const ShaderGraph::SgGraphDocument& doc
     if (!ShaderGraph::WriteGraphFileTextIfChanged(outputGlslPath, source))
     {
         outErrors.push_back("ShaderGraphMaterial: failed to write materialized surface to '" +
-                            outputGlslPath.string() + "'.");
+                            PathToUtf8(outputGlslPath) + "'.");
         return false;
     }
     return true;
@@ -234,7 +234,8 @@ bool IsGraphLivePreviewMaterialPath(const std::filesystem::path& materialAssetPa
 
 GameEngine::Rendering::VertexAttributeFlags InferVertexAttributeFlagsFromDocument(
     const MaterialDocument& doc,
-    const std::filesystem::path& materialAssetPath)
+    const std::filesystem::path& materialAssetPath,
+    const std::filesystem::path& resolvedSurfacePath)
 {
     using GameEngine::Rendering::VertexAttributeFlags;
     if (materialAssetPath.empty())
@@ -246,14 +247,16 @@ GameEngine::Rendering::VertexAttributeFlags InferVertexAttributeFlagsFromDocumen
     if (doc.surfaceShader.empty())
         return VertexAttributeFlags::StandardMesh;
 
+    // The chain searches the material's directory first, so a surface beside the material is the one it
+    // resolved. A surface it found under another root is not a graph surface of this material.
     const std::filesystem::path surfacePath =
         (materialAssetPath.parent_path() / doc.surfaceShader).lexically_normal();
     std::error_code ec;
-    if (!std::filesystem::exists(surfacePath, ec))
+    if (std::filesystem::absolute(surfacePath, ec).lexically_normal() != resolvedSurfacePath.lexically_normal())
         return VertexAttributeFlags::StandardMesh;
 
     std::string content;
-    if (!ReadFileTextShared(surfacePath, content))
+    if (!Rendering::ShaderComposer::ReadSourceFileText(surfacePath, content))
         return VertexAttributeFlags::StandardMesh;
 
     if (!ShaderGraph::IsShaderGraphSource(content))
@@ -388,7 +391,7 @@ bool PrepareMaterialDocumentForShaderPackage(
     {
         outErrors.push_back(
             "ShaderGraphMaterial: no shader cache root — the generated surface for '" +
-            materialPath.generic_string() + "' has nowhere to go.");
+            PathToUtf8(materialPath) + "' has nowhere to go.");
         return false;
     }
 
@@ -396,7 +399,7 @@ bool PrepareMaterialDocumentForShaderPackage(
         MaterializedSurfacePath(materialPath, context);
     if (materializedPath.empty())
     {
-        outErrors.push_back("ShaderGraphMaterial: graph material '" + materialPath.generic_string() +
+        outErrors.push_back("ShaderGraphMaterial: graph material '" + PathToUtf8(materialPath) +
                             "' is outside every mounted asset source, so its generated surface "
                             "has no stable name. Move it into the project's assets or a package; "
                             "an offline cook names extra roots with --scan.");
@@ -407,7 +410,7 @@ bool PrepareMaterialDocumentForShaderPackage(
     if (ec)
     {
         outErrors.push_back("ShaderGraphMaterial: could not create generated-surface directory '" +
-                            materializedPath.parent_path().generic_string() + "': " + ec.message());
+                            PathToUtf8(materializedPath.parent_path()) + "': " + ec.message());
         return false;
     }
 
@@ -469,7 +472,7 @@ bool WriteMaterializedShaderGraphSurfaceFromModel(const Graph::Model& model,
     if (!ShaderGraph::WriteGraphFileTextIfChanged(outputGlslPath, source))
     {
         outErrors.push_back("ShaderGraphMaterial: failed to write materialized surface to '" +
-                            outputGlslPath.string() + "'.");
+                            PathToUtf8(outputGlslPath) + "'.");
         return false;
     }
     return true;

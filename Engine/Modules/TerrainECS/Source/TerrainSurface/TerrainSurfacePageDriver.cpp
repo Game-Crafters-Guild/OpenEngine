@@ -1,5 +1,7 @@
 #include "TerrainECS/TerrainSurface/TerrainSurfacePageDriver.h"
 
+#include "TerrainSurface/TerrainSurfaceBakeQueue.h"
+
 #include "TerrainECS/HeightPageStoreLoader.h"
 #include "TerrainECS/PageLevelRule.h"
 #include "TerrainECS/TerrainSurface/TerrainSurfaceBakeInputs.h"
@@ -9,10 +11,12 @@
 #include "TerrainECS/TerrainHeightPageDriver.h"
 #include "TerrainECS/TerrainPages.h"
 #include "TerrainECS/TerrainModifierSystem.h"
+#include "TerrainSurface/TerrainSurfaceSessionStore.h"
 #include "Components/SceneEntityTag.h"
 #include "Components/Terrain/Terrain.h"
 #include "Components/Transform.h"
 #include "ECS/World.h"
+#include "FileSystem/ScopedFileLock.h"
 #include "JobSystem/TaskHandle.h"
 #include "JobSystem/WorkStealingThreadPool.h"
 #include "Logger/Logger.h"
@@ -22,12 +26,17 @@
 #include "PageStreaming/PageStore/PageStoreReader.h"
 #include "Types/ByteBuffer.h"
 #include "Types/FlatMap.h"
+#include "Types/StringUtils.h"
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <format>
+#include <limits>
 #include <optional>
+#include <span>
 #include <string>
+#include <string_view>
 #include <system_error>
 
 namespace GameEngine::TerrainECS
@@ -122,12 +131,32 @@ SurfaceHeightPageFetch MakeHeightFetch(const SurfaceHeightSource& source, std::s
     };
 }
 
-// The first pinned level of `tiled`'s height pyramid (FirstPinnedPageLevel), at least level 1.
+// The first pinned level of `tiled`'s surface pyramid: FirstPinnedPageLevel on the surface profile's
+// slots, the level the stream pins, at least level 1.
 uint32 FirstPinnedSurfaceLevel(const TiledTerrainData& tiled, std::span<const PageStreaming::PageStoreLevel> levels,
-                               uint32 cacheSlots)
+                               const SurfacePageProfile& profile)
 {
     const float32 texel = tiled.Config.TileWorldSize / static_cast<float32>(tiled.Config.TileConfig.HeightmapWidth - 1u);
-    return std::max(1u, FirstPinnedPageLevel(levels, 1u, texel, cacheSlots));
+    return std::max(1u, FirstPinnedPageLevel(levels, 1u, texel, profile.Slots));
+}
+
+// "the grass store" or "the splat, normal and color stores": `noun` for the planes of `planes`
+// (SurfacePlaneBit), in kSurfacePlanes order.
+std::string NamePlanes(uint8 planes, std::string_view noun)
+{
+    std::vector<std::string_view> names;
+    for (const PageFieldKind plane : kSurfacePlanes)
+        if ((planes & SurfacePlaneBit(plane)) != 0u)
+            names.push_back(SurfacePlaneName(plane));
+    if (names.size() < 2u)
+        return std::format("the {} {}", names.empty() ? std::string_view() : names.front(), noun);
+    return std::format("the {} and {} {}s", Join(std::span(names).first(names.size() - 1u), ", "), names.back(), noun);
+}
+
+// "1 page" or "N pages", for the log lines.
+std::string CountPages(std::size_t pages)
+{
+    return std::format("{} page{}", pages, pages == 1u ? "" : "s");
 }
 
 float64 MillisecondsSince(std::chrono::steady_clock::time_point start)
@@ -140,12 +169,29 @@ float64 MillisecondsSince(std::chrono::steady_clock::time_point start)
 struct TerrainSurfacePageDriver::PlaneStore
 {
     PageFieldKind Plane = PageFieldKind::Splat;
-    uint64 Key = 0;
+    uint64 Key = 0; // the key in the file name
+    // The key of the inputs the next job bakes from. A patch writes it into the store, so an open
+    // keeps a patched store only when the key of its file name is the key of the patch.
+    uint64 InputsKey = 0;
     std::filesystem::path File;
     // The plane's store for its streams: the same object while the plane has a store, over every run.
     std::shared_ptr<PageStreaming::PageStoreAccess> Access;
     std::unique_ptr<TerrainSurfacePageBaker> Baker;
     bool Failed = false; // the open job could not make the store
+    // The streams read the plane. A plane that a grass edit adds shows when its wanted pages are baked.
+    bool Shown = true;
+    // The store is in the session folder: it is deleted when the terrain leaves the session.
+    bool InSession = false;
+};
+
+// The stores of the terrains whose scene is not saved: one folder a driver, under the cache, named
+// for a GUID that the driver makes. The lock beside the folder tells a sweep that the session lives.
+struct TerrainSurfacePageDriver::Session
+{
+    std::filesystem::path Cache;
+    GUID Id;
+    std::filesystem::path Directory;
+    std::unique_ptr<FileSystem::ScopedFileLock> Lock; // null when the lock was refused
 };
 
 // One job of a terrain's stores. It owns or copies all it reads; the main thread reads its results
@@ -164,14 +210,15 @@ struct TerrainSurfacePageDriver::BakeJob
     GUID Scene;
     std::string Tag;
     std::vector<PageFieldKind> Removed;
-    std::vector<PageAddress> Pages; // the level-0 pages it bakes
-    // Publishes the stores after its pages: the last job of a run.
+    std::vector<SurfaceBakePage> Pages; // the pages it bakes, of any level
+    // Publishes the stores after its pages: the last job of a run. The open job carries no Finish:
+    // CreateStore publishes each store it makes, and a kept store is published as it is.
     bool Finish = false;
     // The stores of the planes the terrain had before, published first.
     std::vector<std::shared_ptr<PlaneStore>> Retired;
 
-    // Results. Missing marks the level-0 pages the open stores lack (one byte a page, row by row).
-    std::vector<uint8> Missing;
+    // Results. Present holds the pages that each store of the open holds.
+    std::vector<SurfacePlaneLayout> Present;
     std::vector<std::string> Warnings;
     float64 Milliseconds = 0.0;
     std::atomic<bool> Ran{false};
@@ -184,25 +231,26 @@ struct TerrainSurfacePageDriver::TerrainStores
     std::string Tag;
     uint64 HeightKey = 0;
     TerrainColorGroundWrite Write;
-    uint64 SeenVersion = 0;
     std::vector<std::shared_ptr<PlaneStore>> Planes;
-    PageStreaming::PageStoreLevel Level0;
     // The inputs of the newest open or settle, read by every job started after it.
     std::shared_ptr<const TerrainSurfaceBakeInputs> Inputs;
     SurfaceHeightSource Source;
-    std::vector<PageAddress> Pending; // the level-0 pages every plane still bakes, the next at the back
+    TerrainSurfaceBakeQueue Pending; // the pages still to bake
+    uint32 PinnedLevel = 1;
     // The job in flight and its handle; null when none.
     std::shared_ptr<BakeJob> Job;
     std::unique_ptr<JobSystem::TaskHandle> Task;
-    // The edits since the last settle: the level-0 rect they changed, or the whole surface.
+    // The edits since the last settle: the level-0 rect and the planes they changed, or the whole surface.
     std::optional<PageStreaming::PageSampleRect> Unsettled;
+    uint8 UnsettledPlanes = 0; // SurfacePlaneBit of each plane
     bool UnsettledWhole = false;
     uint32 QuietFrames = 0;
     // The bake run since Pending was last empty, for its log line.
     std::size_t RunPages = 0;
+    uint8 RunPlanes = 0; // bit PageFieldKind
     std::chrono::steady_clock::time_point RunStart;
     float64 RunLongestJobMs = 0.0;
-    bool RunIsColdOpen = false;
+    bool RunQueueLogged = false; // the run logged its queued pages
     // A job left the stores open: a later job patches them, and the last one publishes them.
     bool StoresOpen = false;
     // The open job ended: every plane left holds its pinned levels.
@@ -222,38 +270,29 @@ struct TerrainSurfacePageDriver::TerrainFrame
     std::string_view Tag;
     float32 OriginY = 0.0f;
     TerrainColorGroundWrite Write;
+    bool InSession = false;
 };
 
 namespace
 {
 
-// Marks in `needed` (one byte a level-0 page, row by row) every level-0 page that the store at
-// `file` does not hold.
-void MarkMissingPages(const std::filesystem::path& file, PageFieldKind plane, const PageStreaming::PageStoreLevel& level0,
-                      std::vector<uint8>& needed)
+// The pages that the store of `plane` at `file` holds; none when it does not open.
+SurfacePlaneLayout ReadPresentPages(const std::filesystem::path& file, PageFieldKind plane)
 {
     PageStreaming::PageStoreReader reader;
-    const bool open = reader.Open(file, plane).empty();
-    for (uint32 pz = 0; pz < level0.PagesZ; ++pz)
-        for (uint32 px = 0; px < level0.PagesX; ++px)
-            if (!open || !reader.Layout().FindPresent(PageAddress{0, 0, px, pz}))
-                needed[static_cast<std::size_t>(pz) * level0.PagesX + px] = 1u;
+    if (!reader.Open(file, plane).empty())
+        return SurfacePlaneLayout{SurfacePlaneBit(plane), {}};
+    return SurfacePlaneLayout{SurfacePlaneBit(plane), reader.Layout()};
 }
 
-// The level-0 pages marked in `needed`, the first Morton code at the back: each block of pages
-// taken from the back is a square of pages that share most of the height pages they read.
-std::vector<PageAddress> PendingInMortonOrder(const PageStreaming::PageStoreLevel& level0,
-                                              const std::vector<uint8>& needed)
+// The addresses of the pages of `pages` that `plane` bakes.
+std::vector<PageAddress> PlanePages(std::span<const SurfaceBakePage> pages, PageFieldKind plane)
 {
-    std::vector<PageAddress> pages;
-    for (uint32 pz = 0; pz < level0.PagesZ; ++pz)
-        for (uint32 px = 0; px < level0.PagesX; ++px)
-            if (needed[static_cast<std::size_t>(pz) * level0.PagesX + px] != 0u)
-                pages.push_back(PageAddress{0, 0, px, pz});
-    std::sort(pages.begin(), pages.end(), [](const PageAddress& a, const PageAddress& b) {
-        return PageStreaming::PageMortonCode(a.X, a.Z) > PageStreaming::PageMortonCode(b.X, b.Z);
-    });
-    return pages;
+    std::vector<PageAddress> addresses;
+    for (const SurfaceBakePage& page : pages)
+        if ((page.Planes & SurfacePlaneBit(plane)) != 0u)
+            addresses.push_back(page.Address);
+    return addresses;
 }
 
 // True when `changed` holds every level-0 sample of `tiled`.
@@ -287,7 +326,7 @@ bool TerrainSurfacePageDriver::HoldsCurrentStore(const PlaneStore& store)
             std::filesystem::exists(SurfaceSamplesCachePath(store.File), missingCache));
 }
 
-void TerrainSurfacePageDriver::OpenJobStores(BakeJob& job, const PageStreaming::PageStoreLevel& level0)
+void TerrainSurfacePageDriver::OpenJobStores(BakeJob& job)
 {
     // A retired access that no plane keeps reads no page from now on: it lets its file go before the
     // file is deleted, so that no stream reads a deleted store.
@@ -297,7 +336,6 @@ void TerrainSurfacePageDriver::OpenJobStores(BakeJob& job, const PageStreaming::
             retired->Access->Close();
     for (const PageFieldKind plane : job.Removed)
         RemoveSurfaceStores(job.Directory, job.Scene, job.Tag, plane);
-    job.Missing.assign(static_cast<std::size_t>(level0.PagesX) * level0.PagesZ, 0u);
     for (const std::shared_ptr<PlaneStore>& store : job.Planes)
     {
         if (!job.Rebuild && HoldsCurrentStore(*store))
@@ -305,7 +343,7 @@ void TerrainSurfacePageDriver::OpenJobStores(BakeJob& job, const PageStreaming::
             if (std::string error = store->Access->Publish(store->File); !error.empty())
                 job.Warnings.push_back(std::string("the ") + SurfacePlaneName(store->Plane) +
                                        " store is not readable: " + error);
-            MarkMissingPages(store->File, store->Plane, level0, job.Missing);
+            job.Present.push_back(ReadPresentPages(store->File, store->Plane));
             continue;
         }
         RemoveSurfaceStores(job.Directory, job.Scene, job.Tag, store->Plane);
@@ -316,11 +354,18 @@ void TerrainSurfacePageDriver::OpenJobStores(BakeJob& job, const PageStreaming::
             store->Failed = true;
             continue;
         }
-        std::fill(job.Missing.begin(), job.Missing.end(), uint8{1});
+        job.Present.push_back(ReadPresentPages(store->File, store->Plane));
     }
+    // A terrain that leaves the session (its scene is saved) deletes the session's stores.
+    for (const std::shared_ptr<PlaneStore>& retired : job.Retired)
+        if (retired->InSession && std::none_of(job.Planes.begin(), job.Planes.end(),
+                                               [&retired](const std::shared_ptr<PlaneStore>& store) {
+                                                   return store->File == retired->File;
+                                               }))
+            RemoveSurfaceStore(retired->File);
 }
 
-void TerrainSurfacePageDriver::RunJob(BakeJob& job, const PageStreaming::PageStoreLevel& level0)
+void TerrainSurfacePageDriver::RunJob(BakeJob& job)
 {
     const auto start = std::chrono::steady_clock::now();
     for (const std::shared_ptr<PlaneStore>& store : job.Retired)
@@ -328,15 +373,15 @@ void TerrainSurfacePageDriver::RunJob(BakeJob& job, const PageStreaming::PageSto
             job.Warnings.push_back(std::string("the previous ") + SurfacePlaneName(store->Plane) +
                                    " store was not published: " + error);
     if (job.Open)
-        OpenJobStores(job, level0);
+        OpenJobStores(job);
     for (const std::shared_ptr<PlaneStore>& store : job.Planes)
     {
         if (store->Failed)
             continue;
-        if (!job.Pages.empty())
-            if (std::string error = store->Baker->BakeLevel0Pages(store->File, job.Pages); !error.empty())
+        if (const std::vector<PageAddress> pages = PlanePages(job.Pages, store->Plane); !pages.empty())
+            if (std::string error = store->Baker->BakePages(store->File, pages); !error.empty())
                 job.Warnings.push_back(std::string("the ") + SurfacePlaneName(store->Plane) +
-                                       " store missed level-0 pages: " + error);
+                                       " store missed pages: " + error);
         if (job.Finish)
             if (std::string error = store->Baker->Finish(); !error.empty())
                 job.Warnings.push_back(std::string("the ") + SurfacePlaneName(store->Plane) +
@@ -347,7 +392,87 @@ void TerrainSurfacePageDriver::RunJob(BakeJob& job, const PageStreaming::PageSto
 }
 
 TerrainSurfacePageDriver::TerrainSurfacePageDriver() = default;
-TerrainSurfacePageDriver::~TerrainSurfacePageDriver() = default;
+TerrainSurfacePageDriver::~TerrainSurfacePageDriver()
+{
+    EndSession();
+}
+
+const TerrainSurfacePageDriver::Session* TerrainSurfacePageDriver::OpenSession(const std::filesystem::path& cache)
+{
+    if (m_Session)
+        return m_Session->Lock ? m_Session.get() : nullptr;
+    m_Session = std::make_unique<Session>();
+    m_Session->Cache = cache;
+    m_Session->Id = GUID::Generate();
+    m_Session->Directory = SessionStoreDirectory(cache, m_Session->Id);
+    // The lock comes before the folder, so that no sweep finds the folder without its lock. The first
+    // store that bakes makes the folder.
+    std::error_code error;
+    std::filesystem::create_directories(SessionStoreRoot(cache), error);
+    auto lock = std::make_unique<FileSystem::ScopedFileLock>(SessionStoreLock(cache, m_Session->Id),
+                                                             FileSystem::ScopedFileLock::Mode::Exclusive, false);
+    if (!lock->IsLocked())
+    {
+        Logger::Log::Warning("Surface pages: no session folder for the terrains of a scene that is not saved ({}); "
+                             "they draw without surface pages until the scene is saved.",
+                             lock->FailureReason());
+        return nullptr;
+    }
+    m_Session->Lock = std::move(lock);
+    return m_Session.get();
+}
+
+void TerrainSurfacePageDriver::EndSession()
+{
+    if (!m_Session)
+        return;
+    // A refused session holds no lock and made no folder: it has nothing to delete.
+    if (!m_Session->Lock)
+    {
+        m_Session.reset();
+        return;
+    }
+    // A store that a job still writes can stay on disk: the sweep of the next driver deletes it.
+    for (const std::unique_ptr<TerrainStores>& stores : m_Terrains)
+        if (stores->Scene == m_Session->Id && !(stores->Task && !stores->Task->IsDone()))
+            for (const std::shared_ptr<PlaneStore>& store : stores->Planes)
+                store->Access->Close();
+    std::error_code error;
+    std::filesystem::remove_all(m_Session->Directory, error);
+    m_Session->Lock.reset();
+    std::filesystem::remove(SessionStoreLock(m_Session->Cache, m_Session->Id), error);
+    m_Session.reset();
+}
+
+void TerrainSurfacePageDriver::DeleteSessionStores(const TerrainStores& stores) const
+{
+    if (!m_Session || stores.Scene != m_Session->Id)
+        return;
+    for (const std::shared_ptr<PlaneStore>& store : stores.Planes)
+    {
+        store->Access->Close();
+        RemoveSurfaceStore(store->File);
+    }
+}
+
+void TerrainSurfacePageDriver::CloseDroppedStores()
+{
+    // A stream can still hold a dropped access. Close each access, so that its reader lets the file go and a
+    // later open of the same store can patch it. A store that is open for a run stays as it is.
+    for (std::size_t index = 0; index < m_Dropped.size();)
+    {
+        TerrainStores& stores = *m_Dropped[index];
+        if (!Poll(stores))
+        {
+            ++index;
+            continue;
+        }
+        if (!stores.StoresOpen)
+            for (const std::shared_ptr<PlaneStore>& store : stores.Planes)
+                store->Access->Close();
+        m_Dropped.erase(m_Dropped.begin() + static_cast<std::ptrdiff_t>(index));
+    }
+}
 
 const TerrainSurfacePageDriver::TerrainStores* TerrainSurfacePageDriver::Find(const TiledTerrainHandle& terrain) const
 {
@@ -372,7 +497,7 @@ std::size_t TerrainSurfacePageDriver::PendingPages(const TiledTerrainHandle& ter
     const TerrainStores* stores = Find(terrain);
     if (!stores)
         return 0u;
-    return stores->Pending.size() + (stores->Job ? stores->Job->Pages.size() : 0u);
+    return stores->Pending.Size() + (stores->Job ? stores->Job->Pages.size() : 0u);
 }
 
 void TerrainSurfacePageDriver::Start(TerrainStores& stores, std::shared_ptr<BakeJob> job,
@@ -381,19 +506,18 @@ void TerrainSurfacePageDriver::Start(TerrainStores& stores, std::shared_ptr<Bake
     // The bakers take the job's inputs here, on the main thread: the job only reads them.
     const SurfaceHeightPageFetch fetch = MakeHeightFetch(job->Source, job->Overlay);
     for (const std::shared_ptr<PlaneStore>& store : job->Planes)
-        store->Baker->SetInputs(job->Inputs, fetch);
+        store->Baker->SetInputs(job->Inputs, store->InputsKey, fetch);
     stores.Job = job;
-    const PageStreaming::PageStoreLevel level0 = stores.Level0;
     if (pool)
     {
         // Background: the frame's own work goes first, and a shutdown cancels a job not yet started.
         stores.Task = std::make_unique<JobSystem::TaskHandle>(
-            pool->Submit([job, level0] { RunJob(*job, level0); }, JobSystem::JobPriority::Background));
+            pool->Submit([job] { RunJob(*job); }, JobSystem::JobPriority::Background));
         if (stores.Task->IsValid())
             return;
         stores.Task.reset();
     }
-    RunJob(*job, level0);
+    RunJob(*job);
 }
 
 bool TerrainSurfacePageDriver::Poll(TerrainStores& stores)
@@ -406,40 +530,75 @@ bool TerrainSurfacePageDriver::Poll(TerrainStores& stores)
     stores.Task.reset();
     if (!job->Ran.load(std::memory_order_acquire))
     {
-        // The pool cancelled the job before it ran: its pages bake again.
-        stores.Pending.insert(stores.Pending.end(), job->Pages.begin(), job->Pages.end());
+        // The pool canceled the job before it ran: its pages bake again, and a later job publishes.
+        stores.Pending.QueueNext(job->Pages);
+        stores.StoresOpen = stores.StoresOpen || job->Finish;
         return true;
     }
     for (const std::string& warning : job->Warnings)
         Logger::Log::Warning("Surface pages: terrain '{}': {}", stores.Tag, warning);
     stores.RunLongestJobMs = std::max(stores.RunLongestJobMs, job->Milliseconds);
+    stores.RunPages += job->Pages.size();
+    if (!job->Pages.empty() && Logger::Log::ShouldLog(Logger::LogLevel::Debug))
+        Logger::Log::Debug("Surface pages: terrain '{}' job baked {} from level {} in {:.1f} ms", stores.Tag,
+                           CountPages(job->Pages.size()), job->Pages.front().Address.Level, job->Milliseconds);
+    stores.Pending.MarkBaked(job->Pages);
     if (job->Open)
     {
         std::erase_if(stores.Planes, [](const std::shared_ptr<PlaneStore>& store) { return store->Failed; });
         stores.PinnedLevelsBaked = true;
+        uint8 opened = 0;
+        for (const std::shared_ptr<PlaneStore>& store : job->Planes)
+            if (!store->Failed)
+                opened |= SurfacePlaneBit(store->Plane);
+        for (const PageFieldKind plane : job->Removed)
+            stores.Pending.RemovePlane(SurfacePlaneBit(plane));
         // The pages an edit queued while the stores opened stay next.
-        std::vector<PageAddress> edited = std::move(stores.Pending);
-        stores.Pending = stores.Planes.empty() ? std::vector<PageAddress>{}
-                                               : PendingInMortonOrder(stores.Level0, job->Missing);
-        std::erase_if(stores.Pending, [&edited](const PageAddress& page) {
-            return std::find(edited.begin(), edited.end(), page) != edited.end();
-        });
-        stores.Pending.insert(stores.Pending.end(), edited.begin(), edited.end());
-        stores.RunPages = stores.Pending.size();
-        Logger::Log::Info("Surface pages: terrain '{}' opened {} stores in {:.1f} ms, {} level-0 pages to bake",
-                          stores.Tag, stores.Planes.size(), MillisecondsSince(stores.RunStart), stores.Pending.size());
+        for (SurfacePlaneLayout& present : job->Present)
+            stores.Pending.SetPresent(std::move(present));
+        if (stores.Planes.empty())
+            stores.Pending.Clear();
+        if (job->Planes.empty())
+        {
+            uint8 removed = 0;
+            for (const PageFieldKind plane : job->Removed)
+                removed |= SurfacePlaneBit(plane);
+            Logger::Log::Info("Surface pages: terrain '{}' deleted {}", stores.Tag, NamePlanes(removed, "store"));
+        }
+        else
+            Logger::Log::Info("Surface pages: terrain '{}' opened {} in {:.1f} ms", stores.Tag,
+                              NamePlanes(opened, "store"), MillisecondsSince(stores.RunStart));
     }
-    if (!stores.Pending.empty() || job->Pages.empty())
+    // Every queued page is baked: each plane shows.
+    if (stores.Pending.Empty())
+        for (const std::shared_ptr<PlaneStore>& store : stores.Planes)
+            store->Shown = true;
+    if (!stores.Pending.Empty() || job->Pages.empty())
         return true;
-    constexpr std::string_view kRunDone =
-        "Surface pages: terrain '{}' baked {} level-0 pages over {} planes in {:.1f} ms, at most {:.1f} ms a job";
-    if (stores.RunIsColdOpen)
-        Logger::Log::Info(kRunDone, stores.Tag, stores.RunPages, stores.Planes.size(), MillisecondsSince(stores.RunStart),
-                          stores.RunLongestJobMs);
-    else
-        Logger::Log::Debug(kRunDone, stores.Tag, stores.RunPages, stores.Planes.size(),
-                           MillisecondsSince(stores.RunStart), stores.RunLongestJobMs);
+    // One line a run: an open, or the settle of an edit, which bakes once.
+    Logger::Log::Info("Surface pages: terrain '{}' baked {} of {} in {:.1f} ms, at most {:.1f} ms a job",
+                      stores.Tag, CountPages(stores.RunPages), NamePlanes(stores.RunPlanes, "plane"),
+                      MillisecondsSince(stores.RunStart), stores.RunLongestJobMs);
     return true;
+}
+
+std::shared_ptr<TerrainSurfacePageDriver::PlaneStore>
+TerrainSurfacePageDriver::MakePlaneStore(const TerrainFrame& frame, const TerrainStores& stores, PageFieldKind plane,
+                                         uint64 key, std::span<const std::shared_ptr<PlaneStore>> retired)
+{
+    const PageStreaming::PageStoreHeader shape = MakeSurfaceStoreHeader(frame.Tiled.Config, plane, 0u);
+    auto store = std::make_shared<PlaneStore>();
+    store->Plane = plane;
+    store->Key = key;
+    store->InputsKey = key;
+    store->File = SurfaceStoreFile(frame.Directory, frame.Scene, frame.Tag, plane, key);
+    store->InSession = frame.InSession;
+    store->Access = KeptAccess(retired, plane, shape);
+    if (!store->Access)
+        store->Access = std::make_shared<PageStreaming::PageStoreAccess>(plane, shape);
+    store->Baker =
+        std::make_unique<TerrainSurfacePageBaker>(stores.Inputs, plane, store->Access, SurfaceHeightPageFetch{}, frame.Pool);
+    return store;
 }
 
 std::unique_ptr<TerrainSurfacePageDriver::TerrainStores> TerrainSurfacePageDriver::OpenStores(
@@ -447,14 +606,12 @@ std::unique_ptr<TerrainSurfacePageDriver::TerrainStores> TerrainSurfacePageDrive
 {
     auto stores = std::make_unique<TerrainStores>();
     stores->RunStart = std::chrono::steady_clock::now();
-    stores->RunIsColdOpen = true;
     stores->Handle = frame.Handle;
     stores->Scene = frame.Scene;
     stores->Tag = std::string(frame.Tag);
     stores->Source = ResolveHeightSource(frame.Service, frame.Tiled, frame.Tag, true);
     stores->HeightKey = stores->Source.Key;
     stores->Write = frame.Write;
-    stores->SeenVersion = frame.Tiled.SurfaceVersion;
     stores->Seen = true;
     stores->Inputs = frame.System.SnapshotSurfaceBake(frame.Tiled, frame.Write);
 
@@ -470,27 +627,24 @@ std::unique_ptr<TerrainSurfacePageDriver::TerrainStores> TerrainSurfacePageDrive
     const PageStreaming::PageStoreHeader shape = MakeSurfaceStoreHeader(frame.Tiled.Config, PageFieldKind::Splat, 0u);
     const std::vector<PageStreaming::PageStoreLevel> levels =
         PageStreaming::BuildPageStoreLevels(shape.SamplesX, shape.SamplesZ);
-    stores->Level0 = levels.front();
-    job->PinnedLevel = FirstPinnedSurfaceLevel(frame.Tiled, levels, frame.Service.GetTerrainPages().Profile().Slots);
+    stores->PinnedLevel =
+        FirstPinnedSurfaceLevel(frame.Tiled, levels, frame.Service.GetTerrainPages().Surface().Profile());
+    stores->Pending.Reset(levels, stores->PinnedLevel);
+    // The wanted pages that a store lacks queue when the open job ends, so the pages to bake are known then.
+    stores->Pending.Want(frame.Service.GetTerrainPages().Surface().WantedPages(frame.Tiled.GlobalGpuHandleIndex));
+    job->PinnedLevel = stores->PinnedLevel;
+    // The open bakes the surface of now: it takes the change record.
+    frame.Tiled.SurfaceChangedSince = frame.Tiled.SurfaceVersion;
     std::vector<PageAddress> read;
     for (const PageFieldKind plane : kSurfacePlanes)
     {
-        const PageStreaming::PageStoreHeader planeShape = MakeSurfaceStoreHeader(frame.Tiled.Config, plane, 0u);
         const uint64 key = frame.System.SurfaceStoreKey(frame.Tiled, plane, stores->HeightKey, frame.OriginY, frame.Write);
         if (key == 0)
         {
             job->Removed.push_back(plane);
             continue;
         }
-        auto store = std::make_shared<PlaneStore>();
-        store->Plane = plane;
-        store->Key = key;
-        store->File = SurfaceStoreFile(frame.Directory, frame.Scene, frame.Tag, plane, key);
-        store->Access = KeptAccess(job->Retired, plane, planeShape);
-        if (!store->Access)
-            store->Access = std::make_shared<PageStreaming::PageStoreAccess>(plane, planeShape);
-        store->Baker = std::make_unique<TerrainSurfacePageBaker>(stores->Inputs, plane, store->Access,
-                                                                 SurfaceHeightPageFetch{}, frame.Pool);
+        std::shared_ptr<PlaneStore> store = MakePlaneStore(frame, *stores, plane, key, job->Retired);
         if (read.empty())
             read = store->Baker->HeightPagesReadByCreate(job->PinnedLevel);
         stores->Planes.push_back(store);
@@ -502,16 +656,19 @@ std::unique_ptr<TerrainSurfacePageDriver::TerrainStores> TerrainSurfacePageDrive
     return stores;
 }
 
-bool TerrainSurfacePageDriver::NoteEdits(TerrainStores& stores, const TiledTerrainData& tiled,
+bool TerrainSurfacePageDriver::NoteEdits(TerrainStores& stores, TiledTerrainData& tiled,
                                          const TerrainColorGroundWrite& write)
 {
     bool edited = false;
-    if (tiled.SurfaceVersion != stores.SeenVersion)
+    if (tiled.SurfaceChangedSince != tiled.SurfaceVersion)
     {
         stores.Unsettled = stores.Unsettled ? PageStreaming::Union(*stores.Unsettled, tiled.SurfaceChanged)
                                             : tiled.SurfaceChanged;
-        stores.UnsettledWhole = stores.UnsettledWhole || CoversTheWholeSurface(tiled, tiled.SurfaceChanged);
-        stores.SeenVersion = tiled.SurfaceVersion;
+        stores.UnsettledPlanes |= tiled.SurfaceChangedPlanes;
+        // A grass edit of the whole surface bakes its planes' pages again; it makes no store again.
+        stores.UnsettledWhole = stores.UnsettledWhole || ((tiled.SurfaceChangedPlanes & ~kGrassSurfacePlanes) != 0u &&
+                                                          CoversTheWholeSurface(tiled, tiled.SurfaceChanged));
+        tiled.SurfaceChangedSince = tiled.SurfaceVersion;
         edited = true;
     }
     // The ground write is in the Color store's key and reaches every page.
@@ -520,6 +677,7 @@ bool TerrainSurfacePageDriver::NoteEdits(TerrainStores& stores, const TiledTerra
         const uint32 interior = tiled.Config.TileConfig.HeightmapWidth - 1u;
         stores.Unsettled = PageStreaming::PageSampleRect{0u, 0u, tiled.Config.TilesPerAxisX * interior,
                                                          tiled.Config.TilesPerAxisZ * interior};
+        stores.UnsettledPlanes = kEverySurfacePlane;
         stores.UnsettledWhole = true;
         stores.Write = write;
         edited = true;
@@ -527,49 +685,138 @@ bool TerrainSurfacePageDriver::NoteEdits(TerrainStores& stores, const TiledTerra
     return edited;
 }
 
-void TerrainSurfacePageDriver::QueueEdit(TerrainStores& stores, const PageStreaming::PageSampleRect& changed)
+void TerrainSurfacePageDriver::StartRun(TerrainStores& stores)
 {
-    std::vector<PageAddress> pages;
+    stores.RunPages = 0;
+    stores.RunPlanes = 0;
+    stores.RunStart = std::chrono::steady_clock::now();
+    stores.RunLongestJobMs = 0.0;
+    stores.RunQueueLogged = false;
+}
+
+void TerrainSurfacePageDriver::QueueEdit(TerrainStores& stores, const PageStreaming::PageSampleRect& changed,
+                                         uint8 planes)
+{
+    // A present page of any level that reads the rect bakes again: its direct texels see the edit, and
+    // the refilter of the finer pages remakes its filtered texels. An absent page bakes the edit when wanted.
+    FlatMap<PageAddress, uint8> edited;
+    std::vector<PageAddress> present;
     for (const std::shared_ptr<PlaneStore>& store : stores.Planes)
-        for (const PageAddress& page : store->Baker->Level0PagesReading(changed))
-            if (std::find(pages.begin(), pages.end(), page) == pages.end())
-                pages.push_back(page);
-    if (stores.Pending.empty())
     {
-        stores.RunPages = 0;
-        stores.RunStart = std::chrono::steady_clock::now();
-        stores.RunLongestJobMs = 0.0;
-        stores.RunIsColdOpen = false;
+        const uint8 plane = SurfacePlaneBit(store->Plane);
+        if ((planes & plane) == 0u)
+            continue;
+        const std::vector<PageStreaming::PageSampleRect> reading = store->Baker->PagesReading(changed);
+        present.clear();
+        for (uint32 level = 0; level < reading.size(); ++level)
+            stores.Pending.AppendPresent(plane, level, reading[level], present);
+        for (const PageAddress& address : present)
+            edited.GetOrInsert(address) |= plane;
     }
-    const std::size_t queued = stores.Pending.size();
-    std::erase_if(stores.Pending, [&pages](const PageAddress& page) {
-        return std::find(pages.begin(), pages.end(), page) != pages.end();
+    if (edited.Empty())
+        return;
+    // A job in flight is part of the run: the edit joins it.
+    if (stores.Pending.Empty() && !stores.Job)
+        StartRun(stores);
+    // The queue takes the last page first: the finest pages bake first, so a coarse page filters fresh pages.
+    std::vector<SurfaceBakePage> pages;
+    pages.reserve(edited.Size());
+    for (const auto& [address, pagePlanes] : edited)
+        pages.push_back(SurfaceBakePage{address, pagePlanes});
+    std::ranges::reverse(pages);
+    stores.Pending.QueueNext(pages);
+    Logger::Log::Debug("Surface pages: terrain '{}' queued {} for an edit", stores.Tag, CountPages(pages.size()));
+}
+
+void TerrainSurfacePageDriver::ChangeGrassStore(TerrainStores& stores, const TerrainFrame& frame, uint64 key)
+{
+    auto job = std::make_shared<BakeJob>();
+    job->Open = true;
+    job->PinnedLevel = stores.PinnedLevel;
+    job->Directory = frame.Directory;
+    job->Scene = stores.Scene;
+    job->Tag = stores.Tag;
+    job->Inputs = stores.Inputs;
+    job->Source = stores.Source;
+    job->Overlay = std::make_shared<OverlayPages>();
+    const auto grass = std::find_if(stores.Planes.begin(), stores.Planes.end(), [](const auto& store) {
+        return store->Plane == PageFieldKind::GrassControl;
     });
-    stores.RunPages += pages.size() - (queued - stores.Pending.size());
-    stores.Pending.insert(stores.Pending.end(), pages.begin(), pages.end());
-    Logger::Log::Debug("Surface pages: terrain '{}' queued {} level-0 pages for an edit", stores.Tag, pages.size());
+    if (grass != stores.Planes.end())
+    {
+        job->Retired.push_back(*grass);
+        job->Removed.push_back(PageFieldKind::GrassControl);
+        stores.Planes.erase(grass);
+    }
+    if (key != 0)
+    {
+        std::shared_ptr<PlaneStore> store = MakePlaneStore(frame, stores, PageFieldKind::GrassControl, key, {});
+        // The other planes stay on screen: the new plane shows when its wanted pages are baked.
+        store->Shown = false;
+        stores.Planes.push_back(store);
+        job->Planes.push_back(std::move(store));
+    }
+    if (stores.Pending.Empty() && !stores.Job)
+        StartRun(stores);
+    Start(stores, std::move(job), frame.Pool);
+    Poll(stores);
 }
 
 void TerrainSurfacePageDriver::BakePending(TerrainStores& stores, const TerrainFrame& frame)
 {
-    if (stores.Job || stores.Pending.empty() || stores.Planes.empty())
+    if (stores.Job || stores.Planes.empty())
         return;
-    const std::size_t count = std::min(kLevel0PagesAJob, stores.Pending.size());
+    // The pages the surface stream wanted at its last request, the coarsest level first: the view's far field
+    // is whole sooner, and the camera's ground follows.
+    const bool idle = stores.Pending.Empty();
+    stores.Pending.Want(frame.Service.GetTerrainPages().Surface().WantedPages(frame.Tiled.GlobalGpuHandleIndex));
+    if (stores.Pending.Empty())
+    {
+        // A Want that empties the queue after a job that left the stores open: a job of no page
+        // publishes them, so every run ends with one Finish.
+        if (stores.StoresOpen && !stores.Unsettled)
+            StartFinish(stores, frame.Pool);
+        return;
+    }
+    if (idle)
+        StartRun(stores);
+    if (!stores.RunQueueLogged)
+    {
+        Logger::Log::Info("Surface pages: terrain '{}' queued {} to bake", stores.Tag,
+                          CountPages(stores.Pending.Size()));
+        stores.RunQueueLogged = true;
+    }
     auto job = std::make_shared<BakeJob>();
-    job->Pages.assign(stores.Pending.end() - static_cast<std::ptrdiff_t>(count), stores.Pending.end());
-    stores.Pending.resize(stores.Pending.size() - count);
+    stores.Pending.Take(kPagesAJob, job->Pages);
+    for (const SurfaceBakePage& page : job->Pages)
+        stores.RunPlanes |= page.Planes;
     // The stores stay open while the run lasts: a job opens and publishes no file.
-    job->Finish = stores.Pending.empty() && !stores.Unsettled;
+    job->Finish = stores.Pending.Empty() && !stores.Unsettled;
     stores.StoresOpen = !job->Finish;
     job->Inputs = stores.Inputs;
     job->Source = stores.Source;
     job->Planes = stores.Planes;
     std::vector<PageAddress> read;
+    // The planes of a page can differ, so the read is the union of each plane's read.
     for (const std::shared_ptr<PlaneStore>& store : stores.Planes)
-        if (read.empty())
-            read = store->Baker->HeightPagesReadByBake(job->Pages);
+        for (const PageAddress& page : store->Baker->HeightPagesReadByBake(PlanePages(job->Pages, store->Plane)))
+            if (std::find(read.begin(), read.end(), page) == read.end())
+                read.push_back(page);
     job->Overlay = MakeOverlayPages(frame.Tiled.PageOverlay.get(), read);
     Start(stores, std::move(job), frame.Pool);
+    Poll(stores);
+}
+
+void TerrainSurfacePageDriver::StartFinish(TerrainStores& stores, JobSystem::WorkStealingThreadPool* pool)
+{
+    auto job = std::make_shared<BakeJob>();
+    job->Finish = true;
+    job->Inputs = stores.Inputs;
+    job->Source = stores.Source;
+    job->Planes = stores.Planes;
+    job->Overlay = std::make_shared<OverlayPages>();
+    stores.StoresOpen = false;
+    Start(stores, std::move(job), pool);
     Poll(stores);
 }
 
@@ -596,34 +843,58 @@ void TerrainSurfacePageDriver::UpdateTerrain(ECS::World& world, ECS::EntityHandl
         return;
     TiledTerrainData* tiled = service.GetTiledTerrainData(handle);
     const auto* sceneTag = world.GetComponent<Components::SceneEntityTag>(entity);
-    const std::string_view tag = sceneTag ? sceneTag->View() : std::string_view{};
-    if (!tiled || terrain.BakeOriginScene.IsNull() || tag.empty())
+    // A terrain whose scene is not saved bakes into the session stores, named for its tiled terrain.
+    // Without its session, it bakes no surface pages.
+    const bool inSession = terrain.BakeOriginScene.IsNull();
+    const Session* session = inSession ? OpenSession(directory) : nullptr;
+    if (inSession && !session)
         return;
+    const GUID scene = session ? session->Id : terrain.BakeOriginScene;
     const auto sameTerrain = [&](const std::unique_ptr<TerrainStores>& stores) {
         return stores->Handle == handle;
     };
     auto found = std::find_if(m_Terrains.begin(), m_Terrains.end(), sameTerrain);
+    // The session tag is made once, when the terrain joins the session; its stores keep it.
+    const bool joined = session && found != m_Terrains.end() && (*found)->Scene == scene;
+    const std::string sessionTag =
+        inSession && !joined ? std::format("tiled-{}-{}", handle.Index, handle.Generation) : std::string{};
+    const std::string_view tag = !inSession ? (sceneTag ? sceneTag->View() : std::string_view{})
+                                 : joined   ? std::string_view((*found)->Tag)
+                                            : std::string_view(sessionTag);
+    if (!tiled || tag.empty())
+        return;
     if (found != m_Terrains.end())
         (*found)->Seen = true;
-    // The surface bakes over the modifiers' heights and the committed splat range.
-    if (!tiled->PageOverlayCurrent || !tiled->SplatBakeRangeValid)
+    // The surface bakes over the modifiers' heights once the resident splats are baked.
+    if (!tiled->PageOverlayCurrent || !tiled->ResidentSplatsBaked)
         return;
     const SurfaceHeightSource source = ResolveHeightSource(service, *tiled, tag, false);
     if (source.Key == 0)
         return;
-    const TerrainFrame frame{*tiled, service, system, pool, directory, handle, terrain.BakeOriginScene, tag, originY,
-                             TerrainColorMapBaker::ResolveGroundWrite(world, entity)};
+    const TerrainFrame frame{*tiled,
+                             service,
+                             system,
+                             pool,
+                             session ? session->Directory : directory,
+                             handle,
+                             scene,
+                             tag,
+                             originY,
+                             TerrainColorMapBaker::ResolveGroundWrite(world, entity),
+                             inSession};
 
     // The stores of a terrain are made again only between its jobs.
     const bool idle = found == m_Terrains.end() || Poll(**found);
     if (idle && found != m_Terrains.end() &&
-        ((*found)->HeightKey != source.Key || (*found)->Scene != terrain.BakeOriginScene || (*found)->Tag != tag))
+        ((*found)->HeightKey != source.Key || (*found)->Scene != scene || (*found)->Tag != tag))
     {
         *found = OpenStores(frame, false, std::move((*found)->Planes));
         return;
     }
     if (found == m_Terrains.end())
     {
+        if (std::ranges::any_of(m_Dropped, sameTerrain))
+            return; // its dropped stores still have a job
         m_Terrains.push_back(OpenStores(frame, false, {}));
         return;
     }
@@ -649,9 +920,36 @@ void TerrainSurfacePageDriver::UpdateTerrain(ECS::World& world, ECS::EntityHandl
                 *found = OpenStores(frame, true, std::move(stores.Planes));
             return;
         }
+        // An edit bakes again the present pages that read it: they are known when the open job ends.
+        if (stores.Job && stores.Job->Open)
+            return;
+        // A grass edit that makes or deletes the GrassControl store waits for the job in flight.
+        const bool grassEdit = (stores.UnsettledPlanes & SurfacePlaneBit(PageFieldKind::GrassControl)) != 0u;
+        const uint64 grassKey = grassEdit ? system.SurfaceStoreKey(*tiled, PageFieldKind::GrassControl,
+                                                                              stores.HeightKey, originY, frame.Write)
+                                                      : 0u;
+        const bool hasGrass = std::any_of(stores.Planes.begin(), stores.Planes.end(), [](const auto& store) {
+            return store->Plane == PageFieldKind::GrassControl;
+        });
+        const bool grassStoreChanges = grassEdit && (grassKey != 0u) != hasGrass;
+        if (grassStoreChanges && !idle)
+            return;
         stores.Inputs = system.SnapshotSurfaceBake(*tiled, frame.Write);
-        QueueEdit(stores, *stores.Unsettled);
+        if (grassStoreChanges)
+            ChangeGrassStore(stores, frame, grassKey);
+        for (const std::shared_ptr<PlaneStore>& store : stores.Planes)
+            store->InputsKey = grassEdit && store->Plane == PageFieldKind::GrassControl
+                                   ? grassKey
+                                   : system.SurfaceStoreKey(*tiled, store->Plane, stores.HeightKey, originY, frame.Write);
+        // A new GrassControl store bakes all its pages; the other planes bake the edited rect.
+        const uint8 planes = grassStoreChanges
+                                 ? static_cast<uint8>(stores.UnsettledPlanes & ~SurfacePlaneBit(PageFieldKind::GrassControl))
+                                 : stores.UnsettledPlanes;
+        QueueEdit(stores, *stores.Unsettled, planes);
         stores.Unsettled.reset();
+        stores.UnsettledPlanes = 0;
+        if (grassStoreChanges)
+            return;
     }
     if (idle)
         BakePending(stores, frame);
@@ -672,7 +970,7 @@ void TerrainSurfacePageDriver::PublishSource(TerrainService& service, const Terr
     constexpr uint8 kLast = static_cast<uint8>(PageFieldKind::Color);
     for (uint8 kind = kFirst; kind <= kLast; ++kind)
         for (const std::shared_ptr<PlaneStore>& store : stores.Planes)
-            if (static_cast<uint8>(store->Plane) == kind && store->Access)
+            if (static_cast<uint8>(store->Plane) == kind && store->Access && store->Shown)
             {
                 source.Planes.push_back(store->Access);
                 source.PlaneMask |= 1u << (kind - kFirst);
@@ -684,22 +982,44 @@ void TerrainSurfacePageDriver::Update(ECS::World& world, TerrainService& service
                                       JobSystem::WorkStealingThreadPool* pool)
 {
     const std::filesystem::path& directory = service.GetHeightPageStores().Location().CacheDirectory;
+    if (m_Session && m_Session->Cache != directory)
+    {
+        for (std::unique_ptr<TerrainStores>& stores : m_Terrains)
+            if (stores->Scene == m_Session->Id)
+            {
+                stores->Seen = false;
+                PublishSource(service, *stores);
+            }
+        EndSession();
+    }
     if (directory.empty())
     {
         for (std::unique_ptr<TerrainStores>& stores : m_Terrains)
         {
             stores->Seen = false;
             PublishSource(service, *stores);
+            m_Dropped.push_back(std::move(stores));
         }
         m_Terrains.clear();
+        CloseDroppedStores();
         return;
+    }
+    CloseDroppedStores();
+    // The first frame of a cache deletes the sessions of editors that stopped without deleting them.
+    if (directory != m_SweptCache)
+    {
+        RemoveOrphanSessionStores(directory);
+        m_SweptCache = directory;
     }
     for (std::unique_ptr<TerrainStores>& stores : m_Terrains)
         stores->Seen = false;
 
     world.Query<ECS::Read<Components::Terrain>, ECS::Read<Components::WorldTransform>>().Each(
         [&](ECS::EntityHandle entity, const Components::Terrain& terrain, const Components::WorldTransform& transform)
-        { UpdateTerrain(world, entity, terrain, transform.matrix[13], service, system, pool, directory); });
+        {
+            UpdateTerrain(world, entity, terrain, (transform.GetPosition() - Mathematics::WorldPosition{}).y, service,
+                          system, pool, directory);
+        });
     // A forgotten terrain stays until a job of its own publishes its open stores, so that no later
     // job writes its files beside it.
     for (const std::unique_ptr<TerrainStores>& stores : m_Terrains)
@@ -708,8 +1028,12 @@ void TerrainSurfacePageDriver::Update(ECS::World& world, TerrainService& service
         if (!stores->Seen && Poll(*stores) && stores->StoresOpen)
             Close(*stores, pool);
     }
-    std::erase_if(m_Terrains, [](const std::unique_ptr<TerrainStores>& stores) {
-        return !stores->Seen && Poll(*stores) && !stores->StoresOpen;
+    // A forgotten terrain of the session deletes its stores: no later frame opens them again.
+    std::erase_if(m_Terrains, [this](const std::unique_ptr<TerrainStores>& stores) {
+        const bool forgotten = !stores->Seen && Poll(*stores) && !stores->StoresOpen;
+        if (forgotten)
+            DeleteSessionStores(*stores);
+        return forgotten;
     });
 }
 

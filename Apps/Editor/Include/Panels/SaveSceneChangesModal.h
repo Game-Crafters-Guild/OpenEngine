@@ -4,6 +4,7 @@
 
 #include <functional>
 #include <string>
+#include <string_view>
 
 namespace GameEngine
 {
@@ -22,7 +23,9 @@ struct SaveSceneChangesModalLabels
 class SaveSceneChangesModal final : public UIElement
 {
   public:
-    SaveSceneChangesModal();
+    /// `idPrefix` names the owner. The prompt's ids are "<idPrefix>-save-changes-save" and so on, so each
+    /// prompt in the window has its own ids.
+    explicit SaveSceneChangesModal(std::string_view idPrefix);
 
     void Show(const std::string& title, const std::string& message,
               const SaveSceneChangesModalLabels& labels = {});

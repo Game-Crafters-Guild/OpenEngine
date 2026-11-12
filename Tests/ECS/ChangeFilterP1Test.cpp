@@ -420,11 +420,13 @@ TEST(ChangeFilterP1, ParallelBatchEachHonorsGate) {
 }
 
 // ---------------------------------------------------------------------------
-// CompactRelocationKeepsStamps (§4.6, M14 extended): stamps travel with
-// chunks through CompactChunks' swap+pop and trailing-free modes, through
-// ArchetypeTable move construction/assignment, and across Reserve growth.
+// RemovalMoveKeepsStamps (§4.6, M14 extended): a removal moves the table's last
+// row into the vacated slot of another chunk, and that chunk passes a gate taken
+// before the moved row was written. Stamps survive a chunk leaving the table, the
+// freeing of spare chunks, ArchetypeTable move construction/assignment, and a
+// spare chunk enters with a zero row.
 // ---------------------------------------------------------------------------
-TEST(ChangeFilterP1, CompactRelocationKeepsStamps) {
+TEST(ChangeFilterP1, RemovalMoveKeepsStamps) {
     World world(nullptr);
     auto handles = Populate(world, 1);
     auto* archetype = world.GetEntityArchetype(handles[0]);
@@ -434,40 +436,35 @@ TEST(ChangeFilterP1, CompactRelocationKeepsStamps) {
     // Fill three full chunks (plus the one entity already there).
     auto more = Populate(world, cap * 3 - 1);
     handles.insert(handles.end(), more.begin(), more.end());
-    ASSERT_GE(std::as_const(*archetype).GetTable().GetChunkCount(), 3u);
+    ASSERT_EQ(std::as_const(*archetype).GetTable().GetChunkCount(), 3u);
 
-    // Empty chunk 1 (entities [cap, 2cap) by creation order).
-    for (size_t i = cap; i < cap * 2; ++i)
-        world.DestroyEntityImmediate(handles[i]);
-
-    // Entry-sample, then dirty exactly one entity living in chunk 2.
+    // Entry-sample, then dirty the table's last row (chunk 2).
     const uint64_t gate = world.GetGlobalSystemVersion();
-    auto* p = world.GetComponentForWrite<Position>(handles[cap * 2 + 3]);
+    auto* p = world.GetComponentForWrite<Position>(handles.back());
     ASSERT_NE(p, nullptr);
     p->z = 123.0f;
 
-    // Compact: chunk 2 swaps into slot 1; its stamps must travel (swap+pop
-    // mode). The destroy loop above also exercises swap-remove stamping, but
-    // those stamps predate `gate`.
-    EXPECT_GT(world.CompactAllChunks(), 0u);
-    EXPECT_GT(VisitedSince(world, gate), 0u) << "stamp lost in CompactChunks swap";
+    // The dirty row moves into chunk 0. Chunk 0 (cap rows) and chunk 2 (cap - 1
+    // rows) pass the gate; chunk 1 does not.
+    world.DestroyEntityImmediate(handles[3]);
+    EXPECT_EQ(VisitedSince(world, gate), cap + (cap - 1)) << "chunk that received the moved row missed the gate";
 
-    // Clean after compact: relocation alone must not fabricate changes for a
+    // Clean after the move: the removal alone must not fabricate changes for a
     // fresh gate.
     EXPECT_EQ(VisitedSince(world, world.GetGlobalSystemVersion()), 0u);
 
-    // Trailing-free mode: empty the LAST chunk (the relocated former chunk 2),
-    // compact, and verify stamps of surviving chunks stay intact.
+    // Empty the last chunk (it becomes a spare), then free the spares, and verify
+    // stamps of surviving chunks stay intact.
     for (size_t i = cap * 2; i < cap * 3; ++i) {
         if (world.IsValid(handles[i]))
             world.DestroyEntityImmediate(handles[i]);
     }
     const uint64_t gate2 = world.GetGlobalSystemVersion();
-    auto* p0 = world.GetComponentForWrite<Position>(handles[3]); // chunk 0 resident
+    auto* p0 = world.GetComponentForWrite<Position>(handles[5]); // chunk 0 resident
     ASSERT_NE(p0, nullptr);
     p0->z = 55.0f;
-    world.CompactAllChunks();
-    EXPECT_GT(VisitedSince(world, gate2), 0u) << "stamp lost in trailing-free compact";
+    EXPECT_GT(world.CompactAllChunks(), 0u);
+    EXPECT_GT(VisitedSince(world, gate2), 0u) << "stamp lost when spare chunks were freed";
 
     // Table-level: move ctor/assign and Reserve growth preserve stamps.
     {
@@ -478,7 +475,9 @@ TEST(ChangeFilterP1, CompactRelocationKeepsStamps) {
         ArchetypeTable table{std::span<const ComponentMeta>(metas)};
         table.AddEntity(EntityHandle(1, 1));
         table.StampColumnVersion(0, 1, 42);
-        table.Reserve(table.GetLayout().Capacity * 2 + 1); // grow: new rows zeroed
+        table.Reserve(table.GetLayout().Capacity * 2 + 1);
+        for (uint32_t i = 0; i < table.GetLayout().Capacity; ++i)
+            table.AddEntity(EntityHandle(i + 2, 1)); // fills chunk 0, opens chunk 1 from a spare
         EXPECT_EQ(table.GetColumnVersion(0, 1), 42u);
         EXPECT_EQ(table.GetColumnVersion(1, 1), 0u);
 

@@ -5,6 +5,7 @@ if(NOT GTest_FOUND)
 endif()
 
 add_executable(NoiseTests
+    FractalNoise3DTests.cpp
     GradientCurl3DTests.cpp
     NoiseGoldenTests.cpp
 )

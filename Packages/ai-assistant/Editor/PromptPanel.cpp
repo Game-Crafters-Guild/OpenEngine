@@ -1,4 +1,5 @@
 #include "PromptPanel.h"
+#include "AgentConnectionDropdown.h"
 #include "AgentConversationController.h"
 #include "AgentConversationRow.h"
 #include "AgentConversationRowModel.h"
@@ -18,6 +19,7 @@
 #include "MarkupTokenPicker.h"
 #include "PromptTextArea.h"
 #include "ModeControlFit.h"
+#include "Providers/CliSessionProvider.h"
 #include "Providers/IAgentProvider.h"
 
 #include "Editor/Registries/EditorMarkupRequests.h"
@@ -243,12 +245,9 @@ void PromptPanel::OnLayoutBound()
     ConfigurePromptScrollView(*m_HistoryScroll, false);
     ConfigurePromptScrollView(*m_PromptInputScroll, true);
 
-    std::vector<Dropdown::Option> providers;
-    for (const AiAssistantSettings::Choice& choice : AiAssistantSettings::ProviderChoices())
-        providers.push_back({std::string(choice.Id), std::string(choice.Label), ""});
-    m_ProviderDropdown->SetOptions(providers, 0);
+    m_Connections = std::make_unique<AgentConnectionDropdown>(*m_ProviderDropdown);
     m_ProviderGeneration = AiAssistantSettings::ProviderGeneration();
-    m_ProviderDropdown->SetSelectedValue(AiAssistantSettings::Provider());
+    m_Connections->Show(AiAssistantSettings::Provider());
     auto modelPopover = std::make_unique<AgentModelPopover>(*m_ModelButton);
     m_ModelPopover = modelPopover.get();
     AddChild(std::move(modelPopover));
@@ -260,10 +259,6 @@ void PromptPanel::OnLayoutBound()
         *m_SessionButton, *m_Controller, [this](const AgentSessionChoice& choice) { OnSessionChosen(choice); },
         [this](const std::string& text) { SetStatus(text); });
     FollowProvider(AiAssistantSettings::Provider());
-    m_ProviderDropdown->SetOnValueChanged([](const std::string& providerId)
-    {
-        AiAssistantSettings::SetProvider(providerId);
-    });
     m_ModeDropdown->SetOnValueChanged([this](const std::string& modeId)
     {
         if (m_SyncingModeControl)
@@ -283,11 +278,6 @@ void PromptPanel::OnLayoutBound()
         header->AddClass("prompt-panel-input-task-header");
     AddSemanticClassToDescendants(*m_ProviderDropdown, "dropdown-chevron", "prompt-panel-input-task-chevron");
     AddSemanticClassToDescendants(*m_ProviderDropdown, "dropdown-header-label", "prompt-panel-input-task-label");
-    m_ProviderDropdown->SetTooltip("The connection that answers; changing it starts a new conversation. The "
-                                   "button beside it chooses the model; executables are in Settings > AI "
-                                   "Assistant. Claude (API) reads ANTHROPIC_API_KEY from the editor's "
-                                   "environment: set it before starting the editor");
-    m_ProviderDropdown->SetTooltipPlacement(UIElement::TooltipPlacement::Right);
 
     if (Button* settings = findButton("PromptSettingsToggle"_sid))
     {
@@ -489,7 +479,7 @@ void PromptPanel::UpdateInputStacking()
     if (!m_InputPane || !m_InputRow || !m_InputControls)
         return;
     // The controls group never shrinks beside the field, so its width is that of the
-    // controls the connection shows (Claude (API) hides the mode control and Session…);
+    // controls the connection shows (Claude (API key) hides the mode control and Session…);
     // under the field it shrinks only once the pane is narrower than that width, which
     // leaves no room for the field anyway.
     const float rowWidth = m_InputRow->GetLayoutWidth();
@@ -550,7 +540,7 @@ void PromptPanel::UpdateConversation()
     if (m_ProviderDropdown && providerGeneration != m_ProviderGeneration)
     {
         m_ProviderGeneration = providerGeneration;
-        m_ProviderDropdown->SetSelectedValue(AiAssistantSettings::Provider());
+        m_Connections->Show(AiAssistantSettings::Provider());
         FollowProvider(AiAssistantSettings::Provider());
     }
 
@@ -991,9 +981,13 @@ void PromptPanel::SyncRows()
 void PromptPanel::UpdateStatus()
 {
     const auto messages = m_Controller->GetConversation().Messages();
+    // Only a local session runs a check before its first turn; a message API answers at once.
+    const std::shared_ptr<CliSessionProvider> session =
+        AgentSessionState::Get().SessionProvider(AiAssistantSettings::Provider());
+    const bool setupChecked = !session || session->SetupChecked();
     if (messages.empty())
     {
-        SetStatus("Ready");
+        SetStatus(setupChecked ? kReadyStatus : kNotCheckedStatus);
         return;
     }
     const auto actions = m_Controller->Actions();
@@ -1011,6 +1005,11 @@ void PromptPanel::UpdateStatus()
     for (const ConversationMessage& message : messages)
         if (message.Status == MessageStatus::InProgress)
             running = &message;
+    if (running && !setupChecked)
+    {
+        SetStatus(kCheckingSetupStatus);
+        return;
+    }
     if (running)
     {
         SetStatus(queued > 0 ? "Generating... (" + std::to_string(queued) + " queued; Esc stops all)"
@@ -1023,7 +1022,7 @@ void PromptPanel::UpdateStatus()
         SetStatus(messages.back().Truncated ? "Reply complete (truncated at 64 KB)" : "Reply complete");
         break;
     case MessageStatus::Failed:
-        SetStatus(m_Controller->SessionWasLost() ? kSessionLostStatus : "Reply failed");
+        SetStatus(FailedReplyStatus(messages.back(), m_Controller->SessionWasLost()));
         break;
     case MessageStatus::Stopped:
     case MessageStatus::Cancelled:

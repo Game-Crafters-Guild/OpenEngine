@@ -54,12 +54,15 @@
 #include "Spline/SplineEvaluator.h"
 #include "SplineECS/SplineService.h"
 #include "Terrain/Heightfield.h"
-#include "Noise/FractalNoise2D.h"
+#include "Noise/FractalNoise.h"
+#include "PageStreaming/Height/HeightPageLayer.h"
+#include "PageStreaming/PageStore/PageStoreFormat.h"
 #include "TerrainECS/Erosion/ErosionFilter.h"
 #include "TerrainECS/Scene/TerrainSceneSchemas.h"
 #include "TerrainECS/TerrainModifierComponents.h"
 #include "TerrainECS/TerrainModifierSystem.h"
 #include "TerrainECS/TerrainService.h"
+#include "TerrainTestHelpers.h"
 
 #include <algorithm>
 #include <cmath>
@@ -130,10 +133,7 @@ TerrainHandle CreateBakedTerrain(TerrainService& svc)
 {
     const TerrainHandle handle = svc.CreateTerrain(MakeTestConfig());
     auto* data = svc.GetTerrainData(handle);
-    FillHeightfieldBaseRegion(data->Heightfield, Components::TerrainBaseSource::ProceduralNoise,
-                              nullptr, 0, 0,
-                              static_cast<int32>(kHeightmapDim) - 1,
-                              static_cast<int32>(kHeightmapDim) - 1);
+    TerrainTests::SeedNoiseBaseHeightmap(svc, data->Heightfield);
     data->MarkFullDirty();
     svc.RebuildQuadtree(handle);
     data->ResetSplatmapAndCommitRange();
@@ -143,9 +143,9 @@ TerrainHandle CreateBakedTerrain(TerrainService& svc)
 Components::WorldTransform IdentityAt(float32 x, float32 y, float32 z)
 {
     Components::WorldTransform xf{};
-    xf.matrix[12] = x;
-    xf.matrix[13] = y;
-    xf.matrix[14] = z;
+    xf.Position.X = x;
+    xf.Position.Y = y;
+    xf.Position.Z = z;
     return xf;
 }
 
@@ -161,7 +161,7 @@ ECS::EntityHandle CreateTerrainEntity(ECS::World& world, TerrainHandle handle, f
     terrain.HeightScale = kHeightScale;
     terrain.TerrainDataHandle = handle.Index;
     terrain.TerrainDataGeneration = handle.Generation;
-    terrain.BaseSource = Components::TerrainBaseSource::ProceduralNoise;
+    TerrainTests::UseNoiseBaseHeightmap(terrain);
     world.AddComponentImmediate<Components::Terrain>(e, terrain);
     world.AddComponentImmediate<Components::WorldTransform>(e, IdentityAt(0.0f, worldY, 0.0f));
     return e;
@@ -179,6 +179,8 @@ ECS::EntityHandle CreatePlanetEntity(ECS::World& world, TerrainHandle handle)
     world.AddComponentImmediate<Components::WorldTransform>(e, Components::WorldTransform{});
     return e;
 }
+
+using TerrainTests::PlanetLayerHeight;
 
 // A spline entity whose control points are authored in entity-local space, with
 // the swept radius as the band half-width.
@@ -324,7 +326,7 @@ float32 BakeSphereMaxAbsOffset(const std::function<void(ECS::World&, SplineECS::
 
     const TerrainHandle handle = CreateBakedTerrain(terrainSvc);
     ECS::World world;
-    CreatePlanetEntity(world, handle);
+    const ECS::EntityHandle planet = CreatePlanetEntity(world, handle);
     author(world, splineSvc);
 
     TerrainModifierSystem system;
@@ -341,7 +343,7 @@ float32 BakeSphereMaxAbsOffset(const std::function<void(ECS::World&, SplineECS::
             const float32 ax = kHalfAngle * (2.0f * static_cast<float32>(ix) / (kFan - 1) - 1.0f);
             const float32 az = kHalfAngle * (2.0f * static_cast<float32>(iz) / (kFan - 1) - 1.0f);
             const float32 len = std::sqrt(ax * ax + 1.0f + az * az);
-            const float32 h = terrainSvc.SampleSphereSculptHeight(ax / len, 1.0f / len, az / len, 0.0f);
+            const float32 h = PlanetLayerHeight(terrainSvc, planet.id, Mathematics::Vector3(ax / len, 1.0f / len, az / len));
             maxAbs = std::max(maxAbs, std::abs(h));
         }
     return maxAbs;
@@ -1614,7 +1616,7 @@ TEST(TerrainVolumeGate, MovingAVolumeWakesTheGatherAndRebakes)
 
     auto* xf = scene.World.GetComponentForWrite<Components::WorldTransform>(volume);
     ASSERT_NE(xf, nullptr);
-    xf->matrix[12] = kModX + 60.0f;
+    xf->Position.X = kModX + 60.0f;
 
     Tick(scene.World, scene.System);
 

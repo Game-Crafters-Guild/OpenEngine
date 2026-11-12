@@ -2,6 +2,7 @@
 
 #include "Components/Markup/Markup.h"
 #include "ECS/ECS.h"
+#include "Mathematics/Matrix4x4.h"
 #include "Mathematics/Vector3.h"
 #include "Types/Types.h"
 
@@ -96,9 +97,9 @@ struct MarkupWorldVolume
     float BoundingRadius = 0.0f;                 // of the sphere around the shape
     float TopY = 0.0f;                           // the highest world Y the shape reaches
 };
-// The shape `matrix` (a WorldTransform's, column-major) places; none for a zero scale.
+// The shape the world matrix `matrix` places; none for a zero scale.
 std::optional<MarkupWorldVolume> MarkupWorldVolumeFromMatrix(Components::MarkupVolumeShape shape,
-                                                             const float32 (&matrix)[16]);
+                                                             const Mathematics::Matrix4x4& matrix);
 // The mark-up's shape in the world; none without a MarkupVolume and a WorldTransform.
 std::optional<MarkupWorldVolume> ReadMarkupWorldVolume(const ECS::World& world, ECS::EntityHandle entity);
 // Whether `point` lies inside `volume` or on its surface.

@@ -7,6 +7,7 @@
 #include "SceneView/SplineTool/SplineDrapePolylines.h"
 #include "SceneView/SplineTool/SplineJunctionMarkers.h"
 #include "Spline/SplineTypes.h"
+#include "SplineRecipes/ConformGroundWatch.h"
 #include "SplineRecipes/SplineSurfaceConform.h"
 #include "Types/FlatMap.h"
 
@@ -83,6 +84,8 @@ private:
         uint64_t SurfaceRevision = 0;
         // The run's world bounds at the keys above.
         Mathematics::AABB RunBounds = Mathematics::AABB::Empty();
+        // The terrain ground under the run, folded again only when the ground stamp or the run changed.
+        SplineRecipes::ConformGroundWatch Ground;
         // The meshes under the run the drape can land on. A mesh that arrives, moves or leaves
         // there changes SceneDigest.Value, and the drape is rebuilt when it differs from SceneRevision.
         SplineRecipes::SceneConformDigest SceneDigest;
@@ -115,7 +118,6 @@ private:
                                         ECS::EntityHandle e,
                                         const Components::SplineComponent& comp,
                                         const Spline::SplineData& data,
-                                        const Components::WorldTransform& xf,
                                         const Mathematics::Matrix4x4& worldM,
                                         bool wantEdges);
 

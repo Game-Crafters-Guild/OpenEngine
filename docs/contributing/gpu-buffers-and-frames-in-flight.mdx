@@ -102,10 +102,8 @@ fences and the caller not reusing a handle while the GPU is still using it.
 ## 5. GPUScene: global scene buffers
 
 `Rendering::GPUScene` owns the GPU-resident representation of the scene (instances, meshes,
-materials). Historically it also owned visibility buffers and culling data. In the
-target architecture **per-view visibility lists and HZB/occlusion resources live in a dedicated
-GPU visibility/HZB pipeline** (fronted by `GPUCullingPipeline`).
-GPUScene remains the scene data backend that those pipelines consume.
+materials). `GPUCullingPipeline` owns the per-view visibility lists and the HZB/occlusion resources.
+GPUScene is the scene data backend that those pipelines consume.
 
 Current behavior:
 
@@ -116,8 +114,13 @@ Current behavior:
 - `BeginFrame()` increments an internal `m_frameIndex` and derives the active frame slot from
   `m_device->GetFrameIndex() % m_FramesInFlight`. Calls `UpdateGPUBuffers()`.
 - `EndFrame()` clears dirty flags once culling work is scheduled.
-- Per-frame buffers (instances, visibility, indirect-args, culling data) are created for each
+- Per-frame buffers (instances, the scatter-hot mirror, meshes, indirect-args) are created for each
   frame-in-flight slot, giving each in-flight frame its own stable view of scene data.
+- The instance buffers start at 16,384 rows. When the scene holds more rows than a slot's buffers,
+  `UpdateGPUBuffers()` replaces that slot's buffers with ones at the next power of two (at most the
+  `maxInstances` given to `Initialize`) and uploads the whole slot. Each slot grows on its own turn.
+  The old buffers go through the device's deferred destroy and are freed after the frames that read
+  them complete.
 
 **Key invariants:**
 
@@ -131,8 +134,8 @@ Current behavior:
 
 GPUScene uses true per-frame buffers for frame-in-flight safety:
 
-- `struct GPUSceneFrameResources { BufferHandle instanceBuffer; BufferHandle visibilityBuffer;
-  BufferHandle indirectArgsBuffer; };`
+- `struct GPUSceneFrameResources { BufferHandle instanceBuffer; BufferHandle scatterHotBuffer;
+  BufferHandle meshBuffer; BufferHandle indirectArgsBuffer; uint32_t instanceCapacity; };`
 
 - `static constexpr uint32_t kMaxFramesInFlight = IDevice::kMaxSupportedFramesInFlight;`
   (the compile-time upper bound defined once on `IDevice`; runtime frame count is queried
@@ -145,12 +148,13 @@ API:
 
 - Current-frame accessors:
   - `BufferHandle GetInstanceBuffer() const;`
-  - `BufferHandle GetVisibilityBuffer() const;`
+  - `uint32_t GetInstanceCapacity() const;` (the rows the current slot's instance buffer holds; a
+    binding range over the instance buffer reads it in the same frame)
   - `BufferHandle GetIndirectArgsBuffer() const;`
 
 - Explicit per-frame accessors (for tests and advanced callers):
   - `BufferHandle GetInstanceBufferForFrame(uint32_t frameIndex) const;`
-  - `BufferHandle GetVisibilityBufferForFrame(uint32_t frameIndex) const;`
+  - `BufferHandle GetScatterHotBufferForFrame(uint32_t frameIndex) const;`
   - `BufferHandle GetIndirectArgsBufferForFrame(uint32_t frameIndex) const;`
 
 Update path:

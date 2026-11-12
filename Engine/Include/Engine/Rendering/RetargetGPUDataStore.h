@@ -25,7 +25,7 @@ namespace GameEngine { namespace Animation {
 namespace GameEngine { namespace Engine { namespace Renderer {
 
 // Hard cap on bones per skeleton. Sized to fit the LDS budget of the fused
-// retarget_full.comp (~16 KB / workgroup at 256 bones × 4 vec4 arrays).
+// retarget_full.comp (about 24 KB / workgroup: six 256-bone vec4 arrays).
 // MetaHuman ~150 bones; humanoid rigs all fit comfortably.
 constexpr uint32_t kRetargetMaxBones = 256;
 
@@ -76,7 +76,7 @@ struct GPURetargetClipBoneRec {
 };
 static_assert(sizeof(GPURetargetClipBoneRec) == 16, "GPURetargetClipBoneRec must be 16 bytes");
 
-// Per-rig-pair header in rigBuf. Packed std430. 80 bytes. Offsets are in
+// Per-rig-pair header in rigBuf. Packed std430. 96 bytes. Offsets are in
 // vec4 units into rigBuf's flat data section. The shader fetches via
 // `rigData[offset + idx]` patterns.
 struct GPURigPairHeader {
@@ -110,8 +110,13 @@ struct GPURigPairHeader {
     uint32_t tgtInverseBind;            // 4 vec4 per tgt bone (mat4 column-major)
     uint32_t tgtJointNodes;             // 1 packed uint32 per skin joint (joint -> tgt bone)
     uint32_t tgtMeshRootInverse;        // 4 vec4 (single mat4)
+
+    // vec4 (xyz, 1) per tgt bone (rest local scale). An FBX centimeter rig keeps
+    // scale 100 on its root, and the inverse binds include that scale.
+    uint32_t tgtRestScale;
+    uint32_t _pad[3];
 };
-static_assert(sizeof(GPURigPairHeader) == 80, "GPURigPairHeader must be 80 bytes");
+static_assert(sizeof(GPURigPairHeader) == 96, "GPURigPairHeader must be 96 bytes");
 
 // Per-character per-frame parameter block. Written by the CPU side once per
 // frame for every active retargeted character; uploaded as a single contiguous

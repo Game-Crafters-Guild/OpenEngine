@@ -71,6 +71,7 @@
 #include "Assets/MaterialAsset.h"
 #include "Assets/Packages/PackageManifest.h"
 #include "Assets/Packages/PackageResolver.h"
+#include "Engine/Build/MaterialVariantCookTool.h"
 #include "Engine/Rendering/MaterialPrewarmVariants.h"
 #include "Engine/Rendering/MaterialRegistry.h"
 #include "Engine/Rendering/MaterialShaderPackageBuilder.h"
@@ -95,6 +96,8 @@
 #include "TerrainGrass/GrassMaterialKeywords.h"
 #include "Ocean/OceanSurfaceMaterial.h"
 #include "Platform/Process.h"
+#include "Types/PathUtils.h"
+#include "Types/StringUtils.h"
 #include "CookWorkers.h"
 #include "WebWgslCook.h"
 #include "MeshVariantTable.h"
@@ -572,11 +575,11 @@ std::string OceanForwardVariantLabel(MaterialKeyword passKeywords)
 // cache root exactly as the runtime anchors it — a directory holding no
 // shaders, so it can never shadow the project/package/engine resolution chain.
 // Preparation materializes graph surfaces and extends the shared include roots.
-// Targets whose preparation fails are reported and excluded from compilation.
+// A material that does not load or prepare is one failure in `outFailures` and is not compiled.
 std::vector<CookTarget> CollectTargets(const std::vector<fs::path>& materialPaths,
                                        MaterialBuildContext& context, bool web,
                                        const std::optional<VariantRequest>& particleRow,
-                                       std::vector<std::string>& outErrors)
+                                       std::vector<MaterialCookFailure>& outFailures)
 {
     const fs::path& cacheRoot = context.CacheRoot;
     std::vector<CookSource> targets;
@@ -585,13 +588,12 @@ std::vector<CookTarget> CollectTargets(const std::vector<fs::path>& materialPath
         MaterialAsset asset(GUID::Generate(), materialPath);
         if (!asset.Load())
         {
-            std::string message = materialPath.filename().string() + ": unreadable";
-            for (const std::string& e : asset.GetErrors())
-                message += "\n        " + e;
-            outErrors.push_back(std::move(message));
+            const std::vector<std::string>& errors = asset.GetErrors();
+            outFailures.push_back({PathToUtf8(materialPath), {},
+                                   errors.empty() ? std::string("the file could not be read") : Join(errors, "; ")});
             continue;
         }
-        targets.push_back({materialPath.stem().string(), materialPath, asset.GetDocument(), {}, false, true, true});
+        targets.push_back({PathToUtf8(materialPath.stem()), materialPath, asset.GetDocument(), {}, false, true, true});
     }
     // The standard-PBR stand-ins for imported mesh materials, one per alpha mode
     // (kImportedMeshMaterialTargets); VariantsFor appends the depth-mask rows to
@@ -838,8 +840,7 @@ std::vector<CookTarget> CollectTargets(const std::vector<fs::path>& materialPath
             std::move(source.Document), source.MaterialPath, source.Name, context);
         if (!builder.IsPrepared())
         {
-            for (const std::string& error : builder.GetErrors())
-                outErrors.push_back(source.Name + ": " + error);
+            outFailures.push_back({PathToUtf8(source.MaterialPath), {}, Join(builder.GetErrors(), "; ")});
             continue;
         }
         preparedTargets.push_back({std::move(source.Name), std::move(source.MaterialPath),
@@ -976,6 +977,14 @@ std::vector<RowBuild> BuildRows(const std::vector<CookRow>& rows, size_t jobs, b
     return builds;
 }
 
+// The message of `ec` as UTF-8. On Windows the C++ runtime writes it in the active code page, and a
+// path built from a narrow string reads that code page, so the path converts it through the wide form.
+std::string SystemMessageToUtf8(const std::error_code& ec)
+{
+    const std::u8string utf8 = fs::path(ec.message()).u8string();
+    return std::string(utf8.begin(), utf8.end());
+}
+
 // Copies the program at `packagePath`, which lies under `fromCache`, to the same key directory
 // under `toCache`, and names the copy in `packagePath`. Returns false with `error` naming the
 // program when it cannot be copied.
@@ -991,8 +1000,8 @@ bool CopyIntoCache(std::string& packagePath, const fs::path& fromCache, const fs
         fs::copy_file(packagePath, destination, fs::copy_options::overwrite_existing, ec);
     if (ec)
     {
-        error = "could not copy the reused program " + packagePath + " to " + destination.string() +
-                ": " + ec.message();
+        error = "could not copy the reused program " + PathToUtf8(fs::path(packagePath)) + " to " +
+                PathToUtf8(destination) + ": " + SystemMessageToUtf8(ec);
         return false;
     }
     packagePath = destination.string();
@@ -1093,22 +1102,15 @@ int main(int argc, char** argv)
     if (options.ReuseCache)
         context.ReadOnlyCacheRoots = {fs::absolute(*options.ReuseCache)};
 
-    // The compile inputs of the device class the cook serves, set before the
-    // first build the way the runtime sets them from the profile its device
-    // resolves: a desktop device resolves the full profile, every feature on
-    // (the interpolation functions included); a browser resolves the compat
-    // profile, which keeps the cooked SPIR-V free of the buffer_device_address
-    // and descriptor-indexing constructs naga refuses and of interpolation
-    // functions WGSL does not have. An input set differently here from the
-    // runtime changes the cache key, and that runtime then misses every
-    // program cooked for it.
-    Rendering::RendererProfile servedProfile{};
-    if (options.Web)
-    {
-        servedProfile.ActiveTier = Rendering::RendererProfile::Tier::Compatibility;
-        servedProfile.UseInterpolationFunctions = false;
-    }
-    Rendering::ApplyShaderCompileProfile(servedProfile);
+    // The compile inputs of the served device class, from the runtime's own FromCapabilities: a desktop has
+    // bindless resources, the interpolation functions and clip distances, a browser has none of them (naga refuses
+    // bindless constructs, WGSL has no interpolateAtOffset, and the web device does not request clip distances).
+    // The runtime refuses a program index cooked with other inputs.
+    Rendering::RenderingDeviceCapabilities servedDevice{};
+    servedDevice.supportsBindlessResources = !options.Web;
+    servedDevice.supportsInterpolationFunctions = !options.Web;
+    servedDevice.supportsShaderClipDistance = !options.Web;
+    Rendering::ApplyShaderCompileProfile(Rendering::RendererProfile::FromCapabilities(servedDevice));
     // The SPIR-V target is a compile input too, and a device publishes its own at init
     // (ShaderCompileService::SetMaxSupportedSpirv): 1.6 on Metal and on a Vulkan 1.3 device, which a
     // desktop cook serves. A browser device publishes none, so a web cook keys at the default 1.5.
@@ -1117,13 +1119,13 @@ int main(int argc, char** argv)
         ShaderCompileService::SetMaxSupportedSpirv(ShaderCompileService::SpirvTarget::Spirv_1_6);
 
     size_t failed = 0;
-    std::vector<std::string> loadErrors;
+    MaterialCookRecord record;
     const std::vector<CookTarget> targets =
         CollectTargets(MaterialsToCook(options), context, options.Web,
-                       options.ParticleRow, loadErrors);
-    for (const std::string& e : loadErrors)
+                       options.ParticleRow, record.Failures);
+    for (const MaterialCookFailure& failure : record.Failures)
     {
-        std::cerr << ResultLines("  FAIL " + e, {});
+        std::cerr << ResultLines("  FAIL " + failure.Material, {failure.Reason});
         ++failed;
     }
 
@@ -1140,12 +1142,11 @@ int main(int argc, char** argv)
     // Every row builds its SPIR-V first, `jobs` at a time; the WGSL translations the rows need
     // are collected and run concurrently afterwards, so no translation runs while a build can
     // still rewrite its package. The results are reported in row order whatever order the
-    // builds and translations finish in: the export reads these lines.
-    // The index is rewritten from this run's rows only, so one left by an earlier cook never ships
-    // beside programs it does not describe.
+    // builds and translations finish in.
+    // The index and the record are rewritten from this run's rows only, so a file left by an
+    // earlier cook never ships beside programs it does not describe.
     const fs::path programIndexPath = context.CacheRoot / kShaderProgramIndexFileName;
-    std::error_code removeError;
-    fs::remove(programIndexPath, removeError);
+    RemoveMaterialCookOutputs(context.CacheRoot);
     const std::vector<CookRow> rows = CookRows(targets, context, options.Web);
     const std::vector<RowBuild> builds = BuildRows(rows, jobs, options.Web);
     size_t reused = 0;
@@ -1217,15 +1218,19 @@ int main(int argc, char** argv)
     for (size_t index = 0; index < outcomes.size(); ++index)
     {
         const VariantOutcome& outcome = outcomes[index];
+        const std::string& material = rows[index].Target->Name;
+        const std::string& variant = rows[index].Variant.Name;
         if (!outcome.Built)
         {
             std::cerr << ResultLines("  FAIL " + outcome.Label, outcome.BuildErrors);
+            record.Failures.push_back({material, variant, Join(outcome.BuildErrors, "; ")});
             ++failed;
             continue;
         }
         if (outcome.WgslRequest != kNoWgslRequest && !wgslErrors[outcome.WgslRequest].empty())
         {
             std::cerr << ResultLines("  FAIL " + outcome.Label + " WGSL", {wgslErrors[outcome.WgslRequest]});
+            record.Failures.push_back({material, variant, "WGSL: " + wgslErrors[outcome.WgslRequest]});
             ++failed;
             continue;
         }
@@ -1238,6 +1243,7 @@ int main(int argc, char** argv)
             programIndexEntries.push_back(std::move(*entry));
             programIndexSourceSet.insert(builds[index].SourcePaths.begin(), builds[index].SourcePaths.end());
         }
+        record.Packages.emplace_back(outcome.PackagePath);
         std::cout << ResultLines("  ok   " + outcome.Label + " -> " + outcome.PackagePath, {});
     }
     std::string programIndexError;
@@ -1265,11 +1271,21 @@ int main(int argc, char** argv)
         if (packagePath.empty())
         {
             std::cerr << ResultLines("  FAIL " + row.Target + " [" + row.Variant + "]", {programError});
+            record.Failures.push_back({row.Target, row.Variant, programError});
             ++failed;
             continue;
         }
         ++cooked;
+        record.Packages.emplace_back(packagePath);
         std::cout << ResultLines("  ok   " + row.Target + " [" + row.Variant + "] -> " + packagePath, {});
+    }
+    // The export ships the packages of this record and warns of its failures; the "ok" and "FAIL"
+    // rows are progress for a person.
+    std::string recordError;
+    if (!WriteMaterialCookRecord(context.CacheRoot, record, recordError))
+    {
+        std::cerr << ResultLines("  FAIL cook record", {recordError});
+        ++failed;
     }
 
     const bool verify = options.Verify && failed == 0;

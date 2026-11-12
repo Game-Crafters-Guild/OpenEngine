@@ -22,6 +22,7 @@
 #include "Assets/Parsers/NavSurfaceAssetParser.h"
 #include "Assets/Parsers/RenderPipelineAssetParser.h"
 #include "Assets/Parsers/SceneAssetParser.h"
+#include "Assets/Parsers/ShaderSourceAssetParser.h"
 #include "Assets/Parsers/SpriteFramesAssetParser.h"
 #include "Assets/Parsers/UILayoutAssetParser.h"
 #include "Assets/Parsers/UIStyleAssetParser.h"
@@ -368,11 +369,18 @@ std::filesystem::path ParserRegistry::ResolveReadPath(const AssetMetadata& metad
     return parser ? parser->ResolveReadPath(metadata, assetManager) : metadata.Path;
 }
 
-AssetDecodeInputs ParserRegistry::ResolveDecodeInputs(const AssetMetadata& metadata, const Vector<uint8>& bytes,
+AssetDecodeInputs ParserRegistry::ResolveDecodeInputs(const AssetMetadata& metadata, std::span<const uint8> bytes,
                                                       AssetManager& assetManager) const
 {
     const auto parser = FindParser(metadata.Path);
     return parser ? parser->ResolveDecodeInputs(metadata, bytes, assetManager) : AssetDecodeInputs{};
+}
+
+AssetDecodeInputs ParserRegistry::ResolveDecodeInputsWithoutBytes(const AssetMetadata& metadata,
+                                                                  AssetManager& assetManager) const
+{
+    const auto parser = FindParser(metadata.Path);
+    return parser ? parser->ResolveDecodeInputsWithoutBytes(metadata, assetManager) : AssetDecodeInputs{};
 }
 
 std::vector<std::shared_ptr<AssetParser>> ParserRegistry::FindParsers(const std::string& extension) const
@@ -483,6 +491,9 @@ void ParserRegistry::RegisterDefaultParsers()
     // Register UI parsers (UI module assets)
     RegisterParser(std::make_shared<UILayoutAssetParser>());
     RegisterParser(std::make_shared<UIStyleAssetParser>());
+
+    // Register the shader source parser: its #include edges ship the included files
+    RegisterParser(std::make_shared<ShaderSourceAssetParser>());
 
     // Register generic XML parser (only used when UILayout sniffing rejects .xml)
     RegisterParser(std::make_shared<XmlAssetParser>());

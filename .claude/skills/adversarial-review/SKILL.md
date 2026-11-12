@@ -21,7 +21,7 @@ Your job is to try to make the change fail, not to confirm it works. The author'
 
 ## Verdict
 
-MERGE-READY or NOT-READY, with numbered findings tagged [BLOCKER] / [SHOULD-FIX] / [NIT], each with file:line and a minimal fix. State explicitly: what you reproduced vs reviewed statically, and what you deliberately skipped and why. If your verdict depends on something you did not reproduce, say so in the verdict line itself.
+READY or NOT-READY, with numbered findings tagged [BLOCKER] / [SHOULD-FIX] / [NIT], each with file:line and a minimal fix. State explicitly: what you reproduced vs reviewed statically, and what you deliberately skipped and why. If your verdict depends on something you did not reproduce, say so in the verdict line itself.
 
 ## The review owns the gap, the class, and the stack
 
@@ -32,4 +32,4 @@ MERGE-READY or NOT-READY, with numbered findings tagged [BLOCKER] / [SHOULD-FIX]
 
 ## The ledger row is part of the review
 
-Before reporting, add your row as its own file under `GameEngine-Workbench/review-tier-log/` (the workbench checkout, found through `GE_WORKBENCH`; `<YYYY-MM-DD>-<slug>.md`, one row: date · branch · class · reviewer tier · verdict · catches B/SF/N · escapes · notes; format in its README). **A review that has not logged its row is not finished** — the log is the artifact other sessions trust; on 2026-07-27 it had zero rows for twelve reviewed-or-in-review branches and testified falsely in both directions (reviews looked absent that had happened; "awaiting review" piles hid branches already reviewed). If the review dies before logging, whoever salvages it logs the row with a `salvaged` note. Do not leave logging to the coordinator: coordinator memory is the mechanism that already failed.
+Before reporting, add your row as its own file under `GameEngine-Workbench/review-tier-log/` (the workbench checkout, found through `GE_WORKBENCH`; `<YYYY-MM-DD>-<slug>.md`, one row: date · branch · class · reviewer tier · verdict · catches B/SF/N · escapes · notes; format in its README). **A review that has not logged its row is not finished**: the log is the artifact other sessions trust. If the review dies before logging, whoever salvages it logs the row with a `salvaged` note. Do not leave logging to the coordinator.

@@ -23,6 +23,7 @@ namespace GameEngine.ManagedBindingTests
             Assert.That(Input.WasMouseButtonPressed(MouseButton.Left), Is.False);
             Assert.That(Input.GetMouseDelta(), Is.EqualTo(Vector2.Zero));
             Assert.That(Input.GetPointerLockState(), Is.EqualTo(PointerLockState.Unlocked));
+            Assert.That(Input.GetGamepadRuntimeState(), Is.EqualTo(GamepadRuntimeState.Starting));
             ActionState state = Input.GetActionState(Jump);
             Assert.That(state.Pressed || state.JustPressed || state.JustReleased, Is.False);
             Assert.That(state.Value, Is.Zero);

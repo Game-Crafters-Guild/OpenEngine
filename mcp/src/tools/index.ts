@@ -1,4 +1,5 @@
 import type { ToolDef } from "../registry.js";
+import { tools as ai } from "./ai.js";
 import { tools as animation } from "./animation.js";
 import { tools as assets } from "./assets.js";
 import { tools as capture } from "./capture.js";
@@ -25,6 +26,7 @@ export const allTools: readonly ToolDef[] = Object.freeze([
   ...editorState,
   ...scene,
   ...ground,
+  ...ai,
   ...markups,
   ...animation,
   ...ui,

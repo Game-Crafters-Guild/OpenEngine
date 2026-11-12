@@ -18,6 +18,8 @@
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/RenderGraph/RGFrame.h"
 #include "SharedHeadlessDevice.h"
+#include "TestCameraEye.h"
+
 #include <gtest/gtest.h>
 
 #include <nlohmann/json.hpp>
@@ -195,7 +197,7 @@ struct PreExposureFixture
         Rs = std::make_unique<RenderServices>();
         EXPECT_TRUE(Rs->Initialize(Device));
         const CameraId cam = Rs->Views().AllocateCamera("PreExposureCam");
-        Rs->Views().SetCameraData(cam, CameraData{});
+        Rs->Views().SetCameraData(cam, ::GameEngine::Tests::TestCameraWithEye(CameraData{}), CameraRanges{});
         View = Rs->Views().AllocateView("PreExposureView", cam);
         Rs->Views().SetViewRenderLayerMask(View, GameEngine::Rendering::RenderLayerMask::Default());
         Rs->Views().SetViewTargets(View, 0, 0, 0, Rendering::ViewClearConfig{});

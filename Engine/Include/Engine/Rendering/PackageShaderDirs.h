@@ -74,4 +74,9 @@ void AppendStagedModuleShaderDirs(const std::filesystem::path& adapterShaderDir,
 // (MaterialSystem::EnsureMaterialBuildContextReady does both).
 std::filesystem::path ResolveAdapterShaderDir(const AssetManager& assetManager);
 
+// Fills the mount-derived fields of `context`: AdapterShaderDir, IncludeDirs (the asset root),
+// ProjectRoots, AssetSourceRoots, and PackageShaderDirs with the staged module folders. The material
+// compiles and the shader dependency parser use it, so they resolve an include to the same file.
+void FillMaterialSourceRoots(const AssetManager& assetManager, Rendering::MaterialBuildContext& context);
+
 } // namespace GameEngine

@@ -18,7 +18,11 @@
 #include "Core/Engine.h"
 #include "ECS/ECSTemplates.h"
 #include "ECS/World.h"
+#include "Engine/Rendering/Material.h"
+#include "Engine/Rendering/MaterialRegistry.h"
+#include "Engine/Rendering/MaterialSystem.h"
 #include "Engine/Rendering/RenderServices.h"
+#include "Rendering/Materials/MaterialDocument.h"
 #include "Mathematics/Vector3.h"
 #include "Paving/PavingApproachGround.h"
 #include "Scripting/ScriptsConfig.h"
@@ -41,6 +45,7 @@
 #include <cmath>
 #include <initializer_list>
 #include <limits>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -307,15 +312,33 @@ protected:
         return meshes;
     }
 
+    // The renderer of the first chunk under `parent` whose mesh name holds `part`; none when no chunk does.
+    std::optional<Components::MeshRenderer> ChunkRendererUnder(ECS::EntityHandle parent, std::string_view part)
+    {
+        std::optional<Components::MeshRenderer> found;
+        const Rendering::MeshGPURegistry& registry = m_RenderServices.GetMeshGPURegistry();
+        m_World.Query<ECS::Read<Components::MeshRenderer>, ECS::Read<Components::Parent>>().Each(
+            [&found, &registry, parent, part](ECS::EntityHandle, const Components::MeshRenderer& renderer,
+                                               const Components::Parent& link)
+            {
+                const auto* entry = link.Entity == parent
+                                        ? registry.Find(Rendering::MeshGPUHandle(renderer.meshGpuHandleId))
+                                        : nullptr;
+                if (!found && entry && entry->cpuMesh && entry->cpuMesh->Name.find(part) != std::string::npos)
+                    found = renderer;
+            });
+        return found;
+    }
+
     // The top vertices (y at or above 0) of `road`'s strip on its ring nearest the node at the origin,
-    // measured along world axis `axis` (0 = x, 2 = z). The paving's lid and border under it are skipped.
+    // measured along world axis `axis` (0 = x, 2 = z). The paving's meshes under it are skipped.
     std::vector<Vertex> StripTopVerticesNearestNode(ECS::EntityHandle road, uint32 axis)
     {
         float32 nearest = std::numeric_limits<float32>::max();
         std::vector<Vertex> ring;
         for (const Mesh* mesh : ChunkMeshesUnder(road, ""))
         {
-            if (mesh->Name.find("_Lid") != std::string::npos || mesh->Name.find("_Border") != std::string::npos)
+            if (IsPavingMesh(*mesh))
                 continue;
             for (const Vertex& vertex : mesh->Vertices)
             {
@@ -332,6 +355,25 @@ protected:
             }
         }
         return ring;
+    }
+
+    static bool IsPavingMesh(const Mesh& mesh)
+    {
+        for (const std::string_view part : {"_Lid", "_Border", "_Band", "_Course"})
+        {
+            if (mesh.Name.find(part) != std::string::npos)
+                return true;
+        }
+        return false;
+    }
+
+    // The lid's meshes under `owner`: the lid, and the seam bands cut from it.
+    std::vector<const Mesh*> LidAndBandMeshesUnder(ECS::EntityHandle owner)
+    {
+        std::vector<const Mesh*> meshes = ChunkMeshesUnder(owner, "_Lid");
+        const std::vector<const Mesh*> bands = ChunkMeshesUnder(owner, "_Band");
+        meshes.insert(meshes.end(), bands.begin(), bands.end());
+        return meshes;
     }
 
     std::vector<Vector3> StripTopNearestNode(ECS::EntityHandle road, uint32 axis)
@@ -379,7 +421,7 @@ TEST_F(SplinePavingControllerTests, TheLidSitsTheLiftAboveTheGroundUnderIt)
     // The square's entity stands 5 m above the terrain: a ray that misses would put the lid there.
     const ECS::EntityHandle square = CreateSquare();
     constexpr float32 kSquareY = 5.0f;
-    m_World.GetComponentForWrite<Components::WorldTransform>(square)->matrix[13] = kSquareY;
+    m_World.GetComponentForWrite<Components::WorldTransform>(square)->Position.Y = kSquareY;
     Components::SplinePaving recipe{};
     recipe.BorderWidth = 0.0f;
     recipe.ConformTarget = Components::SplineConformTarget::TerrainOnly;
@@ -537,12 +579,49 @@ TEST_F(SplinePavingControllerTests, ARoadsStripStopsUnderTheRegionAndGoesOnPastI
 
     EXPECT_EQ(Status(road).State, BuildState::Built);
     EXPECT_EQ(ChunkCountUnder(road), 2u);
+    // The road's strip stops on the square's rim, so no band: the square's lid and its border.
     EXPECT_EQ(ChunkCountUnder(square), 2u);
 
     m_World.RemoveComponentImmediate<Components::SplinePaving>(square);
     UpdateFrames();
 
     EXPECT_EQ(ChunkCountUnder(road), 1u);
+}
+
+// A road runs through a square under the default Blend. Its strip stops on the square's rim, so the band
+// has no depth and the seam draws as a hard cut: each junction says so, and only under Blend.
+TEST_F(SplinePavingControllerTests, ARoadWhoseStripStopsOnTheRimReadsAHardCutSeamAtItsJunctions)
+{
+    const ECS::EntityHandle square = CreateSquare();
+    m_World.AddComponentImmediate(square, Components::SplinePaving{});
+    const ECS::EntityHandle road = CreateMember({Vector3(-20.0f, 0.0f, 0.0f), Vector3(20.0f, 0.0f, 0.0f)}, false,
+                                                Components::SplineNetworkMemberKind::Road);
+    Components::SplineExtrude strip{};
+    strip.ConformMode = Components::SplinePlacementConform::None;
+    m_World.AddComponentImmediate(road, strip);
+
+    UpdateFrames();
+
+    const PavingStatus* status = m_Controllers.PavingStatusOf(square);
+    ASSERT_NE(status, nullptr);
+    ASSERT_FALSE(status->Junctions.empty());
+    for (const PavingJunctionStatus& junction : status->Junctions)
+    {
+        EXPECT_EQ(junction.State, PavingJunctionState::Paved);
+        EXPECT_TRUE(junction.SeamDrawsHardCut) << "junction " << junction.NodeId;
+    }
+    ASSERT_TRUE(status->SeamPatternSymmetry.has_value()) << "the road takes the square's Seam";
+    EXPECT_EQ(*status->SeamPatternSymmetry, MaterialPatternSymmetry::None) << "an unset material has no symmetry";
+    EXPECT_FALSE(status->SeamPatternMixed);
+    EXPECT_EQ(status->SeamMaterialPaving, square) << "the square's Material draws the seams";
+
+    m_World.GetComponentForWrite<Components::SplinePaving>(square)->Seam = Components::SplinePavingSeam::JointLine;
+    UpdateFrames();
+
+    status = m_Controllers.PavingStatusOf(square);
+    ASSERT_NE(status, nullptr);
+    for (const PavingJunctionStatus& junction : status->Junctions)
+        EXPECT_FALSE(junction.SeamDrawsHardCut) << "a Joint Line is what the setting says";
 }
 
 // Road B ends on road A, and both carry a crown. Where each strip stops at the junction, its top
@@ -603,6 +682,12 @@ TEST_F(SplinePavingControllerTests, TheJunctionLidContinuesEachRoadsGridFromItsS
     const std::vector<const Mesh*> lids = ChunkMeshesUnder(roadA, "_Lid");
     ASSERT_EQ(lids.size(), 1u);
     const std::vector<Vertex>& lid = lids[0]->Vertices;
+    // Road B's band, 4 m deep at these tiles, is cut from the lid: it keeps road B's UV and mixes in
+    // road A's by the weight in its vertex alpha.
+    const std::vector<const Mesh*> bands = ChunkMeshesUnder(roadA, "_Band");
+    ASSERT_EQ(bands.size(), 1u);
+    const Mesh& band = *bands[0];
+    ASSERT_EQ(band.Color0.size(), band.Vertices.size() * 4u);
 
     // Road A rises from x = -18, road B from z = 18.
     for (const auto& [road, axis, startAt, rises] :
@@ -624,6 +709,18 @@ TEST_F(SplinePavingControllerTests, TheJunctionLidContinuesEachRoadsGridFromItsS
                 closest = std::min(closest, std::hypot(vertex.TexCoords[0] - strip.TexCoords[0],
                                                        vertex.TexCoords[1] - strip.TexCoords[1]));
             }
+            for (size_t v = 0; v < band.Vertices.size(); ++v)
+            {
+                const Vertex& vertex = band.Vertices[v];
+                if (std::hypot(vertex.Position[0] - strip.Position[0], vertex.Position[2] - strip.Position[2]) >
+                    kSamePointMeters)
+                    continue;
+                closest = std::min(closest, std::hypot(vertex.TexCoords[0] - strip.TexCoords[0],
+                                                       vertex.TexCoords[1] - strip.TexCoords[1]));
+                EXPECT_LE(band.Color0[v * 4u + 3u], kSameUVTiles)
+                    << "the band reaches the strip at (" << strip.Position[0] << ", " << strip.Position[2]
+                    << "): its other grid steps at the cap";
+            }
             EXPECT_LE(closest, kSameUVTiles) << "road " << road.id << " cap vertex at (" << strip.Position[0] << ", "
                                              << strip.Position[2] << ")";
         }
@@ -639,6 +736,68 @@ TEST_F(SplinePavingControllerTests, TheJunctionLidContinuesEachRoadsGridFromItsS
             << "lid vertex at x " << vertex.Position[0];
     }
     EXPECT_GT(nearCenterline, 0u);
+}
+
+// A road yields to a through road under the default Blend seam. The band cut from the lid draws with a
+// copy of the lid's material that has the UV1 crossfade on, so its pixels mix in the through road's grid.
+TEST_F(SplinePavingControllerTests, TheSeamBandDrawsTheLidsMaterialWithTheUV1Crossfade)
+{
+    CreateFlatTerrain();
+    const ECS::EntityHandle roadA = CreateMember({Vector3(-18.0f, 0.0f, 0.0f), Vector3(18.0f, 0.0f, 0.0f)}, false,
+                                                 Components::SplineNetworkMemberKind::Road);
+    const ECS::EntityHandle roadB = CreateMember({Vector3(0.0f, 0.0f, 18.0f), Vector3(0.0f, 0.0f, 0.0f)}, false,
+                                                 Components::SplineNetworkMemberKind::Road);
+    Components::SplineExtrude crown{};
+    crown.Profile = Components::SplineExtrudeProfile::Crown;
+    m_World.AddComponentImmediate(roadA, crown);
+    m_World.AddComponentImmediate(roadB, crown);
+    m_World.AddComponentImmediate(roadA, Components::SplinePaving{});
+
+    UpdateFrames();
+
+    ASSERT_EQ(Status(roadA).State, BuildState::Built);
+    const std::optional<Components::MeshRenderer> lid = ChunkRendererUnder(roadA, "_Lid");
+    const std::optional<Components::MeshRenderer> band = ChunkRendererUnder(roadA, "_Band");
+    ASSERT_TRUE(lid.has_value());
+    ASSERT_TRUE(band.has_value()) << "road B yields under Blend, so the lid has a band";
+    const GUID lidMaterial = lid->materialAssetGuid.ToGuid();
+    const GUID crossfade = GUID::Derive(lidMaterial, "spline-paving/seam-crossfade");
+    EXPECT_EQ(band->materialAssetGuid.ToGuid(), crossfade);
+
+    const Engine::Renderer::MaterialRegistry& materials = m_RenderServices.Materials().Registry();
+    const Engine::Renderer::Material* lidEntry = materials.Find(lidMaterial);
+    const Engine::Renderer::Material* bandEntry = materials.Find(crossfade);
+    ASSERT_NE(lidEntry, nullptr);
+    ASSERT_NE(bandEntry, nullptr) << "the band's material is registered";
+    EXPECT_FALSE(Rendering::HasKeyword(lidEntry->GetVariantKey().materialKeywords, Rendering::MaterialKeyword::UV1Crossfade));
+    EXPECT_TRUE(Rendering::HasKeyword(bandEntry->GetVariantKey().materialKeywords, Rendering::MaterialKeyword::UV1Crossfade));
+}
+
+// A world reset releases the meshes of the seam band with the lid's and the border's.
+TEST_F(SplinePavingControllerTests, AWorldResetReleasesTheSeamBandsMesh)
+{
+    CreateFlatTerrain();
+    const ECS::EntityHandle roadA = CreateMember({Vector3(-18.0f, 0.0f, 0.0f), Vector3(18.0f, 0.0f, 0.0f)}, false,
+                                                 Components::SplineNetworkMemberKind::Road);
+    const ECS::EntityHandle roadB = CreateMember({Vector3(0.0f, 0.0f, 18.0f), Vector3(0.0f, 0.0f, 0.0f)}, false,
+                                                 Components::SplineNetworkMemberKind::Road);
+    Components::SplineExtrude crown{};
+    crown.Profile = Components::SplineExtrudeProfile::Crown;
+    m_World.AddComponentImmediate(roadA, crown);
+    m_World.AddComponentImmediate(roadB, crown);
+    m_World.AddComponentImmediate(roadA, Components::SplinePaving{});
+    UpdateFrames();
+    const std::optional<Components::MeshRenderer> lid = ChunkRendererUnder(roadA, "_Lid");
+    const std::optional<Components::MeshRenderer> band = ChunkRendererUnder(roadA, "_Band");
+    ASSERT_TRUE(lid.has_value());
+    ASSERT_TRUE(band.has_value());
+
+    m_World.Clear();
+    UpdateFrames();
+
+    const Rendering::MeshGPURegistry& registry = m_RenderServices.GetMeshGPURegistry();
+    EXPECT_EQ(registry.Find(Rendering::MeshGPUHandle(lid->meshGpuHandleId)), nullptr);
+    EXPECT_EQ(registry.Find(Rendering::MeshGPUHandle(band->meshGpuHandleId)), nullptr);
 }
 
 // A road ends inside a square, which paves the mouth. The road's grid fills the mouth's arcs and is cut
@@ -662,22 +821,30 @@ TEST_F(SplinePavingControllerTests, TheRoadsGridFillsTheSquaresMouthAndStopsOnIt
     UpdateFrames();
 
     ASSERT_EQ(Status(square).State, BuildState::Built);
-    const std::vector<const Mesh*> lids = ChunkMeshesUnder(square, "_Lid");
-    ASSERT_EQ(lids.size(), 1u);
+    // The road's band beside the rim is cut from the lid.
+    const std::vector<const Mesh*> lids = LidAndBandMeshesUnder(square);
+    ASSERT_EQ(lids.size(), 2u);
     uint32 onRim = 0;
     uint32 inMouthArcs = 0;
-    for (const Vertex& vertex : lids[0]->Vertices)
+    for (const Mesh* mesh : lids)
     {
-        // The road rises from x = -30; the square's own U is x.
-        const float32 x = vertex.Position[0];
-        if (std::abs(vertex.TexCoords[0] - (x + 30.0f) * crown.TilesPerMetreU) > kSameUVTiles)
-            continue;
-        EXPECT_LE(x, kRimX + kSamePointMeters) << "the road's grid at (" << x << ", " << vertex.Position[2] << ")";
-        onRim += std::abs(x - kRimX) <= kSamePointMeters ? 1u : 0u;
-        inMouthArcs += x < kRimX - kSamePointMeters && std::abs(vertex.Position[2]) > kBesideTopMeters ? 1u : 0u;
+        for (const Vertex& vertex : mesh->Vertices)
+        {
+            // The road rises from x = -30; the square's own U is x.
+            const float32 x = vertex.Position[0];
+            if (std::abs(vertex.TexCoords[0] - (x + 30.0f) * crown.TilesPerMetreU) > kSameUVTiles)
+                continue;
+            EXPECT_LE(x, kRimX + kSamePointMeters) << "the road's grid at (" << x << ", " << vertex.Position[2] << ")";
+            onRim += std::abs(x - kRimX) <= kSamePointMeters ? 1u : 0u;
+            inMouthArcs += x < kRimX - kSamePointMeters && std::abs(vertex.Position[2]) > kBesideTopMeters ? 1u : 0u;
+        }
     }
     EXPECT_GT(onRim, 0u) << "the cut lies on the rim";
     EXPECT_GT(inMouthArcs, 0u) << "the road's grid fills the arcs beside its top";
+    const PavingStatus* status = m_Controllers.PavingStatusOf(square);
+    ASSERT_NE(status, nullptr);
+    for (const PavingJunctionStatus& junction : status->Junctions)
+        EXPECT_FALSE(junction.SeamDrawsHardCut) << "the band has depth inside the mouth";
 }
 
 // Two roads of equal width cross. Where their tops overlap, the lid takes the longer road's grid, in
@@ -995,12 +1162,11 @@ TEST_F(SplinePavingControllerTests, AVergeTakesTheCurbMaterialOfTheFirstPavingAl
 // capped at the throat and the road has no verge.
 TEST_F(SplinePavingControllerTests, ARoadWithNoVergeBuildsACappedCurbAndNoVerge)
 {
-    // The float math of the square's meshes rounds differently on arm64, so each architecture pins
-    // its own bytes. The road's meshes are the same bytes on both.
+    // libm trigonometry rounds differently on arm64 and x86-64, so the square pins each architecture; the road pins one value.
 #if defined(__aarch64__) || defined(_M_ARM64)
-    constexpr uint64 kSquareDigest = 0xb094b6de04451142ull;
+    constexpr uint64 kSquareDigest = 0xcc63a8f99fcd675eull;
 #else
-    constexpr uint64 kSquareDigest = 0xfce75b03317ec4ffull;
+    constexpr uint64 kSquareDigest = 0x781ec98107ce2bb7ull;
 #endif
     const ECS::EntityHandle square = CreateSquare();
     m_World.AddComponentImmediate(square, Components::SplinePaving{});

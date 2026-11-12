@@ -104,6 +104,9 @@ struct SystemRegistration {
     SystemPhase Phase { SystemPhase::Early }; // coarse ordering
     int Order { 0 };                         // fine ordering within phase (lower runs first)
     std::vector<SystemDependency> Dependencies; // systems that must run before this
+    // From the system type's `Cadence` (CadenceOf). Adjacent Simulation systems run as one
+    // block per clock step; a Frame system between two Simulation systems starts a new block.
+    SystemCadence Cadence { SystemCadence::Frame };
     // Instantiate the system into the manager: append a new slot, or — when the
     // registration was superseded by a module reload — replace the object at
     // its existing slot in place. Returns the slot index.
@@ -138,6 +141,7 @@ public:
                                CtorArgs&&... ctorArgs) {
         SystemRegistration r;
         r.Name = name; r.Phase = phase; r.Order = order; r.Dependencies = std::move(Deps);
+        r.Cadence = CadenceOf<T>();
         r.Owner = m_ActiveOwner;
         r.Module = GetActiveRegistrationModule();
         using ArgsTuple = std::tuple<std::decay_t<CtorArgs>...>;
@@ -148,7 +152,8 @@ public:
                 [&](auto&&... a)
                 {
                     return m.InstallSystem(
-                        std::make_unique<Detail::NamedSystem<T>>(scheduledName, a...), replaceIndex);
+                        std::make_unique<Detail::NamedSystem<T>>(scheduledName, a...), replaceIndex,
+                        CadenceOf<T>(), TimeOf<T>());
                 },
                 args);
         };
@@ -398,6 +403,7 @@ public:
                         first.Phase = m_Regs[i].Phase;
                         first.Order = m_Regs[i].Order;
                         first.Dependencies = std::move(m_Regs[i].Dependencies);
+                        first.Cadence = m_Regs[i].Cadence;
                         first.AddToManager = std::move(m_Regs[i].AddToManager);
                         first.Module = m_Regs[i].Module;
                         first.PendingReplace = m_ManagerIndices[it->second] != kNotInstantiated;
@@ -456,37 +462,11 @@ public:
         }
         AddRunsLastEdges(nameToIndex, adj, indeg, completeness);
 
-        // BFS by waves: all indegree-0 nodes form the current wave.
-        // Within each wave, sort by (Phase, Order, Name) for determinism.
-        std::vector<std::vector<size_t>> waves;
-        std::vector<size_t> currentWave;
-        for (size_t i = 0; i < count; ++i)
-            if (indeg[i] == 0) currentWave.push_back(i);
-
+        std::vector<SystemCadence> waveCadence;
+        const std::vector<std::vector<size_t>> waves = SolveCadenceWaves(adj, indeg, waveCadence);
         size_t totalWaved = 0;
-        while (!currentWave.empty())
-        {
-            std::sort(currentWave.begin(), currentWave.end(), [&](size_t a, size_t b) {
-                const auto& rA = m_Regs[a];
-                const auto& rB = m_Regs[b];
-                return std::make_tuple((int)rA.Phase, rA.Order, rA.Name) <
-                       std::make_tuple((int)rB.Phase, rB.Order, rB.Name);
-            });
-
-            waves.push_back(currentWave);
-            totalWaved += currentWave.size();
-
-            std::vector<size_t> nextWave;
-            for (size_t node : currentWave)
-            {
-                for (size_t succ : adj[node])
-                {
-                    if (--indeg[succ] == 0)
-                        nextWave.push_back(succ);
-                }
-            }
-            currentWave = std::move(nextWave);
-        }
+        for (const auto& wave : waves)
+            totalWaved += wave.size();
 
         // Instantiate new registrations in wave order (on the first build this
         // makes the manager's sequential order match the plan order), apply
@@ -499,9 +479,11 @@ public:
         std::vector<bool> planned(count, false);
         SystemExecutionPlan plan;
         plan.Waves.reserve(waves.size());
-        for (const auto& wave : waves)
+        for (size_t wi = 0; wi < waves.size(); ++wi)
         {
+            const auto& wave = waves[wi];
             SystemExecutionPlan::Wave w;
+            w.Cadence = waveCadence[wi];
             for (size_t i : wave)
             {
                 if (m_ManagerIndices[i] == kNotInstantiated && m_Regs[i].AddToManager)
@@ -539,7 +521,7 @@ public:
             {
                 if (!planned[i] && m_ManagerIndices[i] != kNotInstantiated)
                 {
-                    plan.Waves.push_back({{m_ManagerIndices[i]}});
+                    plan.AppendWave(m_ManagerIndices[i], m_Regs[i].Cadence);
                     Logger::Log::Error("[ECS] Scheduler: system '{}' is in an unresolved cycle — "
                                        "kept ticking as a trailing wave",
                                        m_Regs[i].Name);
@@ -565,13 +547,161 @@ public:
                 if (!names.empty()) names += ", ";
                 names += m_Regs[i].Name;
             }
-            Logger::Log::Debug("[ECS] Wave {}: {}", (uint32)wi, names);
+            const bool simulation = waveCadence[wi] == SystemCadence::Simulation;
+            Logger::Log::Debug("[ECS] Wave {}{}: {}", (uint32)wi, simulation ? " (simulation)" : "", names);
         }
     }
 
 
 private:
     static constexpr size_t kNotInstantiated = ~size_t{0};
+
+    // Kahn's algorithm by waves over the nodes in `member`: all indegree-0 nodes
+    // form the current wave. Within each wave, sort by (Phase, Order, Name) for
+    // determinism; a node past the registrations (a run of Simulation systems) sorts last.
+    std::vector<std::vector<size_t>> SolveWaves(const std::vector<std::vector<size_t>>& adj,
+                                                std::vector<int> indeg,
+                                                const std::vector<bool>& member) const {
+        std::vector<std::vector<size_t>> waves;
+        std::vector<size_t> currentWave;
+        for (size_t i = 0; i < member.size(); ++i)
+            if (member[i] && indeg[i] == 0) currentWave.push_back(i);
+
+        while (!currentWave.empty())
+        {
+            std::sort(currentWave.begin(), currentWave.end(), [&](size_t a, size_t b) {
+                if (a >= m_Regs.size() || b >= m_Regs.size())
+                    return a < b;
+                const auto& rA = m_Regs[a];
+                const auto& rB = m_Regs[b];
+                return std::make_tuple((int)rA.Phase, rA.Order, rA.Name) <
+                       std::make_tuple((int)rB.Phase, rB.Order, rB.Name);
+            });
+
+            waves.push_back(currentWave);
+
+            std::vector<size_t> nextWave;
+            for (size_t node : currentWave)
+            {
+                for (size_t succ : adj[node])
+                {
+                    if (--indeg[succ] == 0)
+                        nextWave.push_back(succ);
+                }
+            }
+            currentWave = std::move(nextWave);
+        }
+        return waves;
+    }
+
+    // The waves of registration indices in run order, with the cadence of each wave. A Simulation
+    // system's run is the most edges from a Simulation system to a Frame system on one dependency
+    // path that ends at it. In the Frame graph each run is one node, after the Frame systems of its wave.
+    std::vector<std::vector<size_t>> SolveCadenceWaves(const std::vector<std::vector<size_t>>& adj,
+                                                       const std::vector<int>& indeg,
+                                                       std::vector<SystemCadence>& waveCadence) const {
+        const size_t count = m_Regs.size();
+        std::vector<bool> isSimulation(count, false);
+        for (size_t i = 0; i < count; ++i)
+            isSimulation[i] = m_Regs[i].Cadence == SystemCadence::Simulation;
+
+        // A registration in a cycle, or after one, is in no wave of the order.
+        const std::vector<std::vector<size_t>> order = SolveWaves(adj, indeg, std::vector<bool>(count, true));
+        // A Simulation system's run; for a Frame system, the count of runs before it.
+        std::vector<size_t> runOf(count, 0);
+        std::vector<bool> ordered(count, false);
+        size_t runCount = 0;
+        for (const auto& wave : order)
+        {
+            for (size_t node : wave)
+            {
+                ordered[node] = true;
+                if (isSimulation[node])
+                    runCount = std::max(runCount, runOf[node] + 1);
+                for (size_t succ : adj[node])
+                {
+                    const bool leavesRun = isSimulation[node] && !isSimulation[succ];
+                    runOf[succ] = std::max(runOf[succ], runOf[node] + (leavesRun ? 1 : 0));
+                }
+            }
+        }
+        if (runCount == 0)
+        {
+            waveCadence.assign(order.size(), SystemCadence::Frame);
+            return order;
+        }
+
+        std::vector<std::vector<size_t>> runAdj(count + runCount);
+        std::vector<int> runIndeg(count + runCount, 0);
+        std::vector<std::vector<size_t>> simulationAdj(count);
+        std::vector<int> simulationIndeg(count, 0);
+        for (size_t from = 0; from < count; ++from)
+        {
+            if (!ordered[from])
+                continue;
+            for (size_t to : adj[from])
+            {
+                if (!ordered[to])
+                    continue;
+                const size_t nodeFrom = isSimulation[from] ? count + runOf[from] : from;
+                const size_t nodeTo = isSimulation[to] ? count + runOf[to] : to;
+                if (nodeFrom == nodeTo)
+                {
+                    simulationAdj[from].push_back(to);
+                    ++simulationIndeg[to];
+                    continue;
+                }
+                runAdj[nodeFrom].push_back(nodeTo);
+                ++runIndeg[nodeTo];
+            }
+        }
+
+        std::vector<bool> inRunGraph(count + runCount, true);
+        std::vector<bool> inSimulation(count, false);
+        for (size_t i = 0; i < count; ++i)
+        {
+            inRunGraph[i] = ordered[i] && !isSimulation[i];
+            inSimulation[i] = ordered[i] && isSimulation[i];
+        }
+        const std::vector<std::vector<size_t>> frameWaves = SolveWaves(runAdj, std::move(runIndeg), inRunGraph);
+        const std::vector<std::vector<size_t>> simulationWaves =
+            SolveWaves(simulationAdj, std::move(simulationIndeg), inSimulation);
+
+        std::vector<std::vector<size_t>> waves;
+        waveCadence.clear();
+        for (const auto& frameWave : frameWaves)
+        {
+            std::vector<size_t> wave;
+            std::vector<size_t> runs;
+            for (size_t node : frameWave)
+            {
+                if (node >= count)
+                    runs.push_back(node - count);
+                else
+                    wave.push_back(node);
+            }
+            if (!wave.empty())
+            {
+                waves.push_back(std::move(wave));
+                waveCadence.push_back(SystemCadence::Frame);
+            }
+            for (size_t run : runs)
+            {
+                for (const auto& simulationWave : simulationWaves)
+                {
+                    std::vector<size_t> runWave;
+                    for (size_t node : simulationWave)
+                        if (runOf[node] == run)
+                            runWave.push_back(node);
+                    if (runWave.empty())
+                        continue;
+                    waves.push_back(std::move(runWave));
+                    waveCadence.push_back(SystemCadence::Simulation);
+                }
+            }
+        }
+        return waves;
+    }
 
     // RunAfterAllOthers: an edge from every other registration into the system
     // ordered last.

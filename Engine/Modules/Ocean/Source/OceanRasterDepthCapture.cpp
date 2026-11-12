@@ -5,6 +5,7 @@
 #include "OceanShader/OceanShaderDirectory.h"
 
 #include "Engine/Rendering/Pipeline/RenderPipelineNodes.h"
+#include "Engine/Rendering/RenderOrigin.h"
 #include "Engine/Rendering/RenderServices.h"
 #include "Logger/Logger.h"
 #include "Mathematics/MatrixOps.h"
@@ -360,9 +361,7 @@ CameraData OceanRasterDepthCapture::MakeTopDownCamera(
     out.view = view;
     out.proj = proj;
     out.viewProj = viewProj;
-    out.cameraPos.x = eye.x;
-    out.cameraPos.y = eye.y;
-    out.cameraPos.z = eye.z;
+    Engine::Renderer::SetCameraEye(out, Mathematics::WorldPosition::FromVector3(eye));
     return out;
 }
 
@@ -467,7 +466,8 @@ bool OceanRasterDepthCapture::DeclareForView(Engine::Renderer::Pipeline::ViewDec
 
     d.Services.Views().SetCameraData(m_CameraId,
                              MakeTopDownCamera(snappedCenterX, snappedCenterZ,
-                                               seaLevel, settings));
+                                               seaLevel, settings),
+                             {topPadding, topPadding + deep});
     d.Services.Views().SetViewRenderLayerMask(m_ViewId, captureMask);
     d.Services.Views().SetViewWorldId(m_ViewId, d.View.worldId);
 

@@ -13,9 +13,9 @@ inline float ResolveOceanSeaLevel(const Components::OceanSurface& ocean, const C
                                   const Components::WorldTransform* worldTransform)
 {
     if (worldTransform && (worldTransform->Version != 0u || !transform))
-        return worldTransform->matrix[13];
+        return (worldTransform->GetPosition() - Mathematics::WorldPosition{}).y;
     if (transform)
-        return transform->matrix[13];
+        return (transform->GetPosition() - Mathematics::WorldPosition{}).y;
     return ocean.SeaLevel;
 }
 

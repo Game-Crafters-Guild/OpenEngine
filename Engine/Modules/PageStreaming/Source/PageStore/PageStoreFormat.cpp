@@ -31,6 +31,16 @@ bool MortonLess(const PageIndexEntry& a, const PageIndexEntry& b)
     return a.Morton < b.Morton;
 }
 
+// The index order: face, level, then Morton code.
+bool IndexOrderLess(const PageAddress& a, const PageAddress& b)
+{
+    if (a.Face != b.Face)
+        return a.Face < b.Face;
+    if (a.Level != b.Level)
+        return a.Level < b.Level;
+    return PageMortonCode(a.X, a.Z) < PageMortonCode(b.X, b.Z);
+}
+
 } // namespace
 
 bool PageStoreLayout::Contains(const PageAddress& address) const
@@ -95,26 +105,33 @@ uint64 PageStoreLayout::TotalBytes() const
 
 std::vector<PageStoreLevel> BuildPageStoreLevels(uint32 samplesX, uint32 samplesZ)
 {
-    std::vector<PageStoreLevel> levels;
+    std::array<PageStoreLevel, kPageStoreMaxLevels> storage;
+    const std::span<const PageStoreLevel> levels = FillPageStoreLevels(samplesX, samplesZ, storage);
+    return {levels.begin(), levels.end()};
+}
+
+std::span<PageStoreLevel> FillPageStoreLevels(uint32 samplesX, uint32 samplesZ,
+                                              std::span<PageStoreLevel, kPageStoreMaxLevels> storage)
+{
     if (samplesX == 0 || samplesZ == 0)
-        return levels;
+        return {};
+    std::size_t count = 0;
     uint64 firstEntry = 0;
-    while (levels.size() < kPageStoreMaxLevels)
+    while (count < kPageStoreMaxLevels)
     {
-        PageStoreLevel level;
+        PageStoreLevel& level = storage[count++];
         level.SamplesX = samplesX;
         level.SamplesZ = samplesZ;
         level.PagesX = PagesFor(samplesX);
         level.PagesZ = PagesFor(samplesZ);
         level.FirstEntry = firstEntry;
         firstEntry += static_cast<uint64>(level.PagesX) * level.PagesZ;
-        levels.push_back(level);
         if (level.PagesX == 1 && level.PagesZ == 1)
             break;
         samplesX = samplesX / 2u + 1u;
         samplesZ = samplesZ / 2u + 1u;
     }
-    return levels;
+    return storage.first(count);
 }
 
 bool PlanetFaceSamplesHalve(uint32 samples)
@@ -206,32 +223,49 @@ std::span<float32> HeightSamples(std::vector<uint8>& bytes)
     return {reinterpret_cast<float32*>(bytes.data()), kPageSampleCount};
 }
 
-PageStoreLayout AddPresentPages(const PageStoreLayout& layout, std::span<const uint8> present)
+std::optional<PageStoreLayout> AddPresentPages(const PageStoreLayout& layout, std::span<const PageAddress> added)
 {
-    std::vector<uint8> merged(present.begin(), present.end());
-    std::vector<std::pair<std::size_t, PageAddress>> kept;
-    std::size_t page = 0;
-    for (uint32 face = 0; face < layout.Header.FaceCount; ++face)
-        for (std::size_t level = 0; level < layout.Levels.size(); ++level)
-            for (uint32 z = 0; z < layout.Levels[level].PagesZ; ++z)
-                for (uint32 x = 0; x < layout.Levels[level].PagesX; ++x, ++page)
-                {
-                    const PageAddress address{static_cast<uint8>(face), static_cast<uint8>(level), x, z};
-                    const std::optional<std::size_t> index = layout.PresentIndex(address);
-                    if (!index)
-                        continue;
-                    if (page < merged.size())
-                        merged[page] = 1u;
-                    kept.emplace_back(*index, address);
-                }
-    PageStoreLayout grown = MakePageStoreLayout(layout.Header, merged);
-    for (const auto& [index, address] : kept)
-        if (const std::optional<std::size_t> to = grown.PresentIndex(address))
-            grown.Entries[*to] = layout.Entries[index];
+    std::vector<PageAddress> sorted;
+    sorted.reserve(added.size());
+    for (const PageAddress& address : added)
+    {
+        if (!layout.Contains(address))
+            return std::nullopt;
+        if (!layout.PresentIndex(address))
+            sorted.push_back(address);
+    }
+    std::ranges::sort(sorted, IndexOrderLess);
+    const auto repeated = std::ranges::unique(sorted);
+    sorted.erase(repeated.begin(), repeated.end());
+
+    PageStoreLayout grown;
+    grown.Header = layout.Header;
+    grown.Levels = layout.Levels;
+    grown.Ranges.resize(layout.Ranges.size());
+    grown.Entries.reserve(layout.Entries.size() + sorted.size());
+    auto next = sorted.begin();
+    for (std::size_t r = 0; r < layout.Ranges.size(); ++r)
+    {
+        // Each range is its held entries and the added ones, merged in Morton order.
+        const PageStoreRange& held = layout.Ranges[r];
+        const auto first = layout.Entries.begin() + static_cast<std::ptrdiff_t>(held.First);
+        grown.Ranges[r].First = grown.Entries.size();
+        grown.Entries.insert(grown.Entries.end(), first, first + static_cast<std::ptrdiff_t>(held.Count));
+        const auto addedFirst = grown.Entries.end() - grown.Entries.begin();
+        for (; next != sorted.end() && next->Face * layout.Levels.size() + next->Level == r; ++next)
+            grown.Entries.push_back(PageIndexEntry{PageMortonCode(next->X, next->Z)});
+        std::inplace_merge(grown.Entries.begin() + static_cast<std::ptrdiff_t>(grown.Ranges[r].First),
+                           grown.Entries.begin() + addedFirst, grown.Entries.end(), MortonLess);
+        grown.Ranges[r].Count = grown.Entries.size() - grown.Ranges[r].First;
+    }
     return grown;
 }
 
-PageStoreLayout MakePageStoreLayout(const PageStoreHeader& header, std::span<const uint8> present)
+namespace
+{
+
+// The layout of a store with `header` and no page present: its levels and an empty range for each.
+PageStoreLayout EmptyPageStoreLayout(const PageStoreHeader& header)
 {
     PageStoreLayout layout;
     layout.Header = header;
@@ -246,8 +280,42 @@ PageStoreLayout MakePageStoreLayout(const PageStoreHeader& header, std::span<con
         layout.Header.ReferenceRadius = 0.0;
         layout.Header.StepPerLevel.fill(0.0f);
     }
-    const uint64 densePerFace = DensePageCount(layout.Levels);
     layout.Ranges.resize(layout.Levels.size() * header.FaceCount);
+    return layout;
+}
+
+} // namespace
+
+std::optional<PageStoreLayout> MakeSparsePageStoreLayout(const PageStoreHeader& header,
+                                                         std::span<const PageAddress> present)
+{
+    PageStoreLayout layout = EmptyPageStoreLayout(header);
+    std::vector<PageAddress> sorted(present.begin(), present.end());
+    for (const PageAddress& address : sorted)
+        if (!layout.Contains(address))
+            return std::nullopt;
+    std::ranges::sort(sorted, IndexOrderLess);
+    if (std::ranges::adjacent_find(sorted) != sorted.end())
+        return std::nullopt;
+    layout.Entries.reserve(sorted.size());
+    for (const PageAddress& address : sorted)
+    {
+        ++layout.Ranges[address.Face * layout.Levels.size() + address.Level].Count;
+        layout.Entries.push_back(PageIndexEntry{PageMortonCode(address.X, address.Z)});
+    }
+    uint64 first = 0;
+    for (PageStoreRange& range : layout.Ranges)
+    {
+        range.First = first;
+        first += range.Count;
+    }
+    return layout;
+}
+
+PageStoreLayout MakePageStoreLayout(const PageStoreHeader& header, std::span<const uint8> present)
+{
+    PageStoreLayout layout = EmptyPageStoreLayout(header);
+    const uint64 densePerFace = DensePageCount(layout.Levels);
     if (!present.empty() && present.size() != densePerFace * header.FaceCount)
         return layout; // every page absent: the caller's presence does not fit the header
 
@@ -275,23 +343,6 @@ PageStoreLayout MakePageStoreLayout(const PageStoreHeader& header, std::span<con
     }
     return layout;
 }
-
-} // namespace GameEngine::PageStreaming
-
-// The equal-angle functions below are a format constant: they must give the same bits on every
-// machine, so contraction is off, the deep decode's rule (CBTDeepDecode.h).
-#if defined(_MSC_VER)
-#pragma float_control(push)
-#pragma fp_contract(off)
-#elif defined(__GNUC__) && !defined(__clang__)
-#pragma GCC push_options
-#pragma GCC optimize ("fp-contract=off")
-#else
-#pragma STDC FP_CONTRACT OFF
-#endif
-
-namespace GameEngine::PageStreaming
-{
 
 namespace
 {
@@ -350,9 +401,15 @@ PageFaceEdge PageFaceNeighbor(uint8 face, PageFaceSide side)
 
 PageFaceSample PageCubeSampleAt(uint8 face, int64 x, int64 z, uint32 samples)
 {
+    return PageCubeWindowSampleAt(face, x, z, samples, 1u);
+}
+
+PageFaceSample PageCubeWindowSampleAt(uint8 face, int64 x, int64 z, uint32 samples, uint32 margin)
+{
     const int64 last = static_cast<int64>(samples) - 1;
-    x = std::clamp<int64>(x, -1, last + 1);
-    z = std::clamp<int64>(z, -1, last + 1);
+    const int64 reach = std::min<int64>(margin, last);
+    x = std::clamp<int64>(x, -reach, last + reach);
+    z = std::clamp<int64>(z, -reach, last + reach);
     const bool outsideX = x < 0 || x > last;
     const bool outsideZ = z < 0 || z > last;
     if (outsideX == outsideZ)
@@ -360,19 +417,21 @@ PageFaceSample PageCubeSampleAt(uint8 face, int64 x, int64 z, uint32 samples)
     const PageFaceSide side = outsideX ? (x < 0 ? PageFaceSide::MinX : PageFaceSide::MaxX)
                                        : (z < 0 ? PageFaceSide::MinZ : PageFaceSide::MaxZ);
     const int64 along = outsideX ? z : x;
+    const int64 past = outsideX ? x : z;
+    const uint32 inward = static_cast<uint32>(past < 0 ? -past : past - last);
     const PageFaceEdge edge = PageFaceNeighbor(face, side);
     const uint32 t = static_cast<uint32>(edge.Reversed ? last - along : along);
-    const uint32 inner = static_cast<uint32>(last - 1);
+    const uint32 farSide = static_cast<uint32>(last) - inward;
     switch (edge.Side)
     {
     case PageFaceSide::MinX:
-        return {edge.Face, 1u, t};
+        return {edge.Face, inward, t};
     case PageFaceSide::MaxX:
-        return {edge.Face, inner, t};
+        return {edge.Face, farSide, t};
     case PageFaceSide::MinZ:
-        return {edge.Face, t, 1u};
+        return {edge.Face, t, inward};
     case PageFaceSide::MaxZ:
-        return {edge.Face, t, inner};
+        return {edge.Face, t, farSide};
     }
     return {face, 0u, 0u};
 }
@@ -428,10 +487,39 @@ Mathematics::Vector3 GnomonicFaceDirection(uint8 face, float64 alongX, float64 a
                                 static_cast<float32>(cubeZ * inverseLength));
 }
 
-} // namespace GameEngine::PageStreaming
+namespace
+{
 
-#if defined(_MSC_VER)
-#pragma float_control(pop)
-#elif defined(__GNUC__) && !defined(__clang__)
-#pragma GCC pop_options
-#endif
+// The sample coordinate along face axis `axis` (sign `sign`) of `direction`, whose component along the
+// face normal is `nearest`; `halfSpan` is half the samples a side less one.
+float64 FaceSampleCoordinate(const Mathematics::Vector3& direction, uint8 axis, int8 sign, float64 nearest,
+                             float64 halfSpan)
+{
+    const float64 gnomonic = std::clamp(sign * static_cast<float64>(direction[axis]) / nearest, -1.0, 1.0);
+    return (EqualAngleFaceCoordinate(gnomonic) + 1.0) * halfSpan;
+}
+
+} // namespace
+
+PageFacePoint EqualAngleFacePointOf(const Mathematics::Vector3& direction, uint32 samples)
+{
+    PageFacePoint point;
+    float64 nearest = 0.0;
+    for (uint8 face = 0; face < Mathematics::kCubeFaceCount; ++face)
+    {
+        const Mathematics::CubeFaceAxes& axes = Mathematics::kCubeFaceAxes[face];
+        const float64 normal = axes.NormalSign * static_cast<float64>(direction[axes.NormalAxis]);
+        if (normal > nearest)
+        {
+            nearest = normal;
+            point.Face = face;
+        }
+    }
+    const Mathematics::CubeFaceAxes& axes = Mathematics::kCubeFaceAxes[point.Face];
+    const float64 halfSpan = 0.5 * static_cast<float64>(samples - 1u);
+    point.X = FaceSampleCoordinate(direction, axes.XAxis, axes.XSign, nearest, halfSpan);
+    point.Z = FaceSampleCoordinate(direction, axes.ZAxis, axes.ZSign, nearest, halfSpan);
+    return point;
+}
+
+} // namespace GameEngine::PageStreaming

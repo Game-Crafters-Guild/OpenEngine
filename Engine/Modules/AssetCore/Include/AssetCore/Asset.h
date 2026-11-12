@@ -6,6 +6,7 @@
 #include "Types/Types.h"
 #include <atomic>
 #include <filesystem>
+#include <span>
 #include <utility>
 
 namespace GameEngine {
@@ -120,7 +121,7 @@ public:
      * @param data The raw data to load from
      * @return true if loading was successful, false otherwise
      */
-    virtual bool LoadFromData(const Vector<uint8>& data) = 0;
+    virtual bool LoadFromData(std::span<const uint8> data) = 0;
 
     /**
      * @brief Unload asset from memory
@@ -233,7 +234,7 @@ protected:
      *
      * @return true when the asset now holds the payload of `data`.
      */
-    virtual bool ReloadFromData(const Vector<uint8>& data);
+    virtual bool ReloadFromData(std::span<const uint8> data);
 
     /**
      * @brief Type-specific payload adoption for AdoptReload: swap the decoded

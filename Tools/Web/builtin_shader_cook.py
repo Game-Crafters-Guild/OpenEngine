@@ -53,7 +53,6 @@ kPackages: dict[str, dict[str, str | tuple[str, list[str]]]] = {
     "msaa_color_resolve_bloom_delta": {"vs": "fullscreen_noinput.vert", "fs": "msaa_color_resolve_bloom_delta.frag"},
     "clear_color_backdrop": {"vs": "fullscreen_noinput.vert", "fs": "clear_color_backdrop.frag"},
     "solidcolor": {"vs": "fullscreen_noinput.vert", "fs": "solidcolor.frag"},
-    "forwardplus_lighting": {"vs": "fullscreen_noinput.vert", "fs": "forwardplus_lighting.frag"},
     "clustered_light_cull": {"cs": "clustered_light_cull.comp"},
     "cluster_depth_minmax": {"cs": "cluster_depth_minmax.comp"},
     # The same kernel at 16 and 8 threads per axis, for devices below 1024 invocations per
@@ -98,8 +97,6 @@ kPackages: dict[str, dict[str, str | tuple[str, list[str]]]] = {
     "shadow_debug_overlay": {"vs": "fullscreen_noinput.vert", "fs": "shadow_debug_overlay.frag"},
     "world_debug": {"vs": "world_debug.vert", "fs": "world_debug.frag"},
     "world_depthonly": {"vs": "world_debug.vert", "fs": "world_depthonly.frag"},
-    "world_debug_forwardplus": {"vs": "world_debug_forwardplus.vert",
-                                "fs": "world_debug_forwardplus.frag"},
     # Volumetric clouds (Engine/Modules/VolumetricClouds owns these sources):
     # six passes the default ForwardPlus graph carries. Unlike the DOF node
     # below these are graph passes, so a package the runtime cannot load is an

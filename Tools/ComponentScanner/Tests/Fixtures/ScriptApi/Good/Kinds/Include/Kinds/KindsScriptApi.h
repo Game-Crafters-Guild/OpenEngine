@@ -78,7 +78,7 @@ void Scalars(bool b, std::int8_t i8, std::int16_t i16, std::int32_t i32, std::in
 /// Every math kind, and the angle.
 // @ge-script
 Mathematics::Matrix4x4 Math(Mathematics::Vector2 v2, const Mathematics::Vector3& v3, Mathematics::Vector4 v4,
-                            Mathematics::Quaternion q, Mathematics::Radians angle, ColorLinear color);
+                            Mathematics::Quaternion q, Mathematics::Radians angle, ColorLinear color, Mathematics::WorldPosition at);
 
 /// Entities, ids, text and spans.
 // @ge-script @ge-any-thread

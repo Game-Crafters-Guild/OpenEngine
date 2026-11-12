@@ -1,11 +1,17 @@
 #pragma once
 
-#include <string>
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <limits>
+#include <optional>
+#include <string>
 
 #include "UI/Controls/FloatField.h"
 #include "UI/Controls/TextField.h"
 #include "NumericExpression/NumericExpression.h"
+#include "Types/ParseNumber.h"
+#include "Types/StringUtils.h"
 
 namespace GameEngine {
 
@@ -28,6 +34,9 @@ public:
         TextFieldBase<int>::SetValue(m_HasRange ? std::clamp(v, m_Min, m_Max) : v);
     }
 
+    /// Parses `text` as the field's value. A whole decimal integer is read exactly; any other text is
+    /// read as a numeric expression and rounded to the nearest integer. A value past the range of
+    /// `int` is clamped to that range. Returns false when the text is not a number.
     static bool TryParseInt(const std::string& text, int& outValue);
 
 protected:
@@ -78,12 +87,20 @@ inline std::string IntField::FormatInt(int v)
 
 inline bool IntField::TryParseInt(const std::string& text, int& outValue)
 {
+    constexpr int64_t kMin = std::numeric_limits<int>::min();
+    constexpr int64_t kMax = std::numeric_limits<int>::max();
+    if (const std::optional<int64_t> whole = ParseInt(TrimWhitespaceView(text)))
+    {
+        outValue = static_cast<int>(std::clamp(*whole, kMin, kMax));
+        return true;
+    }
     float f = 0.0f;
     if (!FloatField::TryParseFloat(text, f))
     {
         return false;
     }
-    outValue = static_cast<int>(std::lround(f));
+    const double rounded = std::round(static_cast<double>(f));
+    outValue = static_cast<int>(std::clamp(rounded, static_cast<double>(kMin), static_cast<double>(kMax)));
     return true;
 }
 

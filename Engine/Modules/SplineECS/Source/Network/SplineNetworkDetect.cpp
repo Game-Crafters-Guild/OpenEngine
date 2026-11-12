@@ -230,6 +230,19 @@ void AddCrossings(std::span<const MemberCurve* const> curves, uint32 first, uint
     }
 }
 
+// The angle from +X toward +Z, in (-pi, pi]; the -X half-line is +pi. For x < 0, the angle is pi
+// minus the angle from -X. Thus the result near -X does not depend on the float that the libm
+// atan2 gives for pi, and a direction that rounds to -X gets +pi.
+float32 GroundAngleRadians(const Vector3& direction)
+{
+    constexpr float32 kPi = std::numbers::pi_v<float32>;
+    if (direction.x >= 0.0f)
+        return std::atan2(direction.z, direction.x);
+    const float32 fromMinusX = std::atan2(direction.z, -direction.x);
+    const float32 angle = fromMinusX < 0.0f ? -kPi - fromMinusX : kPi - fromMinusX;
+    return angle <= -kPi ? kPi : angle;
+}
+
 } // namespace
 
 CurvePoint NearestPointXZ(const MemberCurve& curve, const Vector3& point)
@@ -416,10 +429,7 @@ void BuildArms(const MemberCurve& first, const MemberCurve& second, SplineNode& 
             arm.Member = curve.Entity;
             arm.Direction = direction;
             arm.Forward = forward * static_cast<float32>(direction);
-            arm.AngleRadians = std::atan2(arm.Forward.z, arm.Forward.x);
-            // -X with a negative-zero z comes back as -pi; the range is (-pi, pi].
-            if (arm.AngleRadians <= -std::numbers::pi_v<float32>)
-                arm.AngleRadians = std::numbers::pi_v<float32>;
+            arm.AngleRadians = GroundAngleRadians(arm.Forward);
         }
     }
     std::sort(node.Arms, node.Arms + node.ArmCount,

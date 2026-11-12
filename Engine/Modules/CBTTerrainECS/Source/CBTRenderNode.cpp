@@ -32,7 +32,7 @@ namespace RG = ::GameEngine::Rendering::RenderGraph;
 
 namespace
 {
-void EmitCbtForwardDraw(Pipeline::ViewDeclare& d, CBTRenderFeature& feature)
+void EmitCbtForwardDraw(Pipeline::ViewDeclare& d, CBTRenderFeature& feature, DrawProducerId producer)
 {
     auto& rs = d.Services;
     const void* graph = &d.Frame;
@@ -88,6 +88,7 @@ void EmitCbtForwardDraw(Pipeline::ViewDeclare& d, CBTRenderFeature& feature)
     DrawCommand cmd{};
     if (!feature.BuildDrawCommand(rs, d.View.id, passKeywords, cmd))
         return;
+    cmd.Producer = producer;
 
     // The terrain's depth goes into the camera prepass, so GTAO, the screen-space shadows, the
     // light-cull depth bounds and every other reader of the prepass depth see the ground, and the
@@ -97,6 +98,7 @@ void EmitCbtForwardDraw(Pipeline::ViewDeclare& d, CBTRenderFeature& feature)
     // colour draw writes its own.
     DrawCommand head{};
     const bool hasHead = feature.BuildPrepassHead(rs, d.View.id, cmd, head);
+    head.Producer = cmd.Producer;
 
     // Emit into the MAIN world pass as a forward contributor (the terrain/ocean-
     // surface path), NOT a separate forward pass. The separate pass rebuilt a full
@@ -151,15 +153,8 @@ void DeclareTerrainShadow(Pipeline::ViewDeclare& d, CBTRenderFeature& feature,
     if (feature.GetDomainConfig().DomainMode != CBTTerrain::kDomainPlanar)
         return;
     auto& rs = d.Services;
-    TerrainShadowBakeInputs inputs;
+    TerrainShadowBakeInputs inputs = TerrainShadowBake::GeometryOf(params);
     inputs.Source = feature.GetTerrainShadowSource();
-    inputs.TerrainX = params.TerrainOrigin[0];
-    inputs.TerrainZ = params.TerrainOrigin[1];
-    inputs.BaseY = params.TerrainSize[3];
-    inputs.SizeX = params.TerrainSize[0];
-    inputs.SizeZ = params.TerrainSize[1];
-    inputs.HeightScale = params.TerrainSize[2];
-    inputs.DrawLevelScale = params.HeightChain[0];
     const CBTTerrain::CBTClassifyDesc& classify = feature.GetClassify();
     inputs.DirtyMinU = classify.DirtyMinU;
     inputs.DirtyMinV = classify.DirtyMinV;
@@ -174,6 +169,7 @@ void DeclareTerrainShadow(Pipeline::ViewDeclare& d, CBTRenderFeature& feature,
 bool CBTRenderNode::Initialize(std::string /*nodeId*/, std::string /*nodeJson*/,
                                std::string* /*outError*/)
 {
+    m_DrawProducer = DrawProducerRegistry::Register("Terrain");
     return true;
 }
 
@@ -217,7 +213,7 @@ void CBTRenderNode::DeclareForView(Pipeline::ViewDeclare& d)
     {
         if (!feature.UpdateDeclaredInGraph(&d.Frame, d.Frame.FrameIndex()))
             return;
-        EmitCbtForwardDraw(d, feature);
+        EmitCbtForwardDraw(d, feature, m_DrawProducer);
         return;
     }
 
@@ -324,7 +320,7 @@ void CBTRenderNode::DeclareForView(Pipeline::ViewDeclare& d)
         DeclareTerrainShadow(d, feature, params);
         if (feature.IsUpdateAtRest(params))
         {
-            EmitCbtForwardDraw(d, feature);
+            EmitCbtForwardDraw(d, feature, m_DrawProducer);
             return;
         }
 
@@ -334,7 +330,8 @@ void CBTRenderNode::DeclareForView(Pipeline::ViewDeclare& d)
         // the point the update actually records, so a change on a non-recording frame is kept.
         CBTTerrain::CBTClassifyDesc classify = feature.GetClassify();
         classify.GateVertexEval = feature.ConsumeForceVertexEval() ? 0u : 1u;
-        classify.Settle = feature.InputsHeld() ? 1u : 0u;
+        classify.Settle = feature.RestSettle();
+        classify.Census = feature.ConsumePoolCensusRequest() ? 1u : 0u;
         // Forward the bound heightmap so the update pass declares its read edge on
         // the texture VertexEval samples (plan §8 C5 — live-edit region uploads).
         const CBTTerrain::CBTActivitySlot activitySlot =
@@ -393,7 +390,7 @@ void CBTRenderNode::DeclareForView(Pipeline::ViewDeclare& d)
         return; // the update ran in a DIFFERENT graph this frame — no producer here.
     }
 
-    EmitCbtForwardDraw(d, feature);
+    EmitCbtForwardDraw(d, feature, m_DrawProducer);
 }
 
 } // namespace GameEngine::CBTTerrainECS

@@ -38,7 +38,10 @@ struct TexturePackageCookStats
 
 // Bake the textures already copied to the staging tree, using that tree's
 // authoritative .assetmanifest metadata: one payload per texture, named by the
-// record's kTexturePackagedMetaKey. Original cache artifacts are reusable only
+// record's kTexturePackagedMetaKey. The staged source is deleted once its payload
+// ships, except for an unclassified texture and a texture that a packaged scene or
+// prefab names as a terrain heightmap (`sourceRegistry`'s dependency edges): those
+// readers open the source by path. Original cache artifacts are reusable only
 // under the exact shared source/settings key and after KTX2 validation, and a
 // payload the bake encodes is also published into the source mount's derived
 // cache, where the editor's next load adopts it.

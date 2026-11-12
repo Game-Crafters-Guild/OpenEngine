@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include <functional>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -14,6 +15,13 @@ struct PolyhavenManifestEntry
     std::string slug;
     std::string name;
     std::string thumbUrl;
+};
+
+// The content type and the bytes of one thumbnail answer.
+struct PolyhavenThumbnailResponse
+{
+    std::string contentType;
+    std::string body;
 };
 
 // Result of materializing a batch of manifest entries into local thumbnail paths.
@@ -60,14 +68,24 @@ public:
     static ManifestResult FetchManifest(const std::string& type,
                                         const std::string& categoryFilter);
 
-    // Download thumbnails for manifest[startIndex..endIndex) into temp cache.
+    // Fetches one thumbnail URL. Empty when the request fails.
+    using ThumbnailFetch = std::function<std::optional<PolyhavenThumbnailResponse>(const std::string& url)>;
+
+    // Lists manifest[startIndex..endIndex) at their thumbnail paths and caches the missing PNG thumbnails.
+    // An asset with no PNG thumbnail is listed without a picture; an asset with no thumbnail path is
+    // not listed. One warning per batch counts each of the two cases.
     static PolyhavenLoadResult MaterializeBatch(
         const std::vector<PolyhavenManifestEntry>& manifest,
         size_t startIndex, size_t endIndex,
-        const std::string& typeKey);
+        const std::string& typeKey,
+        const ThumbnailFetch& fetch = FetchThumbnail);
 
     // Temp directory for thumbnail cache.
     static std::filesystem::path GetCacheDir();
+
+    // Cache path of the PNG thumbnail for a slug. Empty when the cache directory is not available or
+    // the slug holds a character other than a lowercase letter, a digit, '_' or '-'.
+    static std::filesystem::path GetThumbnailPath(const std::string& slug);
 
     // ---------- downloading ----------
 
@@ -134,6 +152,9 @@ public:
     void ClearDownloadCache() { m_DownloadedCache.clear(); }
 
 private:
+    // Fetches one thumbnail URL from Poly Haven's server, with retries.
+    static std::optional<PolyhavenThumbnailResponse> FetchThumbnail(const std::string& url);
+
     std::unordered_map<std::string, bool> m_DownloadedCache;
 };
 

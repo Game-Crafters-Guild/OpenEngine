@@ -1,9 +1,9 @@
 // CPU-only unit tests for the view-priority near-bias radius curve (CBTNearBias.h). No GPU
 // device is needed — these pin the shape of the sub-linear altitude curve so a future retune
 // is caught, and lock the PR #620 zoom-in acceptance case (a mid-distance feature must KEEP
-// full detail as the camera descends toward it). The GPU demand/occupancy probes
-// (CBTFarFieldDrainProbe, CBTSaturationRetess, CBTLookBackPriority) exercise the same curve
-// through the real kernels; these tests bound the curve itself.
+// full detail as the camera descends toward it). The GPU demand/occupancy probe
+// (CBTFarFieldDrainProbe) exercises the same curve through the real kernels; these tests
+// bound the curve itself.
 
 #include <gtest/gtest.h>
 

@@ -13,6 +13,7 @@
 #include "Engine/Rendering/TextureMipUpload.h"
 #include "JobSystem/WorkStealingThreadPool.h"
 #include "Logger/Logger.h"
+#include "Types/PathUtils.h"
 #include "UI/StyleUtil.h"
 #include "UI/UITextureRegistry.h"
 #include "UI/UIStyle.h"
@@ -128,6 +129,17 @@ AssetKind ResolveAssetKind(AssetManager* assets, const GUID& guid)
         return AssetKind::Raster;
     return AssetKind::Svg;
 }
+
+void WarnRasterFailed(AssetManager* assets, const GUID& guid)
+{
+    AssetMetadata metadata{};
+    const std::string path = assets && assets->GetRegistry().TryGetAssetMetadata(guid, metadata)
+                                 ? PathToUtf8(metadata.Path)
+                                 : std::string("<unregistered>");
+    Logger::Log::Warning("UI: background image '{}' ({}) did not load; it stays blank. Check that the file is an image "
+                         "format the engine reads and that it is not damaged; a saved change to the file loads it again",
+                         path, guid.ToString());
+}
 } // namespace
 
 // A finished bake on its way to the UI thread.
@@ -163,6 +175,9 @@ struct BackgroundImageCache::CachedTexture
     uint32_t MipLevels = 1;
     // A borrowed handle (a test seed) is never destroyed here.
     bool Borrowed = false;
+    // The raster load completed with nothing to draw. Paints and requests then
+    // start no load; an eviction (a reload or a change to the asset) clears it.
+    bool RasterFailed = false;
     // 9-slice layout authored on the texture asset, read at upload.
     NineSlice Slice{};
     // State::Frame when the raster was last resolved for paint.
@@ -460,10 +475,15 @@ void BackgroundImageCache::EnsureUploaded(const GUID& guid)
     if (guid.IsNull() || !m_Assets || !m_Device)
         return;
 
-    if (auto it = m_State->Entries.find(guid); it != m_State->Entries.end() && it->second.Handle.IsValid())
+    if (auto it = m_State->Entries.find(guid); it != m_State->Entries.end())
     {
-        it->second.LastUsedFrame = m_State->Frame;
-        return;
+        if (it->second.RasterFailed)
+            return;
+        if (it->second.Handle.IsValid())
+        {
+            it->second.LastUsedFrame = m_State->Frame;
+            return;
+        }
     }
 
     // Asset already loaded: upload now.
@@ -561,13 +581,22 @@ void BackgroundImageCache::Request(const GUID& guid, ReadyCallback onReady)
         return;
     }
 
-    // Already uploaded: answer at once.
-    if (auto it = m_State->Entries.find(guid); it != m_State->Entries.end() && it->second.Handle)
+    // Already uploaded, or already failed: answer at once.
+    if (auto it = m_State->Entries.find(guid); it != m_State->Entries.end())
     {
-        it->second.LastUsedFrame = m_State->Frame;
-        if (onReady)
-            onReady(it->second.Handle, it->second.Width, it->second.Height);
-        return;
+        if (it->second.RasterFailed)
+        {
+            if (onReady)
+                onReady(Rendering::TextureHandle{}, 0, 0);
+            return;
+        }
+        if (it->second.Handle)
+        {
+            it->second.LastUsedFrame = m_State->Frame;
+            if (onReady)
+                onReady(it->second.Handle, it->second.Width, it->second.Height);
+            return;
+        }
     }
 
     const Key key{guid, SvgRasterSize{}};
@@ -640,6 +669,7 @@ void BackgroundImageCache::CompleteRaster(const GUID& guid, Rendering::TextureHa
         entry.Borrowed = false;
         entry.Slice = ResolveNineSlice(guid);
         entry.LastUsedFrame = m_State->Frame;
+        entry.RasterFailed = false;
     }
     static const bool s_Log = []() -> bool
     {
@@ -650,13 +680,14 @@ void BackgroundImageCache::CompleteRaster(const GUID& guid, Rendering::TextureHa
     if (s_Log && s_Budget-- > 0)
         Logger::Log::Warning("[UI GeoInvalidate] BackgroundTextureReady(guid={})", guid.ToString());
 
-    m_State->InFlight.erase(key);
-    if (!handle)
+    // An eviction erases the in-flight marker, so a load that started before a
+    // file change finds no marker here and does not mark the new entry failed.
+    const bool current = m_State->InFlight.erase(key) > 0;
+    if (current && !entry.Handle.IsValid() && !entry.RasterFailed)
     {
-        // The request completed with nothing to draw: the asset is not a
-        // texture, or it decoded to zero. The element stays blank and nothing
-        // further is coming, so say so once.
-        Logger::Log::Warning("UI: background image {} completed with no texture; it stays blank", guid.ToString());
+        // Nothing to draw: the asset is not a texture, or it did not decode.
+        entry.RasterFailed = true;
+        WarnRasterFailed(m_Assets, guid);
     }
     if (auto itCallbacks = m_State->ReadyCallbacks.find(key); itCallbacks != m_State->ReadyCallbacks.end())
     {
@@ -769,7 +800,7 @@ BackgroundImageCache::PaintBinding BackgroundImageCache::ResolveSvgForPaint(cons
         if (!source || source->Width <= 0.0f || source->Height <= 0.0f)
         {
             // Loaded without a source: not drawable as an SVG. The raster path
-            // takes it with its bounded retries.
+            // takes it; a failed raster load stops until the file changes.
             entry.Kind = AssetKind::Raster;
             return binding;
         }
@@ -820,9 +851,8 @@ void BackgroundImageCache::RequestSvgSource(const GUID& guid)
                     if (!texture || !texture->SnapshotSvgSource())
                     {
                         // No source will come (a load that failed, or a build
-                        // without ThorVG). Hand the asset to the raster path,
-                        // whose retries are bounded, instead of asking and
-                        // repainting every paint.
+                        // without ThorVG). The raster path takes the asset; a
+                        // failed raster load stops until the file changes.
                         if (auto it = m_State->Entries.find(guid); it != m_State->Entries.end())
                             it->second.Kind = AssetKind::Raster;
                         return;

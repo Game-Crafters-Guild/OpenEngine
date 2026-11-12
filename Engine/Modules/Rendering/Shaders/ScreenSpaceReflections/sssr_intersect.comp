@@ -156,7 +156,7 @@ void main()
     // Fixed world-space steps (baseStep * 2^mip) with bisection refinement at
     // the crossing. Toward-camera rays use the same near-plane-bounded test.
     float maxDistance = max(sssr.sssrMaxDistance, 0.05);
-    float traceDistance = GE_SssrTraceDistance(origin.z, rayDir.z, ge_nearFar.x, maxDistance);
+    float traceDistance = GE_SssrTraceDistance(origin.z, rayDir.z, ge_viewRanges.x, maxDistance);
     int maxSteps = clamp(sssr.sssrMaxSteps, 8, 192);
     float baseStep = max(traceDistance / float(maxSteps), max(abs(origin.z) * 0.001, 0.015));
     // The start offset dithers the sampling grid along the ray per pixel, so the

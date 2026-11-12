@@ -1,0 +1,40 @@
+#version 450
+// Test-only: GE_ViewLinearDepth (view_linear_depth.glsl) for one sector-local sample per invocation, the position
+// made relative to the pass camera's sector as GE_ClipFromSectorLocal makes vPosRel.
+// results[2i].x is the view depth through the pass camera's frame, results[2i + 1].x through world positions.
+layout(local_size_x = 1) in;
+
+layout(set = 0, binding = 5) uniform CameraUBO {
+#include "Includes/camera_ubo_fields.glsl"
+} Cam;
+#include "Includes/camera_relative.glsl"
+#include "Includes/view_params.glsl"
+#include "Includes/view_linear_depth.glsl"
+
+struct ProbeSample
+{
+    vec4 sectorLocal; // xyz = the position in its instance sector, meters
+    ivec4 sector;     // xyz = the instance sector
+    vec4 normal;      // unused
+};
+
+layout(set = 0, binding = 10, std430) readonly buffer ProbeSamples
+{
+    ProbeSample samples[];
+};
+
+layout(set = 0, binding = 11, std430) writeonly buffer ProbeResults
+{
+    vec4 results[];
+};
+
+void main()
+{
+    uint i = gl_GlobalInvocationID.x;
+    ProbeSample s = samples[i];
+    vec3 posWS;
+    vec3 posRel;
+    GE_ClipFromSectorLocal(s.sectorLocal.xyz, s.sector.xyz, posWS, posRel);
+    results[2u * i] = vec4(GE_ViewLinearDepth(posRel));
+    results[2u * i + 1u] = vec4((ge_view * vec4(posWS, 1.0)).z);
+}

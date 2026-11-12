@@ -12,6 +12,7 @@
 #include "SceneView/SceneViewGizmos.h"
 #include "SceneView/SceneViewLayerFilter.h"
 #include "Engine/Rendering/PlanetCameraFraming.h"
+#include "Engine/Rendering/RenderOrigin.h"
 #include "Engine/Rendering/RenderServices.h"
 #include "Engine/Rendering/ViewReadbackUtils.h"
 #include "Scene/SceneTlas.h"
@@ -133,7 +134,8 @@ bool GetEntityWorldMatrixForMeasure(GameEngine::ECS::World* world,
 
     if (const auto* transform = world->GetComponent<GameEngine::Components::Transform>(entity))
     {
-        GameEngine::Mathematics::Matrix4x4 local = GameEngine::Mathematics::Matrix4x4::FromColumnMajor(transform->matrix);
+        GameEngine::Mathematics::Matrix4x4 local =
+            transform->ToMatrix4x4(transform->GetPosition() - GameEngine::Mathematics::WorldPosition{});
         if (const auto* parent = world->GetComponent<GameEngine::Components::Parent>(entity);
             parent && parent->Entity.IsValid())
         {
@@ -151,7 +153,7 @@ bool GetEntityWorldMatrixForMeasure(GameEngine::ECS::World* world,
 
     if (const auto* worldTransform = world->GetComponent<GameEngine::Components::WorldTransform>(entity))
     {
-        out = GameEngine::Mathematics::Matrix4x4::FromColumnMajor(worldTransform->matrix);
+        out = worldTransform->ToMatrix4x4(worldTransform->GetPosition() - GameEngine::Mathematics::WorldPosition{});
         return true;
     }
 
@@ -180,16 +182,12 @@ void SetEntityPositionForMeasure(GameEngine::ECS::World* world,
             }
         }
 
-        transform->matrix[12] = localPoint.x;
-        transform->matrix[13] = localPoint.y;
-        transform->matrix[14] = localPoint.z;
+        transform->Position = GameEngine::Mathematics::WorldPosition::FromVector3(localPoint);
     }
 
     if (auto* worldTransform = world->GetComponentForWrite<GameEngine::Components::WorldTransform>(entity))
     {
-        worldTransform->matrix[12] = point.x;
-        worldTransform->matrix[13] = point.y;
-        worldTransform->matrix[14] = point.z;
+        worldTransform->Position = GameEngine::Mathematics::WorldPosition::FromVector3(point);
         GameEngine::Components::BumpWorldTransform(*world, entity, *worldTransform);
     }
 }
@@ -1630,7 +1628,7 @@ GameEngine::ECS::EntityHandle SceneViewController::PickIconAtRay(const Editor::S
     {
         if (!revealHidden && !IsEntityPickable(e))
             return;
-        const Mathematics::Vector3 pos(xf.matrix[12], xf.matrix[13], xf.matrix[14]);
+        const Mathematics::Vector3 pos = xf.GetPosition() - Mathematics::WorldPosition{};
         const float r = Editor::SceneTools::ComputeGizmoIconWorldRadius(pos, camPos, orthoHeight);
         if (r <= 0.0f)
             return;
@@ -1649,7 +1647,7 @@ GameEngine::ECS::EntityHandle SceneViewController::PickIconAtRay(const Editor::S
     {
         if (!revealHidden && !IsEntityPickable(e))
             return;
-        const Mathematics::Vector3 pos(xf.matrix[12], xf.matrix[13], xf.matrix[14]);
+        const Mathematics::Vector3 pos = xf.GetPosition() - Mathematics::WorldPosition{};
         const float r = Editor::SceneTools::ComputeGizmoIconWorldRadius(pos, camPos, orthoHeight);
         if (r <= 0.0f)
             return;
@@ -2367,7 +2365,8 @@ static Rendering::CameraData
 BuildCameraDataFromPose(
     ECS::World* world, const SceneViewCameraPose& pose,
     float viewportWidth,
-    float viewportHeight)
+    float viewportHeight,
+    Rendering::CameraRanges& outRanges)
 {
     using namespace GameEngine::Mathematics;
 
@@ -2387,6 +2386,7 @@ BuildCameraDataFromPose(
     float nearClip = 0.1f;
     float farClip = 200.0f;
     GetSceneViewClipPlanes(world, pose.Distance, nearClip, farClip);
+    outRanges = {nearClip, farClip};
     const float fovDeg = GetSceneViewFieldOfViewDeg();
     const float fovRad = ToRadians(fovDeg);
     Matrix4x4 proj = MakePerspectiveLH_ZO_ReverseZ(fovRad, aspect, nearClip, farClip);
@@ -2397,6 +2397,7 @@ BuildCameraDataFromPose(
     cam.view = view;
     cam.proj = proj;
     cam.viewProj = viewProj;
+    GameEngine::Engine::Renderer::SetCameraEye(cam, WorldPosition{pose.Pos[0], pose.Pos[1], pose.Pos[2]});
 
     return cam;
 }
@@ -2519,10 +2520,11 @@ bool SceneViewController::DeclarePreviewTargetsRG(
     if (m_RequestPreview)
     {
         m_RequestPreview = false;
-        const CameraData cam = BuildCameraDataFromPose(&GetWorld(), m_PreviewPose, 128.0f, 72.0f);
+        Rendering::CameraRanges ranges;
+        const CameraData cam = BuildCameraDataFromPose(&GetWorld(), m_PreviewPose, 128.0f, 72.0f, ranges);
         if (m_PreviewCameraId != 0)
         {
-            rs->Views().SetCameraData(m_PreviewCameraId, cam);
+            rs->Views().SetCameraData(m_PreviewCameraId, cam, ranges);
             // Participate in per-view post-process filtering.
             rs->Views().SetCameraVolumeLayers(m_PreviewCameraId, Rendering::RenderLayerMask::All());
         }
@@ -3230,13 +3232,12 @@ void SceneViewController::UpdateCamera(float deltaSeconds, bool moveForward, boo
         cam.view = viewM;
         cam.proj = projM;
         cam.viewProj = viewProjM;
-        cam.cameraPos.x = static_cast<float>(m_CamPos[0]);
-        cam.cameraPos.y = static_cast<float>(m_CamPos[1]);
-        cam.cameraPos.z = static_cast<float>(m_CamPos[2]);
         cam.cameraPos.w = m_Is2DMode ? 1.0f : 0.0f;
+        GameEngine::Engine::Renderer::SetCameraEye(
+            cam, GameEngine::Mathematics::WorldPosition{m_CamPos[0], m_CamPos[1], m_CamPos[2]});
         if (m_RenderServices)
         {
-            m_RenderServices->Views().SetCameraData(m_CameraId, cam);
+            m_RenderServices->Views().SetCameraData(m_CameraId, cam, {nearClip, farClip});
             // Register every frame alongside SetCameraData (before rendering systems run),
             // so RenderExtractionSystem's per-view post-process path sees HasCameraVolumeLayers true
             // in the same phase as world/culling.
@@ -3583,7 +3584,8 @@ void SceneViewController::FrameAll()
             if (!worldXf)
                 continue;
 
-            const auto aabb = bounds->Box.TransformToAABB(worldXf->matrix);
+            const auto aabb = bounds->Box.TransformToAABB(
+                worldXf->ToMatrix4x4(worldXf->GetPosition() - Mathematics::WorldPosition{}).Data());
 
             minBounds[0] = std::min(minBounds[0], aabb.min.x);
             minBounds[1] = std::min(minBounds[1], aabb.min.y);
@@ -4007,28 +4009,9 @@ bool SceneViewController::DeclareTargetsRG(Rendering::RenderGraph::RGFrame& fram
         Engine::Renderer::UsesPerViewAntiAliasingState(aa.Mode) && samples == 1u &&
         m_FixedViewOrientation == FixedViewOrientation::Free && !m_Is2DMode && !m_Orthographic;
 
-    // View + camera registry bookkeeping — the same RenderServices calls as
-    // the old arm (graph-agnostic).
-    if (m_CameraId == 0)
-        m_CameraId = rs->Views().AllocateCamera("Scene View Camera");
-    if (m_ViewId == 0)
-        m_ViewId = rs->Views().AllocateView("Scene View", m_CameraId, Rendering::ViewPurpose::EditorScene,
-                                    Rendering::ViewParticipation::OnDemand);
-    else
-        rs->Views().SetViewCamera(m_ViewId, m_CameraId);
-    // Arm this OnDemand view for the frame. A controller that stops declaring
-    // its pane (quad view toggled off, a collapsed/hidden pane, an inactive
-    // split) then lapses to dormant within two frames: its GPU culling,
-    // extraction, and shadow dispatches stop without releasing the view, so its
-    // HZB visibility history (keyed by viewId) survives and re-declaring revives
-    // it at once.
-    rs->Views().RequestViewFrame(m_ViewId);
-    // The layers the Scene View toolbar's filter keeps, every layer by default.
-    rs->Views().SetViewRenderLayerMask(
-        m_ViewId, Editor::SceneViewLayerFilter::Get().Layers(EngineCore::GetInstance().GetWorkspaceRoot()));
+    RequestFrame();
     rs->Views().SetViewActiveRenderPipeline(m_ViewId, true);
     rs->Views().SetViewAntiAliasing(m_ViewId, registerViewAA, aa.Mode, rs->GetTaaSequenceLength());
-    rs->Views().SetViewWorldId(m_ViewId, GetWorld().GetWorldId());
     // Two-phase HZB occlusion is DEFAULT-ON for the free (perspective) scene
     // view (gates passed 2026-07-08: interiors −32.5% GPU, zero false culls
     // open-field — PR #253); GE_HZB_OCCLUSION=0 is the kill switch back to
@@ -4093,17 +4076,16 @@ bool SceneViewController::DeclareTargetsRG(Rendering::RenderGraph::RGFrame& fram
         cam.view = viewM;
         cam.proj = projM;
         cam.viewProj = viewProjM;
-        cam.cameraPos.x = static_cast<float>(m_CamPos[0]);
-        cam.cameraPos.y = static_cast<float>(m_CamPos[1]);
-        cam.cameraPos.z = static_cast<float>(m_CamPos[2]);
         cam.cameraPos.w = m_Is2DMode ? 1.0f : 0.0f;
+        GameEngine::Engine::Renderer::SetCameraEye(
+            cam, GameEngine::Mathematics::WorldPosition{m_CamPos[0], m_CamPos[1], m_CamPos[2]});
 
         m_FrameCameraData = cam;
         m_FrameCameraViewportW = w;
         m_FrameCameraViewportH = h;
         m_HasFrameCameraData = true;
 
-        rs->Views().SetCameraData(m_CameraId, cam);
+        rs->Views().SetCameraData(m_CameraId, cam, {nearClip, farClip});
         rs->Views().SetCameraVolumeLayers(m_CameraId, Rendering::RenderLayerMask::All());
         rs->Views().SetCameraExposure(m_CameraId, SceneViewLensExposure(&GetWorld()));
     }
@@ -4349,10 +4331,26 @@ bool SceneViewController::DeclareTargetsRG(Rendering::RenderGraph::RGFrame& fram
     return true;
 }
 
-void SceneViewController::PrepareForActivation()
+void SceneViewController::RequestFrame()
 {
-    if (m_RenderServices && m_ViewId != 0)
-        m_RenderServices->Views().RequestViewFrame(m_ViewId);
+    if (!m_RenderServices)
+        return;
+    Engine::Renderer::RenderServices& rs = *m_RenderServices;
+    if (m_CameraId == 0)
+        m_CameraId = rs.Views().AllocateCamera("Scene View Camera");
+    if (m_ViewId == 0)
+        m_ViewId = rs.Views().AllocateView("Scene View", m_CameraId, Rendering::ViewPurpose::EditorScene,
+                                           Rendering::ViewParticipation::OnDemand);
+    else
+        rs.Views().SetViewCamera(m_ViewId, m_CameraId);
+    // The request arms this OnDemand view for the next extraction. A controller that
+    // stops requesting goes dormant within two frames; its view and HZB history stay.
+    rs.Views().RequestViewFrame(m_ViewId);
+    // The layers the Scene View toolbar's filter keeps, every layer by default.
+    rs.Views().SetViewRenderLayerMask(
+        m_ViewId, Editor::SceneViewLayerFilter::Get().Layers(EngineCore::GetInstance().GetWorkspaceRoot()));
+    // Extraction marks a view current only for its own world.
+    rs.Views().SetViewWorldId(m_ViewId, GetWorld().GetWorldId());
 }
 
 } // namespace GameEngine

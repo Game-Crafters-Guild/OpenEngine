@@ -4,6 +4,7 @@
 #include "InspectorRegistry.h"
 #include "Prefabs/ApplyRevert/ApplyPrefabOverrideCommand.h"
 #include "Prefabs/PrefabHierarchyRows.h"
+#include "Prefabs/PrefabOverrideRecordsCommand.h"
 #include "SceneView/SceneViewNoticeOverlay.h"
 #include "UI/EditorIcons.h"
 #include "UndoRedo/EntityComponentsEdit.h"
@@ -29,6 +30,8 @@ namespace
 {
 
 constexpr const char* kRevertFieldLabel = "Revert to prefab value";
+// Apply and Revert add no record.
+constexpr std::span<const Scene::PrefabOverrideTarget> kNoTargets;
 
 // The overrides of the target's entity that its row or header shows: the field's lines for a row, the
 // component's addition or removal for a header.
@@ -47,16 +50,18 @@ std::vector<Scene::PrefabOverride> FindTargetOverrides(const OverrideMenuTarget&
         const bool headerEntry = entry.Kind == Scene::PrefabOverrideKind::AddedComponent ||
                                  entry.Kind == Scene::PrefabOverrideKind::RemovedComponent;
         const bool fieldEntry = entry.Kind == Scene::PrefabOverrideKind::Field &&
-                                ReflectedFieldForSceneKey(target.Component, entry.Field) == target.Field;
+                                InspectorFieldForSceneKey(target.Component, entry.Field) == target.Field;
         if (target.Field.empty() ? headerEntry : fieldEntry)
             found.push_back(entry);
     }
     return found;
 }
 
-// What the undo step names: the field's words for a row, the component's for a header.
+// What the undo step names: the row's label, else the field's words, else the component's for a header.
 std::string DescribeTarget(const OverrideMenuTarget& target)
 {
+    if (!target.Label.empty())
+        return target.Label;
     if (!target.Field.empty())
         return IdentifierToWords(target.Field);
     return IdentifierToWords(Scene::SceneSchemaRegistry::SchemaTokenForComponentType(target.Component));
@@ -121,7 +126,7 @@ std::vector<OverrideMenuEntry> QueryPrefabOverrideMenu(const OverrideMenuTarget&
         kind == Scene::PrefabOverrideKind::AddedComponent     ? std::format("Remove {} from instance", DescribeTarget(target))
         : kind == Scene::PrefabOverrideKind::RemovedComponent ? std::format("Restore {}", DescribeTarget(target))
                                                               : std::string(kRevertFieldLabel);
-    OverrideMenuEntry revert{revertLabel, EditorIcons::kReset,
+    OverrideMenuEntry revert{revertLabel, EditorIcons::kRevert,
                              [target, overrides = std::move(overrides)]() { RevertOverrides(target, overrides); }};
     // A removed component's header offers its restore first: the ghost reads as something to bring back.
     if (kind == Scene::PrefabOverrideKind::RemovedComponent)
@@ -142,10 +147,21 @@ void ApplyPrefabOverridesAsOneStep(ECS::World& world, std::span<const Scene::Pre
     if (targets.empty())
         return;
     std::string error;
+    // An applied field keeps no record; the undo gives back the records the fields held.
+    const std::vector<Scene::PrefabOverrideTarget> dropped = Scene::ForgetPrefabOverrides(world, targets);
     std::unique_ptr<ApplyPrefabOverrideCommand> command =
         ApplyPrefabOverrideCommand::Create(world, notifications, targets, undoName, error);
-    if (command && undo)
+    if (!command)
+        Scene::RecordPrefabOverrides(world, dropped);
+    else if (undo)
+    {
+        undo->BeginCompound(undoName);
         undo->CommitAlreadyApplied(std::move(command));
+        if (!dropped.empty())
+            undo->CommitAlreadyApplied(
+                std::make_unique<PrefabOverrideRecordsCommand>(world, notifications, kNoTargets, dropped, undoName));
+        undo->EndCompound();
+    }
     if (!error.empty())
         ShowSceneViewNotice(std::move(error));
 }
@@ -157,32 +173,44 @@ void RevertPrefabOverridesAsOneStep(ECS::World& world, std::span<const Scene::Pr
     if (targets.empty())
         return;
     std::string error;
-    // One edit for each entity, in one compound step when the targets span several entities.
+    // One edit for each entity and the records the revert drops, in one compound step.
     std::vector<ECS::EntityHandle> entities;
     for (const Scene::PrefabOverrideTarget& target : targets)
         if (std::find(entities.begin(), entities.end(), target.Entity) == entities.end())
             entities.push_back(target.Entity);
-    const bool compound = undo && entities.size() > 1;
-    if (compound)
+    if (undo)
         undo->BeginCompound(undoName);
+    std::vector<Scene::PrefabOverrideTarget> reverted;
     for (const ECS::EntityHandle entity : entities)
     {
         if (!world.IsValid(entity))
             continue;
-        const auto revert = [&world, entity, targets, &error]()
+        const auto revert = [&world, entity, targets, &reverted, &error]()
         {
             for (const Scene::PrefabOverrideTarget& target : targets)
-                if (target.Entity == entity && !Scene::RevertPrefabOverride(world, entity, target.Override, error))
+            {
+                if (target.Entity != entity)
+                    continue;
+                if (!Scene::RevertPrefabOverride(world, entity, target.Override, error))
                     return false;
+                reverted.push_back(target);
+            }
             return true;
         };
         CommitEntityComponentsEdit(world, entity, undo, notifications, undoName, revert);
+        // The description from before the revert would give the reverted fields their records back.
+        PrefabInstanceDescriptions::Get().Forget(world, entity);
         if (notifications)
             notifications->NotifyComponentChanged({&world, entity, ComponentTypeOfTargets(targets, entity),
                                                    EditorChangeNotifications::ChangeKind::Commit});
     }
-    if (compound)
+    if (undo)
+    {
+        if (!reverted.empty())
+            undo->CommitAlreadyApplied(
+                std::make_unique<PrefabOverrideRecordsCommand>(world, notifications, kNoTargets, reverted, undoName));
         undo->EndCompound();
+    }
     if (!error.empty())
         ShowSceneViewNotice(std::move(error));
 }

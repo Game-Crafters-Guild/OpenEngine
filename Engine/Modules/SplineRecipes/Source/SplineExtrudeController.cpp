@@ -34,6 +34,7 @@
 #include "SplineRecipes/SplineSweepStations.h"
 #include "SplineRecipes/RecipeBuildStates.h"
 #include "RoadVerge.h"
+#include "SplineSurfaceConformInternal.h"
 #include "SplineLayout/TileLayout.h"
 #include "Rendering/Materials/MaterialDocument.h"
 #include "Spline/SplineData.h"
@@ -46,6 +47,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 #include <string>
 
 namespace GameEngine::SplineRecipes
@@ -184,6 +186,12 @@ SG::SplineProfileScale MapWidthScale(Components::SplineExtrudeWidthScale mode)
     return SG::SplineProfileScale::LateralOnly;
 }
 
+// The surface revision of a Scene conform: the ground revision with the digest of the meshes under the run.
+uint64 WithSceneDigest(uint64 sceneDigest, uint64 groundRevision)
+{
+    return Hashing::Fnv1a64(&sceneDigest, sizeof(sceneDigest), groundRevision);
+}
+
 } // namespace
 
 SplineExtrudeController::Candidate SplineExtrudeController::MakeCandidate(ECS::World& world, ECS::EntityHandle entity,
@@ -198,7 +206,7 @@ SplineExtrudeController::Candidate SplineExtrudeController::MakeCandidate(ECS::W
     candidate.RetiredProfile = CarriesRetiredWallProfile(world, entity);
     candidate.SplineDataIndex = spline.SplineDataIndex;
     candidate.SplineDataGeneration = spline.SplineDataGeneration;
-    candidate.WorldMatrix = Mathematics::Matrix4x4::FromColumnMajor(transform.matrix);
+    candidate.WorldMatrix = transform.ToMatrix4x4(transform.GetPosition() - Mathematics::WorldPosition{});
     return candidate;
 }
 
@@ -213,14 +221,9 @@ void SplineExtrudeController::Update(ECS::World& world,
     if (!splineService)
         return;
 
-    // A world reset destroys every generated chunk with no per-entity Removed
-    // event and restarts entity versions, so the cached handles now alias
-    // unrelated entities — the retire sweep below would destroy those. The
-    // scene-swap sites release this controller beforehand, but World::Clear is
-    // also reached through World::DeserializeWorld (play-mode exit, undo
-    // snapshot restore), which no swap-site hook can cover. Drop the
-    // bookkeeping here, before the query, so state rebuilt for the new world is
-    // untouched.
+    // A world reset removes every generated chunk and sends no Removed event: no snapshot or scene file
+    // holds a GeneratedEntity. A same-run restore keeps every issued version, so each cached handle names
+    // an entity that does not exist. Drop the state here, before the query, and build again.
     const uint64 resetGeneration = world.GetLifecycleResetGeneration();
     if (resetGeneration != m_LastWorldResetGeneration)
     {
@@ -241,17 +244,9 @@ void SplineExtrudeController::Update(ECS::World& world,
 
     bool worldDirty = false;
 
-    // One reading of the ground per frame, shared by every candidate that reads
-    // it: it is a property of the world, not of a spline. A scene where no
-    // extrude recipe reads the ground never scans the terrains for it.
-    //
-    // Same predicate as the observation below — a candidate that fits to banks
-    // without conforming reads the ground too, and skipping the scan for it
-    // would hand it a zero digest to observe.
-    const bool anyReadsSurface =
-        std::any_of(candidates.begin(), candidates.end(),
-                    [](const Candidate& c) { return Components::ReadsSurface(c.Recipe); });
-    const uint64 surfaceRevision = anyReadsSurface ? ConformSurfaceRevision(world, ResolveTerrainModifierSystem()) : 0u;
+    const TerrainECS::TerrainModifierSystem* modifierSystem = ResolveTerrainModifierSystem();
+    // The ground stamp of this frame, read on the first recipe that reads the ground.
+    std::optional<uint64> groundStamp;
     // One request of the scene TLAS per frame, shared by every candidate that conforms to the scene.
     const bool anyConformsToScene =
         std::any_of(candidates.begin(), candidates.end(), [](const Candidate& c)
@@ -288,7 +283,6 @@ void SplineExtrudeController::Update(ECS::World& world,
         // Fitting rings to the banks reads the ground whatever ConformMode says,
         // so this recipe's ground-reader predicate is ReadsSurface, not "conforms".
         const bool readsSurface = Components::ReadsSurface(candidate.Recipe);
-        current.SurfaceRevision = ObservedSurfaceRevision(readsSurface, surfaceRevision);
         if (const std::vector<PavingRoadTrim>* trims = roadTrims.Find(candidate.Entity.id))
             current.Trims = *trims;
 
@@ -300,20 +294,25 @@ void SplineExtrudeController::Update(ECS::World& world,
             continue;
         }
 
-        // Only the terrains near this run can hold its first build. A Scene conform also reads
-        // the meshes under the run, so they join its surface term.
+        // Only the terrains near this run can hold its first build or move its ground. A Scene
+        // conform also reads the meshes under the run, so they join its surface term.
         const Mathematics::AABB runBounds =
             readsSurface ? RunWorldBounds(*splineService, candidate.SplineDataIndex,
                                           candidate.SplineDataGeneration, candidate.WorldMatrix)
                          : Mathematics::AABB::Empty();
+        if (readsSurface && !groundStamp)
+            groundStamp = ConformSurfaceRevision(world, modifierSystem, UnboundedConformRun());
+        const Mathematics::AABB groundReach = GroundReach(runBounds, ExtrudeGroundReach(candidate.Recipe));
+        current.SurfaceRevision = ObservedSurfaceRevision(
+            readsSurface, readsSurface ? state.Ground.Revision(world, modifierSystem, groundReach, *groundStamp) : 0u);
         const ConformSurfaceReadiness surfaceReadiness =
             readsSurface ? ConformSurfaceState(world, runBounds) : ConformSurfaceReadiness::NoSurface;
-        if (candidate.Recipe.ConformMode != Components::SplinePlacementConform::None &&
-            candidate.Recipe.ConformTarget == Components::SplineConformTarget::Scene)
+        const bool sceneConform = candidate.Recipe.ConformMode != Components::SplinePlacementConform::None &&
+                                  candidate.Recipe.ConformTarget == Components::SplineConformTarget::Scene;
+        if (sceneConform)
         {
             RefreshSceneConformDigest(world, *sceneTlas, runBounds, state.SceneDigest);
-            current.SurfaceRevision = Hashing::Fnv1a64(&state.SceneDigest.Value, sizeof(state.SceneDigest.Value),
-                                                       current.SurfaceRevision);
+            current.SurfaceRevision = WithSceneDigest(state.SceneDigest.Value, current.SurfaceRevision);
         }
         bool releaseWaitingChunks = false;
         if (!state.Models.Bounds.empty())
@@ -364,6 +363,15 @@ void SplineExtrudeController::Update(ECS::World& world,
 
         if (!state.Hold.Held)
         {
+            // The build fetched pages and recorded what it read: the built revision is the ground after the build.
+            if (readsSurface)
+            {
+                groundStamp = ConformSurfaceRevision(world, modifierSystem, UnboundedConformRun());
+                current.SurfaceRevision = ObservedSurfaceRevision(
+                    true, state.Ground.Revision(world, modifierSystem, groundReach, *groundStamp));
+                if (sceneConform)
+                    current.SurfaceRevision = WithSceneDigest(state.SceneDigest.Value, current.SurfaceRevision);
+            }
             state.Gate.MarkBuilt(current);
             state.AppliedTrims = current.Trims;
             state.EmptyReason = state.Chunks.HasChunks() ? std::string_view()
@@ -529,6 +537,7 @@ bool SplineExtrudeController::Rebuild(ECS::World& world,
     if (HoldForPendingBvh(conformMisses, candidate.Entity.id, state.Hold))
         return false;
     ReportConformMisses(conformMisses, candidate.Entity.id, state.LoggedConformMisses);
+    state.Ground.RecordBuild(conformMisses);
 
     const bool lifts = LiftsOffTheGround(world, candidate.Entity, recipe);
     const float32 lift = recipe.VerticalOffset + (lifts ? kGroundSurfaceLiftMeters : 0.0f);

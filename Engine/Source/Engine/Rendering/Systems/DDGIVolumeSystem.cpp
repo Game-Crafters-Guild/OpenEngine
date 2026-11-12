@@ -72,9 +72,8 @@ DDGIVolumeDesc DDGIVolumeSystem::ResolveActiveVolume(ECS::World& world)
     // rotation only: the box stays world-axis-aligned. ComputeVolumeHalfExtents
     // is the ONE derivation, also used by the editor gizmo so the drawn box is
     // the box that reaches the GPU.
-    const Mathematics::Vector3 center = xform.GetPosition();
-    const Mathematics::Vector3 halfExtents =
-        DDGIProbeFeature::ComputeVolumeHalfExtents(Mathematics::Matrix4x4::FromColumnMajor(xform.matrix));
+    const Mathematics::Vector3 center = xform.GetPosition() - Mathematics::WorldPosition{};
+    const Mathematics::Vector3 halfExtents = DDGIProbeFeature::ComputeVolumeHalfExtents(xform.ToMatrix4x4(center));
 
     desc.Enabled = true;
     desc.WorldId = world.GetWorldId();

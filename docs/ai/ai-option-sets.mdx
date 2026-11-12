@@ -1,0 +1,74 @@
+---
+title: AI option sets
+description: How to write a program's options, considerations, and difficulty presets as an .aioptions file, and how game code turns the file into a program.
+---
+
+An **option set** file (`.aioptions`) holds the options of one utility program, their considerations and curves, and the program's difficulty presets. The asset database finds the file, gives it a GUID, and loads it as an `AIECS::AiOptionSetAsset`. When you save the file, the asset loads the new data. A file that does not parse logs one error that names the field and the fix, and the asset keeps the last data that parsed.
+
+The file names tasks and inputs. It does not hold code. Game code registers each task and input with a name (see [AI agents](./ai-agents.mdx)), and `AiRegistry::CompileProgram` changes the names to the registered ids.
+
+## The fields
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `commitmentMargin` | number | 0 | A challenger of the active option's rank must score above the active score plus this value. |
+| `minimumTicks` | whole number | 0 | The AI ticks an active option holds against a challenger of the same rank. |
+| `noiseMargin` | number | 0 | The options within this value of the best score share a seeded draw. At 0, the best score wins. |
+| `cooldownCell` | whole number | none | The first agent cell that holds the tick each option is ready again. Required when an option has `cooldownTicks`. |
+| `entityCells` | list of whole numbers | empty | The agent cells that hold an `ECS::EntityHandle`. A scene save writes these cells as entity references, and a load points them at the loaded entities. A cell is a whole number from 0 to 63, a cell of `AiCellsLarge`: the asset and `CompileProgram` refuse a cell of 64 or more. |
+| `options` | list | empty | The options, in index order. A tie goes to the lower index. |
+| `presets` | list | empty | The difficulty presets. |
+
+An option has these fields:
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `task` | name | required | The registered task that the option runs. |
+| `weight` | number | 1 | The option's score is its weight times the product of its considerations. |
+| `rank` | 0 to 255 | 0 | A higher rank wins over any score of a lower rank. |
+| `cooldownTicks` | whole number | 0 | The AI ticks after the option stops before it can be chosen again. |
+| `considerations` | list | required | The axes of the option. |
+
+A consideration reads the registered input `input`, maps the value from [`min`, `max`] (default 0 and 1) to [0, 1], and puts the result through `curve`. Each input name is one column of the program, in the order the file first names it. A curve has a `preset` (`linear`, `polynomial`, `logistic`, `logit`, or `step`), a `shape` (the exponent or the steepness, default 1), and a `midpoint` (the center or the threshold, default 0.5).
+
+A preset has a `name` and `cadenceTicks`: the AI ticks between two decisions of an agent that uses it (`AiAgent::Cadence`). Each preset name is used once.
+
+## An example
+
+```json
+{
+  "commitmentMargin": 0.1,
+  "minimumTicks": 20,
+  "options": [
+    { "task": "Attack", "weight": 2.0, "rank": 1,
+      "considerations": [ { "input": "Threat", "min": 0, "max": 10,
+                            "curve": { "preset": "logistic", "shape": 8, "midpoint": 0.25 } } ] },
+    { "task": "Gather",
+      "considerations": [ { "input": "IdleWorkers", "max": 5, "curve": { "preset": "linear" } } ] }
+  ],
+  "presets": [
+    { "name": "Easy", "cadenceTicks": 50 },
+    { "name": "Normal", "cadenceTicks": 24 },
+    { "name": "Hard", "cadenceTicks": 13 }
+  ]
+}
+```
+
+## Compile the program and choose a preset
+
+Register the tasks and inputs first. Then load the asset, compile its data, and give each agent the program and the cadence of the preset that the player chose:
+
+```cpp
+#include "AIECS/AiRegistry.h"
+#include "AIECS/Assets/AiOptionSetAsset.h"
+#include "AIECS/Assets/AiOptionSetData.h"
+
+const std::shared_ptr<const AIECS::AiOptionSetData> data = optionSetAsset->GetData();
+const uint16 program = AIECS::AiRegistry::Get().CompileProgram(*data);
+const AIECS::AiDifficultyPreset* preset = data->FindPreset("Normal");
+
+agent.Program = program;
+agent.Cadence = preset ? preset->CadenceTicks : agent.Cadence;
+```
+
+`CompileProgram` returns `AiAgent::kNoProgram` when the file names a task or an input that no module registered. Its error lists the names that are registered. After you edit the file, compile the new data again to get a program with the new values.

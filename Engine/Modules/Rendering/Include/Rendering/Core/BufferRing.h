@@ -135,6 +135,17 @@ public:
         m_RequestedThisFrame.store(0, std::memory_order_relaxed);
     }
 
+    // Continue `source`'s current frame: its cursor and its demand, not its bytes.
+    // The owner copies the bytes on the GPU. This ring must hold `source`'s head,
+    // and `source` must use Allocate only (the atomic head is not carried).
+    void ContinueFrameOf(const BufferRing& source) {
+        assert(m_BasePtr && source.m_Head <= m_Capacity);
+        assert(source.m_AtomicHead.load(std::memory_order_relaxed) == 0);
+        m_Head = source.m_Head;
+        m_AnyAllocThisFrame.store(source.AnyAllocThisFrame(), std::memory_order_relaxed);
+        m_RequestedThisFrame.store(source.GetRequestedThisFrame(), std::memory_order_relaxed);
+    }
+
     struct Allocation { size_t Offset = 0; void* Ptr = nullptr; size_t Size = 0; };
 
     // Single-threaded allocation. Do NOT mix with AllocateAtomic() on the same

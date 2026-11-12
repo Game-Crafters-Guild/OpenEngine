@@ -1,12 +1,10 @@
 #include "SceneView/SceneViewPanel.h"
 #include "SceneView/SceneViewController.h"
 #include "SceneView/SceneViewEvents.h"
+#include "SceneView/SceneViewport/SceneViewport.h"
 #include "UI/UIEvents.h"
 #include "UI/Controls/Label.h"
 #include "UI/Controls/Button.h"
-#include "UI/Controls/Widgets/SceneView/SceneViewMeasureOverlay.h"
-#include "UI/Controls/Widgets/SceneView/SceneViewRulerOverlay.h"
-#include "UI/Controls/Widgets/ViewportRotationGizmo.h"
 #include "UI/EditorIcons.h"
 #include "UI/StyleProperties.h"
 #include "EditorContext.h"
@@ -30,40 +28,9 @@ namespace GameEngine
 {
 namespace
 {
-constexpr StringId kRulerOverlayIds[static_cast<size_t>(SceneViewPanel::ViewportSlot::Count)] = {
-    "SceneViewRulerOverlay"_sid,
-    "SceneViewRulerOverlayTop"_sid,
-    "SceneViewRulerOverlayFront"_sid,
-    "SceneViewRulerOverlaySide"_sid,
-};
-
-constexpr StringId kMeasureOverlayIds[static_cast<size_t>(SceneViewPanel::ViewportSlot::Count)] = {
-    "SceneViewMeasureOverlay"_sid,
-    "SceneViewMeasureOverlayTop"_sid,
-    "SceneViewMeasureOverlayFront"_sid,
-    "SceneViewMeasureOverlaySide"_sid,
-};
-
-// The overlay of type T with `id` that `held` names while it is alive; once it is destroyed
-// (or before the first call), the first T with `id` in `viewport`, else in `panel`, which
-// `held` then names. The per-viewport overlays are refreshed every frame, so this keeps
-// that refresh off the id lookup.
-template <typename T>
-T* HeldViewportOverlay(UIElement::WeakRef<T>& held, UIElement* viewport, UIElement& panel, StringId id)
-{
-    if (T* overlay = held.Get())
-        return overlay;
-    T* overlay = viewport ? dynamic_cast<T*>(viewport->FindById(id)) : nullptr;
-    if (!overlay)
-        overlay = dynamic_cast<T*>(panel.FindById(id));
-    held = UIElement::MakeWeakRef(overlay);
-    return overlay;
-}
-
 constexpr StringId kSharedViewportOverlayIds[] = {
     "SceneToolOverlay"_sid,
     "SceneViewFpsLabel"_sid,
-    "SceneViewHoverHighlightLabel"_sid,
     "SceneAssetPreview"_sid,
 };
 } // namespace
@@ -85,8 +52,7 @@ void SceneViewPanel::SetSceneControllerForSlot(ViewportSlot slot, SceneViewContr
         controller != nullptr && m_Controller != controller)
     {
         const SceneViewCameraPose pose = controller->GetCameraPose();
-        m_Yaw = pose.YawDeg;
-        m_Pitch = pose.PitchDeg;
+        SetYawPitch(pose.YawDeg, pose.PitchDeg);
     }
 
     if (GetQuadViewKind(m_ActiveViewportSlot) == static_cast<QuadViewKind>(index) || !m_Controller)
@@ -97,9 +63,7 @@ void SceneViewPanel::SetSceneControllerForSlot(ViewportSlot slot, SceneViewContr
             m_Toolbar->SetSceneController(m_Controller);
         }
     }
-    RefreshViewportRotationGizmos();
-    RefreshViewportRulerOverlays();
-    RefreshViewportMeasureOverlays();
+    BindViewports();
 }
 
 SceneViewController* SceneViewPanel::GetSceneControllerForSlot(ViewportSlot slot) const
@@ -136,20 +100,14 @@ bool SceneViewPanel::ToggleActiveViewport2DMode()
     {
         m_Controller = controller;
         const SceneViewCameraPose pose = controller->GetCameraPose();
-        m_Yaw = pose.YawDeg;
-        m_Pitch = pose.PitchDeg;
+        SetYawPitch(pose.YawDeg, pose.PitchDeg);
         if (m_Toolbar)
             m_Toolbar->SetSceneController(controller);
     }
 
     controller->Toggle2DMode();
-    RefreshViewportRulerOverlays();
-    RefreshViewportMeasureOverlays();
-    if (m_RulerOverlay)
-    {
-        m_RulerOverlay->SetSceneController(controller);
-        m_RulerOverlay->Tick();
-    }
+    if (SceneViewport* pane = BoundViewport(m_ActiveViewportSlot))
+        pane->TickOverlays();
     if (m_Toolbar)
         m_Toolbar->UpdateView2DButtonState();
 
@@ -174,25 +132,6 @@ SceneViewController* SceneViewPanel::GetSceneControllerForViewport(const UIEleme
     return nullptr;
 }
 
-bool SceneViewPanel::ActivateViewportForController(SceneViewController* controller)
-{
-    if (!controller)
-        return false;
-    for (size_t i = 0; i < m_ViewportSlots.size(); ++i)
-    {
-        const auto slot = static_cast<ViewportSlot>(i);
-        if (GetSceneControllerForSlot(slot) != controller)
-            continue;
-
-        SetHoveredViewportSlot(slot);
-        SetActiveViewportSlot(slot);
-        if (UIElement* viewport = GetViewportElementForSlot(slot))
-            FocusViewport(viewport);
-        return true;
-    }
-    return false;
-}
-
 void SceneViewPanel::SetActiveViewportSlot(ViewportSlot slot)
 {
     const size_t index = static_cast<size_t>(slot);
@@ -206,15 +145,12 @@ void SceneViewPanel::SetActiveViewportSlot(ViewportSlot slot)
     {
         m_Controller = controller;
         const SceneViewCameraPose pose = controller->GetCameraPose();
-        m_Yaw = pose.YawDeg;
-        m_Pitch = pose.PitchDeg;
+        SetYawPitch(pose.YawDeg, pose.PitchDeg);
         if (m_Toolbar)
             m_Toolbar->SetSceneController(controller);
     }
     ApplyQuadViewLayout();
-    RefreshViewportRotationGizmos();
-    RefreshViewportRulerOverlays();
-    RefreshViewportMeasureOverlays();
+    BindViewports();
 }
 
 void SceneViewPanel::SetHoveredViewportSlot(ViewportSlot slot)
@@ -243,10 +179,11 @@ SceneViewPanel::ViewportSlot SceneViewPanel::ResolveSpaceToggleViewportSlot(View
     return fallback;
 }
 
-void SceneViewPanel::BeginViewportSpaceToggle(ViewportSlot fallback, UIEvent& ev)
+void SceneViewPanel::BeginViewportSpaceToggle(ViewportSlot fallback)
 {
     const ViewportSlot slot = ResolveSpaceToggleViewportSlot(fallback);
-    SetActiveViewportSlot(slot);
+    if (!SceneViewport::IsHostDragging(*this, nullptr))
+        SetActiveViewportSlot(slot);
     m_SpaceHeld = true;
 
     if (!m_SpacePressedForQuadToggle)
@@ -254,20 +191,16 @@ void SceneViewPanel::BeginViewportSpaceToggle(ViewportSlot fallback, UIEvent& ev
         m_SpacePressedForQuadToggle = true;
         m_SpacePanDragStarted = false;
     }
-
-    ev.Stop();
 }
 
-void SceneViewPanel::EndViewportSpaceToggle(ViewportSlot fallback, UIEvent& ev)
+void SceneViewPanel::EndViewportSpaceToggle()
 {
-    const ViewportSlot slot = ResolveSpaceToggleViewportSlot(fallback);
-    SetActiveViewportSlot(slot);
-    if (m_SpacePressedForQuadToggle && !m_SpacePanDragStarted)
+    // The release never changes the active pane, and it is no tap while a pane drags.
+    if (m_SpacePressedForQuadToggle && !m_SpacePanDragStarted && !SceneViewport::IsHostDragging(*this, nullptr))
         ToggleQuadView();
     m_SpaceHeld = false;
     m_SpacePressedForQuadToggle = false;
     m_SpacePanDragStarted = false;
-    ev.Stop();
 }
 
 void SceneViewPanel::ToggleQuadView()
@@ -333,7 +266,7 @@ const char* SceneViewPanel::GetViewportSlotMenuLabel(ViewportSlot slot)
     return "Split";
 }
 
-void SceneViewPanel::GetMayaQuadCorner(ViewportSlot slot, bool& leftColumn, bool& topRow)
+void SceneViewPanel::GetQuadCorner(ViewportSlot slot, bool& leftColumn, bool& topRow)
 {
     switch (slot)
     {
@@ -413,14 +346,11 @@ void SceneViewPanel::ApplyQuadViewKind(ViewportSlot slot)
     {
         m_Controller = controller;
         const SceneViewCameraPose pose = controller->GetCameraPose();
-        m_Yaw = pose.YawDeg;
-        m_Pitch = pose.PitchDeg;
+        SetYawPitch(pose.YawDeg, pose.PitchDeg);
         if (m_Toolbar)
             m_Toolbar->SetSceneController(controller);
     }
-    RefreshViewportRotationGizmos();
-    RefreshViewportRulerOverlays();
-    RefreshViewportMeasureOverlays();
+    BindViewports();
 }
 
 void SceneViewPanel::UpdateQuadViewLabel(ViewportSlot slot)
@@ -432,11 +362,13 @@ void SceneViewPanel::UpdateQuadViewLabel(ViewportSlot slot)
         label->SetText(GetQuadViewKindLabel(GetQuadViewKind(slot)));
 }
 
-void SceneViewPanel::NotifyRotationGizmoOrbit(size_t viewportIndex)
+void SceneViewPanel::NotifyRotationGizmoOrbit(SceneViewport& pane)
 {
-    if (viewportIndex >= m_QuadViewKinds.size())
+    const std::optional<ViewportSlot> paneSlot = FindViewportSlot(pane);
+    if (!paneSlot)
         return;
-    const auto slot = static_cast<ViewportSlot>(viewportIndex);
+    const ViewportSlot slot = *paneSlot;
+    const size_t viewportIndex = static_cast<size_t>(slot);
     // Dragging the rotation widget in a free orthographic view must keep
     // its projection. Fixed-axis views retain their explicit escape to 3D.
     if (auto* controller = GetSceneControllerForSlot(slot);
@@ -466,10 +398,12 @@ void SceneViewPanel::NotifyRotationGizmoOrbit(size_t viewportIndex)
     UpdateQuadViewLabel(slot);
 }
 
-void SceneViewPanel::NotifyRotationGizmoAxisSnap(size_t viewportIndex, int axis)
+void SceneViewPanel::NotifyRotationGizmoAxisSnap(SceneViewport& pane, int axis)
 {
-    if (viewportIndex >= m_QuadViewKinds.size())
+    const std::optional<ViewportSlot> paneSlot = FindViewportSlot(pane);
+    if (!paneSlot)
         return;
+    const size_t viewportIndex = static_cast<size_t>(*paneSlot);
 
     QuadViewKind kind = QuadViewKind::Perspective;
     switch (axis)
@@ -514,84 +448,9 @@ UIElement* SceneViewPanel::GetViewportForOverlay() const
     return GetActiveViewportElement();
 }
 
-void SceneViewPanel::RefreshViewportRotationGizmos()
-{
-    static constexpr StringId kRotationGizmoIds[static_cast<size_t>(ViewportSlot::Count)] = {
-        "ViewportRotationGizmo"_sid,
-        "ViewportRotationGizmoTop"_sid,
-        "ViewportRotationGizmoFront"_sid,
-        "ViewportRotationGizmoSide"_sid,
-    };
-
-    for (size_t i = 0; i < m_RotationGizmos.size(); ++i)
-    {
-        const auto slot = static_cast<ViewportSlot>(i);
-        ViewportRotationGizmo* gizmo =
-            HeldViewportOverlay(m_HeldRotationGizmos[i], m_ViewportSlots[i], *this, kRotationGizmoIds[i]);
-        m_RotationGizmos[i] = gizmo;
-        if (!gizmo)
-            continue;
-        gizmo->SetPanel(this);
-        gizmo->SetViewportIndex(i);
-        if (SceneViewController* controller = GetSceneControllerForSlot(slot))
-            gizmo->SetSceneController(controller);
-    }
-
-    const size_t activeIndex = static_cast<size_t>(m_ActiveViewportSlot);
-    m_RotationGizmo = activeIndex < m_RotationGizmos.size() ? m_RotationGizmos[activeIndex] : nullptr;
-}
-
 void SceneViewPanel::RefreshOverlayElementPointers()
 {
     m_FpsLabel = dynamic_cast<Label*>(FindViewportOverlayById("SceneViewFpsLabel"_sid));
-    m_HoverHighlightLabel =
-        dynamic_cast<Label*>(FindViewportOverlayById("SceneViewHoverHighlightLabel"_sid));
-
-    RefreshViewportRotationGizmos();
-    RefreshViewportRulerOverlays();
-    RefreshViewportMeasureOverlays();
-}
-
-void SceneViewPanel::RefreshViewportRulerOverlays()
-{
-    for (size_t i = 0; i < m_RulerOverlays.size(); ++i)
-    {
-        const auto slot = static_cast<ViewportSlot>(i);
-        SceneViewRulerOverlay* overlay =
-            HeldViewportOverlay(m_HeldRulerOverlays[i], m_ViewportSlots[i], *this, kRulerOverlayIds[i]);
-
-        m_RulerOverlays[i] = overlay;
-        if (!overlay)
-            continue;
-
-        overlay->SetPanel(this);
-        overlay->SetSceneController(GetSceneControllerForSlot(slot));
-    }
-
-    const size_t activeIndex = static_cast<size_t>(m_ActiveViewportSlot);
-    m_RulerOverlay = activeIndex < m_RulerOverlays.size() ? m_RulerOverlays[activeIndex] : nullptr;
-}
-
-void SceneViewPanel::RefreshViewportMeasureOverlays()
-{
-    for (size_t i = 0; i < m_MeasureOverlays.size(); ++i)
-    {
-        const auto slot = static_cast<ViewportSlot>(i);
-        SceneViewMeasureOverlay* overlay =
-            HeldViewportOverlay(m_HeldMeasureOverlays[i], m_ViewportSlots[i], *this, kMeasureOverlayIds[i]);
-
-        m_MeasureOverlays[i] = overlay;
-        if (!overlay)
-            continue;
-
-        overlay->SetSceneController(GetSceneControllerForSlot(slot));
-        overlay->SetMeasureToolEnabled(m_MeasureToolEnabled);
-        overlay->SetUnitSystem(m_MeasureUnitSystem);
-        overlay->SetTwoDMode(m_MeasureTwoDMode);
-    }
-
-    const size_t activeIndex = static_cast<size_t>(m_ActiveViewportSlot);
-    m_MeasureOverlay = activeIndex < m_MeasureOverlays.size() ? m_MeasureOverlays[activeIndex] : nullptr;
 }
 
 UIElement* SceneViewPanel::FindViewportOverlayById(StringId id) const
@@ -686,8 +545,8 @@ void SceneViewPanel::SyncViewportOverlays()
         return;
     }
 
-    // Shared editor chrome follows the active pane (Maya: tools apply to the focused view).
-    // Orientation gizmos stay parented to each viewport (Maya: view cube per pane).
+    // Shared editor chrome follows the active pane: the tools apply to the focused view.
+    // Orientation gizmos stay parented to each viewport: one view cube per pane.
     for (StringId id : kSharedViewportOverlayIds)
     {
         UIElement* element = HeldSharedViewportOverlay(id);
@@ -794,7 +653,7 @@ void SceneViewPanel::ApplyQuadViewLayout()
             const auto slot = static_cast<ViewportSlot>(i);
             bool leftColumn = false;
             bool topRow = false;
-            GetMayaQuadCorner(slot, leftColumn, topRow);
+            GetQuadCorner(slot, leftColumn, topRow);
             const float rowSplitX = topRow ? m_QuadSplitTopX : m_QuadSplitBottomX;
             const float leftPct = (leftColumn ? 0.0f : rowSplitX) * 100.0f;
             const float topPct = (topRow ? 0.0f : m_QuadSplitY) * 100.0f;
@@ -909,467 +768,6 @@ void SceneViewPanel::ApplyQuadViewLayout()
     SyncViewportOverlays();
 }
 
-void SceneViewPanel::RegisterAuxViewportEvents(UIElement* viewport, ViewportSlot slot)
-{
-    if (!viewport)
-        return;
-    viewport->RegisterEventHandler(kEventMouseEnter, [this, slot](UIEvent&) {
-        SetHoveredViewportSlot(slot);
-    });
-    viewport->RegisterEventHandler(kEventMouseDown, [this, viewport, slot](UIEvent& ev) {
-        SetHoveredViewportSlot(slot);
-        SetActiveViewportSlot(slot);
-        FocusViewport(viewport);
-        SceneViewController* controller = GetSceneControllerForSlot(slot);
-        if (!controller)
-            return;
-
-        m_Dragging = true;
-        m_DragButton = ev.Button;
-        BeginCameraDragTracking(ev.X, ev.Y);
-        ev.Capture(viewport);
-
-        const bool alt = (ev.Mods & Input::kModAlt) != 0;
-        const bool primaryMod = Input::IsPrimaryShortcutModifier(ev.Mods);
-        const bool fixedControls = controller->UsesFixedViewPanControls();
-        const bool spacePan = (ev.Button == 0 && m_SpaceHeld);
-        if (spacePan)
-            m_SpacePanDragStarted = true;
-        const bool rmbPanFixed = (ev.Button == 1 && fixedControls && !alt);
-        const bool mmbPanFixed = (ev.Button == 2 && fixedControls && !alt);
-
-        m_IsAltOrbiting = (ev.Button == 0 && alt && !primaryMod && !fixedControls);
-        m_IsPanning = (ev.Button == 0 && alt && primaryMod)
-                    || (ev.Button == 0 && alt && !primaryMod && fixedControls)
-                    || spacePan
-                    || rmbPanFixed
-                    || mmbPanFixed;
-        m_IsDollying = (ev.Button == 1 && alt);
-
-        if (ev.Button == 1 && !m_IsDollying && !m_IsPanning)
-        {
-            m_RmbCandidateMenu = true;
-            m_RmbDownX = ev.X;
-            m_RmbDownY = ev.Y;
-        }
-        else
-        {
-            m_RmbCandidateMenu = false;
-        }
-
-        m_LmbDragIsToolMode = (ev.Button == 0 && !m_IsAltOrbiting && !m_IsPanning);
-        if (m_LmbDragIsToolMode && HandleMeasurePointerDown(controller, viewport, slot, ev))
-            return;
-        if (m_LmbDragIsToolMode && m_MeasureToolEnabled)
-        {
-            ev.Stop();
-            return;
-        }
-        if (m_LmbDragIsToolMode)
-        {
-            using namespace Editor::SceneTools;
-            ScenePointerEvent toolEv{};
-            const float localX = ev.X - viewport->GetLayoutX();
-            const float localY = ev.Y - viewport->GetLayoutY();
-            const float viewW = viewport->GetLayoutWidth();
-            const float viewH = viewport->GetLayoutHeight();
-            toolEv.viewX = localX;
-            toolEv.viewY = localY;
-            toolEv.viewW = viewW;
-            toolEv.viewH = viewH;
-            toolEv.ray = controller->MakeGizmoRay(localX, localY, viewW, viewH);
-            controller->PopulatePointerCameraState(toolEv);
-            toolEv.button = PointerButton::Left;
-            toolEv.phase = PointerPhase::Down;
-            Editor::SceneTools::PopulateScenePointerMods(toolEv, ev.Mods);
-            controller->GetToolContext().HandlePointerEvent(toolEv);
-        }
-    });
-    viewport->RegisterEventHandler(kEventMouseUp, [this, viewport, slot](UIEvent& ev) {
-        SetActiveViewportSlot(slot);
-        SceneViewController* controller = GetSceneControllerForSlot(slot);
-        const bool showSceneContextMenu = (ev.Button == 1 && m_RmbCandidateMenu && m_Dragging && m_DragButton == 1);
-
-        if (m_Dragging && ev.Button == m_DragButton)
-        {
-            m_Dragging = false;
-            m_DragButton = -1;
-            m_IsAltOrbiting = false;
-            m_IsPanning = false;
-            m_IsDollying = false;
-            EndCameraDragTracking();
-        }
-
-        if (showSceneContextMenu && m_Window)
-        {
-            if (!m_ContextMenu)
-                m_ContextMenu = CreateContextMenu();
-
-            if (m_ContextMenu)
-            {
-                const uint32_t mask = static_cast<uint32_t>(Editor::EditorContextMenuTarget::SceneView);
-                auto scriptItems = Editor::ScriptMenuRegistry::Get().GetContextItems(mask);
-
-                int scriptEntryCount = 0;
-                for (const auto& si : scriptItems)
-                {
-                    if (si.commandId == 0 || si.path.empty())
-                        continue;
-                    ++scriptEntryCount;
-                }
-                if (scriptEntryCount > 0)
-                {
-                    m_ContextMenu->SetCommandHandler([](uint32_t cmd) {
-                        uint64_t dom = 0;
-                        std::string method;
-                        if (Editor::ScriptMenuRegistry::Get().TryResolveCommand(cmd, dom, method) && !method.empty())
-                        {
-                            try
-                            {
-                                auto& clr = EngineCore::GetInstance().GetScriptManager().GetCLRHost();
-                                int32_t out = 0;
-                                (void)clr.InvokeInDomain(dom, method.c_str(), (uint32_t)method.size(), &out);
-                            }
-                            catch (...)
-                            {
-                            }
-                        }
-                    });
-
-                    m_ContextMenu->Clear();
-                    ContextMenuBuilder builder;
-                    for (const auto& si : scriptItems)
-                    {
-                        if (si.commandId == 0 || si.path.empty())
-                            continue;
-                        builder.AddItem(si.path, si.commandId, MenuItemFlag_None, si.priority,
-                                        EditorIcons::kScript);
-                    }
-                    builder.Build(m_ContextMenu.get());
-                    m_ContextMenu->Show(m_Window, (int)ev.X, (int)ev.Y);
-                    ev.Stop();
-                }
-            }
-        }
-
-        m_RmbCandidateMenu = false;
-
-        if (HandleMeasurePointerUp(controller, viewport, slot, ev))
-            return;
-        if (m_MeasureToolEnabled && ev.Button == 0)
-        {
-            ev.Stop();
-            return;
-        }
-
-        if (ev.Button == 0 && controller)
-        {
-            using namespace Editor::SceneTools;
-            ScenePointerEvent toolEv{};
-            const float localX = ev.X - viewport->GetLayoutX();
-            const float localY = ev.Y - viewport->GetLayoutY();
-            const float viewW = viewport->GetLayoutWidth();
-            const float viewH = viewport->GetLayoutHeight();
-            toolEv.viewX = localX;
-            toolEv.viewY = localY;
-            toolEv.viewW = viewW;
-            toolEv.viewH = viewH;
-            toolEv.ray = controller->MakeGizmoRay(localX, localY, viewW, viewH);
-            controller->PopulatePointerCameraState(toolEv);
-            toolEv.button = PointerButton::Left;
-            toolEv.phase = PointerPhase::Up;
-            Editor::SceneTools::PopulateScenePointerMods(toolEv, ev.Mods);
-            controller->GetToolContext().HandlePointerEvent(toolEv);
-        }
-    });
-    viewport->RegisterEventHandler(kEventMouseMove, [this, viewport, slot](UIEvent& ev) {
-        SetHoveredViewportSlot(slot);
-        if (m_Dragging)
-            SetActiveViewportSlot(slot);
-        SceneViewController* controller = GetSceneControllerForSlot(slot);
-        if (!controller)
-            return;
-
-        m_SceneViewportPointerInside = true;
-        m_SceneViewportPointerLocalX = ev.X - viewport->GetLayoutX();
-        m_SceneViewportPointerLocalY = ev.Y - viewport->GetLayoutY();
-
-        if (m_RmbCandidateMenu && m_Dragging && m_DragButton == 1)
-        {
-            const float dx = ev.X - m_RmbDownX;
-            const float dy = ev.Y - m_RmbDownY;
-            constexpr float kThresholdPx = 4.0f;
-            if ((dx * dx + dy * dy) > (kThresholdPx * kThresholdPx))
-                m_RmbCandidateMenu = false;
-        }
-
-        if (m_Dragging && !m_LmbDragIsToolMode)
-        {
-            const bool alt = (ev.Mods & Input::kModAlt) != 0;
-            const bool primaryMod = Input::IsPrimaryShortcutModifier(ev.Mods);
-
-            if (m_DragButton == 0)
-            {
-                const bool fixedControls = controller->UsesFixedViewPanControls();
-                m_IsAltOrbiting = alt && !primaryMod && !fixedControls;
-                m_IsPanning = (alt && primaryMod)
-                            || (alt && !primaryMod && fixedControls)
-                            || m_SpaceHeld;
-            }
-            else if (m_DragButton == 1)
-            {
-                const bool fixedControls = controller->UsesFixedViewPanControls();
-                m_IsDollying = alt;
-                m_IsPanning = !alt && fixedControls;
-            }
-            else if (m_DragButton == 2)
-            {
-                m_IsAltOrbiting = false;
-                m_IsPanning = controller->UsesFixedViewPanControls() && !alt;
-            }
-        }
-
-        const float localX = ev.X - viewport->GetLayoutX();
-        const float localY = ev.Y - viewport->GetLayoutY();
-        const float viewW = viewport->GetLayoutWidth();
-        const float viewH = viewport->GetLayoutHeight();
-        const size_t slotIndex = static_cast<size_t>(slot);
-        if (slotIndex < m_RulerOverlays.size())
-        {
-            if (SceneViewRulerOverlay* ruler = m_RulerOverlays[slotIndex])
-                ruler->SetCursor(localX, localY, true);
-        }
-
-        if (HandleMeasurePointerMove(controller, viewport, slot, ev))
-            return;
-
-        if (ApplyImmediatePan(controller, viewport, ev))
-            return;
-        if (m_MeasureToolEnabled)
-            return;
-
-        if (!m_Dragging)
-        {
-            using namespace Editor::SceneTools;
-            ScenePointerEvent hoverEv{};
-            hoverEv.viewX = localX;
-            hoverEv.viewY = localY;
-            hoverEv.viewW = viewW;
-            hoverEv.viewH = viewH;
-            hoverEv.ray = controller->MakeGizmoRay(localX, localY, viewW, viewH);
-            controller->PopulatePointerCameraState(hoverEv);
-            hoverEv.button = PointerButton::None;
-            hoverEv.phase = PointerPhase::Move;
-            Editor::SceneTools::PopulateScenePointerMods(hoverEv, ev.Mods);
-
-            controller->HandleHoverDetection(hoverEv);
-            controller->GetToolContext().HandlePointerEvent(hoverEv);
-        }
-
-        if (!m_Dragging || m_DragButton != 0)
-            return;
-
-        using namespace Editor::SceneTools;
-        ScenePointerEvent toolEv{};
-        toolEv.viewX = localX;
-        toolEv.viewY = localY;
-        toolEv.viewW = viewW;
-        toolEv.viewH = viewH;
-        toolEv.ray = controller->MakeGizmoRay(localX, localY, viewW, viewH);
-        controller->PopulatePointerCameraState(toolEv);
-        toolEv.button = PointerButton::Left;
-        toolEv.phase = PointerPhase::Move;
-        Editor::SceneTools::PopulateScenePointerMods(toolEv, ev.Mods);
-
-        GE_CPU_PROFILE_SCOPE("SceneViewPanel.QuadDragMouseMove");
-        controller->GetToolContext().HandlePointerEvent(toolEv);
-    });
-    viewport->RegisterEventHandler(kEventMouseLeave, [this, slot](UIEvent&) {
-        if (m_HasHoveredViewportSlot && m_HoveredViewportSlot == slot)
-            m_HasHoveredViewportSlot = false;
-        if (slot == m_ActiveViewportSlot)
-            m_SceneViewportPointerInside = false;
-        const size_t slotIndex = static_cast<size_t>(slot);
-        if (slotIndex < m_RulerOverlays.size())
-        {
-            if (SceneViewRulerOverlay* ruler = m_RulerOverlays[slotIndex])
-                ruler->SetCursor(0.0f, 0.0f, false);
-        }
-        if (m_MeasureDragActive && m_MeasureDragSlot == slot)
-        {
-            if (slotIndex < m_MeasureOverlays.size())
-            {
-                if (SceneViewMeasureOverlay* measure = m_MeasureOverlays[slotIndex])
-                    measure->EndMeasure();
-            }
-            m_MeasureDragActive = false;
-        }
-    });
-    viewport->RegisterEventHandler(kEventKeyDown, [this, slot](UIEvent& ev) {
-        if (Editor::MatchesCatalogShortcut("Scene View", "Pan Hold (2D)", ev.Key, ev.Mods))
-        {
-            BeginViewportSpaceToggle(slot, ev);
-            ev.Stop();
-        }
-    });
-    viewport->RegisterEventHandler(kEventKeyUp, [this, slot](UIEvent& ev) {
-        if (Editor::MatchesCatalogShortcutKeyOnly("Scene View", "Pan Hold (2D)", ev.Key))
-        {
-            EndViewportSpaceToggle(slot, ev);
-            return;
-        }
-
-        SetActiveViewportSlot(slot);
-        SceneViewController* controller = GetSceneControllerForSlot(slot);
-        if (!controller)
-            return;
-
-        using namespace Editor::SceneTools;
-        SceneKeyEvent keyEv{};
-        keyEv.keyCode = static_cast<std::uint32_t>(ev.Key);
-        keyEv.pressed = false;
-        keyEv.alt = (ev.Mods & Input::kModAlt) != 0;
-        keyEv.ctrl = (ev.Mods & Input::kModControl) != 0;
-        keyEv.shift = (ev.Mods & Input::kModShift) != 0;
-        controller->GetToolContext().HandleKeyEvent(keyEv);
-    });
-    viewport->RegisterEventHandler(kEventScroll, [this, viewport, slot](UIEvent& ev) {
-        SetActiveViewportSlot(slot);
-        SceneViewController* controller = GetSceneControllerForSlot(slot);
-        if (!controller)
-            return;
-
-        const float dy = ev.ScrollY;
-        if (dy == 0.0f)
-            return;
-
-        const bool ctrlOrCmd = (ev.Mods & Input::kModControl) != 0 || (ev.Mods & Input::kModSuper) != 0;
-        const float localX = ev.X - viewport->GetLayoutX();
-        const float localY = ev.Y - viewport->GetLayoutY();
-        const float viewW = viewport->GetLayoutWidth();
-        const float viewH = viewport->GetLayoutHeight();
-
-        if (ctrlOrCmd)
-        {
-            const int direction = (dy > 0.0f) ? 1 : -1;
-            controller->CycleEntityUnderCursor(localX, localY, viewW, viewH, direction);
-            ev.Stop();
-            return;
-        }
-
-        if (!Editor::SceneViewSettings::Get().GetScrollWheelDollyEnabled())
-            return;
-
-        if (controller->Is2DMode() && Editor::SceneViewSettings::Get().GetPixelPerfect2D())
-        {
-            int step = (dy > 0.0f) ? 1 : -1;
-            if (Editor::SceneViewSettings::Get().GetScrollWheelDollyReversed())
-                step = -step;
-            controller->ZoomPixelPerfectAtCursor(step, localX, localY, viewW, viewH);
-            ev.Stop();
-            return;
-        }
-
-        if (controller->IsOrthographic() && !controller->Is2DMode())
-        {
-            int step = dy > 0.0f ? 1 : -1;
-            if (Editor::SceneViewSettings::Get().GetScrollWheelDollyReversed()) step = -step;
-            controller->ZoomOrthographicStep(step);
-            ev.Stop();
-            return;
-        }
-
-        float deltaY = -dy * 0.25f;
-        if (Editor::SceneViewSettings::Get().GetScrollWheelDollyReversed())
-            deltaY = -deltaY;
-        if (controller->Is2DMode())
-            deltaY = -deltaY;
-        controller->UpdateDolly(deltaY);
-        ev.Stop();
-    });
-    viewport->RegisterEventHandler(kEventKeyDown, [this, slot](UIEvent& ev) {
-        SetActiveViewportSlot(slot);
-        SceneViewController* controller = GetSceneControllerForSlot(slot);
-        if (!controller)
-            return;
-
-        if (HandleSceneViewCommandShortcut(controller, ev))
-            return;
-
-        const bool cameraActive = IsLooking() || IsOrbiting() || IsPanning() || IsDollying();
-        if (!cameraActive && ev.Key == Input::kKeyCode_F)
-        {
-            if ((ev.Mods & Input::kModShift) && !(ev.Mods & (Input::kModControl | Input::kModAlt | Input::kModSuper)))
-            {
-                controller->FrameAll();
-                ev.Stop();
-                return;
-            }
-            if (ev.Mods == 0)
-            {
-                controller->FrameOrigin();
-                ev.Stop();
-                return;
-            }
-        }
-
-        if (!cameraActive)
-        {
-            if (m_MeasureToolEnabled &&
-                (Editor::MatchesCatalogShortcut("Transform Tool", "Select Mode", ev.Key, ev.Mods) ||
-                 Editor::MatchesCatalogShortcut("Transform Tool", "Translate Mode", ev.Key, ev.Mods) ||
-                 Editor::MatchesCatalogShortcut("Transform Tool", "Rotate Mode", ev.Key, ev.Mods) ||
-                 Editor::MatchesCatalogShortcut("Transform Tool", "Scale Mode", ev.Key, ev.Mods)))
-            {
-                ev.Stop();
-                return;
-            }
-            if (Editor::MatchesCatalogShortcut("Transform Tool", "Select Mode", ev.Key, ev.Mods))
-            {
-                controller->SetTransformMode(Editor::SceneTools::TransformMode::Select);
-                UpdateToolOverlayModeButtons();
-                ev.Stop();
-                return;
-            }
-            if (Editor::MatchesCatalogShortcut("Transform Tool", "Translate Mode", ev.Key, ev.Mods))
-            {
-                controller->SetTransformMode(Editor::SceneTools::TransformMode::Translate);
-                UpdateToolOverlayModeButtons();
-                ev.Stop();
-                return;
-            }
-            if (Editor::MatchesCatalogShortcut("Transform Tool", "Rotate Mode", ev.Key, ev.Mods))
-            {
-                controller->SetTransformMode(Editor::SceneTools::TransformMode::Rotate);
-                UpdateToolOverlayModeButtons();
-                ev.Stop();
-                return;
-            }
-            if (Editor::MatchesCatalogShortcut("Transform Tool", "Scale Mode", ev.Key, ev.Mods))
-            {
-                controller->SetTransformMode(Editor::SceneTools::TransformMode::Scale);
-                UpdateToolOverlayModeButtons();
-                ev.Stop();
-                return;
-            }
-            if (ev.Mods == 0 && ev.Key == Input::kKeyCode_M)
-            {
-                ToggleMeasureTool();
-                ev.Stop();
-                return;
-            }
-        }
-
-        using namespace Editor::SceneTools;
-        SceneKeyEvent keyEv{};
-        keyEv.keyCode = static_cast<std::uint32_t>(ev.Key);
-        keyEv.pressed = true;
-        keyEv.alt = (ev.Mods & Input::kModAlt) != 0;
-        keyEv.ctrl = (ev.Mods & Input::kModControl) != 0;
-        keyEv.shift = (ev.Mods & Input::kModShift) != 0;
-        controller->GetToolContext().HandleKeyEvent(keyEv);
-    });
-}
 void SceneViewPanel::RegisterQuadSplitHandleEvents()
 {
     if (m_QuadSplitHandleEventsBound)

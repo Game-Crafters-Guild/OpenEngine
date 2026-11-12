@@ -59,7 +59,8 @@ void AddDrawItem(const ItemSource& source, ECS::EntityHandle entity, const Marku
 {
     if (source.Bridge.IsHidden(source.World, entity))
         return;
-    const std::optional<MarkupWorldVolume> volume = MarkupWorldVolumeFromMatrix(shape.Shape, transform.matrix);
+    const std::optional<MarkupWorldVolume> volume = MarkupWorldVolumeFromMatrix(
+        shape.Shape, transform.ToMatrix4x4(transform.GetPosition() - Mathematics::WorldPosition{}));
     if (!volume)
         return;
     MarkupDrawItem& item = source.Items.emplace_back();
@@ -91,7 +92,8 @@ bool SplineShapeMayBeInView(const ItemSource& source, ECS::EntityHandle entity, 
             : nullptr;
     if (!data || data->Points.empty())
         return false;
-    const Mathematics::Matrix4x4 matrix = Mathematics::Matrix4x4::FromColumnMajor(transform.matrix);
+    const Mathematics::Matrix4x4 matrix =
+        transform.ToMatrix4x4(transform.GetPosition() - Mathematics::WorldPosition{});
     Vector3 min = matrix.TransformPoint(data->Points.front().Position);
     Vector3 max = min;
     for (const auto& point : data->Points)

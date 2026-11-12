@@ -23,6 +23,7 @@
 #include "Animation/Skeleton/SkeletonProfile.h"
 #include "ECSModules/Rendering/SkeletonStore.h"
 #include "Logger/Logger.h"
+#include "EngineLogCapture.h"
 
 #include <nlohmann/json.hpp>
 
@@ -245,12 +246,63 @@ TEST_F(HumanoidPostLoadFixture, StaticPropDoesNotGenerateSidecar)
     auto model = LoadModelSync(m_Barrel);
     ASSERT_NE(model, nullptr);
 
-    // A static (non-skinned) model has no skeleton; the coverage gate inside
-    // AutoImportHumanoidRig fails and no sidecar is written. PostLoad
-    // detects the early-out via SkeletonId == 0.
+    // A model with no skinned mesh and no animation is not a humanoid
+    // candidate: PostLoad returns before the heuristic and writes no sidecar.
     const auto sidecar = SidecarFor(m_Barrel);
     EXPECT_FALSE(std::filesystem::exists(sidecar, ec))
         << "Static prop produced an unexpected humanoid sidecar at " << sidecar.string();
+}
+
+// A glTF with one mesh node, no skin and no animation gets a node skeleton from the loader,
+// but it is not a humanoid candidate: the load runs no rig heuristic and writes no sidecar.
+TEST(HumanoidAutoImport, StaticGltfRunsNoRigHeuristic)
+{
+    const auto profile = StagedRoot() / kSkeletonProfile;
+    std::error_code ec;
+    ASSERT_TRUE(std::filesystem::exists(profile, ec)) << "staged profile missing at " << profile.string();
+
+    const auto root = std::filesystem::temp_directory_path() / ("GE_StaticGltf_" + GUID::Generate().ToString());
+    std::filesystem::create_directories(root);
+    const auto model = root / "Corner_Exterior_Wood.gltf";
+    std::ofstream(model) << R"({"asset": {"version": "2.0"},
+  "scene": 0, "scenes": [{"nodes": [0]}], "nodes": [{"name": "Corner_Exterior_Wood", "mesh": 0}],
+  "meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}],
+  "accessors": [{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0, 0, 0], "max": [1, 1, 1]}],
+  "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": 36}],
+  "buffers": [{"byteLength": 36, "uri": "data:application/octet-stream;base64,AACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/"}]})";
+
+    std::vector<std::string> lines;
+    {
+        AssetManager assets;
+        ASSERT_TRUE(assets.Initialize());
+        AssetSourceDesc projectSrc;
+        projectSrc.Alias = std::string(kAssetSourceAliasProject);
+        projectSrc.Root = root;
+        projectSrc.DerivedIdentity = true;
+        projectSrc.Priority = 100;
+        ASSERT_TRUE(assets.RegisterSource(projectSrc));
+        AssetSourceDesc editorSrc;
+        editorSrc.Alias = std::string(kAssetSourceAliasEditor);
+        editorSrc.Root = StagedRoot() / "Assets";
+        editorSrc.DerivedIdentity = true;
+        editorSrc.Priority = 50;
+        ASSERT_TRUE(assets.RegisterSource(editorSrc));
+
+        TestLog::ScopedEngineLogCapture capture(&lines, Logger::LogLevel::Warning);
+        Logger::Log::Warning("capture live");
+        const GUID guid = assets.ResolveAssetGuid(model);
+        ASSERT_FALSE(guid.IsNull());
+        const auto loaded = std::dynamic_pointer_cast<ModelAsset>(assets.LoadAssetAsync(guid).get());
+        ASSERT_NE(loaded, nullptr);
+        EXPECT_EQ(loaded->GetState(), AssetState::Loaded);
+        EXPECT_NE(loaded->GetSkeletonId(), 0u) << "the loader gave the static model no node skeleton";
+        Logger::Log::Flush();
+        assets.Shutdown();
+    }
+    EXPECT_EQ(TestLog::CountLinesContaining(lines, "capture live"), 1u) << "the log capture saw nothing";
+    EXPECT_EQ(TestLog::CountLinesContaining(lines, "AutoImportHumanoidRig"), 0u);
+    EXPECT_FALSE(std::filesystem::exists(SidecarFor(model), ec));
+    std::filesystem::remove_all(root, ec);
 }
 
 // A four-legged creature from the optional Assets/Models/FBXTest/ payload; empty when absent.

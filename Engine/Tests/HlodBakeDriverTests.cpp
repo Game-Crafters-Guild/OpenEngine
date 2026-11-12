@@ -68,9 +68,7 @@ struct ModelBank {
 
 WorldTransform WorldAt(float x, float y, float z) {
     WorldTransform wt{};
-    wt.matrix[12] = x;
-    wt.matrix[13] = y;
-    wt.matrix[14] = z;
+    wt.Position = Mathematics::WorldPosition{x, y, z};
     return wt;
 }
 

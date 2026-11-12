@@ -16,6 +16,7 @@
 #include <cstdlib> // getenv/atoi for configurable async delay
 #include <cstring> // strlen for UCO name lengths
 
+#include "Core/ApplicationPaths.h"
 #include "Scripting/PathResolver.h"
 
 #include "Scripting/ScriptingABI.h"
@@ -50,9 +51,9 @@ static void Host_DebugWrite(const char* msg)
 {
     try
     {
-        auto p = std::filesystem::current_path() / "coreclrhost-debug.txt";
-        std::ofstream ofs(p, std::ios::app | std::ios::out);
-        ofs << msg << "\n";
+        const std::filesystem::path tracePath = GameEngine::ApplicationPaths::GetExecutableDirectory() / "coreclrhost-debug.txt";
+        std::ofstream traceFile(tracePath, std::ios::app | std::ios::out);
+        traceFile << msg << "\n";
     }
     catch (...)
     {
@@ -72,23 +73,11 @@ static std::atomic<int32_t> g_dbgUnloadDomainCount{0};
 #if defined(NETHOST_AVAILABLE)
 static std::filesystem::path ResolveCoreBridgePath(const std::filesystem::path& preferred)
 {
-    // Hardened resolver: try preferred via centralized resolver, then default resolver, then CWD
-    namespace SP = GameEngine::ScriptingPaths;
-    std::filesystem::path p = SP::ResolveCoreBridgeDll(preferred);
-    if (!p.empty() && std::filesystem::exists(p))
-        return p;
-
-    // Fallback: try without preferred (default probes)
-    p = SP::ResolveCoreBridgeDll();
-    if (!p.empty() && std::filesystem::exists(p))
-        return p;
-
-    // Final fallback: current working directory
-    std::filesystem::path cwdCand = std::filesystem::current_path() / "GameEngine.CoreBridge.dll";
-    if (std::filesystem::exists(cwdCand))
-        return cwdCand;
-
-    return p; // may be empty
+    // The engine managed directory first, then the host's preferred path. Empty when neither exists.
+    const std::filesystem::path bridgePath = GameEngine::ScriptingPaths::ResolveCoreBridgeDll(preferred);
+    if (bridgePath.empty() || !std::filesystem::exists(bridgePath))
+        return {};
+    return bridgePath;
 }
 
 namespace

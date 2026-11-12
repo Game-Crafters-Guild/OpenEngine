@@ -112,8 +112,10 @@ inline float EvaluateCurveKeys(const CurveKey* keys, uint32_t count, float t)
             const float u3 = u2 * u;
             const float m0 = ResolveKeySlope(keys, count, i - 1, false) * span;
             const float m1 = ResolveKeySlope(keys, count, i, true) * span;
-            return (2.0f * u3 - 3.0f * u2 + 1.0f) * a.Value + (u3 - 2.0f * u2 + u) * m0 +
-                   (-2.0f * u3 + 3.0f * u2) * b.Value + (u3 - u2) * m1;
+            const float h00 = MulAdd(2.0f, u3, -(3.0f * u2)) + 1.0f;
+            const float h10 = MulAdd(-2.0f, u2, u3) + u;
+            const float h01 = MulAdd(-2.0f, u3, 3.0f * u2);
+            return MulAdd(u3 - u2, m1, MulAdd(h01, b.Value, MulAdd(h00, a.Value, h10 * m0)));
         }
         case CurveInterp::Linear:
         default:

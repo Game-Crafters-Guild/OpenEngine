@@ -442,10 +442,9 @@ void TransformSchema::Serialize(const ECS::World& world, ECS::EntityHandle entit
     const auto* t = world.GetComponent<Components::Transform>(entity);
     if (!t)
         return;
-    const auto pos = t->GetPosition();
     const auto rot = t->GetRotation();
     const auto scl = t->GetScale();
-    outLines.push_back(std::string("Transform.position = ") + FormatFloat3(pos.x, pos.y, pos.z));
+    outLines.push_back(std::string("Transform.position = ") + FormatWorldPosition(t->Position));
     const auto& rq = rot.GetGLM();
     outLines.push_back(std::string("Transform.rotation = ") + FormatFloat4(rq.x, rq.y, rq.z, rq.w));
     outLines.push_back(std::string("Transform.scale = ") + FormatFloat3(scl.x, scl.y, scl.z));
@@ -454,7 +453,7 @@ void TransformSchema::Serialize(const ECS::World& world, ECS::EntityHandle entit
 // A Transform block's authored values; the component itself stores only the composed matrix.
 struct TransformFields
 {
-    Float3 Position{0, 0, 0};
+    Mathematics::WorldPosition Position;
     Float4 Rotation{0, 0, 0, 1};
     Float3 Scale{1, 1, 1};
 };
@@ -465,10 +464,9 @@ static TransformFields ReadTransformFields(const ECS::World& world, ECS::EntityH
     TransformFields fields;
     if (const auto* t = world.GetComponent<Components::Transform>(entity))
     {
-        const auto p = t->GetPosition();
         const auto r = t->GetRotation().GetGLM();
         const auto s = t->GetScale();
-        fields.Position = {p.x, p.y, p.z};
+        fields.Position = t->Position;
         fields.Rotation = {r.x, r.y, r.z, r.w};
         fields.Scale = {s.x, s.y, s.z};
     }
@@ -480,7 +478,7 @@ static bool ParseTransformField(const SceneReadContext& ctx, TransformFields& fi
 {
     if (property == "position")
     {
-        if (ParseFloat3(value, fields.Position))
+        if (ParseWorldPosition(value, fields.Position))
             return true;
         if (outError)
             *outError = "Transform.position must be (x, y, z)";
@@ -508,7 +506,7 @@ static bool ParseTransformField(const SceneReadContext& ctx, TransformFields& fi
 static void WriteTransformFields(ECS::World& world, ECS::EntityHandle entity, const TransformFields& fields)
 {
     const Components::Transform xf = Components::Transform::FromTRS(
-        Mathematics::Vector3{fields.Position.X, fields.Position.Y, fields.Position.Z},
+        fields.Position,
         Mathematics::Quaternion{fields.Rotation.W, fields.Rotation.X, fields.Rotation.Y, fields.Rotation.Z},
         Mathematics::Vector3{fields.Scale.X, fields.Scale.Y, fields.Scale.Z});
     world.AddComponentImmediate(entity, xf);
@@ -557,7 +555,7 @@ bool TransformSchema::AddDefault(ECS::World& world, ECS::EntityHandle entity, st
     if (world.GetComponent<Components::Transform>(entity))
         return true;
     const Components::Transform xf = Components::Transform::FromTRS(
-        Mathematics::Vector3{0, 0, 0},
+        Mathematics::WorldPosition{},
         Mathematics::Quaternion{},
         Mathematics::Vector3{1, 1, 1});
     world.AddComponentImmediate(entity, xf);
@@ -966,8 +964,8 @@ bool MeshRendererSchema::ApplyProperty(ECS::World& world,
             }
             mr.modelAssetGuid.Set(ref.guid);
         }
-        // The GPU handle is resolved after the scene load: RuntimeHost::OpenScene
-        // hands the world to SceneResolveService, which binds it over frames.
+        // The GPU handle is resolved after the scene load: the SceneLoader hands
+        // the world to SceneResolveService, which binds it over frames.
     }
     else if (property == "material")
     {
@@ -4065,6 +4063,7 @@ class CameraSchema final : public ISceneComponentSchema
         outLines.push_back(std::string("Camera.pixelPerfectReferenceHeight = ") + std::to_string(c->PixelPerfectReferenceHeight));
         outLines.push_back(std::string("Camera.pixelPerfectPixelSnap = ") + (c->PixelPerfectPixelSnap ? "true" : "false"));
         outLines.push_back(std::string("Camera.pixelPerfectExpand = ") + (c->PixelPerfectExpand ? "true" : "false"));
+        outLines.push_back(std::string("Camera.worldDrawingPaused = ") + (c->WorldDrawingPaused ? "true" : "false"));
         outLines.push_back(std::string("Camera.exposureControl = ") + std::to_string(static_cast<int>(c->ExposureControl)));
         outLines.push_back(std::string("Camera.exposure = ") + FormatFloat(c->Exposure));
         outLines.push_back(std::string("Camera.manualExposureEV = ") + FormatFloat(c->ManualExposureEV));
@@ -4198,6 +4197,11 @@ class CameraSchema final : public ISceneComponentSchema
         else if (property == "pixelperfectexpand")
         {
             if (!ParseBool(value, c.PixelPerfectExpand, outError))
+                return false;
+        }
+        else if (property == "worlddrawingpaused")
+        {
+            if (!ParseBool(value, c.WorldDrawingPaused, outError))
                 return false;
         }
         else if (property == "exposurecontrol")

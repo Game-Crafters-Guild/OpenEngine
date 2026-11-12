@@ -13,15 +13,29 @@ namespace GameEngine.Scripting
 {
     public enum TerrainBaseSource : byte
     {
-        ProceduralNoise = 0,
         HeightmapAsset = 1,
         Flat = 2,
+        Function = 3,
     }
 
     public enum TerrainDomain : uint
     {
         Planar = 0,
         Spherical = 1,
+    }
+
+    public enum TerrainAtmosphereMode : uint
+    {
+        Auto = 0,
+        ShareOfRadius = 1,
+        HeightMeters = 2,
+    }
+
+    public enum TerrainBehindCameraDetail : uint
+    {
+        AlwaysKeep = 0,
+        ReleaseWhenNeeded = 1,
+        AlwaysRelease = 2,
     }
 
     public enum TerrainDebugView : uint
@@ -31,7 +45,7 @@ namespace GameEngine.Scripting
         AtlasSlots = 2,
     }
 
-    [StructLayout(LayoutKind.Explicit, Size = 236)]
+    [StructLayout(LayoutKind.Explicit, Size = 328)]
     [BuiltInComponent("GameEngine::Components::Terrain")]
     public partial struct Terrain : IComponent
     {
@@ -54,27 +68,44 @@ namespace GameEngine.Scripting
         public TerrainBaseSource BaseSource
         {
             readonly get => m_BaseSource;
-            set => m_BaseSource = (byte)value <= 2
+            set => m_BaseSource = value is TerrainBaseSource.HeightmapAsset or TerrainBaseSource.Flat or TerrainBaseSource.Function
                 ? value
-                : throw new ArgumentOutOfRangeException(nameof(value), value, "Terrain.BaseSource is ProceduralNoise, HeightmapAsset or Flat.");
+                : throw new ArgumentOutOfRangeException(nameof(value), value, "Terrain.BaseSource is HeightmapAsset, Flat or Function.");
         }
 
-        [FieldOffset(24)]
+        [InlineArray(64)]
+        private struct HeightFunctionArray
+        {
+            private byte m_Element;
+        }
+
+        [FieldOffset(21)]
+        private HeightFunctionArray m_HeightFunction;
+        public string HeightFunction
+        {
+            readonly get => ComponentText.Read(m_HeightFunction);
+            set => ComponentText.Write(m_HeightFunction, value, "Terrain.HeightFunction");
+        }
+
+        [FieldOffset(88)]
+        public ulong BaseSeed;
+
+        [FieldOffset(96)]
         public float SizeX;
 
-        [FieldOffset(28)]
+        [FieldOffset(100)]
         public float SizeZ;
 
-        [FieldOffset(32)]
+        [FieldOffset(104)]
         public float HeightScale;
 
-        [FieldOffset(36)]
+        [FieldOffset(108)]
         public float SamplesPerMeter;
 
-        [FieldOffset(40)]
+        [FieldOffset(112)]
         public float StreamingRadius;
 
-        [FieldOffset(44)]
+        [FieldOffset(116)]
         private TerrainDomain m_Domain;
         public TerrainDomain Domain
         {
@@ -84,22 +115,48 @@ namespace GameEngine.Scripting
                 : throw new ArgumentOutOfRangeException(nameof(value), value, "Terrain.Domain is Planar or Spherical.");
         }
 
-        [FieldOffset(48)]
+        [FieldOffset(120)]
         public float PlanetRadius;
 
-        [FieldOffset(52)]
-        public AssetGuid SphereSculptGuid;
+        [FieldOffset(124)]
+        private TerrainAtmosphereMode m_AtmosphereMode;
+        public TerrainAtmosphereMode AtmosphereMode
+        {
+            readonly get => m_AtmosphereMode;
+            set => m_AtmosphereMode = (uint)value <= 2u
+                ? value
+                : throw new ArgumentOutOfRangeException(nameof(value), value, "Terrain.AtmosphereMode is Auto, ShareOfRadius or HeightMeters.");
+        }
 
-        [FieldOffset(68)]
+        [FieldOffset(128)]
+        public float AtmosphereShare;
+
+        [FieldOffset(132)]
+        public float AtmosphereHeight;
+
+        [FieldOffset(136)]
+        public AssetGuid HeightLayerGuid;
+
+        [FieldOffset(152)]
         public float SeaLevel;
 
-        [FieldOffset(72)]
+        [FieldOffset(156)]
         public float TargetPixelError;
 
-        [FieldOffset(76)]
+        [FieldOffset(160)]
+        private TerrainBehindCameraDetail m_BehindCameraDetail;
+        public TerrainBehindCameraDetail BehindCameraDetail
+        {
+            readonly get => m_BehindCameraDetail;
+            set => m_BehindCameraDetail = (uint)value <= 2u
+                ? value
+                : throw new ArgumentOutOfRangeException(nameof(value), value, "Terrain.BehindCameraDetail is AlwaysKeep, ReleaseWhenNeeded or AlwaysRelease.");
+        }
+
+        [FieldOffset(164)]
         public uint MaxDepthOverride;
 
-        [FieldOffset(80)]
+        [FieldOffset(168)]
         private TerrainDebugView m_DebugView;
         public TerrainDebugView DebugView
         {
@@ -109,28 +166,28 @@ namespace GameEngine.Scripting
                 : throw new ArgumentOutOfRangeException(nameof(value), value, "Terrain.DebugView is Off, Facets or AtlasSlots.");
         }
 
-        [FieldOffset(84)]
+        [FieldOffset(172)]
         public uint TerrainDataHandle;
 
-        [FieldOffset(88)]
+        [FieldOffset(176)]
         public uint TerrainDataGeneration;
 
-        [FieldOffset(92)]
+        [FieldOffset(180)]
         public uint TiledTerrainHandle;
 
-        [FieldOffset(96)]
+        [FieldOffset(184)]
         public uint TiledTerrainGeneration;
 
-        [FieldOffset(100)]
+        [FieldOffset(188)]
         public uint DrawOrderFrame;
 
-        [FieldOffset(104)]
+        [FieldOffset(192)]
         public AssetGuid BakeOriginScene;
 
-        [FieldOffset(120)]
+        [FieldOffset(208)]
         public float MaterialTiling;
 
-        [FieldOffset(124)]
+        [FieldOffset(212)]
         public AssetGuid MaterialLibraryGuid;
 
         [InlineArray(4)]
@@ -139,7 +196,7 @@ namespace GameEngine.Scripting
             private byte m_Element;
         }
 
-        [FieldOffset(140)]
+        [FieldOffset(228)]
         public LayerRoleSlotArray LayerRoleSlot;
 
         [InlineArray(4)]
@@ -148,7 +205,7 @@ namespace GameEngine.Scripting
             private AssetGuid m_Element;
         }
 
-        [FieldOffset(144)]
+        [FieldOffset(232)]
         public LayerAlbedoTextureArray LayerAlbedoTexture;
 
         [InlineArray(4)]
@@ -157,19 +214,19 @@ namespace GameEngine.Scripting
             private float m_Element;
         }
 
-        [FieldOffset(208)]
+        [FieldOffset(296)]
         public LayerTilingArray LayerTiling;
 
-        [FieldOffset(224)]
+        [FieldOffset(312)]
         public uint LayerHexTiling;
 
-        [FieldOffset(228)]
+        [FieldOffset(316)]
         public RenderLayerMask RenderLayers;
 
-        [FieldOffset(232)]
+        [FieldOffset(320)]
         public bool CastShadows;
 
-        [FieldOffset(233)]
+        [FieldOffset(321)]
         public bool ReceiveShadows;
     }
 }

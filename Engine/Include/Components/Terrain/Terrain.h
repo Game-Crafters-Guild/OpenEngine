@@ -2,6 +2,7 @@
 
 #include "Components/AssetRef.h"
 #include "Rendering/RenderLayerMask.h"
+#include "Rendering/Sky/SkyPlanet.h"
 #include "Types/Types.h"
 
 #include <limits>
@@ -10,16 +11,14 @@
 namespace GameEngine::Components
 {
 
-// Where a terrain's base heights come from before the modifier stack applies
-// (edit-pipeline design §3.1). Deliberately the thin end of the CBT plan's
-// ITerrainSource seam: the CBT arc virtualizes behind this without touching
-// authoring or bake code.
+// Where a terrain's base heights come from before the modifier stack applies. A generated relief is a Flat
+// base plus a Global TerrainModifierVolume with a TerrainNoiseEffect in Generated mode.
 enum class TerrainBaseSource : uint8
 {
-    ProceduralNoise = 0, // default fBM noise fill
     HeightmapAsset = 1,  // sampled from TerrainAssetGuid (16-bit PNG imports as a
                          // Texture asset; .r16/.r32 raw imports as TerrainHeightmap)
-    Flat = 2,            // constant zero height
+    Flat = 2,            // constant zero height, or the Generated noise effect's relief
+    Function = 3,        // a height function a game module registers under HeightFunction (planar only)
 };
 
 // Rendering domain. Planar is the heightmap terrain; Spherical renders a
@@ -31,6 +30,25 @@ enum class TerrainDomain : uint32
 {
     Planar = 0u,
     Spherical = 1u,
+};
+
+// How a planet's atmosphere height is set. Auto derives it from the radius and the relief
+// (TerrainECS::AtmosphereHeightMeters); the other two use the stored value of their unit.
+enum class TerrainAtmosphereMode : uint32
+{
+    Auto = 0u,
+    ShareOfRadius = 1u,
+    HeightMeters = 2u,
+};
+
+// What the terrain keeps of the ground behind the camera (Terrain::BehindCameraDetail). AlwaysKeep holds the view's
+// detail; ReleaseWhenNeeded coarsens it, farthest ground first, to keep the pool under its keep ceiling;
+// AlwaysRelease always coarsens it. Coarse ground behind the camera frees the pool for the view.
+enum class TerrainBehindCameraDetail : uint32
+{
+    AlwaysKeep = 0u,
+    ReleaseWhenNeeded = 1u,
+    AlwaysRelease = 2u,
 };
 
 // CBT surface debug visualization (ledger cleanup). Off leaves shading untouched — planar
@@ -55,6 +73,9 @@ inline constexpr float32 kNoTerrainSeaLevel = std::numeric_limits<float32>::lowe
 // split area expressed as an edge length.
 inline constexpr float32 kDefaultTerrainTargetPixelError = 11.0f;
 
+// Bytes of Terrain::HeightFunction, the terminating zero included.
+inline constexpr uint32 kTerrainHeightFunctionNameCapacity = 64u;
+
 // ECS component for a terrain instance. Placed on an entity alongside Position
 // to spawn a terrain in the world. This is THE single user-facing terrain
 // control component: authoring data (source, size, resolution), the planet
@@ -70,7 +91,11 @@ struct Terrain
     // HeightmapAsset (serialized + dependency-enumerated via TerrainSchema).
     Components::AssetRef<> TerrainAssetGuid;
     uint32 TerrainAssetType = 0;       // AssetType of the reference; 0 = none
-    TerrainBaseSource BaseSource = TerrainBaseSource::ProceduralNoise;
+    TerrainBaseSource BaseSource = TerrainBaseSource::Flat;
+    // The registered height function a Function base evaluates (GE_REGISTER_TERRAIN_HEIGHT_FUNCTION),
+    // zero-terminated, and the seed it is built for. A name no loaded module registers gives a flat base.
+    char HeightFunction[kTerrainHeightFunctionNameCapacity] = {};
+    uint64 BaseSeed = 0;
 
     // ---- Dimensions (world units) ----
     // Note: SizeX and SizeZ should be equal (square terrain) for correct tiling.
@@ -93,13 +118,18 @@ struct Terrain
     // sphere vertex as dir * (radius + height), so the entity's transform does not move it.
     // Grouped under a "Planet" section in the inspector.
     TerrainDomain Domain = TerrainDomain::Planar;
-    float32 PlanetRadius = 2000.0f;           // sphere radius (metres), Spherical only
+    float32 PlanetRadius = 2000.0f;           // sphere radius (meters), Spherical only
+    // The atmosphere height, Spherical only. Read it through TerrainECS::AtmosphereHeightMeters:
+    // AtmosphereMode selects the stored value that applies, and Auto uses neither.
+    TerrainAtmosphereMode AtmosphereMode = TerrainAtmosphereMode::Auto;
+    // The value ShareOfRadius uses: a share of PlanetRadius, above 0 and at most 1. Earth's is 100 km on 6360 km.
+    float32 AtmosphereShare = Rendering::SkyPlanet::kEarthAtmosphereShare;
+    // The value HeightMeters uses: the height above PlanetRadius in meters, above 0; the sky uses at most PlanetRadius.
+    float32 AtmosphereHeight = Rendering::SkyPlanet::kEarthAtmosphereHeightMeters;
 
-    // The planet's saved sphere sculpt payload (.tsculpt sidecar next to the scene, Spherical
-    // only). Null until the first explicit Save mints the file (SphereSculptSaver swaps in the
-    // file-backed GUID, the zones' mint-and-swap contract); CBTUpdateSystem restores it on
-    // load via TerrainService::EnsureSphereSculptLoaded.
-    Components::AssetRef<> SphereSculptGuid;
+    // The planet's authored height layer (a .gepage next to the scene, Spherical only): the
+    // sculpt's pages. The editor's save writes it; the terrain loads it when the planet starts.
+    Components::AssetRef<> HeightLayerGuid;
 
     // ---- Water ----
     // Height (world Y) of the calm water surface this planar terrain sits under, when the water
@@ -116,6 +146,8 @@ struct Terrain
     // does not depend on the display resolution. Lowering it costs triangles (about 1/T^2)
     // without changing the look on smooth ground.
     float32 TargetPixelError = kDefaultTerrainTargetPixelError;
+    // What the terrain keeps of the ground behind the camera (TerrainBehindCameraDetail).
+    TerrainBehindCameraDetail BehindCameraDetail = TerrainBehindCameraDetail::ReleaseWhenNeeded;
     // Refinement depth cap (LEB heap depth). 0 = auto-derive from domain + size /
     // radius, clamped to the fp32-exact ceiling (baseDepth + 23). A non-zero value
     // is an internal/debug override (not shown in the default inspector, not
@@ -133,10 +165,9 @@ struct Terrain
     // [DoNotSerialize] The first extraction frame that visited this terrain, 0 until then. The earliest
     // terrain draws (TerrainECS::DrawOrderKey), so a terrain added later never takes the draw.
     uint32 DrawOrderFrame = 0;
-    // [DoNotSerialize] The scene asset this terrain was loaded from, set by its scene schema
-    // at load. With the entity's SceneEntityTag it names the terrain's one baked-terrain
-    // cache artifact (TerrainBakeCache.h). Null for a terrain no saved scene loaded, which
-    // bakes uncached.
+    // [DoNotSerialize] The scene asset of this terrain, set at load and by the editor's save. With
+    // the SceneEntityTag it identifies the terrain's surface page store. Null for a terrain that
+    // no saved scene holds: that terrain keeps no surface page store.
     GUID BakeOriginScene{};
 
     // ---- Materials ----

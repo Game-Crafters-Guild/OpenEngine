@@ -3,6 +3,10 @@
 #include <gtest/gtest.h>
 
 #include "Components/Animation/ValueCurve.h"
+#include "ECS/ECSTemplates.h"
+#include "ECS/Systems.h"
+#include "ECS/World.h"
+#include "ECSModules/Rendering/Systems/ValueCurveSystem.h"
 
 using namespace GameEngine;
 using namespace GameEngine::Components;
@@ -133,4 +137,25 @@ TEST(ValueCurveEvaluator, DisabledReturnsStartValue)
     curve.StartValue = 7.0f;
     curve.EndValue = 99.0f;
     EXPECT_NEAR(EvaluateValueCurveValue(curve, 0.5f), 7.0f, 1.0e-5f);
+}
+
+// The scheduler hands the curve system a delta of 0 while the world clock is paused, so a
+// playing curve holds its elapsed time.
+TEST(ValueCurveSystem, APausedClockHoldsThePlayingCurve)
+{
+    ECS::World world;
+    const ECS::EntityHandle entity = world.CreateEntity();
+    ValueCurve curve{};
+    curve.Loop = true;
+    world.AddComponentImmediate(entity, curve);
+    ECS::SystemManager systems;
+    systems.AddSystem<Engine::Renderer::ValueCurveSystem>();
+    systems.Update(world, 0.1f);
+    const float32 held = world.GetComponent<ValueCurve>(entity)->ElapsedSeconds;
+    ASSERT_GT(held, 0.0f);
+
+    world.GetSimulationClock().SetTimeScale(0.0);
+    for (int frame = 0; frame < 5; ++frame)
+        systems.Update(world, 0.1f);
+    EXPECT_EQ(world.GetComponent<ValueCurve>(entity)->ElapsedSeconds, held) << "a paused clock holds the curve";
 }

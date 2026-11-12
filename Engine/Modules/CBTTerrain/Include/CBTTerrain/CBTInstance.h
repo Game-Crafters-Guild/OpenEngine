@@ -23,6 +23,17 @@ class CommandList;
 namespace GameEngine::CBTTerrain
 {
 
+struct CBTPoolCensus;
+
+// What the planar area metric keeps of a facet wholly behind the eye (CBTClassifyDesc::BehindEye; the GLSL mirror
+// is CBT_BEHIND_EYE_*). Such a facet refines like its mirror image in view, so it keeps as many leaves as the view.
+enum class BehindEyeRelease : uint32_t
+{
+    AlwaysKeep = 0u,        // no gate: it refines like its mirror image at every keep step
+    ReleaseWhenNeeded = 1u, // the keep band at its distance excess: each keep step releases one octave, farthest first
+    AlwaysRelease = 2u,     // band 0 at every keep step: it splits no more and merges
+};
+
 // Drives the Classify metric. Mode selects between the C4 production metric
 // (kClassifyScreenSpace — projected edge length vs a target pixel error, camera +
 // terrain from CBTFrameParams) and the deterministic depth-band metric
@@ -52,20 +63,12 @@ struct CBTClassifyDesc
     // here, at most one per face, and Classify reclassifies the bisectors of every listed face in the
     // same update. Planar ignores it.
     SphereEditRegions SphereDirty{};
-    // Gates VertexEval's additive sculpt sample on the sphere (1 once any dab has landed).
-    uint32_t SphereSculptEnabled = 0u;
 
     // Quiescence gate for VertexEval (plan §planet-shading perf). 0 (default) evaluates the
     // whole live pool, refreshing screen-space classification inputs before culling after a
     // parameter change. 1 evaluates only the compact MODIFIED stream, so a quiescent frame
     // launches no vertex workgroups. First use always initializes the root geometry.
     uint32_t GateVertexEval = 0u;
-
-    // Edit-driven retessellation A/B (round-8b). 1 (default) = Classify carries the geometric-error
-    // crease term that refines a facet straddling a live sculpt cliff the area metric cannot see;
-    // 0 = the pre-slice area-only metric (the fails-before behavior). CBTUpdateSystem drives it
-    // from GE_CBT_EDIT_RETESS so the fix can be A/B'd — and disabled — on the same build.
-    uint32_t EditRetessEnabled = 1u;
 
     // Near-field force-split occupancy gate A/B (round-8e saturation-deadlock fix). 1 (default) =
     // under pool pressure, stop force-splitting invisible near-plane/behind-eye grazing geometry so
@@ -81,13 +84,17 @@ struct CBTClassifyDesc
     // GE_CBT_POOL_PRESSURE for the same purpose on a live build); it is not a setting.
     uint32_t PoolPressure = 1u;
 
-    // The rest rule. 1 = this update's inputs match the previous update's (the camera is still):
-    // Kernel_Classify's planar split and merge use one threshold, the merge end of the band, so the tree
-    // settles to the one tree the pose asks for, whatever path the camera took (the planar demand is
-    // monotone in depth, cbt_planar_demand.glsl). 0 (default) = splits and merges keep the hysteresis
-    // band that stops a moving camera from churning the boundary. Chosen per recorded update by the
-    // render feature (CBTRenderFeature::InputsHeld); not an input of the rest gate.
+    // The rest rule (CBTLayout.h kSettle*), set per recorded update by CBTRenderFeature::RestSettle. kSettleMoved keeps
+    // the split and merge hysteresis band; kSettleHeld (a still camera) uses one threshold, so the tree settles to the
+    // one tree the pose asks for; kSettleLasted also lets the keep step's rest search step down.
     uint32_t Settle = 0u;
+
+    // 1 = this update counts the pool census (CBTPoolCensus): Kernel_Reset clears it and Kernel_Classify fills it.
+    // 0 (default) = no census atomics; the census keeps the last counted update's numbers. Not an input of the rest gate.
+    uint32_t Census = 0u;
+
+    // What the planar area metric keeps of a facet wholly behind the eye.
+    BehindEyeRelease BehindEye = BehindEyeRelease::ReleaseWhenNeeded;
 
     /// True when a planar rect or any sphere face rect is dirty this frame.
     bool HasDirtyRegion() const
@@ -193,8 +200,8 @@ class CBTInstance
     // (HeapID = 2^baseDepth + i). Planar seeds 2 twin unit-square triangles
     // (baseDepth 1); spherical seeds the 24 cube-sphere pie slices with cross-face
     // twins (baseDepth 5, CBTSphereRoots.h). Copies and reduction share one graphics
-    // submission. A live restart retires the prior graphics token before replacing sculpt-ring
-    // descriptors; the upload retires with its submission. No device-wide drain is needed.
+    // submission. A live restart retires the prior graphics token before replacing the
+    // topology; the upload retires with its submission. No device-wide drain is needed.
     // Unreachable payload records retain their bytes; new live slots are initialized before use.
     bool InitializeRoots(uint32_t domainMode = kDomainPlanar);
 
@@ -293,19 +300,6 @@ class CBTInstance
     }
     void SetPageTable(Rendering::BufferHandle ring, uint32_t firstWord) { m_Resources.SetPageTable(ring, firstWord); }
 
-    // Uploads the sphere sculpt page POOL + page TABLE into this frame's ring slot (planet editing
-    // v2). Call with the SAME frameCounter passed to RecordUpdate; a host-visible write that completes
-    // before submit (like the params UBO). See CBTResources::UploadSphereSculptPool / PageTable.
-    void UploadSphereSculptPool(uint32_t frameCounter, const float* pool, uint32_t texelCount)
-    {
-        m_Resources.UploadSphereSculptPool(frameCounter, pool, texelCount);
-    }
-    void UploadSphereSculptPageTable(uint32_t frameCounter, const uint32_t* table, uint32_t entryCount)
-    {
-        m_Resources.UploadSphereSculptPageTable(frameCounter, table, entryCount);
-    }
-    uint32_t GetSculptPagePoolCount() const { return m_Resources.GetSculptPagePoolCount(); }
-
     // Uploads the planet-shading surface params into this frame's ring slot (the fragment
     // reads them on the graphics side — plan §planet-shading). Same host-visible ring
     // discipline as the params UBO. Call with the SAME frameCounter passed to RecordUpdate.
@@ -372,6 +366,10 @@ class CBTInstance
     // Incremental vertices VertexEval evaluated on the last gated update (kWQVertexEvalCounter).
     // The perf oracle asserts a quiescent gated frame evaluates ~0, not the whole live pool.
     int32_t ReadVertexEvalCount() { return ReadWorkQueueCounter(kWQVertexEvalCounter); }
+
+    // The census of the last update recorded with CBTClassifyDesc::Census (zeros before the first). Debug query
+    // only: a self-contained submit and wait, like ReadTessellationStats.
+    CBTPoolCensus ReadPoolCensus();
 
     // Debug: copy `wordCount` u32 words starting at `firstWord` of `binding` into a private
     // host-visible buffer and return them (self-contained submit + wait, state-restoring).

@@ -1,7 +1,7 @@
 // set_component's render layer values: a JSON list of layer numbers or the scene text, all and none; a
 // raw number is refused with a message that names the forms the field takes.
 
-#include "DebugServer/Components/RenderLayerMaskValue.h"
+#include "DebugServer/Components/FieldValueReaders.h"
 
 #include <gtest/gtest.h>
 

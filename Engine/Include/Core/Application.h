@@ -13,6 +13,7 @@
 
 #include "Core/WindowInputRouter.h"
 #include "Types/Types.h"
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -169,7 +170,9 @@ public:
     bool ShouldExit() const { return m_ShouldExit; }
 
     /**
-     * @brief Request application exit
+     * @brief Request application exit. Safe from any thread.
+     *
+     * The frame in progress completes; the loop stops before the next frame starts.
      */
     void RequestExit() { m_ShouldExit = true; }
 
@@ -180,6 +183,9 @@ public:
      * A host can override this to end its game session without closing the host.
      */
     virtual void RequestGameExit(int exitCode);
+
+    /// The process exit code when the application cannot start (a failed Initialize).
+    static constexpr int kInitializeFailedExitCode = -1;
 
     /**
      * @brief Set process exit code returned by Run()
@@ -316,7 +322,8 @@ private:
 	    ApplicationConfig m_Config;
 	    bool m_Initialized;
 	    bool m_Ticking = false;
-	    bool m_ShouldExit;
+	    // Set from any thread (a debug-port request, a window close); read at the frame boundary.
+	    std::atomic<bool> m_ShouldExit;
     int m_ExitCode = 0;
 	    
 	    // Timing
@@ -355,8 +362,7 @@ private:
 	    // names another: the shared InputSystem and nothing above it.
 	    WindowInputRouterConfig m_ApplicationInputChain;
 
-	    // Reads the gamepads once per frame; its first read (frame 0) skips the
-	    // platform's device enumeration.
+	    // Reads the gamepads once per frame. Null in a headless application.
 	    std::unique_ptr<Input::GamepadPoller> m_GamepadPoller;
 
 	    // Holds the previous poll so the buttons that changed since it become

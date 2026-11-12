@@ -29,7 +29,8 @@
 namespace GameEngine {
 
 namespace {
-constexpr const char* kNewTodoPlaceholder = "New todo item";
+// The add field's hint, and the title the add button gives an entry when the field is empty.
+constexpr const char* kNewTodoTitle = "New todo item";
 }
 
 TodoPanel::TodoPanel()
@@ -126,43 +127,19 @@ void TodoPanel::BuildUI()
     
     auto addField = std::make_unique<TextField>();
     addField->AddClass("todo-add-field");
-    addField->AddClass("todo-add-placeholder");
-    addField->SetValue(kNewTodoPlaceholder);
-    m_AddFieldShowingPlaceholder = true;
+    addField->SetPlaceholder(kNewTodoTitle);
     m_AddField = addField.get();
 
-    addField->RegisterEventHandler(kEventFocusIn, [this](UIEvent&)
-    {
-        if (m_AddField && m_AddFieldShowingPlaceholder)
-        {
-            m_AddField->SetValue("");
-            m_AddField->RemoveClass("todo-add-placeholder");
-            m_AddFieldShowingPlaceholder = false;
-        }
-    });
-
-    addField->RegisterEventHandler(kEventFocusOut, [this](UIEvent&)
-    {
-        if (m_AddField && m_AddField->GetValue().empty())
-        {
-            m_AddField->SetValue(kNewTodoPlaceholder);
-            m_AddField->AddClass("todo-add-placeholder");
-            m_AddFieldShowingPlaceholder = true;
-        }
-    });
-    
     // Handle Enter key to add todo
     addField->RegisterEventHandler(kEventKeyDown, [this](UIEvent& e)
     {
         if ((e.Key == Input::kKeyCode_Enter || e.Key == Input::kKeyCode_NumPadEnter) && m_AddField)
         {
             std::string text = m_AddField->GetValue();
-            if (!m_AddFieldShowingPlaceholder && !text.empty())
+            if (!text.empty())
             {
                 AddTodo(text);
-                m_AddField->SetValue(kNewTodoPlaceholder);
-                m_AddField->AddClass("todo-add-placeholder");
-                m_AddFieldShowingPlaceholder = true;
+                m_AddField->SetValue("");
             }
             e.Stop();
         }
@@ -177,16 +154,10 @@ void TodoPanel::BuildUI()
         if (e.Button == 0 && m_AddField)
         {
             std::string text = m_AddField->GetValue();
-            if (m_AddFieldShowingPlaceholder || text.empty())
-                text = kNewTodoPlaceholder;
-
-            if (!text.empty())
-            {
-                AddTodo(text);
-                m_AddField->SetValue(kNewTodoPlaceholder);
-                m_AddField->AddClass("todo-add-placeholder");
-                m_AddFieldShowingPlaceholder = true;
-            }
+            if (text.empty())
+                text = kNewTodoTitle;
+            AddTodo(text);
+            m_AddField->SetValue("");
             e.Stop();
         }
     });
@@ -490,6 +461,7 @@ void TodoPanel::CreateTodoRow(const TodoItem& todo, UIElement* container, bool i
     
     // Delete button
     auto deleteBtn = std::make_unique<Button>();
+    deleteBtn->AddClass("icon-button");
     deleteBtn->AddClass("todo-delete");
     deleteBtn->SetText("×");
     deleteBtn->RegisterEventHandler(kEventMouseDown, [this, todoId](UIEvent& e)

@@ -16,7 +16,7 @@ constexpr char kMagic[4] = {'G', 'E', 'N', 'V'};
 constexpr size_t kHeaderBytes = 4 + 4 + 8 + 2 + 1 + 2 + 8 + 1 + 8 + 8;
 constexpr size_t kProfileBytes = 4 + 4 * 4 + 1 + 8 + 4 + 8;
 constexpr size_t kAreaBytes = 1 + 8 + 4 + 2;
-constexpr size_t kChartBytes = 4 + 3 * 4 + 3 * 4 + 4 * 4 + 4 + 4 + 8 + 8;
+constexpr size_t kChartBytes = 4 + 3 * 8 + 4 * 4 + 4 + 4 + 8 + 8;
 constexpr size_t kIndexEntryBytes = 4 + 4 + 8 + 4 + 4 + 8;
 
 class Writer
@@ -106,12 +106,9 @@ uint64 MortonOf(const NavSurfaceTile& tile)
 void WriteChartRecord(Writer& writer, const NavMeshChart& chart, uint32 tileCount)
 {
     writer.Put(chart.Id);
-    writer.Put(chart.Origin.SectorX);
-    writer.Put(chart.Origin.SectorY);
-    writer.Put(chart.Origin.SectorZ);
-    writer.Put(chart.Origin.LocalX);
-    writer.Put(chart.Origin.LocalY);
-    writer.Put(chart.Origin.LocalZ);
+    writer.Put(chart.Origin.X);
+    writer.Put(chart.Origin.Y);
+    writer.Put(chart.Origin.Z);
     const auto& rotation = chart.Rotation.GetGLM();
     for (const float32 component : {rotation.x, rotation.y, rotation.z, rotation.w})
         writer.Put(component);
@@ -130,9 +127,8 @@ bool ReadChart(Reader& reader, NavSurfaceChart& chart, uint64& outIndexOffset, u
                uint32& outTileCount)
 {
     NavMeshChart& record = chart.Chart;
-    bool ok = reader.Get(record.Id) && reader.Get(record.Origin.SectorX) && reader.Get(record.Origin.SectorY) &&
-              reader.Get(record.Origin.SectorZ) && reader.Get(record.Origin.LocalX) &&
-              reader.Get(record.Origin.LocalY) && reader.Get(record.Origin.LocalZ);
+    bool ok = reader.Get(record.Id) && reader.Get(record.Origin.X) && reader.Get(record.Origin.Y) &&
+              reader.Get(record.Origin.Z);
     float32 rotation[4] = {};
     for (float32& component : rotation)
         ok = ok && reader.Get(component);

@@ -1,0 +1,30 @@
+#version 450
+// Test-only: SampleGodRayShadow (Ocean/ocean_god_ray_shadow.glsl) for one world position per invocation, the way
+// ocean_underwater.frag calls it. results[i].x is the sun's visibility at the position.
+layout(local_size_x = 1) in;
+
+#define GE_VIEW_PARAMS_BINDING 20
+#include "Includes/view_params.glsl"
+#include "Ocean/ocean_god_ray_shadow.glsl"
+
+struct ProbeSample
+{
+    vec4 positionWS; // xyz = the world position in fp32, as the overlay rebuilds it
+    vec4 viewDepth;  // x = the linear view depth of the position
+};
+
+layout(set = 0, binding = 10, std430) readonly buffer ProbeSamples
+{
+    ProbeSample samples[];
+};
+
+layout(set = 0, binding = 11, std430) writeonly buffer ProbeResults
+{
+    vec4 results[];
+};
+
+void main()
+{
+    uint i = gl_GlobalInvocationID.x;
+    results[i] = vec4(SampleGodRayShadow(samples[i].positionWS.xyz, samples[i].viewDepth.x));
+}

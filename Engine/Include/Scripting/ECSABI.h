@@ -66,7 +66,7 @@ typedef enum GE_ECS_PrimitiveType
     GE_ECS_Primitive_Plane = 3
 } GE_ECS_PrimitiveType;
 
-// Local-space transform matrix (column-major, matching Components::Transform.matrix).
+// Local-space transform matrix (column-major, Components::Transform::ToMatrix4x4 of its position).
 typedef struct GE_ECS_Transform
 {
     float matrix[16];

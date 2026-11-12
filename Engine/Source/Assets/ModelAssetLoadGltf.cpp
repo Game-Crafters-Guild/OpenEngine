@@ -30,6 +30,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <format>
 #include <limits>
 #include <memory>
 #include <new>
@@ -434,27 +435,27 @@ cgltf_result CgltfReadFileShared(const cgltf_memory_options* /*memoryOptions*/,
     try {
         auto& context = *static_cast<GltfBufferReadContext*>(fileOptions->user_data);
         const auto key = ExternalBufferKey(path);
-        const Vector<uint8>* file = nullptr;
+        const ByteBuffer* file = nullptr;
         if (const auto owned = context.Backing.find(key); owned != context.Backing.end()) {
             file = &owned->second;
         } else {
             const auto declared = context.Sizes.find(key);
             if (declared == context.Sizes.end())
                 return cgltf_result_file_not_found;
-            Vector<uint8> storage;
+            ByteBuffer storage;
             file = ReadAssetDecodeInputFile({key, declared->second}, storage);
             if (!file)
                 return cgltf_result_file_not_found;
-            if (file->size() < declared->second)
+            if (file->Size() < declared->second)
                 return cgltf_result_data_too_short;
             if (file == &storage)
                 file = &context.Backing.emplace(key, std::move(storage)).first->second;
         }
-        if (file->size() < *size)
+        if (file->Size() < *size)
             return cgltf_result_data_too_short;
         // The cgltf boundary: a buffer's data is a void*, but neither cgltf nor the loader writes
         // through it.
-        *data = const_cast<uint8*>(file->data());
+        *data = const_cast<uint8*>(file->Data());
         return cgltf_result_success;
     } catch (const std::bad_alloc&) {
         return cgltf_result_out_of_memory;
@@ -476,11 +477,11 @@ GUID FindTrackedGltfImage(const std::filesystem::path& imagePath)
 // decode holds one copy of them; a later image that names the same file copies that image's.
 // `firstImageOfFile` maps each file taken, by its generic path, to the image that took it.
 bool TakeExternalGltfImage(const std::filesystem::path& imagePath, const Vector<EmbeddedImage>& images,
-                           FastHashMap<String, size_t>& firstImageOfFile, Vector<uint8>& bytes)
+                           FastHashMap<String, size_t>& firstImageOfFile, ByteBuffer& bytes)
 {
     String file = imagePath.generic_string();
     if (const auto first = firstImageOfFile.find(file); first != firstImageOfFile.end()) {
-        bytes = images[first->second].Data;
+        bytes = ByteBuffer::CopyOf(images[first->second].Data);
         return true;
     }
     if (!TakeAssetDecodeInputFile({imagePath, std::nullopt}, bytes))
@@ -672,6 +673,21 @@ std::string SkinShortOfInverseBindMatrices(const cgltf_data& document)
         return "skin " + std::to_string(i) + " has " + std::to_string(skin.joints_count) +
                " joints but its inverseBindMatrices accessor holds " +
                std::to_string(skin.inverse_bind_matrices->count) + " matrices";
+    }
+    return {};
+}
+
+// A Transform holds only an affine pose. The first node whose matrix has a bottom row other than
+// 0, 0, 0, 1, described for a refusal; empty when every node matrix is affine.
+std::string NodeMatrixNotAffine(const cgltf_data& document)
+{
+    for (cgltf_size i = 0; i < document.nodes_count; ++i) {
+        const cgltf_node& node = document.nodes[i];
+        const cgltf_float* m = node.matrix;
+        if (!node.has_matrix || (m[3] == 0.0f && m[7] == 0.0f && m[11] == 0.0f && m[15] == 1.0f))
+            continue;
+        return std::format("node {} ('{}') has a matrix whose bottom row is ({}, {}, {}, {}), not (0, 0, 0, 1)", i,
+                           node.name ? node.name : "", m[3], m[7], m[11], m[15]);
     }
     return {};
 }
@@ -1090,12 +1106,12 @@ ModelExtras RetainGltfExtras(const cgltf_data& document, const std::filesystem::
                              path.string(), notKept.FirstNameTaken, AndOfLaterObjects(notKept.NameTakenCount - 1));
     return extras;
 }
-// cgltf's base64 decoder writes into the image's own byte vector: one owned allocation per image.
+// cgltf's base64 decoder writes into the image's own byte buffer: one owned allocation per image.
 void* AllocateIntoImageBytes(void* imageBytes, cgltf_size size)
 {
-    auto& bytes = *static_cast<Vector<uint8>*>(imageBytes);
-    bytes.resize(size);
-    return bytes.data();
+    auto& bytes = *static_cast<ByteBuffer*>(imageBytes);
+    bytes = ByteBuffer(size);
+    return bytes.Data();
 }
 
 void ReleaseNothing(void* /*imageBytes*/, void* /*data*/) {}
@@ -1145,7 +1161,7 @@ bool DecodeDataUriImage(std::string_view uri, EmbeddedImage& image)
     options.memory.user_data = &image.Data;
     void* decoded = nullptr;
     if (cgltf_load_buffer_base64(&options, decodedSize, dataUri->Payload.data(), &decoded) != cgltf_result_success) {
-        image.Data.clear();
+        image.Data = ByteBuffer{};
         return false;
     }
     if (image.MimeType.empty())
@@ -1182,7 +1198,7 @@ void GltfDocumentRelease::operator()(cgltf_data* document)
     ExternalBuffers.reset();
 }
 
-GltfDocument OpenGltfDocument(const Vector<uint8>& bytes, const std::filesystem::path& path)
+GltfDocument OpenGltfDocument(std::span<const uint8> bytes, const std::filesystem::path& path)
 {
     cgltf_options options{};
     options.file.read = &CgltfReadFileShared;
@@ -1258,6 +1274,12 @@ GltfDocument OpenGltfDocument(const Vector<uint8>& bytes, const std::filesystem:
         RefuseGltfFile(path, shortSkin + "; re-export it with one inverse bind matrix per joint.");
         return {};
     }
+
+    const std::string projectiveNode = NodeMatrixNotAffine(*document);
+    if (!projectiveNode.empty()) {
+        RefuseGltfFile(path, projectiveNode + "; re-export it with the node's translation, rotation and scale.");
+        return {};
+    }
     return document;
 }
 
@@ -1278,7 +1300,7 @@ std::string ChargeAnimationKeys(const cgltf_data& document, size_t animationInde
     return {};
 }
 
-Vector<AssetDecodeInput> ModelAsset::ResolveDecodeInputs(const Vector<uint8>& bytes, const std::filesystem::path& path)
+Vector<AssetDecodeInput> ModelAsset::ResolveDecodeInputs(std::span<const uint8> bytes, const std::filesystem::path& path)
 {
     const ModelFormat format = FormatFromPath(path);
     if (format != ModelFormat::GLTF && format != ModelFormat::GLB)
@@ -1313,13 +1335,13 @@ Vector<AssetDecodeInput> ModelAsset::ResolveDecodeInputs(const Vector<uint8>& by
 }
 
 #else
-Vector<AssetDecodeInput> ModelAsset::ResolveDecodeInputs(const Vector<uint8>&, const std::filesystem::path&)
+Vector<AssetDecodeInput> ModelAsset::ResolveDecodeInputs(std::span<const uint8>, const std::filesystem::path&)
 {
     return {};
 }
 #endif // GE_HAVE_CGLTF
 
-bool ModelAsset::LoadGLTF(const Vector<uint8>& data, const FbxLoaderOptions& loaderOptions) {
+bool ModelAsset::LoadGLTF(std::span<const uint8> data, const FbxLoaderOptions& loaderOptions) {
 #if defined(GE_HAVE_CGLTF)
     m_ParseOptionsHash = Hashing::Fnv1a64Value(HashFbxLoaderOptions(loaderOptions), kGltfImportGeometryVersion);
     const ModelImport::AxisConversion axisConversion =
@@ -1932,14 +1954,20 @@ bool ModelAsset::LoadGLTF(const Vector<uint8>& data, const FbxLoaderOptions& loa
                     clip->SetSelectedAnimationIndex(static_cast<uint32>(ai));
                     clip->SetSourceInfo(GetPath(), static_cast<uint32>(ai));
                     // Parse from the bytes this load already holds (see LoadFBX).
-                    if (clip->LoadFromData(data) && clip->GetDuration() > 0.0f)
-                    {
-                        StageOrPublishRuntimeClip(clipGuid, std::move(clip));
-                    }
-                    else
+                    if (!clip->LoadFromData(data))
                     {
                         Logger::Log::Warning("ModelAsset: failed to load embedded glTF clip {} of '{}'",
                                              ai, GetName());
+                    }
+                    else if (clip->IsEmpty())
+                    {
+                        Logger::Log::Warning("ModelAsset: animation '{}' of '{}' has no length and no key, so it "
+                                             "cannot play. Add a key to it in the source file, or delete it there.",
+                                             m_AnimationNames.back(), GetName());
+                    }
+                    else
+                    {
+                        StageOrPublishRuntimeClip(clipGuid, std::move(clip));
                     }
                 }
             }
@@ -1963,7 +1991,7 @@ bool ModelAsset::LoadGLTF(const Vector<uint8>& data, const FbxLoaderOptions& loa
                 const auto* bufferView = image.buffer_view;
                 if (bufferView->offset + bufferView->size <= bufferView->buffer->size) {
                     const uint8_t* base = static_cast<const uint8_t*>(bufferView->buffer->data) + bufferView->offset;
-                    embeddedImage.Data.assign(base, base + bufferView->size);
+                    embeddedImage.Data = ByteBuffer::CopyOf({base, bufferView->size});
                 }
             }
             else if (image.uri && image.uri[0] != '\0') {
@@ -1985,8 +2013,8 @@ bool ModelAsset::LoadGLTF(const Vector<uint8>& data, const FbxLoaderOptions& loa
                         continue;
                     }
                     if (TakeExternalGltfImage(imagePath, m_EmbeddedImages, firstImageOfFile, embeddedImage.Data)) {
-                        if (!embeddedImage.Data.empty())
-                            Logger::Log::Debug("LoadGLTF: loaded external texture '{}' ({} bytes)", imagePath.string(), embeddedImage.Data.size());
+                        if (embeddedImage.Data.Size() != 0)
+                            Logger::Log::Debug("LoadGLTF: loaded external texture '{}' ({} bytes)", imagePath.string(), embeddedImage.Data.Size());
                         if (embeddedImage.MimeType.empty())
                             embeddedImage.MimeType = MimeFromTextureExtension(imagePath);
                     }

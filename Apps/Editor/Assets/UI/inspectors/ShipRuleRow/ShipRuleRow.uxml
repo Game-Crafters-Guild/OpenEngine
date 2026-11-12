@@ -1,0 +1,28 @@
+<!-- ShipRuleRow (Apps/Editor/Include/Inspectors/ShipRules/ShipRuleRow.h): the Ship in builds row of an asset
+     selection, the line under it and Clear rule. The ids are the contract with ShipRuleRow.cpp. -->
+<UIElement class="ship-rule-body">
+  <UIElement class="inspector-row ship-rule-row">
+    <UIElement class="inspector-label-cell">
+      <Label id="ship-rule-label" class="inspector-label" text="Ship in builds" />
+    </UIElement>
+    <UIElement class="inspector-field">
+      <Dropdown id="ship-rule-dropdown" class="inspector-dropdown" />
+    </UIElement>
+  </UIElement>
+  <UIElement id="ship-rule-caption-row" class="inspector-row ship-rule-caption-row">
+    <UIElement class="inspector-label-cell">
+      <Label class="inspector-label" text="" />
+    </UIElement>
+    <UIElement class="inspector-field">
+      <Label id="ship-rule-caption" class="inspector-field-caption" />
+    </UIElement>
+  </UIElement>
+  <UIElement id="ship-rule-clear-row" class="inspector-row ship-rule-clear-row">
+    <UIElement class="inspector-label-cell">
+      <Label class="inspector-label" text="" />
+    </UIElement>
+    <UIElement class="inspector-field">
+      <Button id="ship-rule-clear" text="Clear rule" />
+    </UIElement>
+  </UIElement>
+</UIElement>

@@ -1,7 +1,7 @@
 {
   "format": 1,
   "name": "Kinds",
-  "hash": "0x3b085f06c5c54e05",
+  "hash": "0x084d186060911e01",
   "constants": [
     {
       "id": "Kinds.kAllLayers",
@@ -245,6 +245,10 @@
         {
           "name": "color",
           "kind": "ColorLinear"
+        },
+        {
+          "name": "at",
+          "kind": "WorldPosition"
         }
       ]
     },

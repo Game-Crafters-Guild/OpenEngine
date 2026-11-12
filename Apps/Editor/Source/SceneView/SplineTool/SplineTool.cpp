@@ -506,7 +506,7 @@ bool SplineTool::RaycastScene(const GizmoRay& ray, Vector3& outHit, uint32* hitE
     const auto pick = Editor::Picking::PickScene(mathRay, *world, options);
     if (pick.Hit)
     {
-        outHit = pick.Best.WorldPosition;
+        outHit = pick.Best.Point;
         if (hitEntityId)
         {
             const bool canStickToHit =
@@ -541,7 +541,7 @@ bool SplineTool::RaycastEntityMesh(const GizmoRay& ray, uint32 entityId, Vector3
     if (!pick.Hit)
         return false;
 
-    outHit = pick.Best.WorldPosition;
+    outHit = pick.Best.Point;
     return true;
 }
 
@@ -552,7 +552,7 @@ bool SplineTool::RaycastEditingPlane(const GizmoRay& ray, Vector3& outHit)
     const auto selected = m_SelectionQuery ? m_SelectionQuery() : ECS::EntityHandle{};
     if (const auto* transform = m_State->World().GetComponent<Components::WorldTransform>(selected))
     {
-        const auto matrix = Mathematics::Matrix4x4::FromColumnMajor(transform->matrix);
+        const auto matrix = transform->ToMatrix4x4(transform->GetPosition() - Mathematics::WorldPosition{});
         origin = matrix.TransformPoint(origin);
         const auto axisX = matrix.TransformPoint({1.0f, 0.0f, 0.0f}) - origin;
         const auto axisY = matrix.TransformPoint({0.0f, 1.0f, 0.0f}) - origin;
@@ -800,8 +800,7 @@ bool SplineTool::GetActiveControlWorldPosition(ECS::World& boundWorld, Vector3& 
 
     if (const auto* xf = world->GetComponent<Components::WorldTransform>(active.Entity))
     {
-        Mathematics::Matrix4x4 worldM;
-        worldM = Mathematics::Matrix4x4::FromColumnMajor(xf->matrix);
+        const Mathematics::Matrix4x4 worldM = xf->ToMatrix4x4(xf->GetPosition() - Mathematics::WorldPosition{});
         outWorldPosition = worldM.TransformPoint(local);
     }
     else
@@ -928,7 +927,7 @@ void SplineTool::BeginSelectedControlTransformEdit(const char* editName)
         dc.HasTransform = xf != nullptr;
         if (xf)
         {
-            dc.WorldMatrix = Mathematics::Matrix4x4::FromColumnMajor(xf->matrix);
+            dc.WorldMatrix = xf->ToMatrix4x4(xf->GetPosition() - Mathematics::WorldPosition{});
             dc.InverseWorldMatrix = Mathematics::Inverse(dc.WorldMatrix);
         }
         dc.StartWorldPosition = dc.ToWorld(point.Position);
@@ -1184,9 +1183,7 @@ void SplineTool::FinalizeSpline(const GizmoRay& releaseRay)
 
     Components::Transform xf{};
     xf.SetIdentity();
-    xf.matrix[12] = pointsCopy[0].x;
-    xf.matrix[13] = pointsCopy[0].y;
-    xf.matrix[14] = pointsCopy[0].z;
+    xf.Position = Mathematics::WorldPosition::FromVector3(pointsCopy[0]);
     world->AddComponentImmediate(entity, xf);
 
     Components::Name nm{};
@@ -1417,7 +1414,7 @@ bool FindBestControlOnSpline(ECS::World* world,
     const auto* xf = world->GetComponent<Components::WorldTransform>(entity);
     Mathematics::Matrix4x4 worldM;
     if (xf)
-        worldM = Mathematics::Matrix4x4::FromColumnMajor(xf->matrix);
+        worldM = xf->ToMatrix4x4(xf->GetPosition() - Mathematics::WorldPosition{});
 
     const auto& pts = data->Points;
     const uint32 n = static_cast<uint32>(pts.size());
@@ -1976,7 +1973,7 @@ bool SplineTool::TryBeginEditDrag(const ScenePointerEvent& event,
         dc.HasTransform = xf != nullptr;
         if (xf)
         {
-            dc.WorldMatrix = Mathematics::Matrix4x4::FromColumnMajor(xf->matrix);
+            dc.WorldMatrix = xf->ToMatrix4x4(xf->GetPosition() - Mathematics::WorldPosition{});
             dc.InverseWorldMatrix = Mathematics::Inverse(dc.WorldMatrix);
         }
         dc.StartWorldPosition = dc.ToWorld(point.Position);
@@ -2303,7 +2300,7 @@ bool SplineTool::TryExtendExistingSpline(std::vector<Vector3> stroke, const Gizm
             bool hasTransform = false;
             if (const auto* xf = world->GetComponent<Components::WorldTransform>(e))
             {
-                worldM = Mathematics::Matrix4x4::FromColumnMajor(xf->matrix);
+                worldM = xf->ToMatrix4x4(xf->GetPosition() - Mathematics::WorldPosition{});
                 inverseWorldM = Mathematics::Inverse(worldM);
                 hasTransform = true;
             }

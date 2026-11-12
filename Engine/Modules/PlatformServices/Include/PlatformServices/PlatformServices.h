@@ -45,9 +45,13 @@ class Services
     // disk, or no-ops is the provider's decision.
     Result ListSlots(std::vector<std::string>& outSlots) const;
     Result ListFiles(std::string_view slot, std::vector<std::string>& outFiles) const;
+    // The size and the last write time of a file; NotFound if it does not exist.
+    Result GetFileInfo(std::string_view slot, std::string_view name, SaveFileInfo& outInfo) const;
     Result ReadFile(std::string_view slot, std::string_view name, std::vector<uint8_t>& outBytes) const;
     Result WriteFile(std::string_view slot, std::string_view name, std::span<const uint8_t> bytes);
     Result DeleteFile(std::string_view slot, std::string_view name);
+    // Removes the slot and all its files. After the call, ListSlots does not report the slot.
+    Result DeleteSlot(std::string_view slot);
     Result Commit(std::string_view slot);
 
     Result UnlockAchievement(std::string_view id);

@@ -335,6 +335,35 @@ TEST_F(GeneratedSurfaceLocationTest, RegistrySpellingIdentifiesEditorGraphUnderM
     EXPECT_TRUE(Rendering::MaterialSourceIdentity(m_Root / "editorassets-extra/test.material", context).empty());
 }
 
+// The registry's folded spelling and the on-disk spelling of a material with a non-ASCII name give one key.
+TEST_F(GeneratedSurfaceLocationTest, EverySpellingOfANonAsciiMaterialPathGivesOneIdentityKey)
+{
+    const auto context = MakeContext();
+    const std::string onDisk = Rendering::MaterialSourceIdentityKey(m_Root / u8"assets/Materials/\u00C9corce.material", context);
+    EXPECT_EQ(onDisk, reinterpret_cast<const char*>(u8"project/materials/\u00E9corce.material"));
+    EXPECT_EQ(Rendering::MaterialSourceIdentityKey(m_Root / u8"assets/materials/\u00E9corce.material", context), onDisk);
+}
+
+// A cook gives a graph material's on-disk spelling and the Player the registry's folded spelling.
+// Both get one generated surface, so the surface reference in the program index key is the same.
+TEST_F(GeneratedSurfaceLocationTest, EverySpellingOfAGraphMaterialPathGetsOneGeneratedSurface)
+{
+    // On a case-sensitive file system the two spellings are two folders that hold the same graph.
+    std::error_code ec;
+    for (const char* folder : {"Graphs", "graphs"})
+    {
+        std::filesystem::create_directories(m_Root / "assets" / folder, ec);
+        std::ofstream(m_Root / "assets" / folder / "test_graph.glsl") << kGraphSource;
+    }
+    auto context = MakeContext();
+    std::vector<std::string> errors;
+    MaterialDocument onDisk = MakeGraphMaterial();
+    ASSERT_TRUE(PrepareMaterialDocumentForShaderPackage(onDisk, m_Root / "assets/Graphs/Test.material", context, errors));
+    MaterialDocument registry = MakeGraphMaterial();
+    ASSERT_TRUE(PrepareMaterialDocumentForShaderPackage(registry, m_Root / "assets/graphs/test.material", context, errors));
+    EXPECT_EQ(registry.surfaceShader, onDisk.surfaceShader);
+}
+
 // The asset registry returns a path in its key spelling, which is case-folded on a
 // case-insensitive host. A graph material at that path gets a surface name from its
 // mounted source, and the name resolves back to the file on disk.

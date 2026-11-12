@@ -4,6 +4,7 @@ project(Ocean LANGUAGES CXX)
 
 add_library(Ocean OBJECT
     Source/OceanRenderFeature.cpp
+    Source/OceanRingMesh.cpp
     Source/OceanFootprintFrustum.cpp
     Source/OceanSimulationDemand.cpp
     Source/OceanShader/OceanShaderProgram.cpp

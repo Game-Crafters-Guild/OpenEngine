@@ -31,6 +31,7 @@ struct JobSystemStatistics
         uint32 Running = 0; // compute workers running a job of this class
     };
     Lane Normal;
+    Lane Awaited;
     Lane Background;
 
     struct Channel
@@ -54,7 +55,7 @@ struct JobSystemStatistics
     {
         ThreadKind Kind = ThreadKind::Worker;
         uint32 Index = 0;
-        // What the thread runs: "Normal" or "Background" on a compute worker,
+        // What the thread runs: "Normal", "Awaited" or "Background" on a compute worker,
         // the channel's name on a blocking thread; null when it is idle.
         const char* Running = nullptr;
         // When the running job started, in steady_clock nanoseconds since its
@@ -67,7 +68,7 @@ struct JobSystemStatistics
     std::vector<Occupancy> Threads;
 
     // Jobs dequeued from the compute lanes (GlobalPops + LocalPops + StealPops
-    // + BackgroundPops) plus the channel jobs the blocking threads ran. Counts
+    // + AwaitedPops + BackgroundPops) plus the channel jobs the blocking threads ran. Counts
     // dequeues, so a handle job the shutdown drain cancelled and a fork visit
     // whose job a participating Wait already ran are in it.
     uint64 TasksExecuted = 0;
@@ -75,10 +76,12 @@ struct JobSystemStatistics
     // The queue-topology census: where jobs were published and consumed.
     uint64 GlobalPushes = 0;          // into the global queue (single, bulk, graph tasks from outside the pool)
     uint64 LocalPushes = 0;           // graph tasks published on a worker, into its local queue
+    uint64 AwaitedPushes = 0;         // into the Awaited lane (single, bulk)
     uint64 BackgroundPushes = 0;      // into the Background lane (single, bulk)
     uint64 GlobalPops = 0;            // from the global queue
     uint64 LocalPops = 0;             // from a worker's own local queue
     uint64 StealPops = 0;             // stolen from another worker's local queue
+    uint64 AwaitedPops = 0;           // from the Awaited lane
     uint64 BackgroundPops = 0;        // from the Background lane
     uint64 StealMisses = 0;           // steal scans (the half-ring cutoff included) that found nothing
     uint64 EmptyLoopsWithBacklog = 0; // worker laps that found nothing while jobs were queued

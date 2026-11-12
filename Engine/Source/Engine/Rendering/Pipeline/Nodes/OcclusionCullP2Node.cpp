@@ -46,4 +46,14 @@ void OcclusionCullP2Node::DeclareForView(ViewDeclare& d)
     // No-ops for any view without a phase-B reservation (every non-HZB view).
     cull->ScheduleOcclusionCullPass(d.Frame, scene, d.View.id, hzb, mipCount);
 }
+
+void OcclusionCullP2Node::RequestPausedViewPipelines(const PausedViewPrewarm& prewarm)
+{
+    // The phase-B cull runs only for a view that reserves its slice. The request covers the HZB cull,
+    // which phase A uses too, and the visibility epilogue. It does not cover GPUScene's frustum cull
+    // (kViewCount1), which every frustum-only cull and the phase-A fallback use.
+    GPUCullingPipeline* cull = prewarm.Services.GetGPUCullingPipeline();
+    if (cull && prewarm.ReservesOcclusionSliceOnceUnpaused())
+        cull->RequestOcclusionViewPipelines();
+}
 } // namespace GameEngine::Engine::Renderer::Pipeline::Nodes

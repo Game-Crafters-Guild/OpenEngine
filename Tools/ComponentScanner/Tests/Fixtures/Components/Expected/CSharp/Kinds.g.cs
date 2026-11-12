@@ -34,7 +34,7 @@ namespace GameEngine.Scripting
     /// <summary>
     /// A probe that holds one field of every kind a mirror holds.
     /// </summary>
-    [StructLayout(LayoutKind.Explicit, Size = 928)]
+    [StructLayout(LayoutKind.Explicit, Size = 992)]
     [BuiltInComponent("GameEngine::Components::FixtureKinds")]
     public partial struct FixtureKinds : IComponent
     {
@@ -107,6 +107,12 @@ namespace GameEngine.Scripting
         public BoundingBox Bounds;
 
         [FieldOffset(880)]
+        public WorldPosition Anchor;
+
+        [FieldOffset(904)]
+        public Matrix3x3 Frame;
+
+        [FieldOffset(940)]
         private FixtureGlow m_Glow;
         public FixtureGlow Glow
         {
@@ -116,7 +122,7 @@ namespace GameEngine.Scripting
                 : throw new ArgumentOutOfRangeException(nameof(value), value, "FixtureKinds.Glow is Off, Soft or Bright.");
         }
 
-        [FieldOffset(882)]
+        [FieldOffset(942)]
         private FixturePulse m_Pulse;
         public FixturePulse Pulse
         {
@@ -126,7 +132,7 @@ namespace GameEngine.Scripting
                 : throw new ArgumentOutOfRangeException(nameof(value), value, "FixtureKinds.Pulse is Slow, Even or Fast.");
         }
 
-        [FieldOffset(884)]
+        [FieldOffset(944)]
         private Shape m_Outline;
         public Shape Outline
         {
@@ -142,7 +148,7 @@ namespace GameEngine.Scripting
             private byte m_Element;
         }
 
-        [FieldOffset(885)]
+        [FieldOffset(945)]
         private LabelArray m_Label;
         public string Label
         {
@@ -150,13 +156,13 @@ namespace GameEngine.Scripting
             set => ComponentText.Write(m_Label, value, "FixtureKinds.Label");
         }
 
-        [FieldOffset(904)]
+        [FieldOffset(968)]
         private ulong m_GpuHandle;
 
-        [FieldOffset(912)]
+        [FieldOffset(976)]
         public readonly float Weight;
 
-        [FieldOffset(916)]
+        [FieldOffset(980)]
         private FixtureGlow m_LastGlow;
         public readonly FixtureGlow LastGlow => m_LastGlow;
 
@@ -166,7 +172,7 @@ namespace GameEngine.Scripting
             private byte m_Element;
         }
 
-        [FieldOffset(917)]
+        [FieldOffset(981)]
         private OwnerArray m_Owner;
         public readonly string Owner => ComponentText.Read(m_Owner);
     }

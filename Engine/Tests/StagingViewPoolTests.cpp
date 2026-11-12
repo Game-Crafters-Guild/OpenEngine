@@ -256,7 +256,8 @@ Engine::Renderer::Camera MakeCubeCamera()
     const Mathematics::Vector3 target(0.0f, 0.0f, 0.0f);
     const Mathematics::Vector3 up(0.0f, 1.0f, 0.0f);
     Engine::Renderer::Camera camera{};
-    camera.worldTransform = Mathematics::Inverse(Mathematics::MakeLookAtLH(eye, target, up));
+    const Mathematics::Matrix4x4 pose = Mathematics::Inverse(Mathematics::MakeLookAtLH(eye, target, up));
+    camera.SetPose(pose, Mathematics::WorldPosition{pose[3][0], pose[3][1], pose[3][2]});
     camera.params.FovY = kFovDegrees;
     return camera;
 }

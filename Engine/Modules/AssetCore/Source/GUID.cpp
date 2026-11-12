@@ -1,4 +1,5 @@
 #include "AssetCore/GUID.h"
+#include "Types/Fnv1a.h"
 #include "Types/FormatNumber.h"
 #include <algorithm>
 #include <array>
@@ -162,16 +163,6 @@ inline uint64_t FnvHash(const uint8* data, size_t length, uint64_t seed = 146959
     return h;
 }
 
-// SplitMix64 finalizer — a strong bit-avalanche of a 64-bit value. Used to derive the
-// upper GUID word from the lower hash so it is well-distributed instead of correlated.
-inline uint64_t SplitMix64(uint64_t x)
-{
-    x += 0x9E3779B97F4A7C15ULL;
-    x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ULL;
-    x = (x ^ (x >> 27)) * 0x94D049BB133111EBULL;
-    return x ^ (x >> 31);
-}
-
 } // anonymous namespace
 
 GUID GUID::Derive(const GUID& parent, const String& subKey) {
@@ -190,10 +181,10 @@ GUID GUID::Derive(const GUID& parent, const String& subKey) {
     h1 = FnvHash(&separator, 1, h1);
     h1 = FnvHash(reinterpret_cast<const uint8*>(subKey.data()), subKey.size(), h1);
 
-    // Upper 64 bits: avalanche the lower hash with a SplitMix64 finalizer, so the upper
-    // word is well distributed rather than correlated with the lower one. Identity
-    // entropy is ~64 bits — astronomically collision-safe at project asset counts.
-    uint64_t h2 = SplitMix64(h1);
+    // Upper 64 bits: the SplitMix64 output function of the lower hash, so the upper word
+    // does not correlate with the lower one. Identity entropy is about 64 bits, which is
+    // enough to prevent collisions at project asset counts.
+    uint64_t h2 = Hashing::SplitMix64(h1);
 
     GUID::Data data{};
     for (int i = 0; i < 8; ++i) {

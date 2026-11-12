@@ -13,6 +13,9 @@ namespace GameEngine::PhysicsECS
 class PhysicsInitSystem : public ECS::ISystem
 {
 public:
+    // The wait before a heightfield collider rebuild is an authoring delay, so it ends while paused.
+    static constexpr ECS::SystemTime Time = ECS::SystemTime::Real;
+
     PhysicsInitSystem();
     ~PhysicsInitSystem() override;
 

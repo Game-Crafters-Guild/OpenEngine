@@ -40,13 +40,13 @@ ScreenSpaceShadowPasses::~ScreenSpaceShadowPasses()
         m_Device->DestroySampler(m_Sampler);
 }
 
-bool ScreenSpaceShadowPasses::LoadPassPipeline(const char* path, Rendering::ComputePipelineId& pipeline,
-                                               std::unique_ptr<Rendering::ShaderMeta>& meta,
-                                               Rendering::DescriptorSetLayoutDesc& layout,
-                                               std::span<const NamedBinding> bindings)
+bool ScreenSpaceShadowPasses::InternPassPipeline(const char* path, Rendering::ComputePipelineId& pipeline,
+                                                 std::unique_ptr<Rendering::ShaderMeta>& meta,
+                                                 Rendering::DescriptorSetLayoutDesc& layout,
+                                                 std::span<const NamedBinding> bindings)
 {
     if (pipeline.IsValid())
-        return m_Device->GetOrCreateComputePipeline(pipeline).IsValid();
+        return true;
     Rendering::ShaderPackage package{};
     std::string error;
     if (!Rendering::LoadShaderPkg(path, m_Device->PreferredShaderSource(), package, &error))
@@ -79,10 +79,10 @@ bool ScreenSpaceShadowPasses::LoadPassPipeline(const char* path, Rendering::Comp
         { if (set == 0) layout = value; }, &error))
         return false;
     pipeline = m_Device->InternComputePipeline(std::move(desc));
-    return m_Device->GetOrCreateComputePipeline(pipeline).IsValid();
+    return pipeline.IsValid();
 }
 
-bool ScreenSpaceShadowPasses::LoadShader()
+bool ScreenSpaceShadowPasses::InternPipelines()
 {
     if (!m_Device)
         return false;
@@ -91,11 +91,31 @@ bool ScreenSpaceShadowPasses::LoadShader()
     const NamedBinding resolveBindings[] = {{"uDepth", m_ResolveDepthBinding},
                                             {"Visibility", m_ResolveVisibilityBinding},
                                             {"uMask", m_ResolveMaskBinding}};
-    if (!LoadPassPipeline(kTraceShader, m_Pipeline, m_Meta, m_Layout, {}) ||
-        !LoadPassPipeline(kPrepareShader, m_PreparePipeline, m_PrepareMeta, m_PrepareLayout, prepareBindings) ||
-        !LoadPassPipeline(kResolveShader, m_ResolvePipeline, m_ResolveMeta, m_ResolveLayout, resolveBindings) ||
-        !LoadPassPipeline(kMatchShader, m_MatchPipeline, m_MatchMeta, m_MatchLayout, {}))
+    return InternPassPipeline(kTraceShader, m_Pipeline, m_Meta, m_Layout, {}) &&
+           InternPassPipeline(kPrepareShader, m_PreparePipeline, m_PrepareMeta, m_PrepareLayout, prepareBindings) &&
+           InternPassPipeline(kResolveShader, m_ResolvePipeline, m_ResolveMeta, m_ResolveLayout, resolveBindings) &&
+           InternPassPipeline(kMatchShader, m_MatchPipeline, m_MatchMeta, m_MatchLayout, {});
+}
+
+void ScreenSpaceShadowPasses::RequestPipelines()
+{
+    // DeclareMaskPass declares nothing on a device without R32_UINT storage images.
+    if (!InternPipelines() ||
+        !m_Device->IsTextureFormatSupported(Rendering::TextureFormat::R32_UINT,
+            static_cast<uint32_t>(Rendering::TextureUsage::UnorderedAccess |
+                                   Rendering::TextureUsage::ShaderResource)))
+        return;
+    for (const Rendering::ComputePipelineId id : {m_PreparePipeline, m_Pipeline, m_ResolvePipeline, m_MatchPipeline})
+        m_Device->RequestComputePipeline(id);
+}
+
+bool ScreenSpaceShadowPasses::LoadShader()
+{
+    if (!InternPipelines())
         return false;
+    for (const Rendering::ComputePipelineId id : {m_Pipeline, m_PreparePipeline, m_ResolvePipeline, m_MatchPipeline})
+        if (!m_Device->GetOrCreateComputePipeline(id).IsValid())
+            return false;
     if (!m_Sampler.IsValid())
         m_Sampler = m_Device->CreateSampler(Rendering::SamplerDesc::PointClamp("ScreenSpaceShadows"));
     return m_Sampler.IsValid();

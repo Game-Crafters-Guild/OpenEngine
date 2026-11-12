@@ -83,7 +83,7 @@ TEST(ModelEntityFactoryPlacements, EveryPlacementSpawnsAnEntityAtItsTransform)
         EXPECT_EQ(parent->Entity, result.rootEntity);
         const auto* xf = world.GetComponent<GameEngine::Components::Transform>(entity);
         ASSERT_NE(xf, nullptr);
-        EXPECT_FLOAT_EQ(xf->matrix[12], expectedX[index]);
+        EXPECT_FLOAT_EQ((xf->GetPosition() - GameEngine::Mathematics::WorldPosition{}).x, expectedX[index]);
     }
     const auto* first = world.GetComponent<GameEngine::Components::MeshRenderer>(result.submeshEntities[0]);
     const auto* second = world.GetComponent<GameEngine::Components::MeshRenderer>(result.submeshEntities[1]);
@@ -142,7 +142,7 @@ TEST(ModelEntityFactoryPlacements, APlacementBelowAnImportedNodeTakesItsLocalTra
         EXPECT_EQ(parent->Entity, expectedParent[index]);
         const auto* xf = world.GetComponent<GameEngine::Components::Transform>(entity);
         ASSERT_NE(xf, nullptr);
-        EXPECT_FLOAT_EQ(xf->matrix[12], expectedLocalX[index]);
+        EXPECT_FLOAT_EQ((xf->GetPosition() - GameEngine::Mathematics::WorldPosition{}).x, expectedLocalX[index]);
     }
 
     device->Shutdown();

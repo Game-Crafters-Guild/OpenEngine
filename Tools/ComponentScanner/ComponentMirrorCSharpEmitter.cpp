@@ -27,6 +27,8 @@ std::string ElementType(const MirrorField& field, const Names& names)
     case MirrorKind::AssetGuid: return "AssetGuid";
     case MirrorKind::Curve: return "Curve";
     case MirrorKind::BoundingBox: return "BoundingBox";
+    case MirrorKind::WorldPosition: return "WorldPosition";
+    case MirrorKind::Matrix3x3: return "Matrix3x3";
     case MirrorKind::Text: return "byte";
     case MirrorKind::Enum: return names.Enums.at(field.TypeName)->Name;
     case MirrorKind::Struct: return names.Structs.at(field.TypeName)->Name;

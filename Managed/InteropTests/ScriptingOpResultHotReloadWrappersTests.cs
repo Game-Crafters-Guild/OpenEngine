@@ -59,6 +59,31 @@ namespace GameEngine.ManagedInteropTests
             Assert.That(GameEngine.HotReload.HotReloadManager.LoadUserScriptsAssembly(missing), Is.EqualTo((int)R.NotFound));
             Assert.That(CB.LoadUserScriptsFromPath(missing), Is.EqualTo(R.NotFound));
         }
+
+        /// <summary>
+        /// A swap that starts while another swap runs is Busy, not Fail, so a caller can retry.
+        /// Busy has the value of GE_Result_Busy.
+        /// </summary>
+        [Test]
+        public void SwapPreloadedContext_WhileASwapRuns_IsBusy()
+        {
+            const int kGeResultBusy = -7;
+            var scriptingOp = System.Type.GetType("GameEngine.CoreBridge.ScriptingOp, GameEngine.CoreBridge", throwOnError: true)!;
+            var mapCommon = scriptingOp.GetMethod("MapCommon", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)!;
+            var swapActive = typeof(GameEngine.HotReload.HotReloadManager).GetField("m_SwapActive", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+
+            swapActive.SetValue(null, 1);
+            try
+            {
+                int code = GameEngine.HotReload.HotReloadManager.SwapPreloadedContext();
+                Assert.That((R)mapCommon.Invoke(null, new object[] { code })!, Is.EqualTo(R.Busy));
+                Assert.That((int)R.Busy, Is.EqualTo(kGeResultBusy));
+            }
+            finally
+            {
+                swapActive.SetValue(null, 0);
+            }
+        }
     }
 }
 

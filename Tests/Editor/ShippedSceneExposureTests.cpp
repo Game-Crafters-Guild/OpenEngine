@@ -74,12 +74,13 @@ std::filesystem::path StagedScenePath(const char* stagedRelativePath)
     return (GameEngine::TestPaths::StagedRoot() / stagedRelativePath).lexically_normal();
 }
 
-bool LoadStagedScene(GameEngine::ECS::World& world, const std::filesystem::path& scenePath)
+GameEngine::Scene::SceneInstantiateResult LoadStagedScene(GameEngine::ECS::World& world, const std::filesystem::path& scenePath)
 {
-    GameEngine::Scene::SceneReadOptions options{};
-    options.clearWorldFirst = true;
-    options.assetRootOverride = scenePath.parent_path();
-    return GameEngine::Scene::ReadSceneInto(world, scenePath, options);
+    GameEngine::Scene::SceneReadOptions options;
+    GameEngine::Scene::SceneInstantiateOptions instantiateOptions;
+    instantiateOptions.ClearWorldFirst = true;
+    options.AssetRootOverride = scenePath.parent_path();
+    return GameEngine::Scene::ReadSceneInto(world, scenePath, options, instantiateOptions);
 }
 
 KeyLight ResolveKeyLight(GameEngine::ECS::World& world)

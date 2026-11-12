@@ -584,7 +584,8 @@ Engine::Renderer::ResolvedWind BuildTreeMaskBaseWindWorld(const EZTree::TreeOpti
     if (!options.wind.enabled)
         return wind;
 
-    const float* m = worldTransform.matrix;
+    const Mathematics::Matrix4x4 basis = worldTransform.ToMatrix4x4(Mathematics::Vector3{});
+    const float* m = basis.Data();
     wind.VelocityX = m[0] * options.wind.strength.x + m[4] * options.wind.strength.y + m[8] * options.wind.strength.z;
     wind.VelocityY = m[1] * options.wind.strength.x + m[5] * options.wind.strength.y + m[9] * options.wind.strength.z;
     wind.VelocityZ = m[2] * options.wind.strength.x + m[6] * options.wind.strength.y + m[10] * options.wind.strength.z;
@@ -595,7 +596,8 @@ Engine::Renderer::ResolvedWind BuildTreeMaskBaseWindWorld(const EZTree::TreeOpti
 Engine::Renderer::ResolvedWind TreeMaskWorldWindToLocal(const Engine::Renderer::ResolvedWind& worldWind,
                                                         const Components::WorldTransform& worldTransform)
 {
-    const float* m = worldTransform.matrix;
+    const Mathematics::Matrix4x4 basis = worldTransform.ToMatrix4x4(Mathematics::Vector3{});
+    const float* m = basis.Data();
     float axisX[3]{m[0], m[1], m[2]};
     float axisY[3]{m[4], m[5], m[6]};
     float axisZ[3]{m[8], m[9], m[10]};
@@ -623,10 +625,11 @@ TreeMaskWind BuildTreeMaskWind(ECS::World& world,
     Engine::Renderer::ResolvedWind worldWind = BuildTreeMaskBaseWindWorld(tree.Options, worldTransform);
     if (tree.Options.wind.enabled)
     {
+        const Mathematics::Vector3 treePosition = worldTransform.GetPosition() - Mathematics::WorldPosition{};
         worldWind = Engine::Renderer::WindVolumeResolver::ResolveAt(world,
-                                                                    worldTransform.matrix[12],
-                                                                    worldTransform.matrix[13],
-                                                                    worldTransform.matrix[14],
+                                                                    treePosition.x,
+                                                                    treePosition.y,
+                                                                    treePosition.z,
                                                                     worldWind);
     }
     const Engine::Renderer::ResolvedWind localWind = TreeMaskWorldWindToLocal(worldWind, worldTransform);

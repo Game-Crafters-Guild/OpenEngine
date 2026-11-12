@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Mathematics/AnonymousStruct.h"
+#include "Mathematics/MulAdd.h"
 #include <cmath>
 #include <cstddef>
 #include <glm/glm.hpp>
@@ -41,23 +42,21 @@ struct Vector3
     Vector3 operator*(float scalar) const { return Vector3(x * scalar, y * scalar, z * scalar); }
     Vector3 operator/(float scalar) const { return Vector3(x / scalar, y / scalar, z / scalar); }
 
-    // Length and normalization helpers (implemented via GLM for consistency).
+    // Length and normalization helpers, on the fused LengthSquared.
     float Length() const
     {
-        glm::vec3 vec(x, y, z);
-        return glm::length(vec);
+        return std::sqrt(LengthSquared());
     }
 
     float LengthSquared() const
     {
-        return x * x + y * y + z * z;
+        return Dot(*this, *this);
     }
 
+    /// Unit-length copy. A zero vector gives NaN; NormalizeOr() takes a fallback.
     Vector3 Normalize() const
     {
-        glm::vec3 vec(x, y, z);
-        glm::vec3 n = glm::normalize(vec);
-        return Vector3(n);
+        return *this * (1.0f / Length());
     }
 
     /// Unit-length copy, or @p fallback when the squared length is under the smallest normal float
@@ -78,15 +77,15 @@ struct Vector3
 
     static float Dot(const Vector3& a, const Vector3& b)
     {
-        return a.x * b.x + a.y * b.y + a.z * b.z;
+        return Math::MulAdd(a.z, b.z, Math::MulAdd(a.x, b.x, a.y * b.y));
     }
 
     static Vector3 Cross(const Vector3& a, const Vector3& b)
     {
         return Vector3(
-            a.y * b.z - a.z * b.y,
-            a.z * b.x - a.x * b.z,
-            a.x * b.y - a.y * b.x
+            Math::MulAdd(a.y, b.z, -(a.z * b.y)),
+            Math::MulAdd(a.z, b.x, -(a.x * b.z)),
+            Math::MulAdd(a.x, b.y, -(a.y * b.x))
         );
     }
 

@@ -7,7 +7,6 @@
 #include "CBTTerrain/CBTInstance.h"
 #include "CBTTerrain/CBTKernelSet.h"
 #include "CBTTerrain/CBTResources.h"
-#include "CBTTerrain/SphereSculptLayer.h"
 #include "CBTReliefHeightSource.h"
 #include "CBTTestHarness.h"
 
@@ -42,10 +41,10 @@ TEST(CBTResources, AllocatesAllBuffersAndWritesDescriptorSet)
     EXPECT_TRUE(resources.GetHeightSampler().IsValid());
     EXPECT_GT(resources.GetPersistentByteSize(), 0u);
 
-    // Slot-diet round 2: the work-queue buffer is THREE aliased payload lanes (16 + 3*P words),
-    // not six — the −12 B/slot diet. Pin the sizing so a regression that un-aliases a lane is caught.
+    // The work-queue buffer is the counters, THREE aliased payload lanes and the census. Pin the sizing so
+    // a regression that un-aliases a lane is caught.
     EXPECT_EQ(WQElementCount(kDefaultBisectorPoolSize),
-              kWQCounterSlots + 3u * kDefaultBisectorPoolSize);
+              kWQCounterSlots + 3u * kDefaultBisectorPoolSize + kCensusWords);
     EXPECT_EQ(resources.GetBufferByteSize(CBTBinding::WorkQueue),
               static_cast<uint64_t>(WQElementCount(kDefaultBisectorPoolSize)) * 4u);
     // Surface the measured persistent footprint (the production "CBTResources: N buffers, X KiB
@@ -56,93 +55,6 @@ TEST(CBTResources, AllocatesAllBuffersAndWritesDescriptorSet)
 
     resources.Shutdown();
     EXPECT_FALSE(resources.IsReady());
-    device->Shutdown();
-}
-
-// The sculpt page rings are read only by a spherical tree, so a planar one holds 256 B placeholders
-// per ring slot and the full rings (64 MiB host-visible at the default page budget) exist only while
-// the tree is seeded for a sphere.
-TEST(CBTInstance, SculptRingsExistOnlyForASphericalTree)
-{
-    auto device = MakeHeadlessDevice();
-    ASSERT_TRUE(device) << "failed to create headless Vulkan device";
-
-    CBTKernelSet kernels; // root seeding dispatches the vertex refresh, so the kernels must load
-    ASSERT_TRUE(kernels.Initialize(*device, ShaderOutputDir())) << "CBT kernels missing from the build output";
-    CBTInstance instance;
-    ASSERT_TRUE(instance.Initialize(*device, kernels));
-    const CBTResources& res = instance.GetResources();
-    const uint64_t placeholderRingBytes =
-        static_cast<uint64_t>(kCBTFrameParamsRing) * 2u * kSculptPlaceholderSlotWords * 4u;
-    const uint64_t fullRingBytes =
-        static_cast<uint64_t>(kCBTFrameParamsRing) *
-        (static_cast<uint64_t>(ResolveSculptPagePoolCount()) * kSculptPageTexels + kSculptPageTableEntries) * 4u;
-
-    ASSERT_TRUE(instance.InitializeRoots(kDomainPlanar));
-    EXPECT_FALSE(res.HasSphericalSculptRings());
-    EXPECT_EQ(res.GetSculptPagePoolCount(), 0u);
-    EXPECT_EQ(res.GetSculptPoolSlotBytes(), kSculptPlaceholderSlotWords * 4u);
-    EXPECT_EQ(res.GetSculptTableSlotBytes(), kSculptPlaceholderSlotWords * 4u);
-    EXPECT_TRUE(res.GetSphereSculptBuffer().IsValid()) << "binding 16 must stay valid on a planar tree";
-    EXPECT_TRUE(res.GetSphereSculptPageTableBuffer().IsValid()) << "binding 20 must stay valid on a planar tree";
-    const uint64_t planarBytes = res.GetPersistentByteSize();
-
-    ASSERT_TRUE(instance.InitializeRoots(kDomainSpherical));
-    EXPECT_TRUE(res.HasSphericalSculptRings());
-    EXPECT_EQ(res.GetSculptPagePoolCount(), ResolveSculptPagePoolCount());
-    EXPECT_EQ(res.GetSculptPoolSlotBytes(), static_cast<uint64_t>(ResolveSculptPagePoolCount()) * kSculptPageTexels * 4u);
-    EXPECT_EQ(res.GetSculptTableSlotBytes(), static_cast<uint64_t>(kSculptPageTableEntries) * 4u);
-    EXPECT_EQ(res.GetPersistentByteSize() - planarBytes, fullRingBytes - placeholderRingBytes);
-    GTEST_LOG_(INFO) << "sculpt rings: planar " << placeholderRingBytes << " B, spherical " << fullRingBytes
-                     << " B (" << fullRingBytes / (1024u * 1024u) << " MiB)";
-
-    ASSERT_TRUE(instance.InitializeRoots(kDomainPlanar));
-    EXPECT_FALSE(res.HasSphericalSculptRings());
-    EXPECT_EQ(res.GetPersistentByteSize(), planarBytes) << "returning to planar must release the full rings";
-
-    instance.Shutdown();
-    kernels.Shutdown();
-    device->Shutdown();
-}
-
-// A sculpt ring allocation the device refuses must leave the rings the descriptor sets point at
-// alive: the new pair is created before the old one is destroyed, so a refused 512 GiB host-visible
-// request (2^21 pages) returns false with the placeholders still bound, and a later request that fits
-// still provisions.
-TEST(CBTResources, ARefusedSculptRingAllocationKeepsTheBoundRings)
-{
-    auto device = MakeHeadlessDevice();
-    ASSERT_TRUE(device) << "failed to create headless Vulkan device";
-
-    CBTKernelSet kernels; // not initialized: Resources only needs the static layout
-    CBTResources resources;
-    ASSERT_TRUE(resources.Initialize(*device, kernels));
-    const BufferHandle boundPool = resources.GetSphereSculptBuffer();
-    const BufferHandle boundTable = resources.GetSphereSculptPageTableBuffer();
-    const uint64_t boundBytes = resources.GetPersistentByteSize();
-    ASSERT_TRUE(boundPool.IsValid());
-    ASSERT_TRUE(boundTable.IsValid());
-
-    constexpr uint32_t kRefusedPages = 1u << 21;
-    EXPECT_FALSE(resources.ProvisionSculptRings(true, kRefusedPages)) << "the device backed a 512 GiB ring";
-    EXPECT_FALSE(resources.HasSphericalSculptRings());
-    EXPECT_EQ(resources.GetSphereSculptBuffer(), boundPool) << "the sets must keep pointing at the bound pool";
-    EXPECT_EQ(resources.GetSphereSculptPageTableBuffer(), boundTable);
-    EXPECT_EQ(resources.GetPersistentByteSize(), boundBytes);
-    // Still live: a destroyed buffer does not map.
-    void* pool = device->MapBuffer(boundPool);
-    EXPECT_NE(pool, nullptr) << "the bound pool was destroyed";
-    if (pool)
-        device->UnmapBuffer(boundPool);
-    void* table = device->MapBuffer(boundTable);
-    EXPECT_NE(table, nullptr) << "the bound page table was destroyed";
-    if (table)
-        device->UnmapBuffer(boundTable);
-
-    EXPECT_TRUE(resources.ProvisionSculptRings(true, ResolveSculptPagePoolCount()));
-    EXPECT_TRUE(resources.HasSphericalSculptRings());
-
-    resources.Shutdown();
     device->Shutdown();
 }
 
@@ -177,8 +89,6 @@ TEST(CBTResources, ReprovisionAfterDeviceRebuildIsDeviceFreeAndLeavesNotReady)
     EXPECT_FALSE(resources.GetIdentityIndexBuffer().IsValid());
     EXPECT_FALSE(resources.GetDrawCountBuffer().IsValid());
     EXPECT_FALSE(resources.GetFrameParamsBuffer().IsValid());
-    EXPECT_FALSE(resources.GetSphereSculptBuffer().IsValid());
-    EXPECT_FALSE(resources.GetSphereSculptPageTableBuffer().IsValid());
     EXPECT_FALSE(resources.GetSurfaceParamsBuffer().IsValid());
     EXPECT_FALSE(resources.GetAtlasRowsBuffer().IsValid());
     EXPECT_FALSE(resources.GetDefaultHeightTexture().IsValid());

@@ -11,6 +11,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <string>
 
@@ -93,8 +94,8 @@ struct FramePools
     explicit FramePools(IDevice* d) : Persistent(d), Transient(d), Ring(d, 2, 4096) {}
 };
 
-// A small editor-shaped frame: depth prepass -> async-eligible compute cull ->
-// world (color+depth attach, reads cull buffer) -> post (reads color). Returns
+// A small editor-shaped frame: depth prepass -> compute cull beside a shadow pass ->
+// world (color+depth attach, reads cull buffer) -> post (reads color and shadow). Returns
 // the number of lambdas that observed a live command list.
 uint32_t BuildAndExecuteFrame(RGFrame& frame, uint64_t frameIndex)
 {
@@ -102,6 +103,7 @@ uint32_t BuildAndExecuteFrame(RGFrame& frame, uint64_t frameIndex)
     uint32_t sawCmd = 0;
 
     RGTexture depth = frame.CreateTexture("Depth", DepthDesc());
+    RGTexture shadow = frame.CreateTexture("Shadow", DepthDesc());
     RGTexture color = frame.CreateTexture("Color", ColorDesc());
     RGTexture ldr = frame.CreateTexture("LDR", ColorDesc());
     BufferDesc cullDesc;
@@ -126,6 +128,10 @@ uint32_t BuildAndExecuteFrame(RGFrame& frame, uint64_t frameIndex)
                              p.Write(cull);
                          },
                          [&see](RGContext& ctx) { see(ctx); });
+    frame.AddPass("Shadow", 0,
+                  [&](RGPassBuilder& p)
+                  { p.AttachDepth(shadow, {.Load = RGLoadOp::Clear, .Clear = {.Depth = 0.0f}}); },
+                  [&see](RGContext& ctx) { see(ctx); });
     frame.AddPass("World", 0,
                   [&](RGPassBuilder& p)
                   {
@@ -138,6 +144,7 @@ uint32_t BuildAndExecuteFrame(RGFrame& frame, uint64_t frameIndex)
                   [&](RGPassBuilder& p)
                   {
                       p.Read(color);
+                      p.Read(shadow);
                       p.AttachColor(0, ldr, {.Load = RGLoadOp::DontCare});
                   },
                   [&see](RGContext& ctx) { see(ctx); });
@@ -156,6 +163,11 @@ void ExecuteHistoryFrame(RGFrame& frame, uint64_t frameIndex)
     historyDesc.usage = static_cast<uint32_t>(BufferUsage::Storage);
     RGBuffer history = frame.ImportPersistentBuffer("CrossFrame.History", historyDesc);
     RGTexture color = frame.CreateTexture("CrossFrame.Color", ColorDesc());
+    RGTexture beside = frame.CreateTexture("CrossFrame.Beside", ColorDesc());
+    // Graphics work beside the rewrite, so the rewrite keeps the compute queue.
+    frame.AddPass(
+        "CrossFrame.Beside", 0, [&](RGPassBuilder& p) { p.AttachColor(0, beside, {.Load = RGLoadOp::Clear}); },
+        [](RGContext&) {});
     frame.AddComputePass(
         "CrossFrame.Write", 0, [&](RGPassBuilder& p) { p.Write(history); }, [](RGContext&) {});
     frame.AddPass(
@@ -167,6 +179,7 @@ void ExecuteHistoryFrame(RGFrame& frame, uint64_t frameIndex)
         },
         [](RGContext&) {});
     frame.MarkOutput(color);
+    frame.MarkOutput(beside);
     frame.Execute();
 }
 
@@ -196,11 +209,11 @@ TEST(RGRecord, RecordsSubmitsAndSignalsAcrossQueues)
     const uint32_t sawCmd = BuildAndExecuteFrame(frame, 0);
     dev->WaitForIdle();
 
-    EXPECT_EQ(sawCmd, 4u) << "every pass lambda must receive a live CommandList";
+    EXPECT_EQ(sawCmd, 5u) << "every pass lambda must receive a live CommandList";
     const auto& stats = frame.Stats();
-    // Graphics{DepthPrepass} -> Compute{ClusterCull} -> Graphics{World, Post}.
-    EXPECT_EQ(stats.SubmissionsMade, 3u);
-    EXPECT_EQ(stats.RenderPassesBegun, 3u) << "three raster passes, compute has none";
+    // Graphics{DepthPrepass} -> Compute{ClusterCull} beside Graphics{Shadow} -> Graphics{World, Post}.
+    EXPECT_EQ(stats.SubmissionsMade, 4u);
+    EXPECT_EQ(stats.RenderPassesBegun, 4u) << "four raster passes, compute has none";
     EXPECT_GT(stats.BarrierBatchesEmitted, 0u);
 
     // Hoist accounting: every BottomOfPipe-sourced IR barrier was hoisted, and
@@ -213,16 +226,17 @@ TEST(RGRecord, RecordsSubmitsAndSignalsAcrossQueues)
     EXPECT_EQ(stats.BarriersEmitted, frame.Graph().BarrierCount());
     EXPECT_GT(stats.BarriersHoisted, 0u) << "first-use inits exist in this frame";
 
-    // Cross-queue timeline sync was planned (compute waits on graphics, world
-    // waits on compute).
-    ASSERT_EQ(frame.Graph().Submissions().size(), 3u);
+    // Cross-queue timeline sync was planned: compute waits on graphics, Shadow beside it waits on
+    // nothing, World waits on compute.
+    ASSERT_EQ(frame.Graph().Submissions().size(), 4u);
     EXPECT_GT(frame.Graph().Submissions()[1].WaitCount, 0u);
-    EXPECT_GT(frame.Graph().Submissions()[2].WaitCount, 0u);
+    EXPECT_EQ(frame.Graph().Submissions()[2].WaitCount, 0u);
+    EXPECT_GT(frame.Graph().Submissions()[3].WaitCount, 0u);
 
     // Frame 2: persistent command lists + timelines reused; signal values advance.
     const uint32_t sawCmd2 = BuildAndExecuteFrame(frame, 1);
     dev->WaitForIdle();
-    EXPECT_EQ(sawCmd2, 4u);
+    EXPECT_EQ(sawCmd2, 5u);
     EXPECT_GT(frame.Graph().Submissions()[0].SignalValue, 1u)
         << "timeline values persist across frames";
 }
@@ -242,6 +256,59 @@ TEST(RGRecord, AliasedQueueMapCollapsesToSingleSubmission)
     EXPECT_EQ(frame.Stats().SubmissionsMade, 1u) << "aliased queues collapse the fork/join";
     ASSERT_EQ(frame.Graph().Submissions().size(), 1u);
     EXPECT_EQ(frame.Graph().Submissions()[0].WaitCount, 0u);
+}
+
+// A compute pass that reads the graphics pass before it and feeds the graphics pass after it
+// has no graphics work to overlap: on separate queues it runs on the graphics queue, in one
+// submission, and records device-clean.
+TEST(RGRecord, ComputePassWithNoGraphicsBesideItRunsOnTheGraphicsQueue)
+{
+    DisarmValidationAssert();
+    auto dev = MakeDevice(/*debugLayer=*/true);
+    if (!dev)
+        dev = MakeDevice(false);
+    if (!dev)
+        GTEST_SKIP() << "no headless device available";
+    FramePools pools(dev.get());
+    RGFrame frame(dev.get(), &pools.Persistent, &pools.Transient, &pools.Ring);
+    frame.SetPhysicalQueueMap(RGFrame::kIdentityQueueMap);
+    frame.BeginFrame(0);
+
+    RGTexture depth = frame.CreateTexture("Serial.Depth", DepthDesc());
+    RGTexture color = frame.CreateTexture("Serial.Color", ColorDesc());
+    BufferDesc resolvedDesc;
+    resolvedDesc.size = 4096;
+    resolvedDesc.usage = static_cast<uint32_t>(BufferUsage::Storage);
+    RGBuffer resolved = frame.CreateBuffer("Serial.Resolved", resolvedDesc);
+    frame.AddPass("Serial.DepthPrepass", 0,
+                  [&](RGPassBuilder& p)
+                  { p.AttachDepth(depth, {.Load = RGLoadOp::Clear, .Clear = {.Depth = 0.0f}}); },
+                  [](RGContext&) {});
+    frame.AddComputePass("Serial.DepthResolve", 0,
+                         [&](RGPassBuilder& p)
+                         {
+                             p.Read(depth);
+                             p.Write(resolved);
+                         },
+                         [](RGContext&) {});
+    frame.AddPass("Serial.World", 0,
+                  [&](RGPassBuilder& p)
+                  {
+                      p.Read(resolved);
+                      p.AttachColor(0, color, {.Load = RGLoadOp::Clear});
+                  },
+                  [](RGContext&) {});
+    frame.MarkOutput(color);
+    dev->ResetValidationStats();
+    frame.Execute();
+    dev->WaitForIdle();
+
+    EXPECT_EQ(frame.Stats().SubmissionsMade, 1u);
+    ASSERT_EQ(frame.Graph().Submissions().size(), 1u);
+    EXPECT_EQ(frame.Graph().Submissions()[0].Queue, RGQueue::Graphics);
+    EXPECT_EQ(frame.Graph().Submissions()[0].WaitCount, 0u);
+    const ValidationStats stats = dev->GetValidationStats();
+    EXPECT_EQ(stats.ErrorCount, 0u) << VuidSummary(stats);
 }
 
 // Gate-1 fleet pin: a collapsed-map frame whose FIRST scheduled pass is
@@ -314,8 +381,8 @@ TEST(RGRecord, ValidationLayerFrameExecutesClean)
 
     const uint32_t sawCmd = BuildAndExecuteFrame(frame, 0);
     dev->WaitForIdle();
-    EXPECT_EQ(sawCmd, 4u);
-    EXPECT_EQ(frame.Stats().SubmissionsMade, 3u);
+    EXPECT_EQ(sawCmd, 5u);
+    EXPECT_EQ(frame.Stats().SubmissionsMade, 4u);
 
     BuildAndExecuteFrame(frame, 1); // second frame exercises import/reuse paths
     dev->WaitForIdle();
@@ -360,14 +427,21 @@ TEST(RGRecord, CrossQueueLayoutTransitionRecordsAtTheProducerTailAndValidatesCle
                              p.Write(mip, RGTextureWrite::Storage);
                          },
                          [](RGContext&) {});
+    // Graphics work beside Downsample, so Downsample keeps the compute queue.
+    RGTexture beside = frame.CreateTexture("Xq.Beside", ColorDesc());
+    frame.AddPass("Xq.Beside", 0,
+                  [&](RGPassBuilder& p) { p.AttachColor(0, beside, {.Load = RGLoadOp::Clear}); },
+                  [](RGContext&) {});
     frame.MarkOutput(mip);
+    frame.MarkOutput(beside);
     frame.Execute();
     dev->WaitForIdle();
 
     const auto& subs = frame.Graph().Submissions();
-    ASSERT_EQ(subs.size(), 2u);
+    ASSERT_EQ(subs.size(), 3u);
     EXPECT_EQ(subs[0].Queue, RGQueue::Graphics);
-    EXPECT_EQ(subs[1].Queue, RGQueue::Compute);
+    EXPECT_EQ(std::count_if(subs.begin(), subs.end(), [](const RGSubmission& s) { return s.Queue == RGQueue::Compute; }),
+              1);
 
     const auto& barriers = frame.Graph().Barriers();
     const auto& placement = frame.Graph().BarrierSubmissions();
@@ -426,10 +500,16 @@ TEST(RGRecord, CrossQueueTransitionLeavesItsLayoutOnTheConsumerList)
                              const float white[4] = {1.0f, 1.0f, 1.0f, 1.0f};
                              ctx.Cmd->ClearColorImageSubresource(ctx.GetTexture(tex), 0, 0, white);
                          });
+    // Graphics work beside Clear that Copy also reads, so it runs before Copy and Clear keeps the compute queue.
+    RGTexture beside = frame.CreateTexture("Xq.Beside", ColorDesc(kSize, kSize));
+    frame.AddPass("Xq.Beside", 0,
+                  [&](RGPassBuilder& p) { p.AttachColor(0, beside, {.Load = RGLoadOp::Clear}); },
+                  [](RGContext&) {});
     frame.AddPass("Xq.Copy", 1,
                   [&](RGPassBuilder& p)
                   {
                       p.Read(tex, RGTextureRead::CopySrc);
+                      p.Read(beside, RGTextureRead::Sampled);
                       p.PreventCulling();
                   },
                   [tex, readback](RGContext& ctx)
@@ -619,6 +699,7 @@ TEST(RGRecord, CrossFrameWaitOnCompletedWorkIsDropped)
     ExecuteHistoryFrame(frame, 0);
     dev->WaitForIdle();
     ExecuteHistoryFrame(frame, 1);
+    ASSERT_EQ(frame.Graph().Submissions().size(), 3u) << "the rewrite runs on the compute queue";
     EXPECT_FALSE(ComputeWaitsOnGraphics(frame))
         << "the rewrite waits for a graphics read the device has already completed";
     dev->WaitForIdle();

@@ -36,6 +36,8 @@ namespace GameEngine::PhysicsECS
 /// and the record is updated. A blend between two different poses moves with alpha, so it leaves the
 /// record invalid and the next frame composes again.
 ///
+/// The Transform and the WorldTransform get the backend's double position exactly.
+///
 /// @param interpolateFrom The backend pose before the last step to blend from, or null for no blend.
 /// @param alpha Blend weight of `current` in [0, 1]; read only with `interpolateFrom`.
 /// @return true when the pose was composed, false when the entity was skipped as unchanged.

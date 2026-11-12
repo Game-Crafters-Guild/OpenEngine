@@ -20,6 +20,11 @@ class TextArea;
 class UIManager;
 struct AgentReplyAction;
 
+namespace EditorUI
+{
+class InspectorNotice;
+}
+
 /// Sets `element`'s height override to `heightPx`. Returns true when the override
 /// moved by more than half a pixel, so a caller can tell whether layout has settled.
 bool PinHeightPx(UIElement& element, float heightPx);
@@ -100,6 +105,9 @@ private:
     bool m_ReplyActionsBuilt = false;
     /// The chips of the mark-ups a user message names; hidden without any.
     UIElement* m_MarkupChips = nullptr;
+    /// Holds m_SetupRefusal; hidden unless the setup check refused the reply.
+    UIElement* m_SetupRefusalHost = nullptr;
+    EditorUI::InspectorNotice* m_SetupRefusal = nullptr;
     /// What the elements show now; nullopt before the first Show().
     std::optional<AgentConversationRowModel> m_Shown;
 };

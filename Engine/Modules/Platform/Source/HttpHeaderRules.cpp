@@ -41,16 +41,10 @@ bool HasUnsafeUrlCharacter(std::string_view url)
     });
 }
 
-bool IsCredentialHeader(std::string_view name)
-{
-    return std::any_of(kCredentialHeaders.begin(), kCredentialHeaders.end(),
-                       [name](std::string_view credential) { return EqualsIgnoreCase(name, credential); });
-}
-
-// The host as written in the URL: no userinfo, no port; an IPv6 literal keeps
-// its brackets. A URL without "scheme://" is read from its first character,
-// the way the backends read it.
-std::string_view UrlHost(std::string_view url)
+// The authority of the URL without userinfo: the host and the port as written.
+// A URL without "scheme://" is read from its first character, the way the
+// backends read it.
+std::string_view UrlAuthority(std::string_view url)
 {
     const size_t schemeEnd = url.find("://");
     std::string_view authority = schemeEnd == std::string_view::npos ? url : url.substr(schemeEnd + 3);
@@ -59,7 +53,14 @@ std::string_view UrlHost(std::string_view url)
     const size_t userInfoEnd = authority.rfind('@');
     if (userInfoEnd != std::string_view::npos)
         authority = authority.substr(userInfoEnd + 1);
+    return authority;
+}
 
+// The host as written in the URL: no userinfo, no port; an IPv6 literal keeps
+// its brackets.
+std::string_view UrlHost(std::string_view url)
+{
+    const std::string_view authority = UrlAuthority(url);
     if (!authority.empty() && authority.front() == '[')
         return authority.substr(0, authority.find(']') + 1);
     return authority.substr(0, authority.find(':'));
@@ -102,6 +103,18 @@ bool IsLoopbackHost(std::string_view host)
 }
 
 } // namespace
+
+bool IsCredentialHeader(std::string_view name)
+{
+    return std::any_of(kCredentialHeaders.begin(), kCredentialHeaders.end(),
+                       [name](std::string_view credential) { return EqualsIgnoreCase(name, credential); });
+}
+
+bool IsSameOrigin(std::string_view firstUrl, std::string_view secondUrl)
+{
+    return StartsWithIgnoreCase(firstUrl, "https://") == StartsWithIgnoreCase(secondUrl, "https://") &&
+           EqualsIgnoreCase(UrlAuthority(firstUrl), UrlAuthority(secondUrl));
+}
 
 std::string ValidateHeaders(std::string_view url, const std::unordered_map<std::string, std::string>& headers)
 {

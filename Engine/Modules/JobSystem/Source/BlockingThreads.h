@@ -28,7 +28,7 @@ namespace Detail
  * (lock order, jobsystem design 5.7).
  *
  * The threads stay outside the compute workers' wake protocol: they never
- * read or write the queued-task counters, the sleeper and spinner counts or
+ * read or write the queued-task counters, the idle mask, the spinner count or
  * the census. Each one is a pool thread (s_CurrentPool is the pool) that is
  * no compute worker (s_CurrentWorkerId is SIZE_MAX): a job on it publishes to
  * the global lanes like any thread outside the pool, and TaskHandle::Wait's

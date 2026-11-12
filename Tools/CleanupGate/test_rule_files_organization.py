@@ -1,4 +1,5 @@
-"""Tests the loose_feature_file pattern of 04_files_organization over the folders in Fixtures/FeatureFolders/."""
+"""Tests 04_files_organization: the loose_feature_file pattern over the folders in Fixtures/FeatureFolders/, and the function heads
+that one_free_function_file counts over the fixtures in Fixtures/."""
 import os
 import sys
 import unittest
@@ -7,6 +8,7 @@ sys.dont_write_bytecode = True
 kGateFolder = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, kGateFolder)
 
+import gate_common  # noqa: E402
 import rule_files_organization  # noqa: E402
 
 kFixtureRoot = os.path.join(kGateFolder, "Fixtures", "FeatureFolders")
@@ -78,6 +80,13 @@ class FeatureFolderRuleTests(unittest.TestCase):
                                           "Assets/TextureImporter.h"])), 3)
         self.assertEqual(len(loose_paths(["M/Source/Other.cpp", "M/Source/SourceControlA.cpp", "M/Source/SourceControlB.cpp",
                                           "M/Source/SourceControlC.cpp"])), 3)
+
+
+class FunctionHeadTests(unittest.TestCase):
+    def test_a_free_function_whose_signature_wraps_counts_as_a_one_function_file(self):
+        source = gate_common.load_source(os.path.join(kGateFolder, "Fixtures"), "wrapped_free_function.h")
+        sites = [site for site in rule_files_organization.Rule([]).scan_file(source) if site.pattern == "one_free_function_file"]
+        self.assertEqual([(site.line, site.piece) for site in sites], [(7, "the utility header of the module that owns SpawnPrefab, beside its kin")])
 
 
 if __name__ == "__main__":

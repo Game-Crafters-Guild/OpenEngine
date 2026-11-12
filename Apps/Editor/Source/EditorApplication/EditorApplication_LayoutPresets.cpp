@@ -565,7 +565,7 @@ void EditorApplication::RequestSwitchLayoutPreset(int index)
             RecallLayoutPreset(index);
             return;
         }
-        auto modal = std::make_unique<SaveSceneChangesModal>();
+        auto modal = std::make_unique<SaveSceneChangesModal>("layout");
         m_LayoutChangesModal = modal.get();
         rootEl->AddChild(std::move(modal));
     }

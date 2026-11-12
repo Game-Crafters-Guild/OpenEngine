@@ -19,15 +19,16 @@ The physics world exists in play mode only. Outside play mode a ray cast returns
 ::::tab[C++]
 
 ```cpp title="PhysicsECS/PhysicsScriptApi.h"
-bool RayCast(Physics::PhysicsWorld& physics, Mathematics::Vector3 origin, Mathematics::Vector3 direction, RayHit& hit,
-             float maxDistance = 1000.0f, std::uint32_t layerMask = kAllLayers, bool ignoreTriggers = false);
+bool RayCast(Physics::PhysicsWorld& physics, Mathematics::WorldPosition origin, Mathematics::Vector3 direction,
+             RayHit& hit, float maxDistance = 1000.0f, std::uint32_t layerMask = kAllLayers,
+             bool ignoreTriggers = false);
 ```
 
 ::::
 ::::tab[C#]
 
 ```csharp title="GameEngine.Scripting.Bindings"
-public static bool RayCast(Vector3 origin, Vector3 direction, out RayHit hit,
+public static bool RayCast(WorldPosition origin, Vector3 direction, out RayHit hit,
                            float maxDistance = 1000f, uint layerMask = Physics.AllLayers, bool ignoreTriggers = false);
 ```
 
@@ -38,9 +39,19 @@ public static bool RayCast(Vector3 origin, Vector3 direction, out RayHit hit,
 
 `RayHit` holds the body's `Entity`, the hit `Point`, the surface `Normal` there, and the `Distance` from the origin. After a miss, `hit` holds the defaults: `Entity.None`, a zero point, and a normal of +Y.
 
+A position in the world is a `WorldPosition`: three doubles, in meters. It stays exact far from the world origin, where a `Vector3` loses millimeters. There is no implicit conversion from `Vector3`: write `WorldPosition.FromVector3(v)` for a point that you hold as a `Vector3`.
+
 ```csharp title="Damage what the crosshair points at"
-if (Physics.RayCast(cameraPosition, cameraForward, out RayHit hit, maxDistance: 100f))
+if (Physics.RayCast(WorldPosition.FromVector3(cameraPosition), cameraForward, out RayHit hit, maxDistance: 100f))
     ApplyDamage(hit.Entity, hit.Point, hit.Normal);
+```
+
+Subtract two world positions to get the `Vector3` offset between them: the subtraction is in double, so the offset is exact far from the origin. Add a `Vector3` to a world position to move it.
+
+```csharp title="Spawn a marker above the hit, and measure the hit from the player"
+WorldPosition marker = hit.Point + new Vector3(0f, 2f, 0f);
+WorldPosition playerPosition = playerTransform.Position; // the player's Transform
+Vector3 fromPlayer = hit.Point - playerPosition;
 ```
 
 ## Find every body along a ray or in a box
@@ -49,21 +60,22 @@ if (Physics.RayCast(cameraPosition, cameraForward, out RayHit hit, maxDistance: 
 ::::tab[C++]
 
 ```cpp title="PhysicsECS/PhysicsScriptApi.h"
-std::int32_t RayCastAll(Physics::PhysicsWorld& physics, Mathematics::Vector3 origin, Mathematics::Vector3 direction,
-                        std::span<RayHit> hits, float maxDistance = 1000.0f, std::uint32_t layerMask = kAllLayers,
-                        bool ignoreTriggers = false);
-std::int32_t BoxOverlap(Physics::PhysicsWorld& physics, Mathematics::Vector3 center, Mathematics::Vector3 halfExtents,
-                        Mathematics::Quaternion rotation, std::span<ECS::EntityHandle> bodies,
+std::int32_t RayCastAll(Physics::PhysicsWorld& physics, Mathematics::WorldPosition origin,
+                        Mathematics::Vector3 direction, std::span<RayHit> hits, float maxDistance = 1000.0f,
                         std::uint32_t layerMask = kAllLayers, bool ignoreTriggers = false);
+std::int32_t BoxOverlap(Physics::PhysicsWorld& physics, Mathematics::WorldPosition center,
+                        Mathematics::Vector3 halfExtents, Mathematics::Quaternion rotation,
+                        std::span<ECS::EntityHandle> bodies, std::uint32_t layerMask = kAllLayers,
+                        bool ignoreTriggers = false);
 ```
 
 ::::
 ::::tab[C#]
 
 ```csharp title="GameEngine.Scripting.Bindings"
-public static int RayCastAll(Vector3 origin, Vector3 direction, Span<RayHit> hits,
+public static int RayCastAll(WorldPosition origin, Vector3 direction, Span<RayHit> hits,
                              float maxDistance = 1000f, uint layerMask = Physics.AllLayers, bool ignoreTriggers = false);
-public static int BoxOverlap(Vector3 center, Vector3 halfExtents, Quaternion rotation, Span<Entity> bodies,
+public static int BoxOverlap(WorldPosition center, Vector3 halfExtents, Quaternion rotation, Span<Entity> bodies,
                              uint layerMask = Physics.AllLayers, bool ignoreTriggers = false);
 ```
 
@@ -99,7 +111,7 @@ The view of an entity reads and changes the velocity of the entity's `PhysicsBod
 | `GetLinearVelocity()`, `SetLinearVelocity(v)` | The body's velocity. A static body does not move. A kinematic body follows its `Transform`: the setter is ignored with a warning ([How a body moves](../physics/body-motion.mdx)). |
 | `GetAngularVelocity()`, `SetAngularVelocity(v)` | The body's spin, in radians per second about each axis. On a kinematic body the setter is ignored with a warning. |
 | `AddImpulse(impulse)` | Changes the velocity at once by `impulse / mass`, at the center of mass. |
-| `AddImpulseAtPosition(impulse, position)` | The same at a point in world space, which also spins the body. |
+| `AddImpulseAtPosition(impulse, position)` | The same at a point in world space (a `WorldPosition`), which also spins the body. |
 
 ```csharp title="Kick a ball"
 Entity ball = new Entity(ballId);

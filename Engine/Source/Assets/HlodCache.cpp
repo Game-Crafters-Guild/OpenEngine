@@ -298,12 +298,12 @@ HlodCacheStatus ReadHlodCache(const std::filesystem::path& file,
                               HlodBakedScene& out) {
     out = HlodBakedScene{};
 
-    Vector<uint8> buffer;
+    ByteBuffer buffer;
     if (!ReadFileBytesShared(file, buffer))
         return HlodCacheStatus::Missing;
 
-    const char* data = reinterpret_cast<const char*>(buffer.data());
-    const std::size_t size = buffer.size();
+    const char* data = reinterpret_cast<const char*>(buffer.Data());
+    const std::size_t size = buffer.Size();
     std::size_t cursor = 0;
 
     uint32 magic = 0, version = 0;

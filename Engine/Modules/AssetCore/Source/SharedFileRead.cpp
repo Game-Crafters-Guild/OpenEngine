@@ -257,55 +257,51 @@ int64 SharedFileReader::Read(void* dst, uint64 bytes)
 
 #endif
 
-namespace
+// Size is a snapshot; the read is authoritative. A file replaced while we
+// hold the handle keeps serving the displaced bytes (see header contract),
+// but an in-place writer can still shrink or grow it under us.
+bool ReadFileBytesShared(const std::filesystem::path& path, ByteBuffer& outBytes)
 {
-template <typename Container>
-bool ReadWholeFileShared(const std::filesystem::path& path, Container& out)
-{
-    out.clear();
+    outBytes = ByteBuffer();
 
     SharedFileReader reader(path);
-    if (!reader.IsOpen())
+    const int64 size = reader.IsOpen() ? reader.Size() : -1;
+    if (size <= 0)
     {
-        return false;
+        return size == 0;
     }
 
-    const int64 size = reader.Size();
-    if (size < 0)
-    {
-        return false;
-    }
-    if (size == 0)
-    {
-        return true;
-    }
-
-    // Size is a snapshot; the read is authoritative. A file replaced while we
-    // hold the handle keeps serving the displaced bytes (see header contract),
-    // but an in-place writer can still shrink or grow it under us.
-    out.resize(static_cast<size_t>(size));
-    const int64 got = reader.Read(out.data(), static_cast<uint64>(size));
+    ByteBuffer bytes(static_cast<size_t>(size));
+    const int64 got = reader.Read(bytes.Data(), static_cast<uint64>(size));
     if (got < 0)
     {
-        out.clear();
         return false;
     }
-    if (got != size)
-    {
-        out.resize(static_cast<size_t>(got));
-    }
+    bytes.Truncate(static_cast<size_t>(got));
+    outBytes = std::move(bytes);
     return true;
-}
-} // namespace
-
-bool ReadFileBytesShared(const std::filesystem::path& path, Vector<uint8>& outBytes)
-{
-    return ReadWholeFileShared(path, outBytes);
 }
 
 bool ReadFileTextShared(const std::filesystem::path& path, String& outText)
 {
-    return ReadWholeFileShared(path, outText);
+    outText.clear();
+
+    SharedFileReader reader(path);
+    const int64 size = reader.IsOpen() ? reader.Size() : -1;
+    if (size <= 0)
+    {
+        return size == 0;
+    }
+
+    outText.resize(static_cast<size_t>(size));
+    const int64 got = reader.Read(outText.data(), static_cast<uint64>(size));
+    if (got < 0)
+    {
+        outText.clear();
+        return false;
+    }
+    outText.resize(static_cast<size_t>(got));
+    return true;
 }
 
 } // namespace GameEngine

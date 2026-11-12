@@ -63,14 +63,6 @@ inline constexpr uint32 kGrassClumpCodeMask = 255u;
 inline constexpr uint32 kGrassMinWidthScaleShift = 10u;
 inline constexpr uint32 kGrassMinWidthScaleMask = 65535u;
 
-// Ceiling on how far the minimum-projected-width floor may widen a blade — and, necessarily the
-// same number, the top of the range that floor is quantized over. A blade turned exactly edge-on
-// projects to zero width and would ask for an unbounded one; past this it is a sliver among slivers
-// and further widening only smears it. The two uses are one constant on purpose: encoding past the
-// ceiling would spend range the clamp discards, and encoding short of it would cap blades the clamp
-// was still meant to widen.
-inline constexpr float32 kGrassMaxWidthExpansion = 6.0f;
-
 // The clump attributes a blade inherits from the site it belongs to. Randoms rather than finished
 // values: the consumer scales each one by its own authored variance, so a variance of zero is
 // exactly the unclumped field and not merely close to it.

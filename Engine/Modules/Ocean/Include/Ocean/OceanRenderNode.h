@@ -26,6 +26,7 @@ public:
     void Declare(Engine::Renderer::Pipeline::RenderPipelineInstance& instance,
                  const Engine::Renderer::Pipeline::PipelineDeclareContext& ctx) override;
     void DeclareForView(Engine::Renderer::Pipeline::ViewDeclare& d) override;
+    void RequestPausedViewPipelines(const Engine::Renderer::Pipeline::PausedViewPrewarm& prewarm) override;
 
 private:
     std::string m_Id;
@@ -33,7 +34,7 @@ private:
     // A second instance of this node placed AFTER the World node (id contains
     // "Underwater") only declares the submerged fullscreen overlay — it must run
     // post-world to read the fully-drawn scene colour. The pre-world instance does
-    // all the setup/sims and stamps the submersion depth onto the feature.
+    // all the setup/sims and records the submersion depth on the feature.
     bool m_UnderwaterMode = false;
     // Reused every frame by the post-world instance for the underwater pass.
     OceanUnderwaterPortalData m_PortalData;

@@ -228,26 +228,6 @@
 	border-width: 0;
 }
 
-/* ─── Scene View ruler overlay (top + left rulers in 2D mode) ─── */
-/* Fills the viewport; no pointer events so pan/orbit input passes through.
-   Z-index sits below the rotation gizmo and tool overlay so those interactive
-   widgets remain on top of the ruler bands. */
-.scene-view-ruler-overlay {
-	position: absolute;
-	top: 0;
-	left: 0;
-	width: 100%;
-	height: 100%;
-	min-width: 0;
-	min-height: 0;
-	pointer-events: none;
-	z-index: 50;
-}
-
-.scene-view-ruler-overlay.hidden {
-	display: none;
-}
-
 /* ─── Viewport rotation gizmo (corner-anchored axis orientation widget) ─── */
 .viewport-rotation-gizmo {
 	position: absolute;
@@ -344,30 +324,20 @@ button.scene-tool-btn,
 }
 
 .scene-tool-btn:hover,
-button.scene-tool-btn:hover,
-.button.scene-tool-btn:hover,
-.scene-tool-btn:active,
-button.scene-tool-btn:active,
-.button.scene-tool-btn:active {
+.scene-tool-btn:active {
 	background-color: rgba(255, 255, 255, 0.28);
 	border-color: transparent;
 	opacity: 0.85;
 }
 
-.scene-tool-btn.icon-active,
-button.scene-tool-btn.icon-active,
-.button.scene-tool-btn.icon-active {
+.scene-tool-btn.icon-active {
 	background-color: var(--ui_color_scene_tool_active, var(--ui_color_accent_blue));
 	border-color: transparent;
 	opacity: 0.50;
 }
 
 .scene-tool-btn.icon-active:hover,
-button.scene-tool-btn.icon-active:hover,
-.button.scene-tool-btn.icon-active:hover,
-.scene-tool-btn.icon-active:active,
-button.scene-tool-btn.icon-active:active,
-.button.scene-tool-btn.icon-active:active {
+.scene-tool-btn.icon-active:active {
 	background-color: var(--ui_color_scene_tool_active_hover, var(--ui_color_accent_blue_hover));
 	border-color: transparent;
 	opacity: 1.0;
@@ -381,23 +351,19 @@ button.scene-tool-btn.icon-active:active,
 .scale-tool-icon     { background-image: url("editor:Icons/Giszmo_scale.svg"); background-size: 16px 16px; background-repeat: no-repeat; background-position: center; }
 .ruler-tool-icon     { background-image: url("editor:Icons/Ruler.svg"); background-size: 16px 16px; background-repeat: no-repeat; background-position: center; }
 /* The spline tool's registered button (SceneView/SplineTool/SplineToolStripEntry.cpp) keeps its own
-   active color. Every Button carries .button, so the shared active rule's .button variant
-   (0,3,0) is the one to outrank. */
+   active color. It outranks the shared active rule `.scene-tool-btn.icon-active` (0,2,0)
+   by specificity. */
 .button.scene-tool-btn.spline-tool-btn.icon-active {
 	background-color: var(--ui_color_spline_tool_active);
 }
 .button.scene-tool-btn.spline-tool-btn.icon-active:hover {
 	background-color: var(--ui_color_spline_tool_active_hover);
 }
-.scene-tool-btn.ruler-tool-icon.icon-active,
-button.scene-tool-btn.ruler-tool-icon.icon-active,
-.button.scene-tool-btn.ruler-tool-icon.icon-active {
+.scene-tool-btn.ruler-tool-icon.icon-active {
 	background-color: #D9A22A;
 	background-image-tint: rgba(255, 255, 255, 1.0);
 }
-.scene-tool-btn.ruler-tool-icon.icon-active:hover,
-button.scene-tool-btn.ruler-tool-icon.icon-active:hover,
-.button.scene-tool-btn.ruler-tool-icon.icon-active:hover {
+.scene-tool-btn.ruler-tool-icon.icon-active:hover {
 	background-color: #EAB542;
 	background-image-tint: rgba(255, 255, 255, 1.0);
 }
@@ -458,9 +424,7 @@ button.view2d-icon,
 	opacity: 0.5;
 }
 
-.view2d-icon.icon-active,
-button.view2d-icon.icon-active,
-.button.view2d-icon.icon-active {
+.view2d-icon.icon-active {
 	background-image: url("editor:Icons/2d.svg");
 	opacity: 1.0;
 }
@@ -469,9 +433,7 @@ button.view2d-icon.icon-active,
 .view2d-icon:hover,
 button.view2d-icon:hover,
 .button.view2d-icon:hover,
-.view2d-icon.icon-active:hover,
-button.view2d-icon.icon-active:hover,
-.button.view2d-icon.icon-active:hover {
+.view2d-icon.icon-active:hover {
 	background-color: rgba(255, 255, 255, 0.28);
 	opacity: 1.0;
 }
@@ -486,19 +448,13 @@ button.pixelperfect-toggle,
 	opacity: 0.85;
 }
 
-.pixelperfect-toggle.icon-active,
-button.pixelperfect-toggle.icon-active,
-.button.pixelperfect-toggle.icon-active {
+.pixelperfect-toggle.icon-active {
 	color: rgba(255, 255, 255, 1.0);
 	opacity: 1.0;
 }
 
 .pixelperfect-toggle:hover,
-button.pixelperfect-toggle:hover,
-.button.pixelperfect-toggle:hover,
-.pixelperfect-toggle.icon-active:hover,
-button.pixelperfect-toggle.icon-active:hover,
-.button.pixelperfect-toggle.icon-active:hover {
+.pixelperfect-toggle.icon-active:hover {
 	background-color: rgba(255, 255, 255, 0.28);
 	color: rgba(255, 255, 255, 1.0);
 	opacity: 1.0;
@@ -515,19 +471,13 @@ button.transform-space-icon,
 	opacity: 0.5;
 }
 
-.transform-space-icon.icon-active,
-button.transform-space-icon.icon-active,
-.button.transform-space-icon.icon-active {
+.transform-space-icon.icon-active {
 	background-image: url("editor:Icons/local.svg");
 	opacity: 1.0;
 }
 
 .transform-space-icon:hover,
-button.transform-space-icon:hover,
-.button.transform-space-icon:hover,
-.transform-space-icon.icon-active:hover,
-button.transform-space-icon.icon-active:hover,
-.button.transform-space-icon.icon-active:hover {
+.transform-space-icon.icon-active:hover {
 	background-color: rgba(255, 255, 255, 0.28);
 	opacity: 1.0;
 }
@@ -543,18 +493,12 @@ button.grid-icon,
 	opacity: 0.5;
 }
 
-.grid-icon.icon-active,
-button.grid-icon.icon-active,
-.button.grid-icon.icon-active {
+.grid-icon.icon-active {
 	opacity: 1.0;
 }
 
 .grid-icon:hover,
-button.grid-icon:hover,
-.button.grid-icon:hover,
-.grid-icon.icon-active:hover,
-button.grid-icon.icon-active:hover,
-.button.grid-icon.icon-active:hover {
+.grid-icon.icon-active:hover {
 	background-color: rgba(255, 255, 255, 0.28);
 	opacity: 1.0;
 }
@@ -570,18 +514,12 @@ button.snap-icon,
 	opacity: 0.5;
 }
 
-.snap-icon.icon-active,
-button.snap-icon.icon-active,
-.button.snap-icon.icon-active {
+.snap-icon.icon-active {
 	opacity: 1.0;
 }
 
 .snap-icon:hover,
-button.snap-icon:hover,
-.button.snap-icon:hover,
-.snap-icon.icon-active:hover,
-button.snap-icon.icon-active:hover,
-.button.snap-icon.icon-active:hover {
+.snap-icon.icon-active:hover {
 	background-color: rgba(255, 255, 255, 0.28);
 	opacity: 1.0;
 }
@@ -617,18 +555,12 @@ button.gizmo-icon,
 	opacity: 0.42;
 }
 
-.gizmo-icon.icon-active,
-button.gizmo-icon.icon-active,
-.button.gizmo-icon.icon-active {
+.gizmo-icon.icon-active {
 	opacity: 1.0;
 }
 
 .gizmo-icon:hover,
-button.gizmo-icon:hover,
-.button.gizmo-icon:hover,
-.gizmo-icon.icon-active:hover,
-button.gizmo-icon.icon-active:hover,
-.button.gizmo-icon.icon-active:hover {
+.gizmo-icon.icon-active:hover {
 	background-color: rgba(255, 255, 255, 0.28);
 	opacity: 1.0;
 }
@@ -644,9 +576,7 @@ button.camera-settings-icon,
 	opacity: 0.5;
 }
 
-.camera-settings-icon:hover,
-button.camera-settings-icon:hover,
-.button.camera-settings-icon:hover {
+.camera-settings-icon:hover {
 	background-color: rgba(255, 255, 255, 0.28);
 	opacity: 1.0;
 }
@@ -682,18 +612,12 @@ button.quad-view-icon,
 	opacity: 0.5;
 }
 
-.quad-view-icon.icon-active,
-button.quad-view-icon.icon-active,
-.button.quad-view-icon.icon-active {
+.quad-view-icon.icon-active {
 	opacity: 1.0;
 }
 
 .quad-view-icon:hover,
-button.quad-view-icon:hover,
-.button.quad-view-icon:hover,
-.quad-view-icon.icon-active:hover,
-button.quad-view-icon.icon-active:hover,
-.button.quad-view-icon.icon-active:hover {
+.quad-view-icon.icon-active:hover {
 	background-color: rgba(255, 255, 255, 0.28);
 	opacity: 1.0;
 }
@@ -709,18 +633,14 @@ button.post-process-icon,
 	opacity: 0.15;
 }
 
+/* The .button form has the specificity of `.sceneview-toolbar .button.icon-button` (0,3,0) and wins because it comes later. */
 .post-process-icon.icon-active,
-button.post-process-icon.icon-active,
 .button.post-process-icon.icon-active {
 	opacity: 0.35;
 }
 
 .post-process-icon:hover,
-button.post-process-icon:hover,
-.button.post-process-icon:hover,
-.post-process-icon.icon-active:hover,
-button.post-process-icon.icon-active:hover,
-.button.post-process-icon.icon-active:hover {
+.post-process-icon.icon-active:hover {
 	background-color: rgba(255, 255, 255, 0.28);
 	opacity: 1.0;
 }
@@ -736,18 +656,14 @@ button.nav-gizmo-icon,
 	opacity: 0.15;
 }
 
+/* The .button form has the specificity of `.sceneview-toolbar .button.icon-button` (0,3,0) and wins because it comes later. */
 .nav-gizmo-icon.icon-active,
-button.nav-gizmo-icon.icon-active,
 .button.nav-gizmo-icon.icon-active {
 	opacity: 0.35;
 }
 
 .nav-gizmo-icon:hover,
-button.nav-gizmo-icon:hover,
-.button.nav-gizmo-icon:hover,
-.nav-gizmo-icon.icon-active:hover,
-button.nav-gizmo-icon.icon-active:hover,
-.button.nav-gizmo-icon.icon-active:hover {
+.nav-gizmo-icon.icon-active:hover {
 	background-color: rgba(255, 255, 255, 0.28);
 	opacity: 1.0;
 }
@@ -762,18 +678,14 @@ button.tool-overlay-icon,
 	opacity: 0.15;
 }
 
+/* The .button form has the specificity of `.sceneview-toolbar .button.icon-button` (0,3,0) and wins because it comes later. */
 .tool-overlay-icon.icon-active,
-button.tool-overlay-icon.icon-active,
 .button.tool-overlay-icon.icon-active {
 	opacity: 0.35;
 }
 
 .tool-overlay-icon:hover,
-button.tool-overlay-icon:hover,
-.button.tool-overlay-icon:hover,
-.tool-overlay-icon.icon-active:hover,
-button.tool-overlay-icon.icon-active:hover,
-.button.tool-overlay-icon.icon-active:hover {
+.tool-overlay-icon.icon-active:hover {
 	background-color: rgba(255, 255, 255, 0.28);
 	opacity: 1.0;
 }

@@ -281,9 +281,10 @@ TEST_F(TerrainMaterialLibraryEditorScene, ExtractionCarriesTheLibrarysAuthoredGr
         // The real load path over the real file.
         GameEngine::Scene::EnsureTerrainSceneSchemasRegistered();
         GameEngine::ECS::World world;
-        ASSERT_TRUE(GameEngine::Scene::ReadSceneInto(
-            world, m_ScenePath, GameEngine::Scene::SceneReadOptions{}))
-            << GameEngine::Scene::GetLastSceneIOError().message;
+        const auto readResult = GameEngine::Scene::ReadSceneInto(
+            world, m_ScenePath, GameEngine::Scene::SceneReadOptions{});
+        ASSERT_TRUE(readResult)
+            << readResult.Error->message;
 
         // Chain link 0, asserted before any extraction: the loaded island component carries the
         // scene's library binding. If THIS fails the break is in the loader, not downstream.
@@ -524,9 +525,10 @@ TEST_F(TerrainMaterialLibraryEditorScene, AnEditAndItsUndoReachATerrainBoundThro
 
         GameEngine::Scene::EnsureTerrainSceneSchemasRegistered();
         GameEngine::ECS::World world;
-        ASSERT_TRUE(GameEngine::Scene::ReadSceneInto(
-            world, m_ScenePath, GameEngine::Scene::SceneReadOptions{}))
-            << GameEngine::Scene::GetLastSceneIOError().message;
+        const auto readResult = GameEngine::Scene::ReadSceneInto(
+            world, m_ScenePath, GameEngine::Scene::SceneReadOptions{});
+        ASSERT_TRUE(readResult)
+            << readResult.Error->message;
 
         GameEngine::Engine::Renderer::TransformHierarchySystem transforms;
         TerrainECS::TerrainExtractionSystem extraction(&rs);

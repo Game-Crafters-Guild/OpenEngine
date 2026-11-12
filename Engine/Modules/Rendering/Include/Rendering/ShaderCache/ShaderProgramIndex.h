@@ -14,7 +14,7 @@ inline constexpr const char* kShaderProgramIndexFileName = "program-index.bin";
 
 /// Bumped whenever the file layout or the input key a material build derives
 /// (BuildMaterialToShaderPackage) changes; an index written under another version is ignored.
-inline constexpr uint32_t kShaderProgramIndexVersion = 2;
+inline constexpr uint32_t kShaderProgramIndexVersion = 3;
 
 struct MaterialBuildContext;
 

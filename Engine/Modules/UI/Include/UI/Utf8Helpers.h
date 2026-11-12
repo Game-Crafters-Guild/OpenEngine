@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -65,6 +66,12 @@ inline size_t Next(std::string_view s, size_t i)
     while (i < s.size() && ((s[i] & 0xC0) == 0x80))
         ++i;
     return i;
+}
+
+// The number of code points in s: every byte that is not a continuation byte (10xxxxxx).
+inline size_t CountCodePoints(std::string_view s)
+{
+    return static_cast<size_t>(std::count_if(s.begin(), s.end(), [](char c) { return (c & 0xC0) != 0x80; }));
 }
 
 }} // namespace GameEngine::Utf8

@@ -11,6 +11,7 @@ namespace
 using namespace GameEngine::ECS;
 struct SnapshotValue { int Value = 0; };
 struct SnapshotReference { EntityHandle Target; };
+struct SnapshotGenerated { int Value = 0; static constexpr bool NotInWorldSnapshot = true; };
 
 TEST(WorldSnapshotIdentity, PreservesSparseHandlesAndReusedGenerations)
 {
@@ -252,6 +253,27 @@ TEST(WorldSnapshotIdentity, PreservesReservedUndoHandlesAndFreeIndexOrder)
     EXPECT_NE(first, expectedFirst);
     EXPECT_NE(second, expectedSecond);
     EXPECT_TRUE(world.IsValid(reserved));
+}
+
+// An entity whose archetype holds a NotInWorldSnapshot type is not in the snapshot: its slot comes
+// back free, and the next create in it issues a new version.
+TEST(WorldSnapshotIdentity, AnEntityOfANotInWorldSnapshotTypeComesBackAsAFreeSlot)
+{
+    World world(nullptr);
+    const auto authored = world.CreateHandle(SnapshotValue{1});
+    const auto generated = world.CreateHandle(SnapshotGenerated{2});
+    world.AddComponentImmediate(generated, SnapshotValue{3});
+    const auto snapshot = world.SerializeWorld();
+
+    world.DeserializeWorld(snapshot);
+
+    EXPECT_TRUE(world.IsValid(authored));
+    EXPECT_EQ(world.GetComponent<SnapshotValue>(authored)->Value, 1);
+    EXPECT_FALSE(world.IsValid(generated)) << "the restore brought back an entity of a NotInWorldSnapshot type";
+    EXPECT_EQ(world.GetEntityCount(), 1u);
+    const auto next = world.CreateEntity();
+    EXPECT_EQ(next.index, generated.index);
+    EXPECT_NE(next, generated);
 }
 
 TEST(WorldSnapshotIdentity, DeletionReplayAndUndoSurviveAnotherSnapshotCycle)

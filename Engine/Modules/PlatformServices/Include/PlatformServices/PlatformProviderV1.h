@@ -65,6 +65,11 @@ typedef struct GE_PS_AchievementStateV1 {
     uint32_t target;
 } GE_PS_AchievementStateV1;
 
+typedef struct GE_PS_FileInfoV1 {
+    uint64_t sizeBytes;
+    int64_t  lastWriteUnixMs; // UTC, milliseconds since 1970-01-01
+} GE_PS_FileInfoV1;
+
 typedef struct GE_PS_ConfigV1 {
     GE_PS_Str appName;  // used to derive the default save root when saveRoot is empty
     GE_PS_Str saveRoot; // optional UTF-8 path override for save storage
@@ -123,6 +128,10 @@ typedef struct GE_PlatformProviderV1 {
     GE_PS_Result (*ShowAchievements)(void);
     GE_PS_Result (*ShowAccountPicker)(void);
     GE_PS_Result (*ShowStorePage)(GE_PS_Str productId);
+
+    // Saves, ABI 1.1
+    GE_PS_Result (*DeleteSlot)(GE_PS_Str slot); // the slot and all its files
+    GE_PS_Result (*GetFileInfo)(GE_PS_Str slot, GE_PS_Str name, GE_PS_FileInfoV1* outInfo);
 } GE_PlatformProviderV1;
 
 // Defined by exactly one provider module per build (CMake links the module

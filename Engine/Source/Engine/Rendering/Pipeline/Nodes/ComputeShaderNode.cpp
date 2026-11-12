@@ -556,6 +556,48 @@ void ComputeShaderNode::EnsureCachedPipeline(GameEngine::Rendering::IDevice* dev
     }
 }
 
+void ComputeShaderNode::RequestPausedViewPipelines(const PausedViewPrewarm& prewarm)
+{
+    // The gates of DeclareForView that read no frame resource. A runOnce node that dispatched bound
+    // its pipeline, so the pipeline is built.
+    GameEngine::Rendering::IDevice* device = prewarm.Services.GetDevice();
+    EnsureCachedPipeline(device);
+    if (!device || !m_PipelineId.IsValid() || (m_RunOnce && m_RunOnceDispatched))
+        return;
+    if (LacksRequiredLights(prewarm.Services, prewarm.View.id) ||
+        IsSkippedBy(prewarm.Services.GetEffectivePostProcessSettings(prewarm.View.id, prewarm.View.worldId),
+                    prewarm.RenderHeight))
+        return;
+    device->RequestComputePipeline(m_PipelineId);
+}
+
+bool ComputeShaderNode::LacksRequiredLights(const RenderServices& services, GameEngine::Rendering::ViewId viewId) const
+{
+    if (!m_RequiresLights)
+        return false;
+    const auto* vd = services.Views().FindViewDesc(viewId);
+    return services.GetWorldLights(vd ? vd->worldId : 0u).empty();
+}
+
+bool ComputeShaderNode::IsSkippedBy(const PostProcessSettings& settings, uint32_t renderHeight) const
+{
+    if (m_SkipWhenFields.empty())
+        return false;
+    // A copy, so the settings that ppOverrides push stay as they are for every node.
+    PostProcessSettings gateSettings = settings;
+    gateSettings.ResolveDerivedForRenderHeight(renderHeight);
+    // Tolerance mirrors FullscreenShaderNode: below any user-visible slider step, above
+    // PostProcessVolume float-blend noise.
+    constexpr float kSkipEpsilon = 1.0f / 1024.0f;
+    for (const auto& f : m_SkipWhenFields)
+    {
+        float v = 0.0f;
+        if (!gateSettings.TryReadField(f.Name, v) || std::abs(v - f.Value) > kSkipEpsilon)
+            return false;
+    }
+    return true;
+}
+
 void ComputeShaderNode::DeclareForView(ViewDeclare& d)
 {
     EnsureCachedPipeline(d.Services.GetDevice());
@@ -580,42 +622,16 @@ void ComputeShaderNode::DeclareForView(ViewDeclare& d)
 
     // The old activation predicate, evaluated at declaration (the spine's
     // node loop already mask-gates the view).
-    if (m_RequiresLights)
-    {
-        const auto* vd = d.Services.Views().FindViewDesc(d.View.id);
-        const uint64_t wId = vd ? vd->worldId : 0u;
-        if (d.Services.GetWorldLights(wId).empty())
-            return;
-    }
+    if (LacksRequiredLights(d.Services, d.View.id))
+        return;
     const PostProcessSettings settings =
         d.Services.GetEffectivePostProcessSettings(d.View.id, d.View.worldId);
 
     // Effect gate (blueprint skipWhen): a disabled effect declares no dispatch
     // — and, because target resources materialize on first resolve, allocates
-    // none of this node's outputs either. Evaluated on a copy carrying the
-    // per-view derived fields so height-derived gates read their live value,
-    // leaving the ppOverrides `settings` above byte-identical for every
-    // existing node.
-    if (!m_SkipWhenFields.empty())
-    {
-        PostProcessSettings gateSettings = settings;
-        gateSettings.ResolveDerivedForRenderHeight(d.RenderHeight);
-        // Tolerance mirrors FullscreenShaderNode: below any user-visible
-        // slider step, above PostProcessVolume float-blend noise.
-        constexpr float kSkipEpsilon = 1.0f / 1024.0f;
-        bool skip = true;
-        for (const auto& f : m_SkipWhenFields)
-        {
-            float v = 0.0f;
-            if (!gateSettings.TryReadField(f.Name, v) || std::abs(v - f.Value) > kSkipEpsilon)
-            {
-                skip = false; // unknown field or live effect: run
-                break;
-            }
-        }
-        if (skip)
-            return;
-    }
+    // none of this node's outputs either.
+    if (IsSkippedBy(settings, d.RenderHeight))
+        return;
 
     // Idle recompute elision (blueprint idleElide): collect the dispatch's
     // content inputs as they are resolved below; the gate decides just before

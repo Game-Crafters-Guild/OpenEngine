@@ -68,10 +68,29 @@ public:
                              std::span<const ::GameEngine::Rendering::RenderGraph::RGTexture>*
                                  outSampledCascades = nullptr);
 
+    // Asks the device for the surface pipeline that BuildForwardCommand binds for `viewId` in a pass
+    // with `passKeywords` and the attachments of `formats`. The build runs off the calling thread.
+    // Returns true when it asked for the pipeline.
+    bool RequestSurfacePipeline(::GameEngine::Rendering::ViewId viewId,
+                                ::GameEngine::Rendering::MaterialKeyword passKeywords,
+                                const ::GameEngine::Rendering::PipelineFormatKey& formats);
+
 private:
+    // The gates of BuildForwardCommand that hold without a frame: true when the surface draws into `viewId`.
+    bool DrawsSurfaceInto(::GameEngine::Rendering::ViewId viewId) const;
+    // The clipmap-vertex variant of the material's base pipeline, culled or two-sided. Invalid while the
+    // material has no base pipeline.
+    ::GameEngine::Rendering::GraphicsPipelineId SurfacePipelineId(::GameEngine::Rendering::IDevice& device,
+                                                                  const Engine::Renderer::Material& material,
+                                                                  ::GameEngine::Rendering::MaterialKeyword passKeywords,
+                                                                  bool twoSided);
+
     // The surface material for a pass with `passKeywords`, registered on first use with the pass
-    // keywords among kOceanSurfacePassKeywords. Null when the registration failed.
-    Engine::Renderer::Material* EnsureMaterial(::GameEngine::Rendering::MaterialKeyword passKeywords);
+    // keywords among kOceanSurfacePassKeywords. With `compileOnWorker` the first registration compiles
+    // its base pipeline on a worker (MaterialSystem::BaseCompileMode::Async), and the material has no
+    // pipeline until the publish lands. Null when the registration failed.
+    Engine::Renderer::Material* EnsureMaterial(::GameEngine::Rendering::MaterialKeyword passKeywords,
+                                               bool compileOnWorker);
 
     OceanRenderFeature& m_Feature;
     Engine::Renderer::RenderServices& m_RenderServices;

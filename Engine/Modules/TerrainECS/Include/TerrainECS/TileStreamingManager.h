@@ -30,14 +30,15 @@ struct StreamingConfig
 // State machine for each tile in the streaming pipeline.
 enum class TileState : uint8
 {
-    Idle,            // Not requested
-    Requested,       // In priority queue, job not yet dispatched
-    LoadingCoarse,   // Job thread: generating coarse heightfield
-    CoarseReady,     // Coarse data complete, awaiting main-thread integration
-    LoadingFull,     // Job thread: generating full heightfield
-    FullReady,       // Full data complete, awaiting main-thread integration
-    Active,          // Fully loaded and integrated
-    Unloading        // Marked for removal
+    Idle,             // Not requested
+    Requested,        // In priority queue, job not yet dispatched
+    UpgradeRequested, // Resident at Coarse LOD, full job not yet dispatched
+    LoadingCoarse,    // Job thread: generating coarse heightfield
+    CoarseReady,      // Coarse data complete, awaiting main-thread integration
+    LoadingFull,      // Job thread: generating full heightfield
+    FullReady,        // Full data complete, awaiting main-thread integration
+    Active,           // Resident and integrated, at Coarse or Full LOD
+    Unloading         // Marked for removal
 };
 
 // Priority for ordering tile load requests.
@@ -45,13 +46,11 @@ struct TileStreamingPriority
 {
     float32 DistanceSq = 0.0f;
     bool InFrustum = false;
-    bool IsUpgrade = false; // true if upgrading from coarse to full
 
     // Lower is higher priority: in-frustum + near beats out-of-frustum + far.
     bool operator<(const TileStreamingPriority& o) const
     {
         if (InFrustum != o.InFrustum) return InFrustum;
-        if (IsUpgrade != o.IsUpgrade) return !IsUpgrade; // New tiles before upgrades
         return DistanceSq < o.DistanceSq;
     }
 };

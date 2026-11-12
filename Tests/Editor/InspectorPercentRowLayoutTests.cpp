@@ -41,7 +41,7 @@ FloatField* LayOutPercentRow(InspectorLayoutFixture& fixture, float initial)
     fixture.ViewportW = kDefaultInspectorWidth;
     // The global theme sheets that style a field with a suffix, then the suffix label's own sheet.
     fixture.ExtraSheets = {"Assets/UI/theme/core.css", "Assets/UI/theme/widgets.css",
-                           "Assets/UI/controls/FieldSuffix/FieldSuffix.css"};
+                           GE_UI_MODULE_SOURCE_DIR "/Assets/UI/controls/FieldSuffix/FieldSuffix.css"};
     return fixture.Build(std::move(panel)) ? row.ValueField : nullptr;
 }
 

@@ -17,6 +17,8 @@ const char* ToString(DepEdgeKind kind) noexcept
         case DepEdgeKind::UILayoutStyle:        return "UILayoutStyle";
         case DepEdgeKind::UIElementImage:       return "UIElementImage";
         case DepEdgeKind::SceneResource:        return "SceneResource";
+        case DepEdgeKind::UIStyleImport:        return "UIStyleImport";
+        case DepEdgeKind::ShaderInclude:        return "ShaderInclude";
     }
     return "Unknown";
 }

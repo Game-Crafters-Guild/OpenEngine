@@ -48,6 +48,17 @@ using GameEngine::TerrainGrass::GrassHashToUnit;
 #include "GrassBladeShapeExtracted.h"
 } // namespace GrassBladeShapeShader
 
+// The shipped floor-band thinning (grass_placement.glsl), compiled through GlslShim.h so the CPU
+// mirror is compared with the expression the plan kernel runs.
+namespace GrassFloorThinningShader
+{
+using namespace GameEngine::GlslShim;
+using GameEngine::GlslShim::max;
+using GameEngine::GlslShim::min;
+using GameEngine::GlslShim::sqrt;
+#include "GrassFloorThinningExtracted.h"
+} // namespace GrassFloorThinningShader
+
 namespace GameEngine::TerrainGrass
 {
 namespace
@@ -249,6 +260,356 @@ TEST(GrassPlacementModel, EverySlotWithVisibleGrowthIsIterated)
         const uint32 iterated = GrassSlotsToIterate(wanted);
         // No slot beyond the iteration bound may still be visible.
         EXPECT_LE(GrassGrowthForSlot(wanted, iterated), kGrassMinGrowth) << "wanted=" << wanted;
+    }
+}
+
+// --- Floor-band thinning ------------------------------------------------------------------------
+
+namespace
+{
+
+// A 1080 px viewport at a 60 degree vertical field of view: H * P11 / 2 pixels per meter at 1 m.
+constexpr float32 kThinningPixelsPerMeter = 1080.0f * 1.7320508f * 0.5f;
+// The strategy pose C2: a 929 px Game View at a 42 degree vertical field of view.
+constexpr float32 kStrategyPixelsPerMeter = 929.0f * 2.6050891f * 0.5f;
+constexpr float32 kThinningBladeWidth = 0.032f;
+constexpr float32 kThinningBladeHeight = 0.5f;
+
+float32 EyeDistance(float32 distance, float32 cameraHeight)
+{
+    return std::sqrt(distance * distance + cameraHeight * cameraHeight);
+}
+
+// The factor for a cell on the view axis, where the view depth is the eye distance.
+float32 OnAxisFactor(float32 density, float32 bladeWidth, float32 distance, float32 cameraHeight,
+                     float32 pixelsPerMeter)
+{
+    return GrassFloorThinningFactor(density, bladeWidth, kThinningBladeHeight, distance,
+                                    EyeDistance(distance, cameraHeight), cameraHeight, pixelsPerMeter);
+}
+
+// The optical depth of the field along the view ray, written from the design rather than from the
+// mirror: blades per square meter times the drawn leaf area times the grazing factor d / h.
+float32 FieldOpticalDepth(float32 density, float32 distance, float32 cameraHeight)
+{
+    const float32 floorWidth = 1.5f * EyeDistance(distance, cameraHeight) / kThinningPixelsPerMeter;
+    const float32 drawnWidth = std::clamp(floorWidth, kThinningBladeWidth, kThinningBladeWidth * 6.0f);
+    return density * drawnWidth * kThinningBladeHeight * (distance / cameraHeight);
+}
+
+} // namespace
+
+TEST(GrassPlacementModel, FloorThinningKeepsEveryBladeAboveTheFloorUnderASteepView)
+{
+    // 10 m up, 2 m out: the leaf projects wider than the floor, and the field is open.
+    for (float32 density : {21.0f, 128.0f})
+    {
+        EXPECT_EQ(OnAxisFactor(density, kThinningBladeWidth, 2.0f, 10.0f, kThinningPixelsPerMeter), 1.0f)
+            << "density=" << density;
+    }
+}
+
+TEST(GrassPlacementModel, FloorThinningKeepsEveryBladeOfAFirstPersonEyeAboveTheFloor)
+{
+    // An eye 1.7 m over ground near the world's lowest point: the 32 mm blade is wider than the floor
+    // out to about 19.9 m, on the view axis and off it, so the near field is unchanged.
+    for (float32 d = 0.5f; d <= 19.5f; d += 0.5f)
+    {
+        for (float32 depthShare : {1.0f, 0.6f, 0.0f})
+        {
+            const float32 kept = GrassFloorThinningFactor(128.0f, kThinningBladeWidth, kThinningBladeHeight, d,
+                                                          EyeDistance(d, 1.7f) * depthShare, 1.7f,
+                                                          kThinningPixelsPerMeter);
+            EXPECT_EQ(kept, 1.0f) << "d=" << d << " depth share=" << depthShare;
+        }
+    }
+    // Past the floor, the strip under the horizon thins.
+    EXPECT_LT(OnAxisFactor(128.0f, kThinningBladeWidth, 40.0f, 1.7f, kThinningPixelsPerMeter), 1.0f);
+}
+
+TEST(GrassPlacementModel, FloorThinningFallsMonotonicallyWithTheGrazingFactor)
+{
+    // The strategy camera 34 m up: the field closes with distance, so the kept share falls.
+    float32 previous = 1.0f;
+    for (float32 d = 1.0f; d <= 105.0f; d += 1.0f)
+    {
+        const float32 kept = OnAxisFactor(128.0f, kThinningBladeWidth, d, 34.0f, kStrategyPixelsPerMeter);
+        EXPECT_LE(kept, previous) << "d=" << d;
+        EXPECT_GT(kept, 0.0f) << "d=" << d;
+        previous = kept;
+    }
+    EXPECT_LT(previous, 0.5f) << "a closed field 105 m out under a 34 m camera keeps every blade";
+}
+
+TEST(GrassPlacementModel, FloorThinningFallsContinuouslyToZeroAtTheLowestGround)
+{
+    // A floor-band cell 60 m out: the kept share falls with the camera height and has no step at h = 0.
+    float32 previous = OnAxisFactor(128.0f, kThinningBladeWidth, 60.0f, 2.0f, kThinningPixelsPerMeter);
+    for (float32 h = 1.99f; h >= -1.0f; h -= 0.01f)
+    {
+        const float32 kept = OnAxisFactor(128.0f, kThinningBladeWidth, 60.0f, h, kThinningPixelsPerMeter);
+        EXPECT_LE(kept, previous) << "h=" << h;
+        EXPECT_LT(previous - kept, 0.001f) << "h=" << h;
+        previous = kept;
+    }
+    EXPECT_EQ(OnAxisFactor(128.0f, kThinningBladeWidth, 60.0f, 0.0f, kThinningPixelsPerMeter), 0.0f);
+}
+
+TEST(GrassPlacementModel, FloorThinningNeverRaisesTheShowThroughByMoreThanTwoPoints)
+{
+    constexpr float32 kAllowedRise = 0.02f;
+    constexpr float32 kTolerance = 1e-5f;
+    for (float32 density : {4.0f, 21.0f, 64.0f, 128.0f, 256.0f})
+    {
+        for (float32 cameraHeight : {1.7f, 10.0f, 34.0f, 120.0f})
+        {
+            for (float32 d = 0.5f; d <= 200.0f; d *= 1.5f)
+            {
+                const float32 tau = FieldOpticalDepth(density, d, cameraHeight);
+                const float32 kept =
+                    OnAxisFactor(density, kThinningBladeWidth, d, cameraHeight, kThinningPixelsPerMeter);
+                const float32 before = std::exp(-tau);
+                const float32 after = std::exp(-tau * kept);
+                EXPECT_LE(after - before, kAllowedRise + kTolerance)
+                    << "density=" << density << " h=" << cameraHeight << " d=" << d;
+                EXPECT_LE(after, std::max(before, kAllowedRise) + kTolerance)
+                    << "density=" << density << " h=" << cameraHeight << " d=" << d;
+            }
+        }
+    }
+}
+
+TEST(GrassPlacementModel, FloorThinningMirrorMatchesTheShippedGlslOnATable)
+{
+    struct Row
+    {
+        float32 Distance;
+        float32 ViewDepth;
+        float32 CameraHeight;
+        float32 Density;
+        float32 BladeWidth; // with the pixel size, sets the floor widening k
+        float32 PixelsPerMeter;
+    };
+    const Row rows[] = {
+        {2.0f, 10.2f, 10.0f, 128.0f, 0.032f, kThinningPixelsPerMeter},    // k = 1, open field
+        {60.0f, 69.0f, 34.0f, 128.0f, 0.032f, kStrategyPixelsPerMeter},   // strategy pose, k about 2.7
+        {60.0f, 42.0f, 34.0f, 128.0f, 0.032f, kStrategyPixelsPerMeter},   // the same cell off the axis
+        {60.0f, 10.0f, 34.0f, 128.0f, 0.032f, kStrategyPixelsPerMeter},   // depth under half the eye distance
+        {100.0f, 106.0f, 34.0f, 128.0f, 0.016f, kStrategyPixelsPerMeter}, // k at its cap
+        {40.0f, 40.0f, 1.7f, 21.0f, 0.032f, kThinningPixelsPerMeter},     // first person, grazing
+        {10.0f, 10.1f, 1.7f, 128.0f, 0.032f, kThinningPixelsPerMeter},    // first person, above the floor
+        {80.0f, 501.0f, 500.0f, 64.0f, 0.064f, kThinningPixelsPerMeter},  // flight, steep
+        {30.0f, 36.0f, 20.0f, 0.0f, 0.032f, kThinningPixelsPerMeter},     // no grass
+        {30.0f, 36.0f, 20.0f, 128.0f, 0.0f, kThinningPixelsPerMeter},     // texture cards: no blade width
+        {30.0f, 36.0f, 20.0f, 128.0f, 0.032f, 0.0f},                      // pixel size unknown
+        {60.0f, 60.0f, 0.0f, 128.0f, 0.032f, kThinningPixelsPerMeter},    // camera at the lowest ground
+        {30.0f, 30.0f, -2.0f, 128.0f, 0.032f, kThinningPixelsPerMeter},   // camera under the lowest ground
+    };
+    for (const Row& row : rows)
+    {
+        const float32 cpu = GrassFloorThinningFactor(row.Density, row.BladeWidth, kThinningBladeHeight, row.Distance,
+                                                     row.ViewDepth, row.CameraHeight, row.PixelsPerMeter);
+        const float32 gpu = GrassFloorThinningShader::GrassFloorThinningFactor(
+            row.Density, row.BladeWidth, kThinningBladeHeight, row.Distance, row.ViewDepth, row.CameraHeight,
+            row.PixelsPerMeter);
+        EXPECT_FLOAT_EQ(cpu, gpu) << "d=" << row.Distance << " z=" << row.ViewDepth << " h=" << row.CameraHeight
+                                  << " n=" << row.Density << " w=" << row.BladeWidth;
+        const float32 cpuRing = GrassFloorThinningRingFactor(row.Density, 2.0f * row.BladeWidth, row.BladeWidth,
+                                                             kThinningBladeHeight, row.Distance, row.CameraHeight,
+                                                             row.PixelsPerMeter);
+        const float32 gpuRing = GrassFloorThinningShader::GrassFloorThinningRingFactor(
+            row.Density, 2.0f * row.BladeWidth, row.BladeWidth, kThinningBladeHeight, row.Distance,
+            row.CameraHeight, row.PixelsPerMeter);
+        EXPECT_FLOAT_EQ(cpuRing, gpuRing) << "ring d=" << row.Distance << " h=" << row.CameraHeight
+                                          << " n=" << row.Density << " w=" << row.BladeWidth;
+        // The cell ground at 1000 m, the ground under the camera 5 m higher, the view pitched down.
+        const float32 cpuCell = GrassFloorThinningCellFactor(row.Density, row.BladeWidth, kThinningBladeHeight,
+                                                             row.Distance, row.ViewDepth, -0.5f,
+                                                             1000.0f + row.CameraHeight, 1000.0f, 1005.0f,
+                                                             row.PixelsPerMeter);
+        const float32 gpuCell = GrassFloorThinningShader::GrassFloorThinningCellFactor(
+            row.Density, row.BladeWidth, kThinningBladeHeight, row.Distance, row.ViewDepth, -0.5f,
+            1000.0f + row.CameraHeight, 1000.0f, 1005.0f, row.PixelsPerMeter);
+        EXPECT_FLOAT_EQ(cpuCell, gpuCell) << "cell d=" << row.Distance << " h=" << row.CameraHeight
+                                          << " n=" << row.Density << " w=" << row.BladeWidth;
+    }
+}
+
+// The strategy pose C2: 120 m over its local ground, which is 1971 m above the world's lowest ground,
+// pitched 40 degrees down. A dense field 150 m out is in the floor band and closed.
+TEST(GrassPlacementModel, FloorThinningReadsTheCameraHeightAboveTheCellsGround)
+{
+    constexpr float32 kGroundY = 1971.22f;
+    constexpr float32 kCameraY = kGroundY + 120.0f;
+    const float32 forwardY = -std::sin(0.6981317f);
+    const float32 forwardXZ = std::cos(0.6981317f);
+    const float32 kept = GrassFloorThinningCellFactor(64.0f, kThinningBladeWidth, kThinningBladeHeight, 150.0f,
+                                                      150.0f * forwardXZ, forwardY, kCameraY, kGroundY, kGroundY,
+                                                      kStrategyPixelsPerMeter);
+    EXPECT_GT(kept, 0.3f);
+    EXPECT_LT(kept, 0.7f) << "the field 150 m under a camera 120 m over its ground is closed: it thins";
+    const float32 tau = FieldOpticalDepth(64.0f, 150.0f, 120.0f);
+    EXPECT_LE(std::exp(-tau * kept) - std::exp(-tau), 0.02f);
+}
+
+// A first-person eye 1.75 m over its ground, and a meadow ahead that rises above the eye. The cell's h
+// is the eye's height over its own ground: the flat-ground share, never zero.
+TEST(GrassPlacementModel, FloorThinningKeepsTheFlatGroundShareForGroundAboveTheEye)
+{
+    constexpr float32 kGroundUnderCameraY = 100.0f;
+    constexpr float32 kCameraY = kGroundUnderCameraY + 1.75f;
+    for (float32 d = 10.0f; d <= 80.0f; d += 10.0f)
+    {
+        const float32 uphill = GrassFloorThinningCellFactor(128.0f, kThinningBladeWidth, kThinningBladeHeight, d, d,
+                                                            0.0f, kCameraY, 103.0f, kGroundUnderCameraY,
+                                                            kThinningPixelsPerMeter);
+        const float32 flat = GrassFloorThinningFactor(128.0f, kThinningBladeWidth, kThinningBladeHeight, d, d, 1.75f,
+                                                      kThinningPixelsPerMeter);
+        EXPECT_EQ(uphill, flat) << "d=" << d;
+        EXPECT_GT(uphill, 0.0f) << "d=" << d;
+    }
+}
+
+// A camera 20 m over a hilltop, and a dense field in the valley 120 m below it. The cell's h is the
+// camera's height over the valley floor, not over the hilltop.
+TEST(GrassPlacementModel, FloorThinningReadsTheValleyCellsOwnGround)
+{
+    constexpr float32 kValleyY = 1000.0f;
+    constexpr float32 kCameraY = kValleyY + 120.0f;
+    const float32 forwardY = -std::sin(0.6981317f);
+    const float32 depth = 150.0f * std::cos(0.6981317f);
+    const float32 overHill = GrassFloorThinningCellFactor(64.0f, kThinningBladeWidth, kThinningBladeHeight, 150.0f,
+                                                          depth, forwardY, kCameraY, kValleyY, kCameraY - 20.0f,
+                                                          kStrategyPixelsPerMeter);
+    const float32 overValley = GrassFloorThinningCellFactor(64.0f, kThinningBladeWidth, kThinningBladeHeight, 150.0f,
+                                                            depth, forwardY, kCameraY, kValleyY, kValleyY,
+                                                            kStrategyPixelsPerMeter);
+    EXPECT_EQ(overHill, overValley);
+}
+
+// A dense far cell seen by a first-person eye is in the floor band and thinned. The dial at 0 keeps
+// every slot of it in both copies, and at 1 keeps the band's share.
+TEST(GrassPlacementModel, FarThinningZeroKeepsEveryBladeWhereTheFullDialThins)
+{
+    const float32 share = OnAxisFactor(128.0f, kThinningBladeWidth, 40.0f, 1.7f, kThinningPixelsPerMeter);
+    ASSERT_LT(share, 0.5f);
+    EXPECT_FLOAT_EQ(GrassFarThinningKeptShare(share, 0.0f), 1.0f);
+    EXPECT_FLOAT_EQ(GrassFloorThinningShader::GrassFarThinningKeptShare(share, 0.0f), 1.0f);
+    EXPECT_EQ(GrassFarThinningKeptShare(share, 1.0f), share);
+    EXPECT_EQ(GrassFloorThinningShader::GrassFarThinningKeptShare(share, 1.0f), share);
+}
+
+// The dial at 0.5 thins half the share the full dial thins, in both copies.
+TEST(GrassPlacementModel, FarThinningHalfThinsHalfTheThinnedShare)
+{
+    const float32 share = OnAxisFactor(128.0f, kThinningBladeWidth, 40.0f, 1.7f, kThinningPixelsPerMeter);
+    ASSERT_LT(share, 0.5f);
+    const float32 expected = 1.0f - 0.5f * (1.0f - share);
+    EXPECT_FLOAT_EQ(GrassFarThinningKeptShare(share, 0.5f), expected);
+    EXPECT_FLOAT_EQ(GrassFloorThinningShader::GrassFarThinningKeptShare(share, 0.5f), expected);
+}
+
+// The ring bound reads h above the world's lowest ground and the floor at the ring's inner distance, so
+// a cell in a valley below the camera's ground, or on a rise, stays under it.
+TEST(GrassPlacementModel, TheRingBoundHoldsForCellsBelowAndAboveTheGroundUnderTheCamera)
+{
+    constexpr float32 kRange = 400.0f;
+    constexpr float32 kWorldMinY = 0.0f;
+    constexpr float32 kGroundUnderCameraY = 50.0f;
+    constexpr float32 kMinWidth = 0.016f;
+    constexpr float32 kMaxWidth = 0.064f;
+    constexpr float32 kMinHeight = 0.3f;
+    const GrassPlacementParams summary = MakeParams(300.0f, kRange, 1.0f);
+    for (float32 eyeHeight : {1.7f, 53.0f})
+    {
+        const float32 cameraY = kGroundUnderCameraY + eyeHeight;
+        for (uint32 ring = 0u; ring < 50u; ++ring)
+        {
+            const float32 inner = static_cast<float32>(ring) * kGrassCellSize;
+            const float32 boundWanted = GrassSlotsWantedForCell(summary, inner);
+            const uint32 bound = GrassSlotsToIterate(
+                boundWanted * GrassFloorThinningRingFactor(boundWanted / kGrassCellArea, kMaxWidth, kMinWidth,
+                                                           kMinHeight, inner, cameraY - kWorldMinY,
+                                                           kStrategyPixelsPerMeter));
+            for (float32 cellGroundY : {kWorldMinY, 20.0f, kGroundUnderCameraY, 70.0f})
+            {
+                for (float32 density : {21.0f, 128.0f, 300.0f})
+                {
+                    for (float32 width : {kMinWidth, kMaxWidth})
+                    {
+                        for (float32 offset : {0.0f, 7.9f})
+                        {
+                            for (float32 forwardY : {0.0f, -0.64f})
+                            {
+                                const float32 d = inner + offset;
+                                const float32 wanted = GrassSlotsWantedForCell(MakeParams(density, kRange, 1.0f), d);
+                                const uint32 slots = GrassSlotsToIterate(
+                                    wanted * GrassFloorThinningCellFactor(wanted / kGrassCellArea, width, kMinHeight,
+                                                                          d, 0.0f, forwardY, cameraY, cellGroundY,
+                                                                          kGroundUnderCameraY,
+                                                                          kStrategyPixelsPerMeter));
+                                EXPECT_LE(slots, bound) << "eye=" << eyeHeight << " ring=" << ring
+                                                        << " ground=" << cellGroundY << " n=" << density
+                                                        << " w=" << width << " d=" << d << " fy=" << forwardY;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+TEST(GrassPlacementModel, TheThinnedSlotCountNeverExceedsTheRingBoundTheFitReserves)
+{
+    // The ring bound thins the densest, flattest request at the ring's inner distance: the floor is
+    // read against the widest blade, the leaf against the thinnest and shortest. Every cell stays
+    // under it: the widest blade, the shortest, a cell off the view axis, a cell the slot cap clamps.
+    constexpr float32 kRange = 400.0f;
+    constexpr float32 kMinWidth = 0.016f;
+    constexpr float32 kMaxWidth = 0.064f;
+    constexpr float32 kMinHeight = 0.3f;
+    const GrassPlacementParams summary = MakeParams(300.0f, kRange, 1.0f);
+    for (float32 cameraHeight : {1.7f, 53.0f})
+    {
+        for (uint32 ring = 0u; ring < 50u; ++ring)
+        {
+            const float32 inner = static_cast<float32>(ring) * kGrassCellSize;
+            const float32 boundWanted = GrassSlotsWantedForCell(summary, inner);
+            const uint32 bound = GrassSlotsToIterate(
+                boundWanted * GrassFloorThinningRingFactor(boundWanted / kGrassCellArea, kMaxWidth, kMinWidth,
+                                                           kMinHeight, inner, cameraHeight,
+                                                           kStrategyPixelsPerMeter));
+            for (float32 density : {21.0f, 128.0f, 260.0f, 300.0f})
+            {
+                for (float32 falloff : {1.0f, 1.85f})
+                {
+                    for (float32 width : {kMinWidth, 0.032f, kMaxWidth})
+                    {
+                        for (float32 height : {kMinHeight, kThinningBladeHeight})
+                        {
+                            for (float32 offset : {0.0f, 3.0f, 7.9f})
+                            {
+                                for (float32 depthShare : {1.0f, 0.0f})
+                                {
+                                    const float32 d = inner + offset;
+                                    const float32 wanted =
+                                        GrassSlotsWantedForCell(MakeParams(density, kRange, falloff), d);
+                                    const uint32 slots = GrassSlotsToIterate(
+                                        wanted * GrassFloorThinningFactor(wanted / kGrassCellArea, width, height, d,
+                                                                          EyeDistance(d, cameraHeight) * depthShare,
+                                                                          cameraHeight, kStrategyPixelsPerMeter));
+                                    EXPECT_LE(slots, bound)
+                                        << "h=" << cameraHeight << " ring=" << ring << " n=" << density
+                                        << " p=" << falloff << " w=" << width << " hb=" << height << " d=" << d
+                                        << " depth share=" << depthShare;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -938,12 +1299,21 @@ TEST(GrassWindClock, WindTimeComesOnlyFromTheEngineAnimationClock)
 // ground disagree.
 TEST(GrassSurfaceSharing, BothStagesResolveTheGroundThroughTheSharedInclude)
 {
-    for (const char* name : {"terrain_grass_place.comp", "terrain_grass_surface.glsl"})
+    // The placement and the classify kernel read the ground through grass_ground_height.glsl.
+    for (const char* name : {"grass_ground_height.glsl", "terrain_grass_surface.glsl"})
     {
         const std::string src = ReadShaderSource(name);
         ASSERT_GT(src.size(), 200u) << name << " read back empty, truncated, or stripped to nothing";
         EXPECT_NE(src.find("TerrainGrass/grass_surface_pages.glsl"), std::string::npos)
             << name << " does not include the shared ground resolve";
+        EXPECT_EQ(src.find("uniform GrassSurfaceParamsBuffer"), std::string::npos)
+            << name << " re-declares the surface params block the shared include owns";
+    }
+    for (const char* name : {"terrain_grass_place.comp", "terrain_grass_classify.comp"})
+    {
+        const std::string src = ReadShaderSource(name);
+        EXPECT_NE(src.find("TerrainGrass/grass_ground_height.glsl"), std::string::npos)
+            << name << " does not include the shared ground height";
         EXPECT_EQ(src.find("uniform GrassSurfaceParamsBuffer"), std::string::npos)
             << name << " re-declares the surface params block the shared include owns";
     }
@@ -977,9 +1347,10 @@ TEST(GrassSurfaceSharing, ThePlacementReadsTheGroundsOwnLocateAtTheGroundsLevel)
     EXPECT_NE(shared.find("returnCBT_SurfPagesAt(uv,footprint,tp.WorldSizeX,tp.WorldSizeZ,Surface.SurfacePageBase,"),
               std::string::npos)
         << "the grass no longer reads the surface through the terrain fragment's resolve";
+    const std::string groundHeight = StripWhitespace(ReadShaderSource("grass_ground_height.glsl"));
+    EXPECT_NE(groundHeight.find("#include\"cbt_surface_pages.glsl\""), std::string::npos)
+        << "the shared ground height does not include the terrain's surface page resolve";
     const std::string placement = StripWhitespace(ReadShaderSource("terrain_grass_place.comp"));
-    EXPECT_NE(placement.find("#include\"cbt_surface_pages.glsl\""), std::string::npos)
-        << "the placement does not include the terrain's surface page resolve";
     EXPECT_NE(placement.find("g.Pages=GrassSurface_Pages(row,tp,uv,grassGroundPixelFootprint(tp,uv,rootWS));"),
               std::string::npos)
         << "the placement reads the pages at a level other than the ground's pixel footprint";
@@ -1311,7 +1682,9 @@ TEST(GrassClumpModel, TheRootColorWordRoundTripsWithinHalfAStepOfItsSquareRoot)
                 const float32 encoded = std::sqrt(value);
                 EXPECT_NEAR(got, value, kHalfStep * (2.0f * encoded + kHalfStep) + 1e-7f) << value;
                 if (value >= 0.01f)
+                {
                     EXPECT_LT(std::abs(got - value), 0.01f * value) << value;
+                }
             }
         }
     }

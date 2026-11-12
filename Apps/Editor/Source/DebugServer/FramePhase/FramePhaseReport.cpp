@@ -53,8 +53,6 @@ constexpr std::array kPhases = {
     Phase{"render.terminalPasses", &Sample::TerminalPassesMs, true},
     Phase{"render.rgCompile", &Sample::RgCompileMs, true},
     Phase{"render.rgExecute", &Sample::RgExecuteMs, true},
-    Phase{"render.variantCompile", &Sample::VariantCompileMs, true},
-    Phase{"render.prewarm", &Sample::PrewarmMs, true},
     Phase{"render.present", &Sample::PresentMs, true},
     Phase{"sleep", &Sample::SleepMs, true},
     Phase{"renderServices.sort", &Sample::SortMs, true},

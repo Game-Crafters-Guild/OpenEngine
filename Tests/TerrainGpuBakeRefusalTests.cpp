@@ -16,6 +16,7 @@
 #include "TerrainECS/TerrainModifierComponents.h"
 #include "TerrainECS/TerrainModifierSystem.h"
 #include "TerrainECS/TerrainService.h"
+#include "TerrainTestHelpers.h"
 
 using namespace GameEngine;
 using namespace GameEngine::TerrainECS;
@@ -45,6 +46,7 @@ protected:
         SetGpuHeightBakeEnabledForTests(1);
 
         TiledTerrainConfig config{};
+        config.Base = TerrainTests::GeneratedNoiseBase();
         config.WorldSizeX = kTileWorld;
         config.WorldSizeZ = kTileWorld;
         config.HeightScale = kHeightScale;
@@ -85,8 +87,8 @@ protected:
         volume.Priority = priority;
         m_World.AddComponentImmediate<Components::TerrainModifierVolume>(e, volume);
         Components::WorldTransform transform{};
-        transform.matrix[12] = 500.0f;
-        transform.matrix[14] = 500.0f;
+        transform.Position.X = 500.0;
+        transform.Position.Z = 500.0;
         m_World.AddComponentImmediate<Components::WorldTransform>(e, transform);
         return e;
     }

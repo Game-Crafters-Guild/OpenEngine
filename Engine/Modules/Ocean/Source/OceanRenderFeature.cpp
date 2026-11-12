@@ -2,6 +2,7 @@
 #include "Ocean/OceanCollisionProvider.h"
 #include "Ocean/OceanFootprintFrustum.h"
 #include "Ocean/OceanForwardContributor.h"
+#include "OceanRingMesh.h"
 
 #include "Engine/Rendering/RenderServices.h"
 #include "Logger/Logger.h"
@@ -13,6 +14,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cassert>
 #include <cmath>
 #include <cstring>
 #include <span>
@@ -584,7 +586,7 @@ bool OceanRenderFeature::Initialize(::GameEngine::Rendering::IDevice* device)
     if (m_InitDeclined)
         return false;
     m_Device = device;
-    CreateGridMesh(device, kDefaultOceanGeometryGridSize);
+    CreateGridMesh(device, kDefaultOceanRingCellsPerTile);
 
     // FFT wave simulation. A failure leaves rendering and collision on the
     // deterministic Gerstner representation built by extraction.
@@ -761,252 +763,21 @@ OceanSampledCascadeLayoutsGPU OceanRenderFeature::SampledCascadeLayouts(
     return layouts;
 }
 
-void OceanRenderFeature::CreateGridMesh(::GameEngine::Rendering::IDevice* device, uint32 gridSize)
+void OceanRenderFeature::CreateGridMesh(::GameEngine::Rendering::IDevice* device, uint32 cellsPerTile)
 {
-    m_GridSize = gridSize;
+    m_RingCellsPerTile = cellsPerTile;
 
-    // Concentric patch topology adapted from Wave Harmonic's Crest OceanBuilder
-    // (MIT, Copyright (c) 2019 Wave Harmonic and contributors; see Ocean/NOTICE).
-    // The implementation is packed into one indexed mesh/draw for this engine.
-    // LOD 0 is a dense 4x4 tile square; every coarser LOD is a 12-tile ring.
-    // Fat/slim patch borders weld adjacent resolutions without cracks.
-    enum class PatchType : uint8
-    {
-        Interior,
-        Fat,
-        FatX,
-        FatXSlimZ,
-        FatXOuter,
-        FatXZ,
-        FatXZOuter,
-        SlimX,
-        SlimXZ,
-        SlimXFatZ,
-    };
-
-    struct PatchPlacement
-    {
-        float32 X = 0.0f;
-        float32 Z = 0.0f;
-        PatchType Type = PatchType::Interior;
-    };
-
-    constexpr uint32 kGeometryLodCount = 8u;
-    constexpr uint32 kTileResolutionDivisor = 10u;
-    constexpr uint32 kMinTileResolution = 16u;
-    constexpr float32 kHorizonSkirtMultiplier = 4.0f;
-
-    // The old authoring value described one monolithic grid. Preserve its budget
-    // meaning by mapping it to a per-tile density: default 512 -> 50 cells/tile,
-    // close to Crest's proven default of 48 while keeping total vertices near the
-    // previous single-grid count. Keep it even so 2x/4x snapping stays exact.
-    uint32 tileResolution = std::max(gridSize / kTileResolutionDivisor,
-                                     kMinTileResolution);
-    tileResolution &= ~1u;
-
-    std::vector<float32> vertices; // float4: local XZ, LOD index, skirt footprint scale
-    std::vector<uint32> indices;
-    const size_t estimatedPatches = 16u + 12u * (kGeometryLodCount - 1u);
-    vertices.reserve(estimatedPatches * static_cast<size_t>(tileResolution + 2u) *
-                     static_cast<size_t>(tileResolution + 2u) * 4u);
-    indices.reserve(estimatedPatches * static_cast<size_t>(tileResolution + 1u) *
-                    static_cast<size_t>(tileResolution + 1u) * 6u);
-
-    const auto isSidePatch = [](PatchType type)
-    {
-        return type == PatchType::FatX || type == PatchType::FatXOuter ||
-               type == PatchType::SlimX || type == PatchType::SlimXFatZ;
-    };
-    const auto isCornerPatch = [](PatchType type)
-    {
-        return type == PatchType::FatXZ || type == PatchType::SlimXZ ||
-               type == PatchType::FatXSlimZ || type == PatchType::FatXZOuter;
-    };
-
-    // Returns the rotated point in the tile's local ground plane: .x is X, .y is Z.
-    const auto rotateOutward = [&](float32 x, float32 z, const PatchPlacement& placement)
-    {
-        // Patch variants put their skirt on local +X (and, for corners, +Z).
-        // Rotate those directions toward this tile's side/corner of the ring.
-        int quarterTurns = 0;
-        if (isSidePatch(placement.Type))
-        {
-            if (std::abs(placement.Z) >= std::abs(placement.X))
-                quarterTurns = placement.Z > 0.0f ? 3 : 1;
-            else if (placement.X < 0.0f)
-                quarterTurns = 2;
-        }
-        else if (isCornerPatch(placement.Type))
-        {
-            if (placement.X < 0.0f && placement.Z > 0.0f)
-                quarterTurns = 3;
-            else if (placement.X < 0.0f && placement.Z < 0.0f)
-                quarterTurns = 2;
-            else if (placement.X > 0.0f && placement.Z < 0.0f)
-                quarterTurns = 1;
-        }
-
-        switch (quarterTurns)
-        {
-        case 1: return Mathematics::Vector2(z, -x);
-        case 2: return Mathematics::Vector2(-x, -z);
-        case 3: return Mathematics::Vector2(-z, x);
-        default: return Mathematics::Vector2(x, z);
-        }
-    };
-
-    const auto appendPatch = [&](const PatchPlacement& placement, uint32 lodIndex)
-    {
-        int32 skirtXMinus = 0;
-        int32 skirtXPlus = 0;
-        int32 skirtZMinus = 0;
-        int32 skirtZPlus = 0;
-        switch (placement.Type)
-        {
-        case PatchType::Fat:
-            skirtXMinus = skirtXPlus = skirtZMinus = skirtZPlus = 1;
-            break;
-        case PatchType::FatX:
-        case PatchType::FatXOuter:
-            skirtXPlus = 1;
-            break;
-        case PatchType::FatXZ:
-        case PatchType::FatXZOuter:
-            skirtXPlus = skirtZPlus = 1;
-            break;
-        case PatchType::FatXSlimZ:
-            skirtXPlus = 1;
-            skirtZPlus = -1;
-            break;
-        case PatchType::SlimX:
-            skirtXPlus = -1;
-            break;
-        case PatchType::SlimXZ:
-            skirtXPlus = skirtZPlus = -1;
-            break;
-        case PatchType::SlimXFatZ:
-            skirtXPlus = -1;
-            skirtZPlus = 1;
-            break;
-        default:
-            break;
-        }
-
-        const uint32 vertsX = static_cast<uint32>(
-            static_cast<int32>(tileResolution + 1u) + skirtXMinus + skirtXPlus);
-        const uint32 vertsZ = static_cast<uint32>(
-            static_cast<int32>(tileResolution + 1u) + skirtZMinus + skirtZPlus);
-        const float32 cell = 1.0f / static_cast<float32>(tileResolution);
-        const float32 startX = -0.5f - static_cast<float32>(skirtXMinus) * cell;
-        const float32 endX = 0.5f + static_cast<float32>(skirtXPlus) * cell;
-        const float32 startZ = -0.5f - static_cast<float32>(skirtZMinus) * cell;
-        const float32 endZ = 0.5f + static_cast<float32>(skirtZPlus) * cell;
-        const float32 lodScale = static_cast<float32>(1u << lodIndex);
-        const uint32 vertexBase = static_cast<uint32>(vertices.size() / 4u);
-
-        for (uint32 z = 0; z < vertsZ; ++z)
-        {
-            float32 localZ = Math::Lerp(startZ, endZ,
-                                  static_cast<float32>(z) /
-                                      static_cast<float32>(vertsZ - 1u));
-            const bool horizonZ = placement.Type == PatchType::FatXZOuter &&
-                                  z == vertsZ - 1u;
-            if (horizonZ)
-                localZ *= kHorizonSkirtMultiplier;
-
-            for (uint32 x = 0; x < vertsX; ++x)
-            {
-                float32 localX = Math::Lerp(startX, endX,
-                                      static_cast<float32>(x) /
-                                          static_cast<float32>(vertsX - 1u));
-                const bool horizonX =
-                    x == vertsX - 1u &&
-                    (placement.Type == PatchType::FatXOuter ||
-                     placement.Type == PatchType::FatXZOuter);
-                if (horizonX)
-                    localX *= kHorizonSkirtMultiplier;
-
-                const Mathematics::Vector2 rotated = rotateOutward(localX, localZ, placement);
-                vertices.push_back((placement.X + rotated.x) * lodScale);
-                vertices.push_back((placement.Z + rotated.y) * lodScale);
-                vertices.push_back(static_cast<float32>(lodIndex));
-                vertices.push_back(horizonX || horizonZ ? kHorizonSkirtMultiplier : 1.0f);
-            }
-        }
-
-        for (uint32 z = 0; z + 1u < vertsZ; ++z)
-        {
-            for (uint32 x = 0; x + 1u < vertsX; ++x)
-            {
-                const uint32 tl = vertexBase + z * vertsX + x;
-                const uint32 tr = tl + 1u;
-                const uint32 bl = vertexBase + (z + 1u) * vertsX + x;
-                const uint32 br = bl + 1u;
-                if (((x ^ z) & 1u) == 0u)
-                {
-                    indices.insert(indices.end(), {tl, bl, br, tl, br, tr});
-                }
-                else
-                {
-                    indices.insert(indices.end(), {tl, bl, tr, tr, bl, br});
-                }
-            }
-        }
-    };
-
-    for (uint32 lod = 0; lod < kGeometryLodCount; ++lod)
-    {
-        const bool outermost = lod + 1u == kGeometryLodCount;
-        const PatchType leadSide = outermost ? PatchType::FatXOuter : PatchType::SlimX;
-        const PatchType trailSide = outermost ? PatchType::FatXOuter : PatchType::FatX;
-        const PatchType leadCorner = outermost ? PatchType::FatXZOuter : PatchType::SlimXZ;
-        const PatchType trailCorner = outermost ? PatchType::FatXZOuter : PatchType::FatXZ;
-        const PatchType topLeftCorner =
-            outermost ? PatchType::FatXZOuter : PatchType::SlimXFatZ;
-        const PatchType bottomRightCorner =
-            outermost ? PatchType::FatXZOuter : PatchType::FatXSlimZ;
-
-        std::vector<PatchPlacement> placements;
-        placements.reserve(lod == 0u ? 16u : 12u);
-        if (lod == 0u)
-        {
-            placements = {
-                {-1.5f,  1.5f, topLeftCorner}, {-0.5f,  1.5f, leadSide},
-                { 0.5f,  1.5f, leadSide},      { 1.5f,  1.5f, leadCorner},
-                {-1.5f,  0.5f, trailSide},     {-0.5f,  0.5f, PatchType::Interior},
-                { 0.5f,  0.5f, PatchType::Interior}, {1.5f, 0.5f, leadSide},
-                {-1.5f, -0.5f, trailSide},     {-0.5f, -0.5f, PatchType::Interior},
-                { 0.5f, -0.5f, PatchType::Interior}, {1.5f, -0.5f, leadSide},
-                {-1.5f, -1.5f, trailCorner},   {-0.5f, -1.5f, trailSide},
-                { 0.5f, -1.5f, trailSide},     { 1.5f, -1.5f, bottomRightCorner},
-            };
-        }
-        else
-        {
-            placements = {
-                {-1.5f,  1.5f, topLeftCorner}, {-0.5f,  1.5f, leadSide},
-                { 0.5f,  1.5f, leadSide},      { 1.5f,  1.5f, leadCorner},
-                {-1.5f,  0.5f, trailSide},     { 1.5f,  0.5f, leadSide},
-                {-1.5f, -0.5f, trailSide},     { 1.5f, -0.5f, leadSide},
-                {-1.5f, -1.5f, trailCorner},   {-0.5f, -1.5f, trailSide},
-                { 0.5f, -1.5f, trailSide},     { 1.5f, -1.5f, bottomRightCorner},
-            };
-        }
-
-        for (const PatchPlacement& placement : placements)
-            appendPatch(placement, lod);
-    }
-
-    m_GridVertexCount = static_cast<uint32>(vertices.size() / 4u);
-    m_GridIndexCount = static_cast<uint32>(indices.size());
+    const OceanRingMesh mesh = BuildOceanRingMesh(cellsPerTile);
+    m_GridVertexCount = static_cast<uint32>(mesh.Vertices.size());
+    m_GridIndexCount = static_cast<uint32>(mesh.Indices.size());
 
     m_GridVB = ::GameEngine::Rendering::CreateVertexBuffer(
-        device, vertices.data(), vertices.size() * sizeof(float32), "Ocean_Grid_VBO");
+        device, mesh.Vertices.data(), mesh.Vertices.size() * sizeof(Mathematics::Vector4), "Ocean_Grid_VBO");
     m_GridIB = ::GameEngine::Rendering::CreateIndexBuffer(
-        device, indices.data(), indices.size() * sizeof(uint32), "Ocean_Grid_IBO");
+        device, mesh.Indices.data(), mesh.Indices.size() * sizeof(uint32), "Ocean_Grid_IBO");
 }
 
-void OceanRenderFeature::RebuildGridMesh(::GameEngine::Rendering::IDevice* device, uint32 gridSize)
+void OceanRenderFeature::RebuildGridMesh(::GameEngine::Rendering::IDevice* device, uint32 cellsPerTile)
 {
     if (!device)
         return;
@@ -1016,7 +787,7 @@ void OceanRenderFeature::RebuildGridMesh(::GameEngine::Rendering::IDevice* devic
         device->DestroyBuffer(m_GridIB);
     m_GridVB = {};
     m_GridIB = {};
-    CreateGridMesh(device, gridSize);
+    CreateGridMesh(device, cellsPerTile);
 }
 
 void OceanRenderFeature::ApplyCascadeConfig(::GameEngine::Rendering::IDevice* device)
@@ -1053,14 +824,22 @@ void OceanRenderFeature::ApplyCascadeConfig(::GameEngine::Rendering::IDevice* de
     // Grid geometry density: rebuild only when the effective cell count changes.
     // 0 means the authored default, which also lets scenes without an
     // OceanRenderer revert after one is removed.
-    const uint32 requestedGridSize = m_GeometryGridSize.load(std::memory_order_acquire);
-    const uint32 gridSize = requestedGridSize == 0u
-        ? kDefaultOceanGeometryGridSize
-        : ClampOceanGeometryGridSize(requestedGridSize);
-    if (gridSize != m_GridSize)
+    const uint32 requestedCellsPerTile = m_RequestedRingCellsPerTile.load(std::memory_order_acquire);
+    const uint32 cellsPerTile = requestedCellsPerTile == 0u
+        ? kDefaultOceanRingCellsPerTile
+        : requestedCellsPerTile;
+    if (cellsPerTile != m_RingCellsPerTile)
     {
-        RebuildGridMesh(device, gridSize);
+        RebuildGridMesh(device, cellsPerTile);
     }
+}
+
+void OceanRenderFeature::SetRingCellsPerTile(uint32 value)
+{
+    assert((value == 0u || (value % 2u == 0u && value >= kMinOceanRingCellsPerTile &&
+                            value <= kMaxOceanRingCellsPerTile)) &&
+           "ring cells per tile must be 0 or even in [8, 64]: pass ResolveOceanRingCellsPerTile");
+    m_RequestedRingCellsPerTile.store(value, std::memory_order_release);
 }
 
 void OceanRenderFeature::SetParams(const OceanParamsGPU& params)
@@ -1540,6 +1319,17 @@ float OceanRenderFeature::GetSubmergedDepthForView(::GameEngine::Rendering::View
     return 0.0f;
 }
 
+bool OceanRenderFeature::IsSurfaceUndersideVisible(::GameEngine::Rendering::ViewId viewId) const
+{
+    if (!m_UnderwaterEnabled.load(std::memory_order_acquire))
+        return false;
+    std::lock_guard<std::mutex> lock(m_Mutex);
+    const auto it = m_UnderwaterByView.find(viewId);
+    if (it == m_UnderwaterByView.end())
+        return true;
+    return it->second.Underwater != 0u || it->second.SubmergedDepth > -kSurfaceCullClearance;
+}
+
 void OceanRenderFeature::SetUnderwaterActive(::GameEngine::Rendering::ViewId viewId, bool active,
                                              float submergedDepth)
 {
@@ -1922,6 +1712,46 @@ void OceanRenderFeature::EnsureForwardContributor(Engine::Renderer::RenderServic
     if (m_ForwardContributor)
         return;
     m_ForwardContributor = std::make_unique<OceanForwardContributor>(*this, rs);
+}
+
+void OceanRenderFeature::RequestViewSimulationPipelines()
+{
+    // The gates of the per-view simulation passes in OceanRenderNode::DeclareForView that hold
+    // without a frame.
+    if (!m_Device)
+        return;
+    if (m_SeabedDepthReady && m_SeabedDepth.HasSeabeds())
+        m_Device->RequestComputePipeline(m_SeabedDepth.GetPipelineId());
+    if (m_FlowReady && m_Flow.HasSources())
+        m_Device->RequestComputePipeline(m_Flow.GetPipelineId());
+    if (m_WaveMaskReady && m_WaveMask.HasSources())
+        m_Device->RequestComputePipeline(m_WaveMask.GetPipelineId());
+    if (m_ClipReady && m_Clip.HasSources())
+        m_Device->RequestComputePipeline(m_Clip.GetPipelineId());
+    if (m_AlbedoReady && m_Albedo.HasSources())
+        m_Device->RequestComputePipeline(m_Albedo.GetPipelineId());
+    if (m_FoamReady && m_FoamSim.GetPendingSubstepCount() > 0u)
+        m_Device->RequestComputePipeline(m_FoamSim.GetPipelineId());
+}
+
+void OceanRenderFeature::RequestWaveSimulationPipelines()
+{
+    if (!m_Device || !m_FFTReady)
+        return;
+    m_FFT.RequestPipelines(*m_Device);
+    if (m_HeightFieldReady)
+        m_Device->RequestComputePipeline(m_HeightField.GetPipelineId());
+    if (m_CombineReady && IsCombineEnabled())
+        m_Device->RequestComputePipeline(m_CombineSim.GetPipelineId());
+}
+
+bool OceanRenderFeature::RequestSurfacePipeline(Engine::Renderer::RenderServices& rs,
+                                                ::GameEngine::Rendering::ViewId viewId,
+                                                Rendering::MaterialKeyword passKeywords,
+                                                const ::GameEngine::Rendering::PipelineFormatKey& formats)
+{
+    EnsureForwardContributor(rs);
+    return m_ForwardContributor->RequestSurfacePipeline(viewId, passKeywords, formats);
 }
 
 bool OceanRenderFeature::BuildSurfaceCommandForView(

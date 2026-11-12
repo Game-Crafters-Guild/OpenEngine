@@ -14,9 +14,11 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <cstddef>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <iterator>
 
 namespace GameEngine
 {
@@ -54,6 +56,30 @@ constexpr uint32_t kDrawCommandStride = 5 * sizeof(uint32_t);
 // bound where a slice carries neither. Keeps tiny scenes off a zero-sized
 // allocation.
 constexpr uint32_t kPerInstanceHistoryMinBytes = 4096;
+
+// The storage-buffer bindings of the scatter set: draw_command_scatter.comp set 0.
+constexpr uint32_t kScatterBindingCount = 14;
+
+// The storage-buffer bindings of the group-compact set: draw_stream_group_compact.comp set 0.
+constexpr uint32_t kGroupCompactBindingCount = 5;
+
+// The (view, cascade, phase) part of the stream keys of `slice`: MakeStreamKey with zero material and mesh.
+uint64_t SliceStreamKey(const GPUDrawStreamBuilder::SliceRegistration& slice)
+{
+    return GPUDrawStreamBuilder::MakeStreamKey(slice.viewId, slice.cascadeIndex, 0u, 0u, slice.phase);
+}
+
+// A storage-buffer write of `bytes` from `offset`. A size of 0 binds the rest of the buffer.
+DescriptorWrite StorageBufferWrite(uint32_t binding, BufferHandle buffer, size_t offset, size_t bytes)
+{
+    DescriptorWrite write{};
+    write.Binding = binding;
+    write.Type    = DescriptorType::StorageBuffer;
+    write.Buffer  = buffer;
+    write.Offset  = offset;
+    write.Range   = bytes;
+    return write;
+}
 
 // GE_LOD_HYSTERESIS: "0" forces every slice's dwell band to 0, restoring
 // stateless per-frame LOD selection. Default on, meaning "honour whatever band
@@ -102,7 +128,7 @@ const char* ScatterPkgPath(bool compact, bool stats)
 
 // std430 stride of the coalesced scatter-hot mirror (GPUInstanceScatterHot).
 // The scatter binds binding 1 at this stride in the compact variant.
-constexpr size_t kScatterHotStride = 32;
+constexpr size_t kScatterHotStride = sizeof(GPUInstanceScatterHot);
 
 // Winding parity rides bit 24 of the BatchTableEntry meshIndex FIELD (real
 // mesh indices are 24-bit — BatchRegistry::MakeKey masks them). A parity-1
@@ -289,8 +315,9 @@ void GPUDrawStreamBuilder::ResetTrackingState()
     m_RenderedHistoryResetScratch.clear();
     m_RenderedHistoryResetRuns.clear();
     m_FrameSlices.clear();
-    m_RangeMap.clear();
-    m_PublishedSliceKeys.clear();
+    m_RangeMap.Clear();
+    m_PublishedSliceKeys.Clear();
+    m_RangeInsertsBeforeEnd        = 0;
     m_SentinelBuffer               = BufferHandle{};
     m_ScatterPipeline              = PipelineHandle{};
     m_GroupCompactPipeline         = PipelineHandle{};
@@ -339,6 +366,11 @@ void GPUDrawStreamBuilder::ReprovisionAfterDeviceRebuild()
     // then recreate the up-front sentinel. The arenas, table ring, and scatter
     // pipeline rebuild lazily on the next schedule via EnsureSharedBuffers.
     ResetTrackingState();
+    {
+        std::lock_guard<std::mutex> lock(m_ScatterInitMutex);
+        m_ScatterPipelineId = {};
+        m_GroupCompactPipelineId = {};
+    }
     Initialize();
 }
 
@@ -677,15 +709,19 @@ DescriptorSetLayoutDesc GPUDrawStreamBuilder::MakeScatterDescriptorSetLayout()
     //   4: DrawCommandsBuffer (write)      11: LodFadeBuffer        (read-write, crossfade)
     //   5: BatchCursorsBuffer (read-write) 12: PrevRenderedHistory  (read, rendered level/phase)
     //   6: IndirectionBuffer  (write)      13: CurrentRenderedHistory (write, same)
+    // The shader declares the read bindings `readonly`, so the layout marks them read-only too.
+    constexpr uint32_t kReadOnlyBindings = (1u << 0) | (1u << 1) | (1u << 2) | (1u << 3) | (1u << 8) |
+                                           (1u << 9) | (1u << 12);
     DescriptorSetLayoutDesc layout{};
     layout.debugName = "GPUDrawScatter_SetLayout";
-    for (uint32_t i = 0; i < 14; ++i)
+    for (uint32_t i = 0; i < kScatterBindingCount; ++i)
     {
         DescriptorBinding b{};
         b.binding      = i;
         b.type         = DescriptorType::StorageBuffer;
         b.count        = 1;
         b.shaderStages = kShaderStageCompute;
+        b.flags        = (kReadOnlyBindings & (1u << i)) != 0 ? kDescriptorBindingReadOnlyStorage : 0u;
         layout.bindings.push_back(b);
     }
     return layout;
@@ -891,6 +927,51 @@ PipelineHandle GPUDrawStreamBuilder::GetOrCreateScatterPipeline()
     std::lock_guard<std::mutex> lock(m_ScatterInitMutex);
     if (m_ScatterPipeline.IsValid())
         return m_ScatterPipeline;
+    const ComputePipelineId id = InternScatterPipeline();
+    if (!id.IsValid())
+        return {};
+
+    try
+    {
+        m_ScatterPipeline = m_Device->GetOrCreateComputePipeline(id);
+    }
+    catch (const std::exception& e)
+    {
+        if (!m_ScatterPipelineFailureLogged)
+        {
+            Logger::Log::Error("[GPUDrawStream] failed to create scatter pipeline: {}", e.what());
+            m_ScatterPipelineFailureLogged = true;
+        }
+        m_ScatterPipeline = PipelineHandle{};
+        return {};
+    }
+    if (m_ScatterPipeline.IsValid())
+    {
+        m_ScatterPipelineFailureLogged = false;
+        Logger::Log::Info("[GPUDrawStream] scatter pipeline ready: {} fetch, stats {}",
+                          m_ScatterCompactActive ? "coalesced 32B (compact)" : "full-fat 240B",
+                          m_ScatterStatsActive ? "ON" : "off");
+    }
+    return m_ScatterPipeline;
+}
+
+void GPUDrawStreamBuilder::RequestScatterPipelines(bool groupCompact)
+{
+    if (!m_Device)
+        return;
+    std::lock_guard<std::mutex> lock(m_ScatterInitMutex);
+    if (const ComputePipelineId id = InternScatterPipeline(); id.IsValid())
+        m_Device->RequestComputePipeline(id);
+    if (!groupCompact)
+        return;
+    if (const ComputePipelineId id = InternGroupCompactPipeline(); id.IsValid())
+        m_Device->RequestComputePipeline(id);
+}
+
+ComputePipelineId GPUDrawStreamBuilder::InternScatterPipeline()
+{
+    if (m_ScatterPipelineId.IsValid())
+        return m_ScatterPipelineId;
 
     if (!m_ScatterVariantInit)
     {
@@ -937,44 +1018,24 @@ PipelineHandle GPUDrawStreamBuilder::GetOrCreateScatterPipeline()
     }
     m_ScatterCompactActive = compactLoaded;
     m_ScatterStatsActive   = m_ScatterStatsRequested;
-
-    try
-    {
-        m_ScatterPipeline = BuildScatterPipeline(std::move(shaderBytes));
-    }
-    catch (const std::exception& e)
-    {
-        if (!m_ScatterPipelineFailureLogged)
-        {
-            Logger::Log::Error("[GPUDrawStream] failed to create scatter pipeline: {}", e.what());
-            m_ScatterPipelineFailureLogged = true;
-        }
-        m_ScatterPipeline = PipelineHandle{};
-        return {};
-    }
-    if (m_ScatterPipeline.IsValid())
-    {
-        m_ScatterPipelineFailureLogged = false;
-        Logger::Log::Info("[GPUDrawStream] scatter pipeline ready: {} fetch, stats {}",
-                          m_ScatterCompactActive ? "coalesced 32B (compact)" : "full-fat 240B",
-                          m_ScatterStatsActive ? "ON" : "off");
-    }
-    return m_ScatterPipeline;
+    m_ScatterPipelineId    = InternScatterPipelineFromBytes(std::move(shaderBytes));
+    return m_ScatterPipelineId;
 }
 
-PipelineHandle GPUDrawStreamBuilder::BuildScatterPipeline(std::vector<uint8_t> shaderBytes)
+ComputePipelineId GPUDrawStreamBuilder::InternScatterPipelineFromBytes(std::vector<uint8_t> shaderBytes)
 {
     ComputePipelineDesc cd{};
     cd.ComputeShader = std::make_shared<const std::vector<uint8_t>>(std::move(shaderBytes));
     cd.DescriptorSetLayouts.push_back(
         m_Device->InternDescriptorSetLayout(MakeScatterDescriptorSetLayout()));
-    static_assert(sizeof(ScatterPushConstants) == 100,
+    static_assert(sizeof(ScatterPushConstants) == 112,
                   "ScatterPushConstants must match draw_command_scatter.comp's block");
+    static_assert(offsetof(ScatterPushConstants, originSectorX) == 100,
+                  "ScatterPushConstants.originSectorX must match the originSectorX offset of the shader's block");
     cd.PushConstants.Size      = sizeof(ScatterPushConstants);
     cd.PushConstants.StageMask = kShaderStageCompute;
     cd.DebugName               = "GPUDrawStreamScatter";
-    const auto id = m_Device->InternComputePipeline(cd);
-    return m_Device->GetOrCreateComputePipeline(id);
+    return m_Device->InternComputePipeline(cd);
 }
 
 DescriptorSetLayoutDesc GPUDrawStreamBuilder::MakeGroupCompactDescriptorSetLayout()
@@ -985,7 +1046,7 @@ DescriptorSetLayoutDesc GPUDrawStreamBuilder::MakeGroupCompactDescriptorSetLayou
     //   2: BatchCursorsBuffer (read-write)
     DescriptorSetLayoutDesc layout{};
     layout.debugName = "GPUDrawGroupCompact_SetLayout";
-    for (uint32_t i = 0; i < 5; ++i)
+    for (uint32_t i = 0; i < kGroupCompactBindingCount; ++i)
     {
         DescriptorBinding b{};
         b.binding      = i;
@@ -1004,34 +1065,12 @@ PipelineHandle GPUDrawStreamBuilder::GetOrCreateGroupCompactPipeline()
     std::lock_guard<std::mutex> lock(m_ScatterInitMutex);
     if (m_GroupCompactPipeline.IsValid())
         return m_GroupCompactPipeline;
-
-    std::string loadErr;
-    std::vector<uint8_t> shaderBytes =
-        LoadComputeStageBytes("Shaders/draw_stream_group_compact.shaderpkg",
-                              m_Device->PreferredShaderSource(), s_ShaderLoader, &loadErr);
-    if (shaderBytes.empty())
-    {
-        if (!m_GroupCompactFailureLogged)
-        {
-            Logger::Log::Error("[GPUDrawStream] draw_stream_group_compact.shaderpkg unavailable "
-                               "({}); consolidated scatter dropped until retry", loadErr);
-            m_GroupCompactFailureLogged = true;
-        }
+    const ComputePipelineId id = InternGroupCompactPipeline();
+    if (!id.IsValid())
         return {};
-    }
     try
     {
-        ComputePipelineDesc cd{};
-        cd.ComputeShader = std::make_shared<const std::vector<uint8_t>>(std::move(shaderBytes));
-        cd.DescriptorSetLayouts.push_back(
-            m_Device->InternDescriptorSetLayout(MakeGroupCompactDescriptorSetLayout()));
-        static_assert(sizeof(GroupCompactPushConstants) == 28,
-                      "GroupCompactPushConstants must match draw_stream_group_compact.comp");
-        cd.PushConstants.Size      = sizeof(GroupCompactPushConstants);
-        cd.PushConstants.StageMask = kShaderStageCompute;
-        cd.DebugName               = "GPUDrawStreamGroupCompact";
-        m_GroupCompactPipeline =
-            m_Device->GetOrCreateComputePipeline(m_Device->InternComputePipeline(cd));
+        m_GroupCompactPipeline = m_Device->GetOrCreateComputePipeline(id);
     }
     catch (const std::exception& e)
     {
@@ -1049,6 +1088,36 @@ PipelineHandle GPUDrawStreamBuilder::GetOrCreateGroupCompactPipeline()
     return m_GroupCompactPipeline;
 }
 
+ComputePipelineId GPUDrawStreamBuilder::InternGroupCompactPipeline()
+{
+    if (m_GroupCompactPipelineId.IsValid())
+        return m_GroupCompactPipelineId;
+    std::string loadErr;
+    std::vector<uint8_t> shaderBytes =
+        LoadComputeStageBytes("Shaders/draw_stream_group_compact.shaderpkg",
+                              m_Device->PreferredShaderSource(), s_ShaderLoader, &loadErr);
+    if (shaderBytes.empty())
+    {
+        if (!m_GroupCompactFailureLogged)
+        {
+            Logger::Log::Error("[GPUDrawStream] draw_stream_group_compact.shaderpkg unavailable "
+                               "({}); consolidated scatter dropped until retry", loadErr);
+            m_GroupCompactFailureLogged = true;
+        }
+        return {};
+    }
+    ComputePipelineDesc cd{};
+    cd.ComputeShader = std::make_shared<const std::vector<uint8_t>>(std::move(shaderBytes));
+    cd.DescriptorSetLayouts.push_back(m_Device->InternDescriptorSetLayout(MakeGroupCompactDescriptorSetLayout()));
+    static_assert(sizeof(GroupCompactPushConstants) == 28,
+                  "GroupCompactPushConstants must match draw_stream_group_compact.comp");
+    cd.PushConstants.Size      = sizeof(GroupCompactPushConstants);
+    cd.PushConstants.StageMask = kShaderStageCompute;
+    cd.DebugName               = "GPUDrawStreamGroupCompact";
+    m_GroupCompactPipelineId   = m_Device->InternComputePipeline(cd);
+    return m_GroupCompactPipelineId;
+}
+
 PipelineHandle GPUDrawStreamBuilder::CreateScatterPipelineForVariant(bool compact, bool stats)
 {
     if (!m_Device)
@@ -1060,7 +1129,7 @@ PipelineHandle GPUDrawStreamBuilder::CreateScatterPipelineForVariant(bool compac
         return {};
     try
     {
-        return BuildScatterPipeline(std::move(shaderBytes));
+        return m_Device->GetOrCreateComputePipeline(InternScatterPipelineFromBytes(std::move(shaderBytes)));
     }
     catch (const std::exception&)
     {
@@ -1382,8 +1451,9 @@ void GPUDrawStreamBuilder::BeginArenaFrame()
     m_ClassMapRingOffset   = 0;
     m_ClassMapBytes        = 0;
     m_FrameSlices.clear();
-    m_RangeMap.clear();
-    m_PublishedSliceKeys.clear();
+    m_RangeMap.Clear();
+    m_PublishedSliceKeys.Clear();
+    m_RangeInsertsBeforeEnd = 0;
     m_SliceStatsBindings.clear();
     m_UnobservableTailSlices = 0;
 }
@@ -1399,8 +1469,15 @@ GPUDrawStreamBuilder::FindBatchDrawRange(uint32_t viewId, uint8_t cascadeIndex,
                                          SlicePhase phase) const
 {
     const uint64_t key = MakeStreamKey(viewId, cascadeIndex, materialIndex, meshIndex, phase);
-    const auto it = m_RangeMap.find(key);
-    return (it == m_RangeMap.end()) ? BatchDrawRange{} : it->second;
+    const BatchDrawRange* range = m_RangeMap.Find(key);
+    return range ? *range : BatchDrawRange{};
+}
+
+GPUDrawStreamBuilder::BatchDrawRange& GPUDrawStreamBuilder::GetOrInsertRange(uint64_t key)
+{
+    if (!m_RangeMap.Empty() && key < std::prev(m_RangeMap.end())->first && !m_RangeMap.Contains(key))
+        ++m_RangeInsertsBeforeEnd;
+    return m_RangeMap.GetOrInsert(key);
 }
 
 GPUDrawStreamBuilder::RenderedHistoryRead
@@ -1416,7 +1493,7 @@ GPUDrawStreamBuilder::GetRenderedHistoryForRead(uint32_t viewId) const
 bool GPUDrawStreamBuilder::HasPublishedRangesForPhase(uint32_t viewId, uint8_t cascadeIndex,
                                                       SlicePhase phase) const
 {
-    return m_PublishedSliceKeys.contains(MakeStreamKey(viewId, cascadeIndex, 0u, 0u, phase));
+    return m_PublishedSliceKeys.Contains(MakeStreamKey(viewId, cascadeIndex, 0u, 0u, phase));
 }
 
 GPUDrawStreamBuilder::ScatterStats GPUDrawStreamBuilder::ReadScatterStats() const
@@ -1608,7 +1685,7 @@ RenderGraph::RGBuffer GPUDrawStreamBuilder::ScheduleUnifiedScatter(
     if (!visibility.IsValid() || !instances.IsValid() || !meshes.IsValid())
         return {};
 
-    // Lever 1: bind GPUScene's 32 B coalesced mirror at binding 1 when the
+    // Lever 1: bind GPUScene's 40 B coalesced mirror at binding 1 when the
     // compact pipeline variant is active. If it is active but the caller passed
     // no mirror, the env-flag/wiring disagreed — binding the 240 B instance
     // buffer to the compact-struct shader would read garbage, so drop the
@@ -1965,6 +2042,9 @@ RenderGraph::RGBuffer GPUDrawStreamBuilder::ScheduleUnifiedScatter(
             b.Append(s.lod.cameraPos.x);
             b.Append(s.lod.cameraPos.y);
             b.Append(s.lod.cameraPos.z);
+            b.Append(s.lod.originSector.x);
+            b.Append(s.lod.originSector.y);
+            b.Append(s.lod.originSector.z);
             b.Append(s.lod.projScaleY);
             b.Append(s.lod.lodBiasGlobal);
             b.Append(s.lod.forceLod);
@@ -2169,7 +2249,15 @@ RenderGraph::RGBuffer GPUDrawStreamBuilder::ScheduleUnifiedScatter(
     // published per RUN (class × pool group × parity) over the slice's DRAW
     // block: the compact pass packs each run densely from its first row's
     // capacity prefix and writes its live total into the run's count slot.
+
+    // Slices publish in stream-key order, so the ranges of a slice go after those of the slices before it.
+    // The GPU blocks of the slices keep the order s.
+    m_SlicePublishOrder.resize(sliceCount);
     for (uint32_t s = 0; s < sliceCount; ++s)
+        m_SlicePublishOrder[s] = s;
+    std::sort(m_SlicePublishOrder.begin(), m_SlicePublishOrder.end(), [&slices](uint32_t a, uint32_t b)
+              { return std::pair(SliceStreamKey(slices[a]), a) < std::pair(SliceStreamKey(slices[b]), b); });
+    for (const uint32_t s : m_SlicePublishOrder)
     {
         const SliceRegistration& slice = slices[s];
         const bool sliceIsShadow = slice.table == SliceTable::Shadow;
@@ -2221,7 +2309,7 @@ RenderGraph::RGBuffer GPUDrawStreamBuilder::ScheduleUnifiedScatter(
             ++m_UnobservableTailSlices;
         }
 
-        const uint64_t sliceKey = MakeStreamKey(slice.viewId, slice.cascadeIndex, 0u, 0u, slice.phase);
+        const uint64_t sliceKey = SliceStreamKey(slice);
         bool slicePublished = false;
         if (groupActive)
         {
@@ -2240,9 +2328,9 @@ RenderGraph::RGBuffer GPUDrawStreamBuilder::ScheduleUnifiedScatter(
                 const uint32_t groupKey    = ordered < orderedToGroup.size()
                                                  ? orderedToGroup[ordered]
                                                  : kAbsentPoolGroup;
-                BatchDrawRange& range = m_RangeMap[MakeStreamKey(
+                BatchDrawRange& range = GetOrInsertRange(MakeStreamKey(
                     slice.viewId, slice.cascadeIndex, first.materialIndex, groupKey,
-                    slice.phase)];
+                    slice.phase));
                 range.recordBuffer = m_SharedRecords;
                 range.countBuffer  = m_SharedCursors;
                 BatchDrawSegment head{};
@@ -2292,8 +2380,8 @@ RenderGraph::RGBuffer GPUDrawStreamBuilder::ScheduleUnifiedScatter(
                 // parity-0 block precedes the parity-1 block for a material).
                 const bool     mirroredRow = (e.meshIndex & kMeshParityBit) != 0u;
                 const uint32_t realMesh    = e.meshIndex & ~kMeshParityBit;
-                BatchDrawRange& range = m_RangeMap[MakeStreamKey(
-                    slice.viewId, slice.cascadeIndex, e.materialIndex, realMesh, slice.phase)];
+                BatchDrawRange& range = GetOrInsertRange(MakeStreamKey(
+                    slice.viewId, slice.cascadeIndex, e.materialIndex, realMesh, slice.phase));
                 range.recordBuffer = m_SharedRecords;
                 range.countBuffer  = m_SharedCursors;
                 BatchDrawSegment head{};
@@ -2330,7 +2418,7 @@ RenderGraph::RGBuffer GPUDrawStreamBuilder::ScheduleUnifiedScatter(
         }
         // The pool-group runs and the per-batch rows publish the slice here.
         if (slicePublished)
-            m_PublishedSliceKeys.insert(sliceKey);
+            m_PublishedSliceKeys.Insert(sliceKey);
     }
 
     const RenderGraph::RGBuffer ordering =
@@ -2460,6 +2548,7 @@ RenderGraph::RGBuffer GPUDrawStreamBuilder::ScheduleUnifiedScatter(
          neededCursors, classBindOffset, classBindBytes, colorMergeActive,
          groupBindOffset, groupBindBytes, groupActive,
          compactPipeline = m_GroupCompactPipeline, colorRowRunOffset, shadowRowRunOffset,
+         scatterSetDesc = &m_ScatterSetDesc, compactSetDesc = &m_GroupCompactSetDesc,
          sliceFade = std::move(sliceFade), frameTimeSeconds,
          visibility, instanceReadRG, instanceStride = (useCompact ? kScatterHotStride : sizeof(GPUInstance)),
          slicePrevLod = std::move(slicePrevLod), sliceBand = std::move(sliceBand),
@@ -2601,7 +2690,7 @@ RenderGraph::RGBuffer GPUDrawStreamBuilder::ScheduleUnifiedScatter(
 
             const size_t visibilityReadBytes =
                 static_cast<size_t>(instanceCount) * sizeof(uint32_t);
-            // 240 B full-fat GPUInstance, or the 32 B coalesced mirror (lever 1).
+            // 240 B full-fat GPUInstance, or the 40 B coalesced mirror (lever 1).
             const size_t instanceReadBytes =
                 static_cast<size_t>(instanceCount) * instanceStride;
             const size_t meshReadBytes =
@@ -2621,64 +2710,54 @@ RenderGraph::RGBuffer GPUDrawStreamBuilder::ScheduleUnifiedScatter(
                 if (sliceBatchCount == 0u || sliceTableBytes == 0u)
                     continue; // shadow table absent (no eligible/dependent rows) — nothing to route
 
-                DescriptorSetDesc setDesc{};
-                setDesc.layout    = MakeScatterDescriptorSetLayout();
-                setDesc.transient = true;
-                setDesc.debugName = "GPUDrawScatter_DS0";
-                DescriptorSetHandle setHandle = device->CreateDescriptorSet(setDesc);
+                DescriptorSetHandle setHandle = device->CreateDescriptorSet(*scatterSetDesc);
                 if (!setHandle.IsValid())
                     continue;
 
-                device->UpdateStorageBufferBinding(setHandle, 0, visBuf,
-                                                   slice.visibilityOffsetBytes,
-                                                   visibilityReadBytes);
-                device->UpdateStorageBufferBinding(setHandle, 1, instBuf, 0, instanceReadBytes);
-                device->UpdateStorageBufferBinding(setHandle, 2, meshBuf, 0, meshReadBytes);
-                device->UpdateStorageBufferBinding(setHandle, 3, tableRing, sliceTableOffset,
-                                                   sliceTableBytes);
-                device->UpdateStorageBufferBinding(setHandle, 4, records, 0,
-                                                   static_cast<size_t>(callRecordBase + neededRecords)
-                                                       * kDrawCommandStride);
-                device->UpdateStorageBufferBinding(setHandle, 5, cursors, 0,
-                                                   static_cast<size_t>(callCursorBase + neededCursors)
-                                                       * sizeof(uint32_t));
-                device->UpdateStorageBufferBinding(setHandle, 6, indirection, 0,
-                                                   static_cast<size_t>(callRecordBase + neededRecords)
-                                                       * sizeof(uint32_t));
-                device->UpdateStorageBufferBinding(
-                    setHandle, 7, statsBuf, 0,
-                    static_cast<size_t>(kStatsSliceCapacity) * sizeof(ScatterSliceStats));
+                // One write per layout binding, sent to the device as one batch.
+                std::array<DescriptorWrite, kScatterBindingCount> writes{};
+                writes[0] = StorageBufferWrite(0, visBuf, slice.visibilityOffsetBytes, visibilityReadBytes);
+                writes[1] = StorageBufferWrite(1, instBuf, 0, instanceReadBytes);
+                writes[2] = StorageBufferWrite(2, meshBuf, 0, meshReadBytes);
+                writes[3] = StorageBufferWrite(3, tableRing, sliceTableOffset, sliceTableBytes);
+                writes[4] = StorageBufferWrite(4, records, 0,
+                                               static_cast<size_t>(callRecordBase + neededRecords)
+                                                   * kDrawCommandStride);
+                writes[5] = StorageBufferWrite(5, cursors, 0,
+                                               static_cast<size_t>(callCursorBase + neededCursors)
+                                                   * sizeof(uint32_t));
+                writes[6] = StorageBufferWrite(6, indirection, 0,
+                                               static_cast<size_t>(callRecordBase + neededRecords)
+                                                   * sizeof(uint32_t));
+                writes[7] = StorageBufferWrite(
+                    7, statsBuf, 0, static_cast<size_t>(kStatsSliceCapacity) * sizeof(ScatterSliceStats));
                 // materialColorClass (P2). Bound on every dispatch so the 9th
                 // layout binding is always valid; only color slices with merge
                 // active actually read it (classMode == Color).
-                device->UpdateStorageBufferBinding(setHandle, 8, tableRing, classBindOffset,
-                                                   classBindBytes);
+                writes[8] = StorageBufferWrite(8, tableRing, classBindOffset, classBindBytes);
                 // meshPoolGroup (draw consolidation). Bound on every dispatch so
                 // the 10th layout binding is always valid; read only when
                 // meshGroupMode != 0.
-                device->UpdateStorageBufferBinding(setHandle, 9, tableRing, groupBindOffset,
-                                                   groupBindBytes);
+                writes[9] = StorageBufferWrite(9, tableRing, groupBindOffset, groupBindBytes);
                 // prevLod (dwell band). Either this view's persistent history or
                 // the never-read stand-in; sliceBand[s] is 0 in the latter case,
                 // which is what stops the shader touching it.
                 const PrevLodBinding& prevBind = slicePrevLod[s];
                 if (prevBind.handle.IsValid())
-                    device->UpdateStorageBufferBinding(
-                        setHandle, 10, prevBind.handle, 0,
-                        static_cast<size_t>(instanceCount) * sizeof(uint32_t));
+                    writes[10] = StorageBufferWrite(10, prevBind.handle, 0,
+                                                    static_cast<size_t>(instanceCount) * sizeof(uint32_t));
                 else
-                    device->UpdateStorageBufferBinding(setHandle, 10, historyStandIn, 0,
-                                                       static_cast<size_t>(kPerInstanceHistoryMinBytes));
+                    writes[10] = StorageBufferWrite(10, historyStandIn, 0,
+                                                    static_cast<size_t>(kPerInstanceHistoryMinBytes));
                 // lodFade (crossfade state). A crossfading slice binds its view's
                 // persistent buffer; every other slice binds the stand-in, which
                 // is legal precisely because ge_UpdateLodFade returns before its
                 // first read when crossfadeTailActive is 0.
                 const LodFadeBinding& fade = sliceFade[s];
                 if (fade.handle.IsValid())
-                    device->UpdateStorageBufferBinding(setHandle, 11, fade.handle, 0, fade.bytes);
+                    writes[11] = StorageBufferWrite(11, fade.handle, 0, fade.bytes);
                 else
-                    device->UpdateStorageBufferBinding(setHandle, 11, tableRing, colorTableOffset,
-                                                       colorTableBytes);
+                    writes[11] = StorageBufferWrite(11, tableRing, colorTableOffset, colorTableBytes);
                 // prevRendered / currentRendered. Either this view's rotated
                 // pair or the never-read stand-in at both; renderedHistoryEnabled
                 // below moves in lockstep with the choice, so the shader can
@@ -2688,20 +2767,17 @@ RenderGraph::RGBuffer GPUDrawStreamBuilder::ScheduleUnifiedScatter(
                     history.previous.IsValid() && history.current.IsValid();
                 if (historyBound)
                 {
-                    device->UpdateStorageBufferBinding(setHandle, 12, history.previous, 0,
-                                                       history.bytes);
-                    device->UpdateStorageBufferBinding(setHandle, 13, history.current, 0,
-                                                       history.bytes);
+                    writes[12] = StorageBufferWrite(12, history.previous, 0, history.bytes);
+                    writes[13] = StorageBufferWrite(13, history.current, 0, history.bytes);
                 }
                 else
                 {
-                    device->UpdateStorageBufferBinding(
-                        setHandle, 12, historyStandIn, 0,
-                        static_cast<size_t>(kPerInstanceHistoryMinBytes));
-                    device->UpdateStorageBufferBinding(
-                        setHandle, 13, historyStandIn, 0,
-                        static_cast<size_t>(kPerInstanceHistoryMinBytes));
+                    writes[12] = StorageBufferWrite(12, historyStandIn, 0,
+                                                    static_cast<size_t>(kPerInstanceHistoryMinBytes));
+                    writes[13] = StorageBufferWrite(13, historyStandIn, 0,
+                                                    static_cast<size_t>(kPerInstanceHistoryMinBytes));
                 }
+                device->WriteDescriptorSet(setHandle, writes);
 
                 ScatterPushConstants pc{};
                 pc.instanceCount   = instanceCount; // call-captured
@@ -2745,6 +2821,9 @@ RenderGraph::RGBuffer GPUDrawStreamBuilder::ScheduleUnifiedScatter(
                 }
                 pc.lodHysteresisBand = sliceBand[s];
                 pc.renderedHistoryEnabled = historyBound ? 1u : 0u;
+                pc.originSectorX = slice.lod.originSector.x;
+                pc.originSectorY = slice.lod.originSector.y;
+                pc.originSectorZ = slice.lod.originSector.z;
                 ctx.Cmd->SetPushConstants(pc);
 
                 ctx.Cmd->BindDescriptorSet(0, setHandle, pipeline);
@@ -2803,28 +2882,22 @@ RenderGraph::RGBuffer GPUDrawStreamBuilder::ScheduleUnifiedScatter(
                     // constants), and a set-creation failure must skip the
                     // WHOLE slice — compacting the tail without the head would
                     // draw only the fading pairs of an otherwise-empty slice.
-                    DescriptorSetDesc setDesc{};
-                    setDesc.layout    = MakeGroupCompactDescriptorSetLayout();
-                    setDesc.transient = true;
-                    setDesc.debugName = "GPUDrawGroupCompact_DS0";
-                    DescriptorSetHandle setHandle = device->CreateDescriptorSet(setDesc);
+                    DescriptorSetHandle setHandle = device->CreateDescriptorSet(*compactSetDesc);
                     if (!setHandle.IsValid())
                         continue;
 
-                    device->UpdateStorageBufferBinding(setHandle, 0, tableRing,
-                                                       sliceTableOffset, sliceTableBytes);
-                    device->UpdateStorageBufferBinding(
-                        setHandle, 1, tableRing, sliceRowRunOffset,
-                        static_cast<size_t>(sliceRowCount) * 2u * sizeof(uint32_t));
-                    device->UpdateStorageBufferBinding(
-                        setHandle, 2, cursors, 0,
-                        static_cast<size_t>(callCursorBase + neededCursors) * sizeof(uint32_t));
-                    device->UpdateStorageBufferBinding(
-                        setHandle, 3, records, 0,
-                        static_cast<size_t>(callRecordBase + neededRecords) * kDrawCommandStride);
-                    device->UpdateStorageBufferBinding(
-                        setHandle, 4, indirection, 0,
-                        static_cast<size_t>(callRecordBase + neededRecords) * sizeof(uint32_t));
+                    const std::array<DescriptorWrite, kGroupCompactBindingCount> writes{
+                        StorageBufferWrite(0, tableRing, sliceTableOffset, sliceTableBytes),
+                        StorageBufferWrite(1, tableRing, sliceRowRunOffset,
+                                           static_cast<size_t>(sliceRowCount) * 2u * sizeof(uint32_t)),
+                        StorageBufferWrite(2, cursors, 0,
+                                           static_cast<size_t>(callCursorBase + neededCursors) * sizeof(uint32_t)),
+                        StorageBufferWrite(3, records, 0,
+                                           static_cast<size_t>(callRecordBase + neededRecords) * kDrawCommandStride),
+                        StorageBufferWrite(4, indirection, 0,
+                                           static_cast<size_t>(callRecordBase + neededRecords) * sizeof(uint32_t)),
+                    };
+                    device->WriteDescriptorSet(setHandle, writes);
 
                     // The crossfade tail block has the same row layout as the
                     // head (same table, same recordOffsets, same runs), so it

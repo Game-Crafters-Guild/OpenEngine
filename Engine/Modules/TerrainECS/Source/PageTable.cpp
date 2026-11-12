@@ -22,6 +22,8 @@ constexpr uint32 kPageTableTierWords = 4u;
 constexpr uint32 kNoPageBlock = 0xFFFFFFFFu;
 /// The fraction of the budget a tiered table's dense top tier fits: a quarter.
 constexpr uint64 kDenseTopTierBudgetFraction = 4u;
+/// The writes a table records between two ClearChanges; past them every word counts as changed.
+constexpr std::size_t kMaxChangedRuns = 1024u;
 
 // The first word of level k below a block's root (k from 1): 4 + 16 + ... + 4^(k-1). At k = levels + 1
 // it is the words of a block's entries, where the next tier's directory starts.
@@ -51,6 +53,8 @@ void PageTable::Reset(uint32 samplesX, uint32 samplesZ, uint32 faces, uint32 slo
     m_FloorLevel = 0;
     m_DirectoryOffset = 0;
     m_Words.clear();
+    m_Changes.Words.clear();
+    m_Changes.All = true;
     if (m_Levels.empty())
         return;
     const uint64 entries = faces * (m_Levels.back().FirstEntry + LevelEntries(m_Levels.back()));
@@ -206,6 +210,7 @@ bool PageTable::Insert(const PageStreaming::PageAddress& page, uint32 entry)
             block = pool.Free.back();
             pool.Free.pop_back();
             std::fill_n(m_Words.begin() + tier.PoolOffset + block * tier.BlockWords, tier.BlockWords, kNoPage);
+            MarkChanged(tier.PoolOffset + block * tier.BlockWords, tier.BlockWords);
             pool.Residents[block] = 0;
             pool.Owner[block] = owner;
             pool.Parent[block] = parent;
@@ -213,6 +218,7 @@ bool PageTable::Insert(const PageStreaming::PageAddress& page, uint32 entry)
             pool.RootZ[block] = rootZ;
             pool.RootFace[block] = page.Face;
             m_Words[owner] = block;
+            MarkChanged(owner, 1u);
             if (parent != kNoPageBlock)
                 ++m_Pools[tierIndex - 1u].Residents[parent];
         }
@@ -223,6 +229,7 @@ bool PageTable::Insert(const PageStreaming::PageAddress& page, uint32 entry)
             if (m_Words[at] == kNoPage)
                 ++pool.Residents[block];
             m_Words[at] = entry;
+            MarkChanged(at, 1u);
             return true;
         }
         owner = at;
@@ -259,6 +266,7 @@ void PageTable::Remove(const PageStreaming::PageAddress& page)
         if (m_Words[at] == kNoPage)
             return;
         m_Words[at] = kNoPage;
+        MarkChanged(at, 1u);
         if (--m_Pools[tierIndex].Residents[block] == 0)
         {
             Release(tierIndex, block);
@@ -274,6 +282,7 @@ void PageTable::Release(uint32 tier, uint32 block)
     // child block's Release its directory word. Insert fills the block again when it takes it.
     Pool& pool = m_Pools[tier];
     m_Words[pool.Owner[block]] = kNoPageBlock;
+    MarkChanged(pool.Owner[block], 1u);
     pool.Free.push_back(block);
     const uint32 parent = pool.Parent[block];
     if (parent != kNoPageBlock && --m_Pools[tier - 1u].Residents[parent] == 0)
@@ -300,7 +309,9 @@ void PageTable::SetEntry(const PageStreaming::PageAddress& page, uint32 entry)
     assert(page.Face < m_Faces && "the page's face is in the table");
     if (page.Level >= m_FloorLevel)
     {
-        m_Words[DenseWord(page)] = entry;
+        const uint32 word = DenseWord(page);
+        m_Words[word] = entry;
+        MarkChanged(word, 1u);
         return;
     }
     std::erase_if(m_Waiting, [&page](const Waiting& waiting) { return waiting.Address == page; });
@@ -352,6 +363,26 @@ void PageTable::TakeLateEntries(std::vector<PageStreaming::PageAddress>& out)
 {
     out.insert(out.end(), m_LateEntries.begin(), m_LateEntries.end());
     m_LateEntries.clear();
+}
+
+void PageTable::ClearChanges()
+{
+    m_Changes.All = false;
+    m_Changes.Fades = false;
+    m_Changes.Words.clear();
+}
+
+void PageTable::MarkChanged(uint32 first, uint32 count)
+{
+    if (m_Changes.All)
+        return;
+    if (m_Changes.Words.size() == kMaxChangedRuns)
+    {
+        m_Changes.All = true;
+        m_Changes.Words.clear();
+        return;
+    }
+    m_Changes.Words.push_back(PageWordRange{first, count});
 }
 
 } // namespace GameEngine::TerrainECS

@@ -94,7 +94,7 @@ public:
         const auto* transform = m_World.GetComponent<Components::WorldTransform>(entity);
         if (service && spline && transform && m_World.IsValid(entity))
         {
-            read.WorldMatrix = Matrix4x4::FromColumnMajor(transform->matrix);
+            read.WorldMatrix = transform->ToMatrix4x4(transform->GetPosition() - Mathematics::WorldPosition{});
             read.Observed = ObserveSpline(*service, spline->SplineDataIndex, spline->SplineDataGeneration,
                                           read.WorldMatrix);
             const Spline::SplineData* data =

@@ -2,10 +2,12 @@
 
 #include "PageStreaming/Height/HeightPageLayer.h"
 #include "PageStreaming/PageResidency.h"
+#include "TerrainECS/PackedPageTable.h"
 #include "TerrainECS/PageLevelRule.h"
 #include "TerrainECS/PageTable.h"
 #include "TerrainECS/PagedHeightSampler.h"
-#include "TerrainECS/PlanetPageRequester.h"
+#include "TerrainECS/Planet/PlanetChart.h"
+#include "TerrainECS/Planet/PlanetPageRequester.h"
 #include "TerrainECS/TerrainSurface/TerrainSurfacePages.h"
 #include "TerrainECS/SurfaceHeightQuery.h"
 #include "CBTTerrain/CBTSphereFaceMap.h"
@@ -65,11 +67,11 @@ struct HeightPageProfile
     uint32 TableLeafBlocks = 0;
 };
 
-/// Desktop: 512 slots (33 MiB); a table kept dense up to 2^21 words (8 MiB a ring slot), so every
-/// flat terrain up to the 60 x 15 km terrain at 0.25 m (1,174,877 words) keeps one tier; a larger one
-/// is tiered with 10 mid and 160 leaf blocks, two working sets at a pose (design page-streaming-planets
-/// 3.4): the largest terrain's table is 1,488,355 words (5.7 MiB). An overlay of up to 512 MiB of
-/// pages (67.6 KB each, about 5.5 B per level-0 sample under a modifier), about 6 km^2 of modifiers
+/// Desktop: 512 slots (33 MiB); a page table is one dense tier while it fits 2^21 words (8 MiB a
+/// ring slot: a square terrain of up to about 160,000 samples a side). A larger terrain is tiered
+/// with 10 mid and 160 leaf blocks, two working sets at a pose (design page-streaming-planets 3.4):
+/// a flat terrain of 2^22 samples a side takes 1,488,355 words (5.7 MiB). An overlay of up to 512 MiB
+/// of pages (67.6 KB each, about 5.5 B per level-0 sample under a modifier), about 6 km^2 of modifiers
 /// on a 0.25 m terrain wherever they lie, a few percent of a 16 GiB machine's memory: a 1 km^2 stamp
 /// at 0.25 m holds about 95 MiB. Decoded pages on the CPU:
 /// 64 MiB (about 990 pages, the uploads waiting and the CPU readers' pages together; the 512 drawn
@@ -79,9 +81,9 @@ struct HeightPageProfile
 /// measured (0.1 to 0.3 ms assumed).
 inline constexpr HeightPageProfile kDesktopHeightPages{512u, 1u << 21, 512ull << 20, 64ull << 20, 4u, 10u, 160u};
 /// Steam Deck: half the desktop slots (256, 16.5 MiB), a quarter of its dense table (2^19 words, 2 MiB
-/// a ring slot: about 24 x 6 km at 0.5 m) and half its blocks; a quarter of the desktop overlay
-/// (128 MiB of its 16 GiB shared with the GPU), which still holds 1 km^2 at 0.25 m. CPU height pages:
-/// 32 MiB and 1 synchronous window fetch a frame (a microSD's random read takes milliseconds).
+/// a ring slot: a square terrain of up to about 80,000 samples a side) and half its blocks; a quarter
+/// of the desktop overlay (128 MiB of its 16 GiB shared with the GPU), which still holds 1 km^2 at
+/// 0.25 m. CPU height pages: 32 MiB and 1 synchronous window fetch a frame (a microSD's random read takes milliseconds).
 inline constexpr HeightPageProfile kSteamDeckHeightPages{256u, 1u << 19, 128ull << 20, 32ull << 20, 1u, 5u, 80u};
 
 /// The profile of the platform this build targets.
@@ -89,11 +91,6 @@ HeightPageProfile PlatformHeightPageProfile();
 
 /// The field id of the height pages in the residency manager.
 inline constexpr uint32 kHeightPageField = 0u;
-
-/// Why a terrain on a cooked store of samplesX x samplesZ level-0 samples does not page on any
-/// platform (past PageStreaming::kCpuDirectoryMaxSamplesPerAxis along an axis), worded with the
-/// fix, naming the terrain `name`; empty when it fits.
-std::string DenseDirectoryRefusal(std::string_view name, uint32 samplesX, uint32 samplesZ);
 
 /// Why a terrain whose modifier overlay needs `overlayBytes` does not page under `profile` (over
 /// the profile's overlay cap), worded with the fix, naming the terrain `name`; empty when it fits.
@@ -153,8 +150,8 @@ struct PagedTerrainRequest
     uint64 SourceIdentity = 0;  ///< changes when the source or the pyramid changes (restarts the stream)
     std::string_view Name;      ///< the terrain entity's name, for the log lines (empty: its render index)
     /// The GPU draws the terrain's pages (TerrainHeightIsPaged, with a view). False streams its CPU
-    /// pages only (the narrow CBT arm, pending modifiers, a page table over the GPU cap, no view): no
-    /// GPU page, page table or dirty rect.
+    /// pages only (the narrow CBT arm, pending modifiers, no view): no new GPU page, and no page table
+    /// or dirty rect reaches the renderer. The pages it holds keep their slots and their entries current.
     bool GpuPages = true;
     PageStreaming::PageSource Source;
     PageRequestTerrain Shape;   ///< its pyramid in world meters; CacheSlots is set by TerrainPages
@@ -173,11 +170,15 @@ struct PagedTerrainRequest
 inline constexpr uint32 kNoRenderTerrain = 0xFFFFFFFFu;
 
 /// A planet's height pages this frame (design page-streaming-planets 3.5): one stream on the planet
-/// provider, requested by its sphere requester. The CBT draws them (VertexEval) on the wide arm; no
-/// CPU reader reads them, so the stream holds no CPU page directory (PageResidencyManager::RequestCpu).
+/// provider, requested by its sphere requester. The CBT draws them (VertexEval) on the wide arm. The
+/// page colliders read the level-0 pages of its CPU windows by address (PlanetPageHeights); the other
+/// CPU readers walk its sparse CPU directory (PlanetSurfaceQuery).
 struct PlanetPagedRequest
 {
     uint32 Planet = 0;          ///< the planet's key: its terrain entity's id
+    /// The planet's center in world space: the dynamic bodies' windows (GatherBodyWindows) are placed
+    /// relative to it.
+    Mathematics::Vector3 Center;
     /// The render handle index of the terrain that draws the planet (TerrainHandle::Index), under
     /// which its page-table words are published; kNoRenderTerrain while it has none.
     uint32 RenderTerrain = kNoRenderTerrain;
@@ -190,13 +191,27 @@ struct PlanetPagedRequest
     PlanetPageRequestTerrain Shape;   ///< CacheSlots and Heights are set by TerrainPages
     /// The narrow arm: a request past the cache's slots is made a level coarser until it fits.
     bool FitToSlots = false;
-    /// What the planet's layer adds to its source's pages (null: nothing), with the version rule of
-    /// PagedTerrainRequest::Overlay; OverlayChanged lies on face OverlayChangedFace.
+    /// What the planet's layers add to its source's pages (null: nothing), Modifiers first and Overlay
+    /// (the sculpt) on top, with the version rule of PagedTerrainRequest::Overlay for both;
+    /// OverlayChanged holds each face's level-0 samples the versions after OverlayChangedSince changed.
     std::shared_ptr<const PageStreaming::HeightPageLayer> Overlay;
+    std::shared_ptr<const PageStreaming::HeightPageLayer> Modifiers;
     uint64 OverlayVersion = 0;
-    uint8 OverlayChangedFace = 0;
-    PageStreaming::PageSampleRect OverlayChanged; ///< level-0 samples of face OverlayChangedFace
+    PageStreaming::PageFaceRects OverlayChanged;
     uint64 OverlayChangedSince = 0;
+};
+
+/// A streamed planet's CPU windows as the last RequestPlanet left them, for its page colliders
+/// (design page-streaming-planets-r4-colliders). Valid until the next RequestPlanet or Update.
+struct PlanetCpuView
+{
+    uint64 Epoch = 0; ///< the stream's source identity: a restart changes it
+    PlanetChartLayout Layout;
+    float64 ReferenceRadius = 0.0;
+    /// The level-0 pages that get a body: the core of each camera's and each dynamic body's window,
+    /// each once. The window also keeps the pages these bodies read (AppendPlanetPageBodyReads).
+    std::span<const PageStreaming::PageAddress> BodyPages;
+    uint64 LayerVersion = 0; ///< the version of the planet's page layer its pages carry
 };
 
 /// One level of a page stream: the pages its requester wants, and how many of them are resident.
@@ -221,6 +236,12 @@ struct PageStreamCounts
     std::string Label;
     bool Planet = false;
     bool Surface = false; ///< a terrain's surface stream (its plane stores), not its height stream
+    /// A planet stream: the times its request was made one level coarser to fit the field's slots.
+    uint32 FitPasses = 0;
+    /// A planet surface stream: the pages its request wants before the fit, at the field's pinned levels.
+    uint32 FullDetailPages = 0;
+    /// The pages the stream's loads made since it was configured (PageResidencyManager::PagesProduced).
+    uint64 PagesProduced = 0;
     std::vector<PageLevelCounts> Levels;
     /// A planet's table: whether the GPU draws it, its finest pinned level and that level's pages a face
     /// side, and each face.
@@ -233,12 +254,12 @@ struct PageStreamCounts
 
 /// Sets `out.Levels` to `wanted`'s pages per level of `levels` and how many of them `cache` holds for `stream`.
 void CountWantedPages(const PageStreaming::PageCache& cache, uint32 stream,
-                      std::span<const PageStreaming::PageAddress> wanted, uint32 levels, PageStreamCounts& out);
+                      std::span<const PageStreaming::PageWant> wanted, uint32 levels, PageStreamCounts& out);
 
 /// GE_CBT_VALIDATE: logs the wanted and resident pages per level of `label`'s stream (`stream` follows the label:
-/// empty for its height) when the line differs from `logged`, then keeps it there; sorts `wanted`.
+/// empty for its height) when the line differs from `logged`, then keeps it there.
 void LogPageResidencyChange(std::string_view label, std::string_view stream, const PageTable& table,
-                            std::vector<PageStreaming::PageAddress>& wanted, std::string& logged);
+                            std::span<const PageStreaming::PageWant> wanted, std::string& logged);
 
 class TerrainPages
 {
@@ -274,8 +295,9 @@ public:
 
     /// The level-0 pages of every CPU window of the paged terrain drawn with render handle `terrain`,
     /// each once: the cameras' windows, the readers', then the dynamic bodies' nearest a camera
-    /// first, as the last Update kept them. Empty when that terrain is not paged. Valid until the
-    /// next Update.
+    /// first, then every other level-0 page when level 0 has at most one tile's pages (9 x 9) and
+    /// they fit a quarter of the CPU budget, as the last Update kept them. Empty when that terrain is
+    /// not paged. Valid until the next Update.
     std::span<const PageStreaming::PageAddress> CpuWindowPages(const TerrainHandle& terrain) const;
 
     /// One frame: forgets the terrains not requested since the last Update, runs the residency,
@@ -292,9 +314,31 @@ public:
     void RequestPlanet(const PlanetPagedRequest& request, std::span<const Mathematics::Vector3> cameras,
                        const PageLevelView& view);
 
+    /// The surface pages planet `request.Planet` needs for `cameras` (relative to its center) this frame:
+    /// call after its RequestPlanet. Nothing while the planet is not requested this frame, its GPU does
+    /// not draw its pages or it has no render terrain.
+    void RequestPlanetSurface(const PlanetSurfacePagedRequest& request, std::span<const PageRequestCamera> cameras,
+                              const PageLevelView& view);
+
     /// True when planet `planet` has no stream on the source of `sourceIdentity`: its next
     /// RequestPlanet carries the source.
     bool NeedsPlanetSource(uint32 planet, uint64 sourceIdentity) const;
+    /// The version of planet `planet`'s layer its pages hold (zero: none, or no such planet).
+    uint64 PlanetOverlayVersion(uint32 planet) const;
+
+    /// Planet `planet`'s CPU windows, or false when it is not streamed.
+    bool FindPlanetCpuView(uint32 planet, PlanetCpuView& out) const;
+
+    /// Copies level-0 page `address` of planet `planet` into `heights` (kPageSampleCount meters above
+    /// the reference radius, apron included) with the planet's page layer applied, as the GPU draws
+    /// it. False when the page is not on the CPU.
+    bool PlanetPageHeights(uint32 planet, const PageStreaming::PageAddress& address,
+                           std::vector<float32>& heights) const;
+
+    /// The CPU height of planet `planet` (SurfaceHeightQuery's spherical arm) through its sparse CPU
+    /// directory, valid until the next RequestPlanet or Update; neither valid nor spherical when it is
+    /// not streamed.
+    SurfaceHeightQuery PlanetSurfaceQuery(uint32 planet) const;
 
     /// Every page stream's wanted and resident pages per level, as of the last Update.
     void StreamCounts(std::vector<PageStreamCounts>& out) const;
@@ -303,7 +347,7 @@ public:
     /// empties the cache and every page table, so every page is assigned and uploaded again.
     void RestartOnDeviceEpoch(uint64 deviceEpoch);
 
-    /// Logs `refusal` (DenseDirectoryRefusal, OverlayRefusal, OverlayGridRefusal) once for `terrain`
+    /// Logs `refusal` (OverlayRefusal, OverlayGridRefusal) once for `terrain`
     /// until the terrain pages or its refusal changes: the terrain keeps its height texture meanwhile.
     void ReportRefusal(uint32 terrain, const std::string& refusal);
 
@@ -321,15 +365,20 @@ public:
     /// them (TerrainPageFeature::Publish moves them out), one rect a page; a reset or a planet's
     /// change covers its whole terrain.
     std::vector<PageChangeRect>& ChangeRects() { return m_ChangeRects; }
-    /// The page-table words of a terrain or planet the GPU draws from its pages, by render handle
-    /// index, and their version (bumped on every change), or null. A planet is listed here and in
+    /// The packed page table of a terrain or planet the GPU draws from its pages, by render handle
+    /// index (its version bumped on every change), or null. A planet is listed here and in
     /// PagedTerrains only while every page of its pinned levels has its entry.
-    const std::vector<uint32>* TableWords(uint32 terrain, uint64& version) const;
+    const PackedPageTable* PackedTable(uint32 terrain) const;
+    /// PackedPageTable::HashWords of a whole pack of the page table of PackedTable(terrain) as it is now: the
+    /// words that a whole write gives. 0 when PackedTable is null. It packs the table on each call: call it
+    /// on request only, never every frame.
+    uint64 WholeTableHash(uint32 terrain) const;
     /// Every terrain and planet the GPU draws from its pages (render handle indices), in no order.
     void PagedTerrains(std::vector<uint32>& out) const;
     const PageStreaming::PageResidencyManager& Residency() const { return m_Residency; }
     /// The surface streams, in the same residency.
     TerrainSurfacePages& Surface() { return m_Surface; }
+    const TerrainSurfacePages& Surface() const { return m_Surface; }
 
 private:
     // UpdateHeightPages drains the planets' dirty regions into the sphere dirty union.
@@ -359,11 +408,10 @@ private:
         uint64 OverlayVersion = 0;
         PageStreaming::PageSampleRect OverlayChanged; ///< what OverlayVersion changed from OverlayChangedSince
         uint64 OverlayChangedSince = 0;
-        std::vector<uint32> Words;
-        uint64 Version = 0;
+        PackedPageTable Packed;
         bool Requested = false;
         bool GpuPages = false;
-        std::vector<PageStreaming::PageAddress> WantedPages; ///< this frame's wanted pages
+        std::vector<PageStreaming::PageWant> WantedPages; ///< this frame's requests
         std::string LoggedResidency;       ///< GE_CBT_VALIDATE: the residency line last logged
     };
 
@@ -372,31 +420,49 @@ private:
         uint32 Stream = 0;
         uint64 Identity = 0;
         std::string Label;
+        PlanetPageRequestTerrain Shape; ///< the pyramid and generator its requester is configured with
         PlanetPageRequester Requester;
         PageTable Table; ///< six faces of FaceSamples a side
-        std::vector<uint32> Words;
-        uint64 Version = 0;
+        PackedPageTable Packed;
         uint32 RenderTerrain = kNoRenderTerrain;
         bool GpuPages = false;
         /// Every pinned page has its entry, so every sample resolves: the GPU may draw the planet's pages.
         bool Published = false;
-        std::vector<PageStreaming::PageAddress> WantedPages; ///< this frame's wanted pages
+        uint32 FitPasses = 0; ///< this frame's passes a level coarser (BuildWithinSlots)
+        std::vector<PageStreaming::PageWant> WantedPages; ///< this frame's requests
         bool Requested = false;
         std::shared_ptr<const PageStreaming::HeightPageLayer> Overlay;
+        std::shared_ptr<const PageStreaming::HeightPageLayer> Modifiers;
         uint64 OverlayVersion = 0;
+        PlanetChartLayout Layout;
+        float64 ReferenceRadius = 0.0;
+        Mathematics::Vector3 Center; ///< the last request's center in world space
+        std::vector<PageStreaming::PageAddress> BodyPages; ///< PlanetCpuView::BodyPages
+        /// The CPU window: BodyPages and the pages they read, for the BodyPages it was built from.
+        std::vector<PageStreaming::PageAddress> CpuWindow;
+        std::vector<PageStreaming::PageAddress> CpuWindowOf;
+        /// The points BodyPages was built from: the cameras (planet-local), the dynamic bodies (world)
+        /// and the planet's center. False until the first build on the current stream.
+        bool BodyPagesBuilt = false;
+        std::vector<Mathematics::Vector3> BodyPagesCameras;
+        std::vector<Mathematics::Vector3> BodyPagesBodies;
+        Mathematics::Vector3 BodyPagesCenter;
     };
 
     void Configure(PagedTerrain& terrain, const PagedTerrainRequest& request);
-    std::shared_ptr<const PageStreaming::HeightPageLayer> FittingOverlay(const PagedPlanet& planet,
-                                                                           const PlanetPagedRequest& request) const;
-    void RefreshOverlay(uint32 stream, const PageStreaming::HeightPageLayer* held, uint64 heldVersion,
-                        const PageStreaming::HeightPageLayer* requested, uint8 changedFace,
-                        const PageStreaming::PageSampleRect& changed, uint64 changedSince);
-    void RefreshLayerRect(uint32 stream, const PageStreaming::HeightPageLayer& layer, uint8 face,
-                          const PageStreaming::PageSampleRect& rect);
+    std::shared_ptr<const PageStreaming::HeightPageLayer> FittingOverlay(
+        const PagedPlanet& planet, const std::shared_ptr<const PageStreaming::HeightPageLayer>& layer) const;
+    static void ApplyPlanetLayers(const PagedPlanet& planet, const PageStreaming::PageAddress& address,
+                                  std::span<float32> heights);
     void AppendPlanetTable(const PagedPlanet& planet, PageStreamCounts& out) const;
+    void SetDiscCameras(std::span<const Mathematics::Vector3> cameras);
     void RequestCpuWindows(const PagedTerrain& terrain, std::span<const Mathematics::Vector3> cameras);
     void AppendBodyWindows(const PagedTerrain& terrain, std::span<const Mathematics::Vector3> cameras);
+    void OrderBodyWindows(std::span<const Mathematics::Vector3> cameras, const Mathematics::Vector3& origin);
+    void RequestPlanetCpuWindows(PagedPlanet& planet, const Mathematics::Vector3& center,
+                                 std::span<const Mathematics::Vector3> cameras);
+    void BuildPlanetCpuWindow(PagedPlanet& planet, const Mathematics::Vector3& center,
+                              std::span<const Mathematics::Vector3> cameras);
     void CollectStreamChanges(uint32 terrainKey, PagedTerrain& terrain);
     void ResetPlanetTable(PagedPlanet& planet);
     void CollectPlanetChanges(PagedPlanet& planet);
@@ -437,7 +503,7 @@ private:
     CBTTerrain::SphereEditRegions m_PlanetDirty;
     std::vector<uint32> m_Forgotten; // reused per Update
     std::vector<PageStreaming::PageAddress> m_LateEntries; // reused per Update
-    std::vector<PageStreaming::PageFaceRect> m_FaceRects;   // reused by RefreshLayerRect
+    std::vector<PageStreaming::PageFaceRect> m_FaceRects;   // reused by RefreshLayeredPages
     FlatMap<uint32, std::string> m_Refusals; // per terrain, the refusal last logged
     TerrainSurfacePages m_Surface; // after m_Residency and m_NextStream, which it holds
 };

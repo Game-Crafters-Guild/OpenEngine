@@ -120,10 +120,11 @@ uint32_t PublishEveryQueuedBody(WorkStealingThreadPool& pool, JobChannel& channe
 
 TEST(FrameJoinedCarrier, ARunUnitOfAFrameJoinedForkSeesTheBitOnAWorker)
 {
-    WorkStealingThreadPool pool(2);
+    // Declared before the pool: a job can still use them when an ASSERT returns early.
     BodyReadings readings;
-    constexpr uint32_t kUnits = 8;
     JobCounter counter;
+    WorkStealingThreadPool pool(2);
+    constexpr uint32_t kUnits = 8;
     {
         const FrameJoinedScope frame(true);
         for (uint32_t i = 0; i < kUnits; ++i)
@@ -249,9 +250,10 @@ TEST(FrameJoinedCarrier, QueuedBodiesRunClearOnAnInlinePool)
 
 TEST(FrameJoinedCarrier, QueuedBodiesRunClearOnWorkersAndBlockingThreads)
 {
+    // Declared before the pool: a job can still use it when an ASSERT returns early.
+    BodyReadings readings;
     WorkStealingThreadPool pool(2);
     JobChannel channel(pool, {.Name = "Frame-joined threaded", .MaxRunning = 1});
-    BodyReadings readings;
     uint32_t published = 0;
     {
         const FrameJoinedScope frame(true);
@@ -303,10 +305,11 @@ TEST(FrameJoinedCarrier, UnitsOfAForkInsideASubmitBodyRunClear)
 // bit on the waiter that ran it, for the rest of the waiter's body.
 TEST(FrameJoinedCarrier, AWaiterThatRunsAThrowingJoinedUnitGetsItsOwnBitBack)
 {
-    WorkStealingThreadPool pool(1);
-    HeldWorkers held(pool);
+    // Declared before the pool: the held unit can still use them when an ASSERT returns early.
     BodyReadings readings;
     JobCounter counter;
+    WorkStealingThreadPool pool(1);
+    HeldWorkers held(pool);
     {
         const FrameJoinedScope frame(true);
         pool.Run([&readings] {

@@ -49,7 +49,7 @@ void WriteParentLocalPose(Components::Transform& out,
     m[12] = pose.Position.x; m[13] = pose.Position.y; m[14] = pose.Position.z; m[15] = 1.0f;
 
     const Mathematics::Matrix4x4 local = invPlacerWorld * world;
-    std::memcpy(out.matrix, local.Data(), sizeof(out.matrix));
+    out = Components::Transform::FromMatrix4x4(local);
 }
 
 Components::Name MakePieceLabel(const char* role, uint32 index)

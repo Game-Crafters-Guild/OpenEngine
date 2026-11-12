@@ -52,7 +52,8 @@ std::string FormatFailure(const NavigationSurface& surface)
         return "Failed: no geometry inside the bounds; the bake reads the terrain, static collider shapes and "
                "mesh renderers";
     case NavigationBakeFailure::SphericalTerrain:
-        return "Failed: spherical terrains are not baked";
+        return "Failed: navigation is not supported on a planet. Move this surface onto a flat terrain, or "
+               "remove it.";
     case NavigationBakeFailure::TooLarge:
         if (surface.Mode == NavigationSurfaceMode::Mesh)
             return "Failed: the bounds need " + FormatGroupedInteger(surface.BakeTotal) +

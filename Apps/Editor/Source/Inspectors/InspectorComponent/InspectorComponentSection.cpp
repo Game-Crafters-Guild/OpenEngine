@@ -1,6 +1,7 @@
 #include "Inspectors/InspectorComponent/InspectorComponentSection.h"
 
 #include "EditorContextMenu/UIContextMenu.h"
+#include "Inspectors/InspectorDragHelpers.h"
 
 #include "Platform/ContextMenu.h"
 #include "UI/Controls/Foldout.h"
@@ -94,6 +95,8 @@ Foldout* AddComponentSection(UIElement* parent, std::string_view key, std::strin
     raw->SetTitle(std::string(title));
     raw->AddClass("rp-foldout");
     raw->AddClass("inspector-component-section");
+    if (UIElement* sectionTitle = InspectorDrag::FindChildByClass(raw->GetHeader(), "foldout-title"))
+        sectionTitle->AddClass("inspector-component-section-title");
     raw->SetExpanded(expanded);
     raw->SetOnExpandedChanged([&expanded](Foldout&, bool nowExpanded) { expanded = nowExpanded; });
 
@@ -133,7 +136,9 @@ void AddSectionHeaderMenu(Foldout* section, Platform::Window* window,
     // block" wherever it appears.
     auto options = std::make_unique<UIElement>();
     UIElement* optionsRaw = options.get();
+    // A Button's look without a Button's input handling: the element requests the Button sheet.
     optionsRaw->AddClass("button");
+    optionsRaw->RequestSubtreeStyleAssetPath("UI/controls/Button.css", "editor");
     optionsRaw->AddClass("icon-button");
     optionsRaw->AddClass("inspector-section-header-options");
     optionsRaw->SetTooltip("Actions for this section.");

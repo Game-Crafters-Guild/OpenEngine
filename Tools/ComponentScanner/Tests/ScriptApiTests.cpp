@@ -102,6 +102,10 @@ const Refusal kRefusals[] = {
     {"MatrixInitializer", "", nullptr, "Bad/Include/Bad/BadScriptApi.h", 12,
      "the matrix field `matrix` has an initializer the description cannot read. Fix: leave the field without an "
      "initializer (the identity)"},
+    {"WorldPositionInitializer", "", nullptr, "Bad/Include/Bad/BadScriptApi.h", 12,
+     "the world position field `at` has an initializer that the C# WorldPosition cannot take. Fix: leave the field "
+     "without an "
+     "initializer (the origin)"},
     {"TextViewReturn", "", nullptr, "Bad/Include/Bad/BadScriptApi.h", 10,
      "return type: a returned `std::string_view` can outlive the text it views. Fix: return std::string"},
     {"SpanCountReturn", "", nullptr, "Bad/Include/Bad/BadScriptApi.h", 10,

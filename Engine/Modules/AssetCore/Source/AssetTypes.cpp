@@ -144,14 +144,20 @@ static const std::unordered_map<String, AssetType>& GetExtensionMap()
         // Terrain brush zone payload (sculpt R32F offsets / paint R8 mask)
         {".tzone", AssetType::TerrainZoneData},
 
-        // Planet sphere sculpt page store (sparse dab + modifier pages)
-        {".tsculpt", AssetType::TerrainSphereSculptData},
+        // A terrain's authored height layer (a height page store)
+        {".gepage", AssetType::TerrainHeightLayer},
 
         // A terrain's ordered material list, keyed by stable slot ID
         {".terrainmatlib", AssetType::TerrainMaterialLibrary},
 
         // A particle emitter's processor stack
         {".particlestack", AssetType::ParticleStack},
+
+        // An AI program's option set and its difficulty presets
+        {".aioptions", AssetType::AiOptionSet},
+
+        // An AI state-tree program
+        {".scribe", AssetType::AiStateTree},
 
         // Ocean formats
         {".oceandepth", AssetType::OceanDepthCache},
@@ -322,6 +328,8 @@ bool IsTextBasedAssetType(AssetType type) {
         case AssetType::TerrainMaterialLibrary:
         case AssetType::ParticleStack:
         case AssetType::DayCycleProfile:
+        case AssetType::AiOptionSet:
+        case AssetType::AiStateTree:
             return true;
         default:
             return false;

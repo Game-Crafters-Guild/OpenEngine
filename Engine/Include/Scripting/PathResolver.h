@@ -111,19 +111,15 @@ std::filesystem::path ResolveNativeLibraryDirectory();
 std::filesystem::path ResolveNativeLibraryPath();
 
 /**
- * @brief ResolveNativeLibraryPath() for explicit executable and working directories; same
- *        probing rules. An empty @p currentDir probes no working directory.
+ * @brief ResolveNativeLibraryPath() for an explicit executable directory; same probing rules.
+ *        The process working directory is never probed.
  */
-std::filesystem::path ResolveNativeLibraryPathFrom(
-    const std::filesystem::path& exeDir,
-    const std::filesystem::path& currentDir);
+std::filesystem::path ResolveNativeLibraryPathFrom(const std::filesystem::path& exeDir);
 
 /**
- * @brief ResolveNativeLibraryDirectory() for explicit executable and working directories
- *        (tests and specialized hosts); same probing rules.
+ * @brief ResolveNativeLibraryDirectory() for an explicit executable directory (tests and
+ *        specialized hosts); same probing rules.
  */
-std::filesystem::path ResolveNativeLibraryDirectoryFrom(
-    const std::filesystem::path& exeDir,
-    const std::filesystem::path& currentDir);
+std::filesystem::path ResolveNativeLibraryDirectoryFrom(const std::filesystem::path& exeDir);
 } // namespace ScriptingPaths
 } // namespace GameEngine

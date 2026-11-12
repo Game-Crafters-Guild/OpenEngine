@@ -22,12 +22,12 @@ using json = nlohmann::json;
 
 TEST(PhysicsRaycastRequestTests, NonFiniteOriginIsRejected)
 {
-    const json params = json::parse(R"({"origin":[1e39,0,0],"direction":[0,1,0]})");
+    // The origin is read as a double, and text out of double range does not parse: the infinity is built.
+    json params = json::object();
+    params["origin"] = {std::numeric_limits<double>::infinity(), 0.0, 0.0};
+    params["direction"] = {0.0, 1.0, 0.0};
     ASSERT_TRUE(params["origin"][0].is_number())
-        << "a number too large for float must still parse as a number, or this test is not "
-           "reaching the guard at all";
-    ASSERT_FALSE(std::isfinite(params["origin"][0].get<float>()))
-        << "1e39 must overflow float for this to be the non-finite case";
+        << "an infinity must still be a JSON number, or this test is not reaching the guard at all";
 
     RayCastQuery query{};
     std::string err;
@@ -67,20 +67,18 @@ TEST(PhysicsRaycastRequestTests, NaNOriginIsRejected)
 
 // The discriminating control: the guard is a finiteness predicate, not a magnitude cap. An
 // over-strict implementation could pass every rejection test above by capping magnitude and
-// only this test would catch it. 3e38 sits below FLT_MAX, so it must pass through exactly.
+// only this test would catch it. The origin is a double: 1e300 passes, and 300 km keeps its millimeters.
 TEST(PhysicsRaycastRequestTests, LargeButFiniteOriginIsAccepted)
 {
-    const json params = json::parse(R"({"origin":[3e38,-3e38,1e30],"direction":[0,1,0]})");
-    ASSERT_TRUE(std::isfinite(params["origin"][0].get<float>()))
-        << "3e38 must stay finite in float, or this control tests nothing";
+    const json params = json::parse(R"({"origin":[1e300,-1e300,300000.004],"direction":[0,1,0]})");
 
     RayCastQuery query{};
     std::string err;
     ASSERT_TRUE(ReadRayCastQuery(params, query, err)) << err;
     EXPECT_TRUE(err.empty());
-    EXPECT_FLOAT_EQ(query.ray.origin.x, 3e38f);
-    EXPECT_FLOAT_EQ(query.ray.origin.y, -3e38f);
-    EXPECT_FLOAT_EQ(query.ray.origin.z, 1e30f);
+    EXPECT_DOUBLE_EQ(query.origin.X, 1e300);
+    EXPECT_DOUBLE_EQ(query.origin.Y, -1e300);
+    EXPECT_DOUBLE_EQ(query.origin.Z, 300000.004);
 }
 
 TEST(PhysicsRaycastRequestTests, MissingOriginAsksForIt)
@@ -197,12 +195,12 @@ TEST(PhysicsRaycastRequestTests, ValidRequestPassesThroughExactly)
 
     ASSERT_TRUE(ReadRayCastQuery(params, query, err)) << err;
     EXPECT_TRUE(err.empty());
-    EXPECT_FLOAT_EQ(query.ray.origin.x, 1.0f);
-    EXPECT_FLOAT_EQ(query.ray.origin.y, 2.0f);
-    EXPECT_FLOAT_EQ(query.ray.origin.z, 3.0f);
-    EXPECT_FLOAT_EQ(query.ray.direction.x, 0.0f);
-    EXPECT_FLOAT_EQ(query.ray.direction.y, -1.0f);
-    EXPECT_FLOAT_EQ(query.ray.direction.z, 0.5f);
+    EXPECT_DOUBLE_EQ(query.origin.X, 1.0);
+    EXPECT_DOUBLE_EQ(query.origin.Y, 2.0);
+    EXPECT_DOUBLE_EQ(query.origin.Z, 3.0);
+    EXPECT_FLOAT_EQ(query.direction.x, 0.0f);
+    EXPECT_FLOAT_EQ(query.direction.y, -1.0f);
+    EXPECT_FLOAT_EQ(query.direction.z, 0.5f);
     EXPECT_FLOAT_EQ(query.maxDistance, 250.0f);
     EXPECT_EQ(query.filter.layerMask, 5u);
 }

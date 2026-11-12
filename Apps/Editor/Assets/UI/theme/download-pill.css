@@ -1,7 +1,7 @@
 /* Download progress pills for Polyhaven model downloads, built by
    DownloadPillOverlay under the scene view's overlay host. Positioned in code:
    at the cursor during a drag, stacked under the compile banner after a drop.
-   The fill width is driven by file-count download progress. */
+   The ProgressBar's value is the file-count download progress. */
 .download-pill {
     position: absolute;
     flex-direction: row;
@@ -29,15 +29,10 @@
     font-weight: 500;
     margin-right: 8px;
 }
-.download-pill-track {
+/* A translucent track, because the pill is a dark translucent plate. */
+.download-pill-progress {
     width: 88px;
     height: 5px;
-    background-color: rgba(255, 255, 255, 0.18);
-    border-radius: 3px;
-    overflow: hidden;
-}
-.download-pill-fill {
-    height: 5px;
-    background-color: #3b82f6;
-    border-radius: 3px;
+    --ui_color_progress_track: rgba(255, 255, 255, 0.18);
+    --ui_color_progress_fill: #3B82F6;
 }

@@ -565,6 +565,13 @@ void ReflectionSceneSchema::Serialize(const ECS::World& world, ECS::EntityHandle
     if (!world.HasComponent(entity, m_TypeId))
         return;
 
+    // A tag has no field line, so its bare name is its line; the reader adds the tag from it.
+    if (ECS::ComponentFieldRegistry::Get(m_TypeId).empty())
+    {
+        outLines.push_back(m_Name);
+        return;
+    }
+
     std::vector<std::uint8_t> bytes;
     if (!world.CaptureComponentBytes(entity, m_TypeId, bytes))
         return;

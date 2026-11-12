@@ -167,10 +167,8 @@ void RenderServices::FinalizeWorldLights(uint64 worldId)
 
     if (count >= 2)
     {
-        // Sort compact keys (contribution precomputed once, id tie-break) instead
-        // of the ~130-byte ExtractedLight structs, then apply the permutation in
-        // one pass. Keeps the per-frame cost low even at the 1024+ light cap: the
-        // O(N log N) swaps move 12-byte keys, not whole light records.
+        // Sort 12-byte keys (contribution, then id) instead of whole light records, then apply
+        // the permutation in one pass. The O(N log N) swaps stay cheap at the 1024-light cap.
         struct SortKey
         {
             float Contribution;
@@ -196,12 +194,10 @@ void RenderServices::FinalizeWorldLights(uint64 worldId)
         lights = std::move(sorted);
     }
 
-    // Light-list version (idle recompute elision): exact bytes of the FINAL
-    // (sorted, consumer-visible) list against last frame's snapshot — runs for
-    // 0/1-light worlds too so an emptied list still bumps. All members are
-    // 4-byte scalars; the static_assert pins the padding-free layout the
-    // memcmp exactness depends on (a new member updates both together).
-    static_assert(sizeof(ExtractedLight) == 144,
+    // Light-list version: compares the bytes of the final sorted list with last frame's list, also
+    // for 0 or 1 light, so an emptied list bumps it. The memcmp needs a record with no padding:
+    // the static_assert pins the size, and a new member updates both.
+    static_assert(sizeof(ExtractedLight) == 160,
                   "ExtractedLight layout changed — re-verify it stays padding-free "
                   "(the light-list version memcmp requires it) and update this size");
     std::vector<ExtractedLight>& snapshot = m_WorldLightSnapshots[worldId];

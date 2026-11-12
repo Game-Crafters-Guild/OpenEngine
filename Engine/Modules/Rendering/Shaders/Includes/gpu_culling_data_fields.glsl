@@ -9,7 +9,8 @@
     // multi-cascade dispatches, fill [c] for c in [0..kViewCount) with that
     // cascade's planes (or degenerate planes for empty cascades).
     vec4 frustumPlanes[4][6];
-    vec3 cameraPosition;
+    // The view matrix and the planes take points relative to the origin of this sector.
+    ivec3 originSector;
     float nearPlane;
     vec3 cameraForward;
     float farPlane;

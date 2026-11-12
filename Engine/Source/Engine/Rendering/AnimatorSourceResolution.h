@@ -40,4 +40,7 @@ struct ResolvedAnimatorPlayback
 ResolvedAnimatorPlayback ResolveAnimatorPlayback(const Components::Animator& animator, const GUID& subtreeModel,
                                                  AssetManager& assetManager);
 
+// The playback rate that an Animator's speedScale gives. It is never negative.
+float32 AnimatorPlaybackSpeed(const Components::Animator& animator);
+
 } // namespace GameEngine::Engine::Renderer

@@ -1,0 +1,105 @@
+---
+title: Spatial grid
+description: How to find the entities near a point, in a cone, or along a segment with the world's spatial grid, in the same order on every run.
+---
+
+The **spatial grid** answers the question "which entities are near this point". Combat, triggers, and AI senses ask it on each simulation step. The grid indexes every entity that has a `SpatialGridMover` component, as a sphere at its world position. A query reads the grid without a lock. A query makes no heap allocation, except the first query of a new size on a thread, which grows that thread's scratch memory.
+
+Use the spatial grid for entities that have no physics body, or when a game needs the same answer on every run. Use a [physics query](../physics/physics-queries.mdx) to test against collider shapes.
+
+:::caution[C# binding pending]
+
+The queries are C++ only. A C# script cannot query the grid yet.
+
+:::
+
+## Add a mover
+
+Add `SpatialGridMover` to an entity. The component adds `Transform` if the entity has none. The grid uses the position of `Transform` for an entity with no parent, and the position of `WorldTransform` for a child.
+
+| Field | Default | Use |
+|---|---|---|
+| `Radius` | 0.5 | Meters. The mover is a sphere of this radius. 0 is a point. |
+| `Mask` | 1 | A query finds the mover when the query's mask and this mask share a bit. The game defines the bits, for example one bit per team. |
+
+```cpp title="Make an entity that the grid indexes"
+#include "Components/SpatialGridMover.h"
+
+world.Create(Components::SpatialGridMover{.Radius = 1.0f, .Mask = kTeamRed});
+```
+
+## Query the grid
+
+A system takes a `SpatialGridView` from the world once per update, and gives it to its jobs. Each query writes its hits to a span that the caller owns, and returns the number of movers that matched. When more movers match than the span holds, the span gets the first hits in the order below, and the return value shows how many matched.
+
+```cpp title="Find the enemies in 12 meters of a unit"
+#include "SpatialGridECS/SpatialGridView.h"
+
+const SpatialGridECS::SpatialGridView grid(world);
+std::array<SpatialGridECS::SpatialGridHit, 16> hits;
+const uint32 found = grid.Sphere(unitPosition, 12.0, {.Mask = kTeamBlue, .Ignore = unit}, hits);
+for (uint32 i = 0; i < std::min<uint32>(found, hits.size()); ++i)
+    Attack(unit, hits[i].Entity);
+```
+
+| Query | Shape | Order of the hits |
+|---|---|---|
+| `Sphere` | A center and a radius. | Ascending entity index. |
+| `Cylinder` | A center, a radius, and a half height along +Y. An infinite half height ignores height. | Ascending entity index. |
+| `Box` | A center and half extents, aligned to the world axes. | Ascending entity index. |
+| `Cone` | An apex, a unit direction, a range, and a half angle in radians, more than 0 and at most pi/2. The cone is solid: it holds the points in range of the apex and in the half angle of the direction. A mover is found when its sphere touches the cone. Line of sight is not tested. | Ascending entity index. |
+| `Segment` | A start, an end, and a radius: a sphere swept along the segment. | Ascending distance along the segment. |
+| `Nearest` | A center and a largest radius. The size of the span is the number of movers to find. | Ascending distance from the center. |
+| `Count` | A center and a radius. | A number, no hits. |
+
+Each hit holds the entity and the squared distance in meters from the query's origin to the mover's center. The origin is the center, or the apex of a cone. For `Segment`, the value is the squared distance from the start to the point of the segment nearest the mover. Equal distances are in ascending entity index.
+
+The filter has a `Mask` and one entity to ignore, usually the caller.
+
+```cpp title="The eight nearest movers, and a line of fire"
+std::array<SpatialGridECS::SpatialGridHit, 8> nearest;
+grid.Nearest(position, 50.0, {}, nearest);
+
+std::array<SpatialGridECS::SpatialGridHit, 4> inTheWay;
+grid.Segment(muzzle, target, 0.25, {.Ignore = shooter}, inTheWay);
+```
+
+## The same answer on every run
+
+The order of the hits depends only on the movers and the query. The cell size, the number of job threads, and the order in which the entities were made do not change a result. A game that changes `CellSize` gets the same outcomes, only faster or slower.
+
+## When a new position becomes visible
+
+`SpatialGridBuildSystem` builds the grid at the start of each simulation step, before the AI systems. Every query in step T sees the positions as they were at the start of step T. A position that a system writes to the `Transform` of an entity with no parent in step T is found by the queries of step T + 1, also when one frame runs two or more steps. A child's position comes from `WorldTransform`, which the transform hierarchy writes once per frame: a child that moves in step T is found at its new position in the first step of the next frame. The answer does not depend on which system runs first. A system that queries the grid runs after `SpatialGridBuildSystem`: in the `Early` phase at an order above 8, or in a later phase. A system before it reads the grid of the previous step.
+
+A query can return an entity that a later system of the same step destroyed. Check that an entity is alive before a structural change acts on it. A job that runs after its system returns must not query the grid. When the schedule no longer has `SpatialGridBuildSystem`, a new view has no movers.
+
+## Choose the cell size
+
+Set the `SpatialGridSettings` singleton of the world from code to change the cell size. `CellSize` is in meters, rounded down to a power of two of 1 or more. The default is 16. A value under 1 gives cells of 1 meter, and a value that is not finite gives the default. Each logs a warning. The editor has no field for it yet.
+
+```cpp title="Set the cell size of a world"
+#include "Components/SpatialGridSettings.h"
+
+world.SetSingleton(Components::SpatialGridSettings{.CellSize = 64.0f});
+```
+
+Set `CellSize` to the diameter of the game's most common query. Then the common query reads two or three cells on each axis.
+
+| Kind of game | Common query | `CellSize` |
+|---|---|---|
+| Strategy, units of 0.5 to 2 meters | 10 to 30 meters | 16 or 32 |
+| Open world, herds over tens of kilometers | 20 to 100 meters | 64 |
+| First person, about 50 movers | Cones of 20 to 50 meters | 16 |
+| Flight and space, a volume of 100 kilometers | 10 kilometers | 8192 |
+
+The grid has four levels of cells. Each level has cells four times the size of the level below it. A mover goes in the smallest level whose cell is at least four times its radius, so a large building does not slow the queries for small units. When a query would read more cells of a level than a quarter of that level's movers, or 1,024 cells or more along one axis, it tests every mover of that level. Small populations and very large queries take this path.
+
+## Limits
+
+- One frame. The grid uses world positions. Movers in a moving frame, such as a ship that carries units, are not indexed in that frame.
+- `Cylinder` uses +Y as up. On a planet, use `Sphere` and `Cone`.
+- The grid indexes spheres. A long or flat entity is indexed as the sphere that holds it.
+- Positions are exact while the distance from the origin divided by the cell size is less than 2 to the 63rd power. The grid does not split the world into the areas that large worlds stream by: a query at the edge of such an area finds the movers on both sides.
+- A mover radius is finite and 0 or more. The build does not index a mover with a radius that is not a number, infinite, or negative. When the number of such movers changes to a value above 0, the log shows one warning with the number.
+- A query radius and a cone's range are 0 or more. A cone's direction is a unit vector, and its half angle is more than 0 and at most pi/2. A query outside these limits stops at an assert in Debug and DebugFast, and finds no mover in every configuration.

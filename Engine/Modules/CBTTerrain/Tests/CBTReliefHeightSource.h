@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <span>
 #include <vector>
 
 #include "CBTTerrain/CBTInstance.h"
@@ -152,33 +153,50 @@ class ReliefHeightSource
     Rendering::TextureHandle m_Texture;
 };
 
+// ReliefHeightAt on a tileRes x tileRes lattice, sample i at UV i / (tileRes - 1).
+inline std::vector<float> ReliefLattice(uint32_t tileRes)
+{
+    std::vector<float> lattice(static_cast<size_t>(tileRes) * tileRes);
+    const float last = static_cast<float>(tileRes - 1u);
+    for (uint32_t z = 0; z < tileRes; ++z)
+        for (uint32_t x = 0; x < tileRes; ++x)
+            lattice[static_cast<size_t>(z) * tileRes + x] =
+                ReliefHeightAt(static_cast<float>(x) / last, static_cast<float>(z) / last);
+    return lattice;
+}
+
 // The same relief through the atlas height source: one resident slot of tileRes x tileRes samples (sample
 // i at UV i / (tileRes - 1), so the slot spans the terrain corner to corner) with a one-sample apron, and
-// one indirection row. The atlas source keeps the screen-space edge rule (CBT_PlanarCriterionOn is false
-// when AtlasParams1.z is 1), so a test arms the edge rule on relief by binding this and calling Apply on its
+// one indirection row. The atlas source takes the projected-area metric (CBT_PlanarCriterionOn is false
+// when AtlasParams1.z is 1), so a test arms the area metric on relief by binding this and calling Apply on its
 // frame params.
 class ReliefAtlasSource
 {
   public:
-    ReliefAtlasSource(Rendering::IDevice& device, CBTInstance& instance, uint32_t tileRes) : m_TileRes(tileRes)
+    ReliefAtlasSource(Rendering::IDevice& device, CBTInstance& instance, uint32_t tileRes)
+        : ReliefAtlasSource(device, instance, tileRes, ReliefLattice(tileRes))
+    {
+    }
+    // `lattice` holds tileRes x tileRes normalized heights, row by row, sample i at UV i / (tileRes - 1).
+    ReliefAtlasSource(Rendering::IDevice& device, CBTInstance& instance, uint32_t tileRes,
+                      std::span<const float> lattice)
+        : m_TileRes(tileRes)
     {
         const uint32_t dim = tileRes + 2u;
         std::vector<float> atlas(static_cast<size_t>(dim) * dim);
-        const float last = static_cast<float>(tileRes - 1u);
         for (uint32_t z = 0; z < dim; ++z)
             for (uint32_t x = 0; x < dim; ++x)
             {
                 // The apron repeats the edge sample, so the bilinear tap at the slot's edge is clamped.
                 const uint32_t sx = std::min(std::max(x, 1u), tileRes) - 1u;
                 const uint32_t sz = std::min(std::max(z, 1u), tileRes) - 1u;
-                atlas[static_cast<size_t>(z) * dim + x] =
-                    ReliefHeightAt(static_cast<float>(sx) / last, static_cast<float>(sz) / last);
+                atlas[static_cast<size_t>(z) * dim + x] = lattice[static_cast<size_t>(sz) * tileRes + sx];
             }
         m_Texture = MakeR32Texture(device, dim, dim, atlas, "CBT.Test.ReliefAtlas");
         if (!m_Texture.IsValid())
             return;
         m_Device = &device;
-        // One resident row: slot 0, generation 1, no LOD bias.
+        // One resident row: slot 0, generation 1, the key of tile (0, 0), no fade.
         const uint32_t row[4] = {0u, 1u, 0u, 0u};
         static_assert(sizeof(row) == kAtlasRowBytes);
         for (uint32_t slot = 0; slot < kCBTFrameParamsRing; ++slot)

@@ -176,3 +176,24 @@ TEST(BufferRing, ResetForNewFrame)
     EXPECT_EQ(a1.Offset, 0u) << "Ring cursor should reset each frame for transient usage";
 }
 
+TEST(BufferRing, ContinueFrameOfCarriesTheCursorAndTheDemand)
+{
+    DeviceDesc dd{}; dd.preferredAPI = GraphicsAPI::Vulkan;
+    auto dev = DeviceFactory::CreateDevice(dd);
+    ASSERT_TRUE(dev && dev->Initialize(dd));
+
+    BufferRing small; ASSERT_TRUE(small.Initialize(dev.get(), 512, BufferUsage::Storage, 256, "BR_ContinueSmall"));
+    ASSERT_GT(small.Allocate(300).Size, 0u);
+    BufferRing grown; ASSERT_TRUE(grown.Initialize(dev.get(), 1024, BufferUsage::Storage, 256, "BR_ContinueGrown"));
+    grown.ContinueFrameOf(small);
+    EXPECT_EQ(grown.GetHead(), small.GetHead());
+    EXPECT_TRUE(grown.AnyAllocThisFrame());
+    EXPECT_EQ(grown.Allocate(64).Offset, 512u) << "the next allocation must land after the carried bytes";
+
+    BufferRing dead; // a failed Initialize leaves no buffer and a head of 0
+    BufferRing empty; ASSERT_TRUE(empty.Initialize(dev.get(), 1024, BufferUsage::Storage, 256, "BR_ContinueDead"));
+    empty.ContinueFrameOf(dead);
+    EXPECT_EQ(empty.GetHead(), 0u);
+    EXPECT_FALSE(empty.AnyAllocThisFrame());
+}
+

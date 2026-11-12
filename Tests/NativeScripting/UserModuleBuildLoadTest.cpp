@@ -25,6 +25,7 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -155,6 +156,38 @@ void ExpectPdbBesideBuiltDll(const ns::NativeBuildConfig& config)
     (void)config;
 #endif
 }
+
+// Outside MSVC every compile command of the user build turns off contraction, as the engine's do.
+// The test sets CMAKE_EXPORT_COMPILE_COMMANDS before the first configure, so CMake writes
+// compile_commands.json (Makefile and Ninja generators).
+void ExpectUserBuildTurnsOffContraction(const ns::NativeBuildConfig& config, const std::string& userSource)
+{
+#if !defined(_WIN32)
+    std::vector<std::string> commands;
+    std::error_code ec;
+    for (auto it = fs::recursive_directory_iterator(config.BuildDir, ec);
+         !ec && it != fs::recursive_directory_iterator(); ++it)
+    {
+        if (it->path().filename() != "compile_commands.json")
+            continue;
+        std::ifstream in(it->path());
+        for (std::string line; std::getline(in, line);)
+            if (line.find("\"command\":") != std::string::npos)
+                commands.push_back(line);
+    }
+    EXPECT_FALSE(commands.empty()) << "no compile command under " << config.BuildDir.string();
+    bool userSourceSeen = false;
+    for (const std::string& command : commands)
+    {
+        userSourceSeen = userSourceSeen || command.find(userSource) != std::string::npos;
+        EXPECT_NE(command.find("-ffp-contract=off"), std::string::npos) << command;
+    }
+    EXPECT_TRUE(userSourceSeen) << "no compile command for " << userSource;
+#else
+    (void)config;
+    (void)userSource;
+#endif
+}
 } // namespace
 
 // Explicit-macro path: a .cpp with GE_REGISTER_COMPONENT compiles + loads + registers.
@@ -189,7 +222,14 @@ TEST(NativeUserModuleBuildLoad, CompilesAndRegistersAComponentViaMacro)
     ns::NativeScriptManager mgr;
     ASSERT_TRUE(mgr.Initialize(nullptr));
     ns::NativeBuildResult buildResult;
+#if !defined(_WIN32)
+    setenv("CMAKE_EXPORT_COMPILE_COMMANDS", "ON", 1);
+#endif
     RunAndExpectSuccess(mgr, config, &buildResult);
+#if !defined(_WIN32)
+    unsetenv("CMAKE_EXPORT_COMPILE_COMMANDS");
+#endif
+    ExpectUserBuildTurnsOffContraction(config, "SampleHealth.cpp");
     EXPECT_EQ(buildResult.ModuleId, config.ModuleName);
     EXPECT_TRUE(buildResult.RegistrationsChanged);
 

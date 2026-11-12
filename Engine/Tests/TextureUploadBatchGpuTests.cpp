@@ -37,6 +37,11 @@ struct TextureUploadBatchTestAccess
     {
         EngineCore::GetInstance().GetJobSystem().Wait(service.m_UploadJobCounter);
     }
+    // A material's bind of `texture` through an upload job, as BindMaterialTextureSlot schedules it.
+    static void ScheduleUploadJob(TextureService& service, const GUID& texture)
+    {
+        service.ScheduleTextureUploadJob(texture, GUID::Generate(), StringId{});
+    }
     // Queues `asset` as a finished AssetManager load of `texture` that one material slot waits on.
     static void QueueLoaded(TextureService& service, const GUID& texture, const SharedPtr<Asset>& asset)
     {
@@ -44,6 +49,13 @@ struct TextureUploadBatchTestAccess
         service.m_PendingGpuUploads.push_back({texture, asset, service.m_TextureEpochByGuid[texture]});
         service.m_PendingTextureBinds.push_back({GUID::Generate(), StringId{}, texture});
         service.m_TextureLoadHandles.try_emplace(texture);
+    }
+    // The hot swap's upload in place of `resident`, the AssetManager's instance of `texture`.
+    static TextureGPUCache::Entry UploadResident(TextureService& service, const GUID& texture,
+                                                 SharedPtr<TextureAsset> resident)
+    {
+        const auto prepared = TextureService::PrepareUpload(texture, std::move(resident), nullptr, false);
+        return service.SubmitPreparedUpload(texture, *prepared);
     }
     static TextureHandle Cached(TextureService& service, const GUID& texture)
     {
@@ -348,6 +360,67 @@ TEST_F(TextureUploadBatch, AQueuedTextureWithoutPixelsFails)
     // Never loaded: no pixels, and no registry entry, so nothing loads it on the way.
     Access::QueueLoaded(m_Textures, texture, MakeShared<TextureAsset>(texture, s_Workspace / "Assets" / "empty.png"));
     ExpectQueuedLoadFails(texture);
+}
+
+// An upload in place of a texture with no pixels is cached as failed, with one error line:
+// GetOrUpload then does not read the file again. A reupload tries again.
+TEST_F(TextureUploadBatch, AnUploadInPlaceWithoutPixelsIsTriedOnceUntilAReupload)
+{
+    const GUID texture = RegisterSvg();
+    m_Device.StagingRequests = 0;
+    std::vector<std::string> errors;
+    {
+        TestLog::ScopedEngineLogCapture capture(&errors, Logger::LogLevel::Error);
+        // Never loaded: no pixels.
+        const auto resident = MakeShared<TextureAsset>(texture, s_Workspace / "Assets" / "empty.svg");
+        EXPECT_FALSE(Access::UploadResident(m_Textures, texture, resident).Texture.IsValid());
+        EXPECT_FALSE(m_Textures.GetOrUpload(texture).IsValid());
+        Logger::Log::Flush();
+    }
+    EXPECT_EQ(m_Device.StagingRequests, 0u);
+    EXPECT_EQ(TestLog::CountLinesContaining(errors, texture.ToString()), 1u);
+    EXPECT_TRUE(Access::CachedAsFailed(m_Textures, texture));
+
+    m_Textures.RequestReupload(texture);
+    m_Textures.FlushPendingUploads();
+    EXPECT_TRUE(m_Textures.GetOrUpload(texture).IsValid());
+}
+
+// An upload job with no pixels fails at the flush as a queued load does, so the next model that
+// embeds the same bytes finds it cached and does not decode them again.
+TEST_F(TextureUploadBatch, AnUploadJobWithoutPixelsFailsAtTheFlush)
+{
+    std::vector<std::string> warnings;
+    GUID texture;
+    {
+        TestLog::ScopedEngineLogCapture capture(&warnings, Logger::LogLevel::Warning);
+        texture = QueueDecodedUploads({Vector<uint8>{1, 2, 3, 4}}).front(); // not an image
+        m_Textures.FlushPendingUploads();
+        Logger::Log::Flush();
+    }
+    EXPECT_TRUE(Access::CachedAsFailed(m_Textures, texture));
+    EXPECT_EQ(TestLog::CountLinesContaining(warnings, texture.ToString()), 1u);
+    EXPECT_EQ(TestLog::CountLinesContaining(warnings, "its embedded image does not decode"), 1u);
+    EXPECT_EQ(m_Textures.PendingMaterialTextureBindCount(), 0u);
+}
+
+// A material texture whose GUID has no asset record fails at the flush as a queued load does:
+// one error line that names it and the reason, cached as no texture, and no bind left.
+TEST_F(TextureUploadBatch, AMaterialTextureWithNoAssetRecordLogsOneErrorLine)
+{
+    const GUID texture = GUID::Generate();
+    std::vector<std::string> errors;
+    {
+        TestLog::ScopedEngineLogCapture capture(&errors, Logger::LogLevel::Error);
+        Access::ScheduleUploadJob(m_Textures, texture);
+        Access::WaitForUploadJobs(m_Textures);
+        m_Textures.FlushPendingUploads();
+        Logger::Log::Flush();
+    }
+    EXPECT_EQ(TestLog::CountLinesContaining(errors, texture.ToString()), 1u);
+    EXPECT_EQ(TestLog::CountLinesContaining(errors, "it has no asset record"), 1u);
+    EXPECT_TRUE(Access::CachedAsFailed(m_Textures, texture));
+    EXPECT_EQ(m_Textures.PendingMaterialTextureBindCount(), 0u);
 }
 
 } // namespace

@@ -12,6 +12,8 @@
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/RenderGraph/RGFrame.h"
 #include "SharedHeadlessDevice.h"
+#include "TestCameraEye.h"
+
 #include <gtest/gtest.h>
 
 #include <nlohmann/json.hpp>
@@ -106,7 +108,7 @@ struct TonemapFixture
         camera.proj = Mathematics::Matrix4x4::Identity();
         camera.viewProj = Mathematics::Matrix4x4::Identity();
         const CameraId cam = Rs->Views().AllocateCamera("TonemapViewOutputCam");
-        Rs->Views().SetCameraData(cam, camera);
+        Rs->Views().SetCameraData(cam, ::GameEngine::Tests::TestCameraWithEye(camera), {0.1f, 1000.0f});
         View = Rs->Views().AllocateView("TonemapViewOutputView", cam);
         Rs->Views().SetViewRenderLayerMask(View, GameEngine::Rendering::RenderLayerMask::Default());
         Rs->Views().SetViewTargets(View, 0, 0, 0, Rendering::ViewClearConfig{});

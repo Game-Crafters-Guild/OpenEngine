@@ -83,6 +83,8 @@ struct TerrainParamsEntry
     uint GrassControlBindless;
     uint ColorMapBindless;
     float GrassGroundTintHeight;
+    float LatticeOverhangX;
+    float LatticeOverhangZ;
 };
 
 layout(std430, set = 0, binding = 0) readonly buffer TerrainParamsBuffer
@@ -110,23 +112,13 @@ layout(std140, set = 0, binding = 6) uniform GrassPlaceParamsBuffer
     vec4 ViewRotCol2;
     vec4 Summary;
     ivec4 RenderOriginSector; // read only by the emit kernel (terrain_grass_place.comp)
+    vec2 FloorThinning; // read by the plan kernel
+    float BladeReach;   // meters: the farthest any blade vertex lies from its root; this kernel reads it
+    float MaxBladeHeight; // meters: the tallest authored blade; this kernel reads it
 } Place;
 
-bool cellOutsideFrustum(vec2 cellMin, vec2 cellMax)
-{
-    vec3 mn = vec3(cellMin.x, Place.Bounds.x, cellMin.y);
-    vec3 mx = vec3(cellMax.x, Place.Bounds.y, cellMax.y);
-    for (int i = 0; i < 6; ++i)
-    {
-        vec3 n = Place.FrustumPlanes[i].xyz;
-        // Positive vertex: the AABB corner furthest along the plane normal. If even that is behind
-        // the plane the whole box is outside.
-        vec3 p = mix(mn, mx, greaterThan(n, vec3(0.0)));
-        if (dot(n, p) + Place.FrustumPlanes[i].w < 0.0)
-            return true;
-    }
-    return false;
-}
+#include "TerrainGrass/grass_ground_height.glsl"
+#include "Includes/frustum_tests.glsl"
 
 // First terrain row whose XZ footprint OVERLAPS the cell. This only picks whose DENSITY curve the
 // cell spawns at; where each blade actually stands is resolved per candidate by the emit kernel.
@@ -140,12 +132,75 @@ int resolveTerrainForCell(vec2 cellMin, vec2 cellMax)
             continue;
         float minX = tp.WorldOriginX;
         float minZ = tp.WorldOriginZ;
-        float maxX = minX + tp.WorldSizeX;
-        float maxZ = minZ + tp.WorldSizeZ;
+        float maxX = minX + tp.WorldSizeX - tp.LatticeOverhangX;
+        float maxZ = minZ + tp.WorldSizeZ - tp.LatticeOverhangZ;
         if (cellMax.x >= minX && cellMin.x <= maxX && cellMax.y >= minZ && cellMin.y <= maxZ)
             return i;
     }
     return -1;
+}
+
+// The ground Y at worldXZ on terrains[row]. The world's lowest ground (Bounds.x) where no grass terrain
+// is there or its height is not readable (an atlas-backed terrain off its pages): h then reads high.
+float groundYAt(int row, vec2 worldXZ)
+{
+    if (row < 0)
+        return Place.Bounds.x;
+    TerrainParamsEntry tp = terrains[row];
+    bool readable = (tp.Flags & kTerrainFlagAtlasBacked) == 0u;
+#if !defined(GE_COMPAT_PROFILE)
+    readable = readable || GrassSurface_HeightPaged(uint(row));
+#endif
+    if (!readable)
+        return Place.Bounds.x;
+    vec2 uv = clamp((worldXZ - vec2(tp.WorldOriginX, tp.WorldOriginZ))
+                        / max(vec2(tp.WorldSizeX, tp.WorldSizeZ), vec2(0.0001)),
+                    vec2(0.0), vec2(1.0));
+    return max(tp.WorldOriginY + GrassGroundHeight01(uint(row), tp, uv) * tp.HeightScale, Place.Bounds.x);
+}
+
+// True when terrains[row] covers the whole cell with readable heights, so its samples bound the ground.
+bool cellGroundSampled(int row, vec2 cellMin, vec2 cellMax)
+{
+    TerrainParamsEntry tp = terrains[row];
+    bool covered = cellMin.x >= tp.WorldOriginX && cellMin.y >= tp.WorldOriginZ
+                   && cellMax.x <= tp.WorldOriginX + tp.WorldSizeX - tp.LatticeOverhangX
+                   && cellMax.y <= tp.WorldOriginZ + tp.WorldSizeZ - tp.LatticeOverhangZ;
+    bool readable = (tp.Flags & kTerrainFlagAtlasBacked) == 0u;
+#if !defined(GE_COMPAT_PROFILE)
+    readable = readable || GrassSurface_HeightPaged(uint(row));
+#endif
+    return covered && readable;
+}
+
+// True when the cell's blade box (grass_placement.glsl) is outside one of the view's planes.
+bool cellBoxOutsideFrustum(vec2 cellMin, vec2 cellMax, vec2 groundRange)
+{
+    GrassCellBox box = GrassCellBladeBox(cellMin, cellMax, groundRange, Place.BladeReach);
+    return AabbOutsideFrustum(box.Min, box.Max, Place.FrustumPlanes);
+}
+
+// The range fit's view test: the cell's square, from the lowest ground of every grass terrain to the
+// highest ground plus the tallest blade. The box does not grow by the blade reach, so the reach does
+// not change the fitted range.
+bool cellBandOutsideFrustum(vec2 cellMin, vec2 cellMax)
+{
+    vec3 boxMin = vec3(cellMin.x, Place.Bounds.x, cellMin.y);
+    vec3 boxMax = vec3(cellMax.x, Place.Bounds.y + Place.MaxBladeHeight, cellMax.y);
+    return AabbOutsideFrustum(boxMin, boxMax, Place.FrustumPlanes);
+}
+
+// The placement's view test: the ground under the cell with the slope pad. A cell whose ground is not
+// sampled takes the height band of every grass terrain.
+bool cellOutsideFrustum(int row, vec2 cellMin, vec2 cellMax, float centerY)
+{
+    vec2 range = Place.Bounds.xy;
+    if (cellGroundSampled(row, cellMin, cellMax))
+    {
+        range = GrassCellGroundRange(groundYAt(row, cellMin), groundYAt(row, vec2(cellMax.x, cellMin.y)),
+                                     groundYAt(row, vec2(cellMin.x, cellMax.y)), groundYAt(row, cellMax), centerY);
+    }
+    return cellBoxOutsideFrustum(cellMin, cellMax, range);
 }
 
 void main()
@@ -164,18 +219,31 @@ void main()
     float distanceToCamera = distance(cellMin + vec2(kGrassCellSize * 0.5), Place.CameraPos.xz);
 
     uint packed = 0u;
-    if (distanceToCamera <= Place.Bounds.w && !cellOutsideFrustum(cellMin, cellMax))
+    int terrainIdx = distanceToCamera <= Place.Bounds.w ? resolveTerrainForCell(cellMin, cellMax) : -1;
+    // The count sets the field's range, so it takes the band box and the range does not depend on the
+    // ground. The cull sets what is placed: a counted cell whose own box is outside gets no slots, so
+    // the placed cells stay a subset of the counted cells and the plan's slot bound holds.
+    if (terrainIdx >= 0 && !cellBandOutsideFrustum(cellMin, cellMax))
     {
-        int terrainIdx = resolveTerrainForCell(cellMin, cellMax);
-        if (terrainIdx >= 0)
+        // Clamped rather than trusted: the range test above bounds the distance, and a clamp keeps a
+        // surprising one inside the histogram instead of corrupting a neighboring ring.
+        uint ring = uint(clamp(floor(distanceToCamera / kGrassCellSize), 0.0,
+                               float(kGrassMaxRings - 1u)));
+        atomicAdd(CellPlan.RingCells[ring], 1u);
+        float centerY = groundYAt(terrainIdx, cellMin + vec2(kGrassCellSize * 0.5));
+        if (!cellOutsideFrustum(terrainIdx, cellMin, cellMax, centerY))
         {
             packed = kGrassCellValidBit | uint(terrainIdx);
-            // Clamped rather than trusted: the cull above bounds the distance, and a clamp keeps a
-            // surprising one inside the histogram instead of corrupting a neighbouring ring.
-            uint ring = uint(clamp(floor(distanceToCamera / kGrassCellSize), 0.0,
-                                   float(kGrassMaxRings - 1u)));
-            atomicAdd(CellPlan.RingCells[ring], 1u);
+            // The plan reads this before it writes the cell's unrounded slot count here.
+            CellPlan.Cells[cell].SlotsWantedBits = floatBitsToUint(centerY);
         }
     }
     CellPlan.Cells[cell].LodAndTerrain = packed;
+    // The window's center cell holds the camera.
+    if (ix == halfSpan && iz == halfSpan)
+    {
+        vec2 camera = Place.CameraPos.xz;
+        CellPlan.RingCells[kGrassCameraGroundWord] =
+            floatBitsToUint(groundYAt(resolveTerrainForCell(camera, camera), camera));
+    }
 }

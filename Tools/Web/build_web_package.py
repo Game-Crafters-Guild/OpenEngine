@@ -34,6 +34,11 @@ binding joins (opengine-core.gepak.parts.json lists them); `--site-models <dir>`
 particle programs from the site's pack. `--check` verifies the file list; `--check --sizes` also prints the raw,
 gzip and brotli size of each file and of what a page downloads at each build.
 
+`--game-notices <dir> --vcpkg-share <share>` writes only THIRD_PARTY_NOTICES.md for the web
+player template (the WebPlayer build runs it into its bin directory): the same list without the
+entries only the package ships. Tools/Web/export_web_player.py copies it into every game.
+`--editor-notices <dir>` writes the same list for the web editor (the WebEditor build runs it).
+
 The version is the engine's, from the repository root's VERSION file: `<year>.<month>.<patch>`,
 with an optional prerelease suffix `-alpha.<n>` or `-beta.<n>`. A packaged commit carrying a
 release tag (`v` plus the version, `v2026.10.0-alpha.4`) is that version, and a tag that differs
@@ -52,6 +57,7 @@ import re
 import shutil
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -87,31 +93,53 @@ kNoticesName = "THIRD_PARTY_NOTICES.md"
 # The vcpkg ports of the wasm build whose license the notices carry: every port with a copyright
 # file except the test frameworks and the header-only API registries the module links nothing of.
 kNoticeExcludedPorts = ("benchmark", "gtest", "egl-registry", "opengl-registry", "vulkan-headers")
-# Third-party runtime code/content and the toolchain used to build the package.
-# Toolchain books identify host-only and conditional entries separately. metal-cpp
-# (Apple only) and the Sponza test scene are not part of the web build.
+
+
+@dataclass(frozen=True)
+class Notice:
+    """A third-party component and the repository file that holds its license text."""
+    Name: str
+    Path: str
+    # True when only the library package ships the component (its examples and its service
+    # worker). The notices of an exported game leave it out.
+    PackageOnly: bool = False
+
+
+# Third-party runtime code/content and the toolchain that builds the package, the web player
+# and the web editor. Toolchain books identify host-only and conditional entries separately.
+# metal-cpp (Apple only) and the Sponza test scene are not part of the web build.
 kRepoNotices = (
-    ("Roboto (the UI fallback font in the pack)", "Apps/Editor/Assets/Fonts/LICENSE.txt"),
-    ("ufbx (the FBX importer)", "Engine/Source/ThirdParty/ufbx/LICENSE"),
-    ("OpenColorIO (the ACES 2 tone mapper tables)", "ThirdParty/OpenColorIO/LICENSE.txt"),
-    ("Bend Screen Space Shadows", "ThirdParty/BendScreenSpaceShadows/LICENSE.txt"),
-    ("AMD FidelityFX Denoiser", "ThirdParty/FidelityFX-Denoiser/LICENSE.txt"),
-    ("Khronos PBR Neutral", "ThirdParty/KhronosPbrNeutral/LICENSE.txt"),
-    ("KinoBloom", "ThirdParty/KinoBloom/LICENSE.md"),
-    ("Minimal AgX", "ThirdParty/MinimalAgX/LICENSE.txt"),
-    ("OCASM Depth Veil", "ThirdParty/OCASMDepthVeil/LICENSE"),
-    ("Punikonta VHS", "ThirdParty/PunikontaVhs/LICENSE.md"),
-    ("Runevision Erosion Filter", "ThirdParty/RunevisionErosionFilter/LICENSE-MPL-2.0.txt"),
-    ("SE Natural Bloom Dirty Lens", "ThirdParty/SENaturalBloomDirtyLens/LICENSE.txt"),
-    ("Speedball GI", "ThirdParty/SpeedballGi/LICENSE.md"),
-    ("coi-serviceworker", "Apps/WebLibrary/coi-serviceworker.LICENSE"),
-    ("Web build toolchain (pinned host tools and bundled libraries)", "Tools/Web/licenses/toolchain-notices.md"),
-    ("Rust compiler dependencies (pinned source inventories)", "Tools/Web/licenses/rust-dependency-notices.md"),
-    ("Example asset sources and credits", "Apps/WebLibrary/examples/ASSET_PROVENANCE.md"),
-    ("Example assets: Creative Commons Attribution 4.0 (verbatim from KhronosGroup/glTF-Sample-Assets LICENSES/CC-BY-4.0.txt at 2bac6f8c57bf471df0d2a1e8a8ec023c7801dddf)",
-     "Tools/Web/licenses/CC-BY-4.0.txt"),
-    ("Example assets: CC0 1.0 Universal (verbatim from KhronosGroup/glTF-Sample-Assets LICENSES/CC0-1.0.txt at 2bac6f8c57bf471df0d2a1e8a8ec023c7801dddf)",
-     "Tools/Web/licenses/CC0-1.0.txt"),
+    Notice("Roboto (the UI fallback font in the pack)", "Apps/Editor/Assets/Fonts/LICENSE.txt"),
+    Notice("ufbx (the FBX importer)", "Engine/Source/ThirdParty/ufbx/LICENSE"),
+    Notice("OpenColorIO (the ACES 2 tone mapper tables)", "ThirdParty/OpenColorIO/LICENSE.txt"),
+    Notice("Bend Screen Space Shadows", "ThirdParty/BendScreenSpaceShadows/LICENSE.txt"),
+    Notice("AMD FidelityFX Denoiser", "ThirdParty/FidelityFX-Denoiser/LICENSE.txt"),
+    Notice("AMD FidelityFX Depth of Field", "Packages/fidelityfx-dof/LICENSE.txt"),
+    Notice("SebLague Clouds (the volumetric clouds)",
+           "Engine/Modules/VolumetricClouds/ThirdParty/SebLague-Clouds/LICENSE"),
+    Notice("Ocean surface (adapted from Crest and Wicked Engine)", "Engine/Modules/Ocean/NOTICE"),
+    Notice("fdlibm (Sin, Cos, Atan, Atan2 and Pow in Mathematics)", "ThirdParty/fdlibm/LICENSE.txt"),
+    Notice("Khronos PBR Neutral", "ThirdParty/KhronosPbrNeutral/LICENSE.txt"),
+    Notice("KinoBloom", "ThirdParty/KinoBloom/LICENSE.md"),
+    Notice("Minimal AgX", "ThirdParty/MinimalAgX/LICENSE.txt"),
+    Notice("OCASM Depth Veil", "ThirdParty/OCASMDepthVeil/LICENSE"),
+    Notice("Punikonta VHS", "ThirdParty/PunikontaVhs/LICENSE.md"),
+    Notice("Runevision Erosion Filter", "ThirdParty/RunevisionErosionFilter/LICENSE-MPL-2.0.txt"),
+    Notice("SE Natural Bloom Dirty Lens", "ThirdParty/SENaturalBloomDirtyLens/LICENSE.txt"),
+    Notice("Speedball GI", "ThirdParty/SpeedballGi/LICENSE.md"),
+    Notice("Slug (the UI text shader)", "ThirdParty/Slug/LICENSE-MIT"),
+    Notice("Film simulation grain (adapted from AMD FidelityFX Lens)", "Packages/film-simulation/LICENSE.txt"),
+    Notice("GTAO (the ambient occlusion shaders)", "ThirdParty/GTAO/LICENSE.txt"),
+    Notice("miniz (the zip archive reader of the web editor)", "Engine/Source/ThirdParty/miniz/LICENSE"),
+    Notice("coi-serviceworker", "Apps/WebLibrary/coi-serviceworker.LICENSE", PackageOnly=True),
+    Notice("Web build toolchain (pinned host tools and bundled libraries)", "Tools/Web/licenses/toolchain-notices.md"),
+    Notice("Rust compiler dependencies (pinned source inventories)", "Tools/Web/licenses/rust-dependency-notices.md"),
+    Notice("Example asset sources and credits", "Apps/WebLibrary/examples/ASSET_PROVENANCE.md",
+           PackageOnly=True),
+    Notice("Example assets: Creative Commons Attribution 4.0 (verbatim from KhronosGroup/glTF-Sample-Assets LICENSES/CC-BY-4.0.txt at 2bac6f8c57bf471df0d2a1e8a8ec023c7801dddf)",
+           "Tools/Web/licenses/CC-BY-4.0.txt", PackageOnly=True),
+    Notice("Example assets: CC0 1.0 Universal (verbatim from KhronosGroup/glTF-Sample-Assets LICENSES/CC0-1.0.txt at 2bac6f8c57bf471df0d2a1e8a8ec023c7801dddf)",
+           "Tools/Web/licenses/CC0-1.0.txt", PackageOnly=True),
 )
 kWasmMagic = b"\0asm"
 kReleaseTag = re.compile(r"^v(\d{4}\.\d{1,2}\.\d+)(?:-(alpha|beta)\.\d+)?$")
@@ -250,23 +278,33 @@ def RewriteOnce(path: Path, old: str, new: str) -> None:
     path.write_text(text.replace(old, new), encoding="utf-8", newline="\n")
 
 
-def WriteNotices(out: Path, vcpkgShare: Path) -> None:
-    """THIRD_PARTY_NOTICES.md: each third-party component's license text, from the wasm build's
-    vcpkg ports and the repository's third-party folders."""
+# What carries the code and content of each notices file, by the name WriteNotices takes.
+kNoticeCarriers = {
+    "package": "The engine module (opengine-core.st/mt.wasm), the engine pack and the examples",
+    "game": "The web player (WebPlayer.wasm) and the engine shaders of this game",
+    "editor": "The web editor's module (WebEditor.wasm) and its preloaded content (WebEditor.data)",
+}
+
+
+def WriteNotices(out: Path, vcpkgShare: Path, carrier: str) -> None:
+    """THIRD_PARTY_NOTICES.md for a kNoticeCarriers entry: each third-party component's license
+    text, from the wasm build's vcpkg ports and the repository's third-party folders. Only the
+    package's notices hold the package-only entries; every exported game copies the game's."""
     sections = []
     ports = sorted(path.parent for path in vcpkgShare.glob("*/copyright")
                    if path.parent.name not in kNoticeExcludedPorts)
     if not ports:
         raise PackageError(f"{vcpkgShare} holds no vcpkg port copyright files: pass the wasm build "
-                           "tree's vcpkg_installed/<triplet>/share")
+                           "tree's vcpkg_installed/<triplet>/share. The wasm configure "
+                           "(cmake --preset wasm-debug) installs the ports there.")
     for port in ports:
         sections.append((f"{port.name} (vcpkg port, a dependency of the engine's wasm build)", port / "copyright"))
-    sections += [(name, kRepoRoot / path) for name, path in kRepoNotices]
+    sections += [(notice.Name, kRepoRoot / notice.Path) for notice in kRepoNotices
+                 if carrier == "package" or not notice.PackageOnly]
     text = ["# Third-party notices", "",
-            "The engine module (opengine-core.st/mt.wasm), the engine pack and the examples carry the "
-            "third-party code and content below. Build-tool notices are also included and identify "
-            "their own scope; host tools are not embedded in the WebAssembly module. "
-            "License texts are reproduced from the stated sources.", ""]
+            f"{kNoticeCarriers[carrier]} carry the third-party code and content below. Build-tool "
+            "notices are also included and identify their own scope; host tools are not embedded in "
+            "the WebAssembly module. License texts are reproduced from the stated sources.", ""]
     for name, path in sections:
         if not path.is_file():
             raise PackageError(f"the notice for {name} is missing: {path}")
@@ -334,7 +372,7 @@ def Build(args: argparse.Namespace, out: Path) -> str:
     shutil.copy2(args.component_dts, out / kComponentTypes)
     for name in (*kDocuments, *kServiceWorker):
         shutil.copy2(kLibraryDir / name, out / name)
-    WriteNotices(out, args.vcpkg_share)
+    WriteNotices(out, args.vcpkg_share, "package")
     shutil.copy2(kRepoRoot / "LICENSE", out / "LICENSE")
     CopyExamples(out)
     WritePackageJson(out, version)
@@ -478,6 +516,13 @@ def main() -> int:
     parser.add_argument("--out", type=Path, help="the package directory to write or check")
     parser.add_argument("--site", type=Path,
                         help="write the demo site instead: the gallery and <site>/package")
+    notices = parser.add_mutually_exclusive_group()
+    notices.add_argument("--game-notices", type=Path,
+                         help="write only the web player template's THIRD_PARTY_NOTICES.md into this "
+                              "directory, with --vcpkg-share (the WebPlayer build runs this)")
+    notices.add_argument("--editor-notices", type=Path,
+                         help="write only the web editor's THIRD_PARTY_NOTICES.md into this directory, "
+                              "with --vcpkg-share (the WebEditor build runs this)")
     parser.add_argument("--site-models", type=Path,
                         help="with --site: a folder of .glb files the site hosts under models/")
     parser.add_argument("--site-without-particles", action="store_true",
@@ -504,6 +549,17 @@ def main() -> int:
     parser.add_argument("--allow-stub", action="store_true",
                         help="accept zero-length module files (a package for tests)")
     args = parser.parse_args()
+    noticesDirectory = args.game_notices or args.editor_notices
+    if noticesDirectory:
+        carrier = "game" if args.game_notices else "editor"
+        if not args.vcpkg_share:
+            parser.error(f"--{carrier}-notices needs --vcpkg-share")
+        try:
+            WriteNotices(noticesDirectory, args.vcpkg_share, carrier)
+        except PackageError as error:
+            print(f"build_web_package: {error}", file=sys.stderr)
+            return 1
+        return 0
     if (args.out is None) == (args.site is None):
         parser.error("give one of --out and --site")
 

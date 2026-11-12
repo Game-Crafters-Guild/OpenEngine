@@ -1,10 +1,12 @@
 #pragma once
 
 #include "PageStreaming/PageAddress.h"
+#include "PageStreaming/PageStore/PageStoreFormat.h"
 
 #include "AssetCore/AssetTypes.h"
 
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <span>
 #include <string>
@@ -27,18 +29,34 @@ class GeneratedHeightPageProvider;
 class PageStoreAccess;
 class PageStoreReader;
 
+/// The planes of one lattice generated per page (a planet's surface). Fill writes each plane of page
+/// `address` in the order of Formats, row-major, a Bc5 plane as its two channels before the encode;
+/// false outside the pyramid. Called on Background jobs, any number at once.
+struct GeneratedPagePlanes
+{
+    std::vector<PageStoreLevel> Levels; ///< the lattice of every plane
+    uint32 FaceCount = 0;
+    std::vector<PageFieldFormat> Formats;
+    /// The samples of its level past its owned area that a page's fill reads: a change there rewrites it.
+    uint32 MarginSamples = kPageApronSamples;
+    std::function<bool(const PageAddress& address, std::span<const std::span<uint8>> planes)> Fill;
+};
+
 /// Where one field's pages come from: a cooked store (read through the asset reader threads), a
-/// generated provider (evaluated on Background jobs) or the planes of one lattice that a bake writes
-/// while they are read (read on Background jobs). Exactly one of Store, Generated and Planes is set.
+/// generated provider (evaluated on Background jobs), the planes of one lattice that a bake writes
+/// while they are read (read on Background jobs) or generated planes (filled and encoded on Background
+/// jobs). Exactly one of Store, Generated, Planes and GeneratedPlanes is set.
 struct PageSource
 {
     std::shared_ptr<const PageStoreReader> Store;
     std::shared_ptr<const GeneratedHeightPageProvider> Generated;
     /// One store access per plane, all on one lattice. A page loads with every plane or not at all.
     std::vector<std::shared_ptr<const PageStoreAccess>> Planes;
+    std::shared_ptr<const GeneratedPagePlanes> GeneratedPlanes;
 
     /// The bytes each loaded page of this source holds: PagePayloadBytes of the store's format, of a
-    /// height page for the generated provider, or of each plane in turn, in the order of Planes.
+    /// height page for the generated provider, or of each plane in turn, in the order of Planes or of
+    /// the generated planes' Formats (a Bc5 plane as its blocks, as a store loads them).
     uint32 PayloadBytes() const;
     /// The sum of the planes' PageStoreAccess::Version: it changes when a page of any plane can
     /// become readable. 0 for a source without planes.
@@ -60,8 +78,9 @@ struct PageFetchOutcome
 uint64 NextPageFetchRetryFrame(uint64 frameIndex, uint32 failedAttempts);
 
 /// Fetches page `address` of `source` on the calling thread: a store's read and decode, the
-/// generated provider's evaluation, or each plane's read. Thread-safe. A plane's read waits while
-/// its bake changes the store's layout; the page is absent while any plane does not hold it.
+/// generated provider's evaluation, each plane's read, or the generated planes' fill and Bc5 encode.
+/// Thread-safe. A plane's read waits while its bake changes the store's layout; the page is absent
+/// while any plane does not hold it.
 PageFetchOutcome FetchPage(const PageSource& source, const PageAddress& address);
 
 /// Why a fetch was started, returned with its outcome: the stream, its restart and its source version.

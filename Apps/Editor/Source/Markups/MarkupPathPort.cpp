@@ -96,17 +96,17 @@ void StandPathOnGround(ECS::World& world, std::span<Vector3> points)
 
 Components::Transform NewPathPlacement(std::span<const Vector3> points)
 {
-    return Components::Transform::FromTRS(points.front(), Mathematics::Quaternion::Identity(),
-                                          Vector3(1.0f, 1.0f, 1.0f));
+    return Components::Transform::FromTRS(Mathematics::WorldPosition::FromVector3(points.front()),
+                                          Mathematics::Quaternion::Identity(), Vector3(1.0f, 1.0f, 1.0f));
 }
 
-void AddPathParts(ECS::World& world, ECS::EntityHandle entity, const float32 (&worldMatrix)[16],
+void AddPathParts(ECS::World& world, ECS::EntityHandle entity, const Mathematics::Matrix4x4& worldMatrix,
                   std::span<const Vector3> points, Spline::SplineType type)
 {
     SplineECS::SplineService& splines = SplineECS::SplineService::Get();
     const SplineECS::SplineHandle handle = splines.CreateSpline(type, false);
     Spline::SplineData& data = *splines.GetSplineData(handle);
-    const Mathematics::Matrix4x4 worldToLocal = Mathematics::Inverse(Mathematics::Matrix4x4::FromColumnMajor(worldMatrix));
+    const Mathematics::Matrix4x4 worldToLocal = Mathematics::Inverse(worldMatrix);
     for (const Vector3& point : points)
         data.AddPoint(worldToLocal.TransformPoint(point), 0.0f);
     data.MarkDirty();
@@ -115,8 +115,10 @@ void AddPathParts(ECS::World& world, ECS::EntityHandle entity, const float32 (&w
     spline.SplineDataIndex = handle.Index();
     spline.SplineDataGeneration = handle.Generation();
     spline.DefaultRadius = 0.0f; // a path mark-up has no swept band
+    const Components::Transform pose = Components::Transform::FromMatrix4x4(worldMatrix);
     Components::WorldTransform placed{};
-    std::copy(std::begin(worldMatrix), std::end(worldMatrix), std::begin(placed.matrix));
+    placed.Position = pose.Position;
+    placed.Basis = pose.Basis;
     world.AddComponentImmediate(entity, placed);
     world.AddComponentImmediate(entity, spline);
 }

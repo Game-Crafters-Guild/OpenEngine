@@ -61,6 +61,10 @@ void SkeletonStore::EnsureSizes(uint32 skeletonId, uint32 boneCount) {
     }
 }
 
+void SkeletonStore::JointCountsWritten() {
+    m_PaletteBonesEpoch.fetch_add(1, std::memory_order_release);
+}
+
 // --- Per-instance runtime ---
 
 static void InitIdentityPalette(SkeletonRuntimeState& state, uint32 jointCount)
@@ -87,6 +91,7 @@ uint32 SkeletonStore::CreateRuntime(uint32 skeletonId)
     auto* skel = &m_Skeletons[skelIdx];
 
     const uint64 generation = m_RuntimeCreateEpoch.fetch_add(1, std::memory_order_relaxed) + 1;
+    m_PaletteBonesEpoch.fetch_add(1, std::memory_order_release);
 
     const uint32 jointCount = (skel->SkinJointCount > 0) ? skel->SkinJointCount : skel->BoneCount;
 
@@ -149,6 +154,25 @@ uint32 SkeletonStore::GetRuntimeSkeletonId(uint32 runtimeId) const
 size_t SkeletonStore::GetRuntimeHighWaterMark() const
 {
     return m_RuntimeCount.load(std::memory_order_acquire);
+}
+
+size_t SkeletonStore::GetLivePaletteBoneCount()
+{
+    // Read the epoch before the walk: a change during the walk sums again next call.
+    const uint64 epoch = m_PaletteBonesEpoch.load(std::memory_order_acquire);
+    if (epoch == m_SummedPaletteBonesEpoch)
+        return m_SummedPaletteBones;
+    size_t bones = 0;
+    const size_t count = m_RuntimeCount.load(std::memory_order_acquire);
+    for (size_t i = 0; i < count; ++i)
+    {
+        const SkeletonData* skeleton = Get(m_Runtimes[i].SkeletonId.load(std::memory_order_acquire));
+        if (skeleton)
+            bones += (skeleton->SkinJointCount > 0) ? skeleton->SkinJointCount : skeleton->BoneCount;
+    }
+    m_SummedPaletteBonesEpoch = epoch;
+    m_SummedPaletteBones = bones;
+    return bones;
 }
 
 uint32 SkeletonStore::GetRuntimeRefCount(uint32 runtimeId) const
@@ -216,6 +240,7 @@ void SkeletonStore::ReleaseRuntime(uint32 runtimeId)
     entry.State.AtlasPaletteWrittenThisFrame = false;
     entry.State.Source = {};
     m_FreeRuntimeIds.push_back(runtimeId);
+    m_PaletteBonesEpoch.fetch_add(1, std::memory_order_release);
 }
 
 void SkeletonStore::RollPaletteOffsets()

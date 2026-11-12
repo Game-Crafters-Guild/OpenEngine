@@ -4,7 +4,7 @@
 #include "Logger/Logger.h"
 #include "AssetCore/SharedFileRead.h"
 #include "Assets/AssetManager.h"
-#include "CssImports.h"
+#include "CssImportsInternal.h"
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
@@ -196,7 +196,7 @@ static void PostProcessAndWarn(Stylesheet& sheet, const std::string& cssText, co
 }
 
 bool UIStyleAsset::Load() {
-    Vector<uint8> data;
+    ByteBuffer data;
     if (!ReadFileBytesShared(GetPath(), data))
     {
         if (!IsLoaded())
@@ -206,14 +206,14 @@ bool UIStyleAsset::Load() {
     return LoadFromData(data);
 }
 
-bool UIStyleAsset::ReloadFromData(const Vector<uint8>& data)
+bool UIStyleAsset::ReloadFromData(std::span<const uint8> data)
 {
     return LoadFromData(data);
 }
 
-bool UIStyleAsset::LoadFromData(const Vector<uint8>& data)
+bool UIStyleAsset::LoadFromData(std::span<const uint8> data)
 {
-    UIStyleAsset candidate(GetGUID(), GetPath());
+    UIStyleAsset candidate(GetGUID(), GetPath(), m_Origin);
     if (!candidate.ParseFromData(data))
     {
         if (!IsLoaded())
@@ -232,7 +232,7 @@ bool UIStyleAsset::LoadFromData(const Vector<uint8>& data)
     return true;
 }
 
-bool UIStyleAsset::ParseFromData(const Vector<uint8>& data)
+bool UIStyleAsset::ParseFromData(std::span<const uint8> data)
 {
     std::string text(reinterpret_cast<const char*>(data.data()), data.size());
 
@@ -302,6 +302,7 @@ bool UIStyleAsset::ParseFromData(const Vector<uint8>& data)
 
             PostProcessAndWarn(sheet, p.CssText, sourceName, p.StartLine);
             sheet.OwnerAssetGuid = ownerGuid;
+            sheet.Origin = m_Origin;
             if (!haveFirstCss)
             {
                 firstCss = sheet;
@@ -342,6 +343,7 @@ bool UIStyleAsset::ParseFromData(const Vector<uint8>& data)
     // stylesheets (mid-file @import), callers must use GetCascadeHandles().
     m_Stylesheet = haveFirstCss ? firstCss : Stylesheet{};
     m_Stylesheet.OwnerAssetGuid = ownerGuid;
+    m_Stylesheet.Origin = m_Origin;
     // A rule-free loaded file still occupies its cascade position. This lets
     // a later save restore its rules without appending it after other styles.
     if (ok && m_Segments.empty())

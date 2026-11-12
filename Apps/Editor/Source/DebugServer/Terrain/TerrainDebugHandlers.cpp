@@ -2,6 +2,7 @@
 
 #include "AssetCore/GUID.h"
 #include "CBTTerrain/CBTLayout.h"
+#include "CBTTerrain/CBTPoolCensus.h"
 #include "CBTTerrain/CBTPoolHealth.h"
 #include "CBTTerrain/CBTTreeAudit.h"
 #include "CBTTerrain/CBTUpdateRestGate.h"
@@ -22,9 +23,12 @@
 #include "EditorApplication/EditorApplication.h"
 #include "Engine/Rendering/RenderServices.h"
 #include "Mathematics/Vector3.h"
+#include "Mathematics/Vector3Int.h"
+#include "PageStreaming/Height/HeightPageLayer.h"
 #include "Terrain/TerrainBrushTool.h"
 #include "SceneView/SceneViewController.h"
 #include "TerrainECS/SurfaceHeightQuery.h"
+#include "TerrainECS/TerrainPageFeature.h"
 #include "TerrainECS/TerrainPages.h"
 #include "TerrainECS/TerrainRenderFeature.h"
 #include "TerrainECS/TerrainRenderPublication.h"
@@ -38,6 +42,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <format>
 #include <limits>
 #include <string>
 #include <vector>
@@ -424,6 +429,101 @@ const char* KeepSettlePhase(const CBTTerrain::CBTTessellationStats& stats)
                                                                                               : "settled";
 }
 
+// A 64-bit hash as its 16 hex digits, most significant first: a JSON number loses the low bits past 2^53.
+std::string HashText(uint64 hash)
+{
+    return std::format("{:016x}", hash);
+}
+
+// Per paged terrain of the last completed table report: the hash of a whole pack of its page table, and the
+// ring slot that the report's frame bound when it holds the terrain. A slot whose version equals the table's
+// version holds pageTableHash. Each call asks for the next report: a reply holds a report a frame or more old.
+json PagedTableReports(TerrainECS::TerrainPageFeature* feature)
+{
+    json reports = json::array();
+    if (feature == nullptr)
+        return reports;
+    feature->RequestTableReport();
+    TerrainECS::TerrainPageFeature::TableReport report;
+    if (!feature->LastTableReport(report))
+        return reports;
+    const TerrainECS::TerrainPageTableRing::SlotReport& slot = report.Slot;
+    for (const TerrainECS::TerrainPageFeature::PublishedTable& table : report.Tables)
+    {
+        json ring = json::array();
+        if (slot.Owner.Terrain == table.Terrain)
+            ring.push_back({{"slot", slot.Slot},
+                            {"generation", slot.Owner.Generation},
+                            {"version", slot.HeightVersion},
+                            {"words", slot.HeightWords},
+                            {"hash", HashText(slot.HeightHash)}});
+        reports.push_back({{"terrain", table.Terrain},
+                           {"frame", report.Frame},
+                           {"version", table.Version},
+                           {"words", table.Words},
+                           {"pageTableHash", HashText(table.Hash)},
+                           {"pageTableRing", std::move(ring)}});
+    }
+    return reports;
+}
+
+// The visible leaves by projected area in Scene View pixels, against the camera and viewport the Scene
+// View last submitted; null before its first frame.
+json VisibleLeavesByArea(const SceneViewController* scene, const CBTTerrain::CBTTreeSnapshot& snapshot)
+{
+    Rendering::CameraData camera;
+    uint32_t widthPx = 0;
+    uint32_t heightPx = 0;
+    if (!scene || !scene->GetLastFrameCamera(camera, widthPx, heightPx))
+        return json(nullptr);
+    const CBTTerrain::CBTVisibleAreaBands bands =
+        CBTTerrain::CountVisibleLeavesByArea(snapshot, camera.viewProjRel,
+                                             Mathematics::Vector3Int(camera.renderOriginSector[0], camera.renderOriginSector[1],
+                                                                     camera.renderOriginSector[2]),
+                                             widthPx, heightPx);
+    return json{{"belowOnePx2", bands.BelowOnePx},
+                {"oneToSixteenPx2", bands.OneToSixteenPx},
+                {"aboveSixteenPx2", bands.AboveSixteenPx},
+                {"viewportPx", {widthPx, heightPx}}};
+}
+
+// The `census` part of get_terrain_stats: the census of the newest update that counted it, then a request for the
+// next update to count it again. `current` is false when an update ran after the counted one.
+json PoolCensusReport(CBTTerrainECS::CBTRenderFeature& cbt)
+{
+    const uint64_t record = cbt.GetPoolCensusRecord();
+    const CBTTerrain::CBTPoolCensus census = cbt.GetInstance().ReadPoolCensus();
+    cbt.RequestPoolCensus();
+    if (record == 0u)
+        return json{{"updateRecord", nullptr}, {"current", false}};
+    uint32_t inView = 0;
+    uint32_t offView = 0;
+    json levels = json::array();
+    for (uint32_t level = 0; level < CBTTerrain::kCensusLevels; ++level)
+    {
+        inView += census.InViewByLevel[level];
+        offView += census.OffViewByLevel[level];
+        if (census.InViewByLevel[level] != 0u || census.OffViewByLevel[level] != 0u)
+            levels.push_back(
+                {{"level", level}, {"inView", census.InViewByLevel[level]}, {"offView", census.OffViewByLevel[level]}});
+    }
+    auto byClass = [&census](CBTTerrain::CBTCensusClass censusClass) {
+        return census.OffViewByClass[static_cast<uint32_t>(censusClass)];
+    };
+    return json{{"updateRecord", record},
+                {"current", record == cbt.GetUpdateRecordCount()},
+                {"inView", inView},
+                {"offView", offView},
+                {"offViewByClass",
+                 {{"mergeWanted", byClass(CBTTerrain::CBTCensusClass::MergeWanted)},
+                  {"behindEye", byClass(CBTTerrain::CBTCensusClass::BehindEye)},
+                  {"besideFrustum", byClass(CBTTerrain::CBTCensusClass::BesideFrustum)},
+                  {"acrossEyePlane", byClass(CBTTerrain::CBTCensusClass::AcrossEyePlane)},
+                  {"inMarginFrustum", byClass(CBTTerrain::CBTCensusClass::InMarginFrustum)},
+                  {"behindHorizon", byClass(CBTTerrain::CBTCensusClass::BehindHorizon)}}},
+                {"levels", std::move(levels)}};
+}
+
 } // namespace
 
 void RegisterTerrainDebugHandlers(EditorDebugServer& server, EditorApplication& app)
@@ -553,6 +653,7 @@ void RegisterTerrainDebugHandlers(EditorDebugServer& server, EditorApplication& 
                         {"splatmapWidth", data->SplatmapWidth},
                         {"splatmapHeight", data->SplatmapHeight},
                         {"splatmap", SplatmapStats(data->Splatmap, data->SplatmapWidth, data->SplatmapHeight)},
+                        {"heightRange", {data->HeightRangeMinH, data->HeightRangeMaxH}},
                         {"colorMap", ColorMapStats(data->ColorMap)},
                         {"quadtreeBuilt", data->Quadtree.IsBuilt()},
                         {"heightfield", HeightStats(data->Heightfield)}
@@ -731,7 +832,9 @@ void RegisterTerrainDebugHandlers(EditorDebugServer& server, EditorApplication& 
                     // the GPU re-fit — so it is bounded by capacity by construction and measures
                     // how much of the pool this view spends, not how much it wanted.
                     {"candidatesConsidered", placement.CandidatesConsidered},
-                    {"cellsVisible", placement.CellsVisible},
+                    // Cells the range fit counts on the height band, and of those the cells that get slots.
+                    {"cellsCounted", placement.CellsCounted},
+                    {"cellsPlaced", placement.CellsPlaced},
                     // Frames whose placement dispatch bailed out, monotonic per class. staleArgs
                     // is the one no count-shaped detector can find: the indirect args survive from
                     // a full ring ago, so the draw runs at a healthy count against a placement made
@@ -799,7 +902,7 @@ void RegisterTerrainDebugHandlers(EditorDebugServer& server, EditorApplication& 
     // independent of what the GPU cached. A one-shot WaitForIdle readback (~160 MiB at the 1M
     // pool) plus a sort of three edges per leaf: a diagnostic to query at a pose, never per frame.
     server.RegisterHandler("get_cbt_tree_audit",
-                           [](const EditorDebugServer::RequestContext& /*ctx*/) -> json
+                           [&app](const EditorDebugServer::RequestContext& /*ctx*/) -> json
     {
         auto* rs = EngineCore::GetInstance().GetRenderServices();
         auto* cbt = rs ? rs->GetFeature<CBTTerrainECS::CBTRenderFeature>() : nullptr;
@@ -821,7 +924,9 @@ void RegisterTerrainDebugHandlers(EditorDebugServer& server, EditorApplication& 
         if (snapshot.DomainMode == CBTTerrain::kDomainPlanar && !snapshot.Vertices.empty())
             if (auto* world = EngineCore::GetInstance().GetPrimaryWorld())
                 heights = CornerHeightAudit(snapshot, TerrainECS::ResolveSurfaceHeightQuery(*world, FirstWorldCorner(snapshot)));
+        const SceneViewController* scene = app.m_Windows.empty() ? nullptr : app.m_Windows[0]->scene.get();
         return json{
+            {"visibleByArea", VisibleLeavesByArea(scene, snapshot)},
             {"heights", std::move(heights)},
             {"domain", snapshot.DomainMode == CBTTerrain::kDomainSpherical ? "spherical" : "planar"},
             {"poolSize", snapshot.PoolSize},
@@ -907,7 +1012,6 @@ void RegisterTerrainDebugHandlers(EditorDebugServer& server, EditorApplication& 
             spherical ? Components::TerrainDomain::Spherical : Components::TerrainDomain::Planar,
             cbt->UsesNarrowHeap());
         out["nearFieldGate"] = cbt->GetClassify().NearFieldGate != 0u; // the round-8e fix state
-        out["editRetess"] = cbt->GetClassify().EditRetessEnabled != 0u;
         // Whether the planar pool-pressure controller is armed (GE_CBT_POOL_PRESSURE). Without it a
         // pressureStep of 0 below reads the same whether the controller is off or simply not engaged.
         out["poolPressure"] = cbt->GetClassify().PoolPressure != 0u;
@@ -915,40 +1019,6 @@ void RegisterTerrainDebugHandlers(EditorDebugServer& server, EditorApplication& 
         // Page samples no resident page answered: the newest read update, and the updates with any.
         out["unresolvedPageSamples"] = cbt->GetUnresolvedPageSamples();
         out["unresolvedPageUpdates"] = cbt->GetUnresolvedPageUpdates();
-        // Sphere sculpt store state (persistence verification: a loaded scene's restored
-        // sculpt shows version > 0 and needsSave false without any dab).
-        if (spherical)
-        {
-            if (auto* svc = TerrainECS::TerrainService::TryGet())
-            {
-                std::array<CBTTerrain::SphereAnalyticDab,
-                           CBTTerrain::kMaxSphereAnalyticModifiers> transient{};
-                out["sculpt"] = {
-                    {"version", svc->SphereSculptVersion()},
-                    {"virtualDim", svc->GetPlanetSculptGeometry().VirtualDim},
-                    {"hasEdits", svc->HasSphereSculptEdits()},
-                    {"needsSave", svc->SphereSculptNeedsSave()},
-                    // S3 analytic-while-stroking: live transient placements (non-zero only while
-                    // a brush stroke is held) — the mid-stroke observability seam.
-                    {"transientDabs", svc->CopyPlanetTransientDabs(transient)},
-                    // S4 adaptive page levels: pool slots claimed (a level-L page counts 4^L)
-                    // and virtual pages hosted above base resolution — the escalation oracle.
-                    {"allocatedSlots", svc->SphereSculptAllocatedPages()},
-                    {"escalatedPages", svc->SphereSculptEscalatedPages()}
-                };
-                // Optional composed-height probe: probe_dir [x,y,z] samples the CPU-authoritative
-                // composed sculpt (store + analytic modifiers + transient dabs, relief passed 0)
-                // at that direction — the direct oracle for "is the held stroke in the composition".
-                if (ctx.params.contains("probe_dir") && ctx.params["probe_dir"].is_array() &&
-                    ctx.params["probe_dir"].size() == 3)
-                {
-                    const float px = ctx.params["probe_dir"][0].get<float>();
-                    const float py = ctx.params["probe_dir"][1].get<float>();
-                    const float pz = ctx.params["probe_dir"][2].get<float>();
-                    out["sculpt"]["probeComposed"] = svc->SampleSphereSculptHeight(px, py, pz, 0.0f);
-                }
-            }
-        }
 
         // Each page stream's wanted pages per level and how many of them are resident: the height streams,
         // the planets, then the surface streams.
@@ -975,6 +1045,9 @@ void RegisterTerrainDebugHandlers(EditorDebugServer& server, EditorApplication& 
                               {"surface", stream.Surface},
                               {"wanted", wanted},
                               {"resident", resident},
+                              {"fitPasses", stream.FitPasses},
+                              {"fullDetailPages", stream.FullDetailPages},
+                              {"pagesProduced", stream.PagesProduced},
                               {"levels", std::move(levels)}};
                 if (stream.Planet)
                     entry["table"] = Editor::DescribePlanetPageTable(stream);
@@ -982,6 +1055,7 @@ void RegisterTerrainDebugHandlers(EditorDebugServer& server, EditorApplication& 
             }
             out["pageStreams"] = std::move(pageStreams);
             out["pageVisits"] = heightService->GetTerrainPages().Residency().PageVisitsThisFrame();
+            out["pagedTables"] = PagedTableReports(rs ? rs->GetFeature<TerrainECS::TerrainPageFeature>() : nullptr);
         }
 
         if (!cbt->IsInitialized())
@@ -1030,6 +1104,8 @@ void RegisterTerrainDebugHandlers(EditorDebugServer& server, EditorApplication& 
         out["inert"] = health.Inert;
         out["diagnosis"] = std::string(CBTTerrain::CBTPoolStateDescription(health.State)) + " " +
                            splitThreshold["summary"].get<std::string>();
+        if (ctx.params.value("census", false))
+            out["census"] = PoolCensusReport(*cbt);
         return out;
     });
 
@@ -1143,7 +1219,26 @@ void RegisterTerrainDebugHandlers(EditorDebugServer& server, EditorApplication& 
         if (count < 1 || count > kMaxStrokeDabs)
             return Editor::RefuseRequest("count must be 1..256");
 
-        const uint64 sculptVersionBefore = svc->SphereSculptVersion();
+        const uint32 planet = CBTTerrainECS::FindActiveTerrainEntity(*world).id;
+        // A refused sculpt takes no dab, and the reply states the refusal.
+        const std::string refusal =
+            spherical && !releaseOnly ? Editor::DescribePlanetDabRefusal(*svc, planet, active) : std::string{};
+        if (!refusal.empty())
+        {
+            if (brush->IsStroking())
+                brush->ApplyStrokePhase(Phase::End, Mathematics::Vector3{});
+            return Editor::RefuseRequest(refusal, json{{"dabsApplied", 0}});
+        }
+        const auto planetLayerVersion = [svc, planet]() -> uint64 {
+            const TerrainECS::TerrainService::PlanetPageOverlay* overlay = svc->FindPlanetPageOverlay(planet);
+            return overlay ? overlay->Version : 0u;
+        };
+        const auto planetApronWork = [svc, planet]() -> PageStreaming::HeightPageLayerApronWork {
+            const TerrainECS::TerrainService::PlanetPageOverlay* overlay = svc->FindPlanetPageOverlay(planet);
+            return overlay && overlay->Layer ? overlay->Layer->ApronWork() : PageStreaming::HeightPageLayerApronWork{};
+        };
+        const uint64 sculptVersionBefore = planetLayerVersion();
+        const PageStreaming::HeightPageLayerApronWork apronWorkBefore = planetApronWork();
         const GUID zonePayloadBefore = brush->GetActivePayload();
         uint64 zoneVersionBefore = 0;
         double zoneMagnitudeBefore = 0.0;
@@ -1220,19 +1315,15 @@ void RegisterTerrainDebugHandlers(EditorDebugServer& server, EditorApplication& 
         };
         if (spherical)
         {
-            // Effect-side proof + sub-texel diagnosis data (the same maths the brush uses).
-            const CBTTerrain::SphereSculptGeometry geom = svc->GetPlanetSculptGeometry();
+            // The effect-side proof: the planet layer's version moves when a dab writes it.
             const float angularRadius =
                 active.PlanetRadius > 0.0f ? brush->GetRadius() / active.PlanetRadius : 0.0f;
-            out["planet"] = {
-                {"radius", active.PlanetRadius},
-                {"angularRadius", angularRadius},
-                {"virtualDim", geom.VirtualDim},
-                {"footprintTexels", TerrainECS::TerrainService::SphereSculptDabFootprintTexels(
-                                        angularRadius, geom.VirtualDim)}
-            };
-            out["sculptVersion"] = {{"before", sculptVersionBefore},
-                                    {"after", svc->SphereSculptVersion()}};
+            out["planet"] = {{"radius", active.PlanetRadius}, {"angularRadius", angularRadius}};
+            out["sculptVersion"] = {{"before", sculptVersionBefore}, {"after", planetLayerVersion()}};
+            // The apron refreshes this call's dabs made in the sculpt layer, and the page searches they made.
+            const PageStreaming::HeightPageLayerApronWork apronWork = planetApronWork();
+            out["apronWork"] = {{"pages", apronWork.Pages - apronWorkBefore.Pages},
+                                {"lookups", apronWork.Lookups - apronWorkBefore.Lookups}};
         }
         else
         {

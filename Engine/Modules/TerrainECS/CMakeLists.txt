@@ -4,29 +4,36 @@ project(TerrainECS LANGUAGES CXX)
 
 add_library(TerrainECS OBJECT
     Source/TerrainService.cpp
+    Source/TerrainHeightFunction/RevocableTerrainHeightFunction.cpp
+    Source/TerrainHeightFunction/TerrainHeightFunctionInstances.cpp
+    Source/TerrainHeightFunction/TerrainHeightFunctionRegistry.cpp
     Source/CoarseTileStandIn.cpp
-    Source/TerrainBakeCache.cpp
+    Source/TerrainBakeKeyBuilder.cpp
     Source/BakeWarningLatch.cpp
     Source/PlanarHeightfieldEditCursor.cpp
     Source/TerrainHandleHygiene.cpp
     Source/TerrainGpuBake.cpp
     Source/TerrainEntityProvisioning.cpp
-    Source/TerrainFactory.cpp
     Source/TerrainRenderFeature.cpp
     Source/GrassWindVolumeRing.cpp
     Source/GrassWindVolumeExtractor.cpp
     Source/TerrainMaterialAuthoring.cpp
     Source/TerrainMaterialLibraryCache.cpp
     Source/TerrainUploadNode.cpp
-    Source/PlanetFaceCollider.cpp
+    Source/Planet/PlanetChart.cpp
+    Source/Planet/PlanetLayerCap.cpp
+    Source/Planet/PlanetPageBodyFill.cpp
     Source/TerrainAtlas.cpp
     Source/AtlasTileNormal.cpp
     Source/TerrainSizingPlan.cpp
     Source/RawHeightmap.cpp
     Source/AtlasResidencyController.cpp
     Source/PageLevelRule.cpp
-    Source/PlanetPageRequester.cpp
+    Source/Planet/PlanetPageRequester.cpp
+    Source/Planet/PlanetSculptDab.cpp
+    Source/Planet/PlanetSurfacePageProvider.cpp
     Source/PageTable.cpp
+    Source/PackedPageTable.cpp
     Source/PagedHeightSampler.cpp
     Source/SurfaceHeightQuery.cpp
     Source/TerrainSkyline.cpp
@@ -35,6 +42,7 @@ add_library(TerrainECS OBJECT
     Source/TerrainPageFeature.cpp
     Source/TerrainPageTableRing.cpp
     Source/TerrainHeightPageDriver.cpp
+    Source/TerrainRenderedViews.cpp
     Source/HeightPageStoreLoader.cpp
     Source/Systems/TerrainExtractionSystem.cpp
     Source/Systems/TerrainPhysicsSystem.cpp
@@ -43,9 +51,12 @@ add_library(TerrainECS OBJECT
     Source/Systems/TerrainModifierSystem.cpp
     Source/Systems/TerrainModifierPageOverlay.cpp
     Source/Systems/TerrainModifierSurfacePages.cpp
+    Source/TerrainSurface/TerrainSurfaceBakeQueue.cpp
     Source/TerrainSurface/TerrainSurfacePageBaker.cpp
     Source/TerrainSurface/TerrainSurfacePageDriver.cpp
     Source/TerrainSurface/TerrainSurfacePages.cpp
+    Source/TerrainSurface/TerrainSurfaceRulePresets.cpp
+    Source/TerrainSurface/TerrainSurfaceRuleRow.cpp
     Source/TerrainSurface/TerrainSurfaceStore.cpp
     Source/TileStreamingManager.cpp
     Source/TerrainModifierComponents.cpp
@@ -122,10 +133,10 @@ target_compile_definitions(TerrainECS PRIVATE
     $<TARGET_PROPERTY:Engine,INTERFACE_COMPILE_DEFINITIONS>
 )
 
-# PlanetFaceCollider.cpp mirrors the CBT planet height field on the CPU
-# (CBTPlanetShading.h / CBTSphereFaceMap.h — device-free, header-only), so the
-# collider heights match the rendered surface. Pull CBTTerrain's public headers
-# without a link dependency (no cycle: CBTTerrain does not depend on TerrainECS).
+# The planet reads (CBTPlanetShading.h, CBTSphereFaceMap.h, CBTLayout.h) are
+# CBTTerrain's device-free, header-only CPU mirror of the GPU's sphere math. Pull
+# CBTTerrain's public headers without a link dependency (no cycle: CBTTerrain does
+# not depend on TerrainECS).
 target_include_directories(TerrainECS PRIVATE
     $<TARGET_PROPERTY:CBTTerrain,INTERFACE_INCLUDE_DIRECTORIES>
 )

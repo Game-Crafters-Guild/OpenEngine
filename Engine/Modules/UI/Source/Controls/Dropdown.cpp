@@ -137,7 +137,7 @@ Dropdown::Dropdown()
     : DismissablePopup(this)
 {
     AddClass("dropdown");
-    // Control styling is an Editor-shipped UIStyle asset.
+    // Control styling is a UI module UIStyle asset.
     RequestSubtreeStyleAssetPath("UI/controls/Dropdown.css", "editor");
     SetFocusable(true);
     EnsureHeader();
@@ -365,15 +365,32 @@ void Dropdown::SetAutoWidthPopup(bool enabled)
     UpdatePopupWidthClass();
 }
 
+// The header sizes the popup, except when the popup needs more: a caller
+// that asked for auto width, or the icon or picture column the control adds,
+// which would otherwise be taken out of the labels and wrap them.
+bool Dropdown::PopupFitsEntries() const
+{
+    return m_AutoWidthPopup || m_OptionArt != OptionArt::None;
+}
+
 void Dropdown::UpdatePopupWidthClass()
 {
-    // The header sizes the popup, except when the popup needs more: a caller
-    // that asked for auto width, or the icon or picture column the control adds,
-    // which would otherwise be taken out of the labels and wrap them.
-    if (m_AutoWidthPopup || m_OptionArt != OptionArt::None)
+    if (PopupFitsEntries())
         m_ItemsContainer->AddClass("fit-content");
     else
         m_ItemsContainer->RemoveClass("fit-content");
+    for (const auto& row : m_ItemsContainer->GetChildren())
+        UpdateTextRowClass(*row);
+}
+
+// A text row of a popup sized to its entries stays on one line (theme/widgets.css). An icon or
+// picture row keeps its text in a child Label, which has a one-line rule of its own.
+void Dropdown::UpdateTextRowClass(UIElement& row) const
+{
+    if (PopupFitsEntries() && m_OptionArt == OptionArt::None)
+        row.AddClass("dropdown-item-fit-content");
+    else
+        row.RemoveClass("dropdown-item-fit-content");
 }
 
 // An open popup re-places itself after every layout pass: its own width is not
@@ -384,12 +401,9 @@ void Dropdown::OnPostLayout()
         UpdatePopupPlacement();
 }
 
-// Where the popup sits relative to its header. Vertically it opens above when
-// there is not enough room below and the upper side offers more; horizontally it
-// is pulled back inside its panel, and capped, when it would otherwise run past
-// the edge. Both decisions are re-made on every converge pass, so each one is
-// applied only when it changes: a class flipped off and on again costs the whole
-// tree another post-layout dispatch and solve.
+// Where the popup sits against its header (UI::Layout::PlaceDropdownPopup). The placement runs again on
+// every converge pass, so each change is applied only when it differs: a class flipped off and on again
+// costs the whole tree another post-layout dispatch and solve.
 void Dropdown::UpdatePopupPlacement()
 {
     if (!m_ItemsContainer)
@@ -599,6 +613,7 @@ void Dropdown::RebuildUiItems()
         auto  lbl = std::make_unique<Label>();
         Label* raw = lbl.get();
         raw->AddClass("dropdown-item");
+        UpdateTextRowClass(*raw);
         raw->SetFocusProxy(this);
         const int index = static_cast<int>(i);
         const bool isSelected = (m_SelectedIndex == index);

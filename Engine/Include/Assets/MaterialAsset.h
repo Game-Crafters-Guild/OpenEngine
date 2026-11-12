@@ -5,6 +5,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <nlohmann/json_fwd.hpp>
@@ -24,14 +25,14 @@ public:
     }
 
     bool Load() override;
-    bool LoadFromData(const Vector<uint8>& data) override;
+    bool LoadFromData(std::span<const uint8> data) override;
     void Unload() override;
 
     const MaterialDocument& GetDocument() const { return m_Doc; }
     const std::vector<std::string>& GetErrors() const { return m_Errors; }
 
 private:
-    bool ParseFromText(const std::string& text, const std::filesystem::path& sourcePathForRelativeErrors);
+    bool ParseFromText(std::string_view text, const std::filesystem::path& sourcePathForRelativeErrors);
 
 private:
     MaterialDocument m_Doc{};

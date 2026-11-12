@@ -2,6 +2,8 @@
 
 #include "PlayMode/PlayModeEntryGate.h"
 
+#include "Types/Types.h"
+
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -131,6 +133,10 @@ class PlayModeManager
     struct UndoHistoryStash;
 
     void SetState(PlayModeState s);
+    // Sets the world clock's time scale to 0, which stops gameplay time.
+    void PauseSimulationClock();
+    // Restores the time scale that PauseSimulationClock found.
+    void ResumeSimulationClock();
 
     Snapshot CaptureSnapshot() const;
     bool ApplySnapshot(const Snapshot& snapshot) const;
@@ -142,6 +148,7 @@ class PlayModeManager
   private:
     PlayModeState m_State = PlayModeState::Edit;
     bool m_ExitRequested = false;
+    float64 m_TimeScaleBeforePause = 1.0;
     ECS::World* m_World = nullptr; // not owned
     SceneEditorController* m_SceneEditor = nullptr; // not owned
     UndoRedoService* m_UndoRedo = nullptr; // not owned

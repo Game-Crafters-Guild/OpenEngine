@@ -265,7 +265,8 @@ class PipelineVariantCache
     // can alias the SPIR-V storage owned by the shader cache without a copy.
     // `declaredMeta`, when set, is the meta the pipeline's set layouts are built
     // from instead of the variant's own (CompatVertexStageDepthMeta); it must be
-    // the meta the binder walks for this pipeline.
+    // the meta the binder walks for this pipeline. `debugName` names the pipeline
+    // in captures and logs only.
     GraphicsPipelineId InternDepthPipelineId(
         const std::shared_ptr<const SharedShaderVariant>& variant,
         VertexAttributeFlags vertexFlags,
@@ -276,6 +277,7 @@ class PipelineVariantCache
         FrontFace frontFace,
         DepthFragmentMode fragmentMode,
         bool patchBindlessTextureSet,
+        std::string debugName,
         const Rendering::ShaderMeta* declaredMeta = nullptr);
 
     // Shared depth-only pipeline (Shape B): one pipeline id per

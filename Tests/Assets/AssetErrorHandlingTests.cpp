@@ -446,7 +446,7 @@ TEST_F(AssetErrorHandlingTest, DecodeSuppressionPreservesFileSpellingAndReportsE
         ASSERT_EQ(metadata.Type, failure.Type);
         const std::string contents = failure.Contents;
         const Vector<uint8> bytes(contents.begin(), contents.end());
-        EXPECT_FALSE(DecodeAssetPayload(manager, metadata.Guid, metadata, bytes));
+        EXPECT_FALSE(DecodeAssetPayload(manager, metadata.Guid, metadata, ByteBuffer::CopyOf(bytes)));
         String reason;
         ASSERT_TRUE(manager.IsLoadSuppressed(metadata.Guid, &reason));
         EXPECT_EQ(reason, "Failed to load '" + path.generic_string() + "': " + failure.Error);

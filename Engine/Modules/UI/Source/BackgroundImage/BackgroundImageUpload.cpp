@@ -33,8 +33,8 @@ bool DecodeSourceImageToRgba8(const std::filesystem::path& path,
                                      std::vector<unsigned char>& outRgba,
                                      uint32_t& outWidth, uint32_t& outHeight)
 {
-    Vector<uint8> bytes;
-    if (!ReadFileBytesShared(path, bytes) || bytes.empty())
+    ByteBuffer bytes;
+    if (!ReadFileBytesShared(path, bytes) || bytes.Size() == 0)
         return false;
 
     const Image::Image8 decoded = Image::Decode8(bytes, path.string(), Image::DecodeChannels::Rgba);

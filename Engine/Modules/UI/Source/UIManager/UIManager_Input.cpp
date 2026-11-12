@@ -3,6 +3,7 @@
 #include "Input/InputSystem.h"
 #include "Input/KeyCodes.h"
 #include "Logger/Logger.h"
+#include "Memory/ScratchScope.h"
 #include "UI/Controls/Mount.h"
 #include "UI/Interaction/DragDrop/DragDropManager.h"
 #include "UI/Interaction/TooltipOverlay.h"
@@ -499,8 +500,8 @@ bool UIManager::BubbleEventFrom(UIElement* target, UIEvent& ev)
     // Snapshot the chain by instanceId: a handler can rebuild the tree while we
     // are walking it, and raw parent pointers would dangle. The depth budget and
     // the repeat check also defend against malformed parent cycles.
-    static thread_local std::vector<std::uint64_t> bubbleIds;
-    bubbleIds.clear();
+    Memory::ScratchScope scratch;
+    std::pmr::vector<std::uint64_t> bubbleIds{&scratch.Resource()};
     bubbleIds.reserve(16);
     {
         UIElement* pBuild = target;
@@ -1066,8 +1067,8 @@ bool UIManager::OnScroll(float xoffset, float yoffset)
     ev.Target = target;
 
     // Snapshot bubble chain by instanceId to avoid UAF if handlers rebuild the UI.
-    static thread_local std::vector<std::uint64_t> bubbleIds;
-    bubbleIds.clear();
+    Memory::ScratchScope scratch;
+    std::pmr::vector<std::uint64_t> bubbleIds{&scratch.Resource()};
     bubbleIds.reserve(16);
     {
         UIElement* pBuild = target;
@@ -1146,8 +1147,8 @@ bool UIManager::DispatchBubbleEvent(UIElement* target, EventId id, int button,
     // (e.g., inspector rebuilding controls) can't produce use-after-free.
     //
     // This also defends against malformed parent cycles by enforcing a depth budget.
-    static thread_local std::vector<std::uint64_t> bubbleIds;
-    bubbleIds.clear();
+    Memory::ScratchScope scratch;
+    std::pmr::vector<std::uint64_t> bubbleIds{&scratch.Resource()};
     bubbleIds.reserve(16);
     {
         UIElement* pBuild = target;

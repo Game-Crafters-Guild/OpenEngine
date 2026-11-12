@@ -37,7 +37,10 @@ class AssetDecodeGate;
  * Helpers run on the Background lane, so frame work (Normal priority) is always
  * dequeued first. A helper holds its slot for one band only and then goes back
  * to the end of the Background lane, so the decodes queued there, and the
- * decode readers waiting on the gate, are reached between bands.
+ * decode readers waiting on the gate, are reached between bands. Before each
+ * band it takes, the calling thread keeps one helper queued for each texture
+ * slot free at that time, so a level that starts on a full share gets helpers
+ * when other cooks end; a helper that finds the share full ends.
  *
  * Thread-safe. A helper still queued when RunBands returns ends without
  * touching this object, the gate or the run's callbacks, so this object may

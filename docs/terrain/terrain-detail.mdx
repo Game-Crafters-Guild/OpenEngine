@@ -21,7 +21,7 @@ The default draws distant ground with edges of about 11 pixels at 1080 rows, and
 
 ## Near the camera: the height data
 
-This section applies to heightfield terrains. A planet has no height grid and no Samples Per Meter: it refines procedurally near the camera, down to a depth limit that follows its radius, and Target Pixel Error applies to it the same way.
+This section applies to heightfield terrains. A planet has no height grid: it refines procedurally near the camera, down to a depth limit that follows its radius, and Target Pixel Error applies to it the same way. On a planet, Planet Radius sets the spacing of the sculpt's samples ([Planet sculpt](planet-sculpt.mdx#planet-radius)).
 
 The terrain's height data is a grid of samples. Its spacing follows **Size** and **Samples Per Meter**, rounded up so that each axis holds `64 × 2^k` intervals. A 576 m terrain at 1 sample per meter therefore holds 1,024 intervals, 0.5625 m apart. The mesh refines down to exactly that spacing and no further: where the ground has relief, a vertex sits on every sample near the camera. Smaller triangles would only interpolate the same samples, so they would add cost and no shape.
 
@@ -33,9 +33,9 @@ The terrain's height data is a grid of samples. Its spacing follows **Size** and
 
 **Target Pixel Error** (Terrain component, Advanced) is the largest size a triangle may have on screen, measured in pixels of a 1080-row view. A triangle's size counts its edge and the height range of the ground it draws, projected from the triangle's nearest depth in the view. A triangle whose size projects larger than the target is split, and a triangle never asks for more detail than the triangle it was split from. A split pair is merged back once neither the triangle it came from nor that triangle's neighbor across its long edge measures above about 0.7 of the target.
 
-While the camera holds still, splits and merges use that one threshold, so a still camera settles to the same mesh for its pose whichever way it arrived. This holds while the mesh fills less than half of its capacity. Above that, distant ground is coarsened by how full the mesh is, and the mesh can depend on the path.
+While the camera holds still, splits and merges use that one threshold, so a still camera settles to the same mesh for its pose whichever way it arrived. This holds while the mesh fills less than half of its triangle pool, the fixed number of triangles that the terrain can hold at one time. Above that, distant ground is coarsened by how full the mesh is, and the mesh can depend on the path.
 
-Terrains streamed through the tile atlas, and every terrain in the web build, which has no 64-bit shader integers, refine on the projected edge length instead (below). They keep the gap between the split and the merge thresholds while the camera holds still too, so a still camera's mesh stops changing soon after the camera stops, and it can depend on the path.
+Terrains streamed through the tile atlas, and every terrain in the web build, which has no 64-bit shader integers, refine on a triangle's area on screen instead. A triangle splits while its area is above that of a right triangle whose long edge is the target, and the two triangles that share a long edge merge as one. Terrain behind the camera keeps the detail of the ground in front of it, so the shadows it casts into the view stay stable. They keep the gap between the split and the merge thresholds while the camera holds still too, so a still camera's mesh stops changing soon after the camera stops, and it can depend on the path.
 
 ### It follows the view's height
 
@@ -49,13 +49,13 @@ The target is relative to resolution. In a view *H* rows tall, the size limit is
 
 ### Flat ground stays coarse
 
-On a heightfield terrain a triangle also splits only while the heights it draws vary by more than about one pixel on screen, measured at the triangle's nearest point to the camera. Far away, where the ground is drawn smoothed (below), that is the range of the smoothed ground, so relief finer than the distance can show adds no triangles there. Flat ground therefore stays as a few large triangles at any distance, even right under the camera, and relief keeps every triangle the target and the data allow. Shading comes from the per-pixel normal map. A coarse triangle can sit up to that pixel's worth of height off the data, so under grazing light a long shadow's edge on it can move by a pixel or two. The rule does not apply to planets, to terrains streamed through the tile atlas (the largest tiled terrains), or to targets without 64-bit shader integers (the web build). They refine on the projected edge length alone.
+On a heightfield terrain a triangle also splits only while the heights it draws vary by more than about one pixel on screen, measured at the triangle's nearest point to the camera. Far away, where the ground is drawn smoothed (below), that is the range of the smoothed ground, so relief finer than the distance can show adds no triangles there. Flat ground therefore stays as a few large triangles at any distance, even right under the camera, and relief keeps every triangle the target and the data allow. Shading comes from the per-pixel normal map. A coarse triangle can sit up to that pixel's worth of height off the data, so under grazing light a long shadow's edge on it can move by a pixel or two. The rule does not apply to planets, to terrains streamed through the tile atlas (the largest tiled terrains), or to targets without 64-bit shader integers (the web build). They refine on the triangle's area on screen alone, so on them flat ground refines like relief.
 
 The distant triangle count goes as about `1 / target²`. Near the camera the count does not change with the target on a heightfield terrain, because the triangles there already sit at the data's spacing.
 
 :::caution[Lowering the target is the expensive direction]
 
-A lower target refines all distant ground with relief, including gentle slopes where the extra triangles change little that is visible. On a large terrain at a low target the mesh can reach its capacity. It then coarsens the largest triangles first, so distant ground ends up coarser than the target asks.
+A lower target refines all distant ground with relief, including gentle slopes where the extra triangles change little that is visible. On a large terrain at a low target the mesh can fill its triangle pool. It then coarsens the largest triangles first, so distant ground ends up coarser than the target asks.
 
 :::
 
@@ -66,3 +66,21 @@ A distant triangle spans many height samples, so its corners alone would pick ou
 Physics, placement, height queries and the terrain's shadow read the full-resolution heights at every distance; the water's shoreline follows the drawn ground. Where the relief is finer than the distance can show, a distant object can sit up to half that relief above or below the drawn ground.
 
 The smoothing does not apply to planets, to terrains streamed through the tile atlas or through height pages, or to targets without 64-bit shader integers (the web build).
+
+## Behind the camera: Detail Behind Camera
+
+The ground behind the camera is not drawn, but the mesh keeps it so that a turn shows detail at once. On a large terrain that ground can take a large share of the triangle pool, and fewer triangles are left for the ground in view. **Detail Behind Camera** (Terrain component, Advanced) sets what the mesh keeps behind the camera. Release When Needed, the default, releases the ground behind the camera only when the triangle pool is nearly full.
+
+| Value | What you see | Use it for |
+|---|---|---|
+| Always Keep | A turn shows no change. After a camera cut, the new view takes the longest to refine. | A game whose camera turns fast and seldom cuts |
+| **Release When Needed (default)** | After a fast turn, the far skyline can change for a few frames. After a camera cut, the new view refines sooner than with Always Keep. In one test of a 2 km cut, the new view was settled at about frame 20, and at about frame 40 with Always Keep. | Most games |
+| Always Release | After a fast turn, the near and the far ground are coarser for the first frames. This is the largest change of the three. After a camera cut, the first frames are the closest to the settled view. | A game with many camera cuts and few fast turns |
+
+The values also differ in the count of triangles in view, but no picture on the test terrain shows the difference as detail. In the tests, 2 m above the ground, Release When Needed held 14 to 17 percent more triangles in view than Always Keep, and Always Release held 3 to 4 percent more than Release When Needed; Always Release and Release When Needed held the same count at four of the six measured poses.
+
+After the camera stops at the end of a long move, the terrain continues to refine for some time. In one test, a 12 km move ended 150 m above the ground: the terrain continued to refine for 20 s with Release When Needed and 28 s with Always Release. With Always Keep, it continued to refine at the end of a 90 s wait. Thus the mesh of the ground can continue to change for many seconds after a long camera move.
+
+Shadows cast into the view from ground behind the camera are the same at every value.
+
+Ground beside the camera, and ground in view, keeps its detail at every value. The setting has an effect only on a tiled heightmap terrain large enough to stream its heights through the tile atlas (more than 8193 height samples on a side). On a smaller terrain the ground behind the camera already goes coarse when the triangle pool fills, and a planet keeps no ground behind the camera, so the Terrain inspector shows the row only where it has an effect.

@@ -223,9 +223,9 @@ EditorDebugServer::~EditorDebugServer()
     Stop();
 }
 
-void EditorDebugServer::RegisterHandler(const std::string& method, Handler handler)
+void EditorDebugServer::RegisterHandler(const std::string& method, Handler handler, HandlerThread thread)
 {
-    m_Handlers[method] = std::move(handler);
+    m_Handlers[method] = RegisteredHandler{std::move(handler), thread};
 }
 
 bool EditorDebugServer::Start(uint16_t port)
@@ -420,7 +420,7 @@ bool EditorDebugServer::Dispatch(PendingRequest& req)
         {
             // A copy: the gates' context still reads the held request's parameters.
             const RequestContext ctx{req.id, req.params, req.clientId};
-            result = handler->second(ctx);
+            result = handler->second.Run(ctx);
         }
     }
     catch (const std::exception& e)
@@ -852,8 +852,35 @@ void EditorDebugServer::ProcessLine(uint32_t clientId, const std::string& line)
         return;
     }
 
+    if (const auto handler = m_Handlers.find(method);
+        handler != m_Handlers.end() && handler->second.Thread == HandlerThread::Network)
+    {
+        RunOnNetworkThread(handler->second.Run, clientId, id, params);
+        return;
+    }
+
     std::lock_guard lock(m_RequestMutex);
     m_PendingRequests.push_back({clientId, std::move(id), std::move(method), std::move(params)});
+}
+
+void EditorDebugServer::RunOnNetworkThread(const Handler& handler, uint32_t clientId, const std::string& id,
+                                           const nlohmann::json& params)
+{
+    nlohmann::json result;
+    try
+    {
+        result = handler(RequestContext{id, params, clientId});
+    }
+    catch (const std::exception& e)
+    {
+        result = Editor::RefuseRequest(std::string("Handler exception: ") + e.what());
+    }
+    catch (...)
+    {
+        result = Editor::RefuseRequest("Handler threw a non-standard exception");
+    }
+    const nlohmann::json response = Editor::HandlerResponse(id, result);
+    EnqueueResponse(clientId, response.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n");
 }
 
 void EditorDebugServer::QueueClientClosed(uint32_t clientId)

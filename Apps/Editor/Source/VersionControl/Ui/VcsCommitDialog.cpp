@@ -78,16 +78,15 @@ void VcsCommitDialog::Show(GameEngine::UIManager* uiManager,
     if (auto* root = uiManager->GetRootElement())
     {
         root->AddChild(std::move(dialogRoot));
-        uiManager->PostToUI([this, uiManager]()
+        // The action captures only the dialog root. It runs only while that root is in the tree.
+        UIElement* dialog = m_DialogRoot;
+        dialog->PostSafeAction([dialog]()
         {
-            if (m_DialogRoot && m_UIManager == uiManager)
+            if (auto* field = dynamic_cast<TextField*>(dialog->FindById("commit-message-field"_sid)))
             {
-                if (auto* field = dynamic_cast<GameEngine::TextField*>(
-                        m_DialogRoot->FindById("commit-message-field"_sid)))
-                {
-                    uiManager->FocusElement(field);
-                    field->SelectAll();
-                }
+                if (UIManager* manager = dialog->GetOwnerManager())
+                    manager->FocusElement(field);
+                field->SelectAll();
             }
         });
     }

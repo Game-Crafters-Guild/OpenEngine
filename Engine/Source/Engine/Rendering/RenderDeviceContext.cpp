@@ -140,16 +140,12 @@ bool RenderDeviceContext::Initialize(const InitParams& params)
             Shutdown();
             return false;
         }
-        m_WindowTarget = device->CreateWindowTarget(params.windowHandle, params.width, params.height);
-        if (!m_WindowTarget.IsValid())
+        IDevice::WindowTargetJobDispatch dispatch;
+        if (params.windowTargetChannel)
+            dispatch = [channel = params.windowTargetChannel](std::function<void()> job) { channel->Enqueue(std::move(job)); };
+        if (!device->CreateAndActivateWindowTarget(params.windowHandle, params.width, params.height, &m_WindowTarget, dispatch))
         {
-            Logger::Log::Error("RenderDeviceContext::Initialize: CreateWindowTarget failed");
-            Shutdown();
-            return false;
-        }
-        if (!device->SetActiveWindowTarget(m_WindowTarget))
-        {
-            Logger::Log::Error("RenderDeviceContext::Initialize: SetActiveWindowTarget failed");
+            Logger::Log::Error("RenderDeviceContext::Initialize: CreateAndActivateWindowTarget failed");
             Shutdown();
             return false;
         }
@@ -267,15 +263,6 @@ bool RenderDeviceContext::RecreateWindowTargetSwapchain(uint32 width, uint32 hei
         return false;
     }
     return device->RecreateWindowTargetSwapchain(m_WindowTarget, width, height);
-}
-
-RenderDeviceContext::CompileAndExecuteResult RenderDeviceContext::CompileAndExecuteRenderGraph()
-{
-    // Old-arm graph compile/execute is gone under RenderGraph — the host drives
-    // BuildFrameGraph(RGFrame&) directly and timings come from caller chrono.
-    // Empty shim until the Stage-6 editor cutover removes the last caller
-    // (EditorApplication RGCsvSidecar emit).
-    return CompileAndExecuteResult{};
 }
 
 } // namespace GameEngine::Engine::Renderer

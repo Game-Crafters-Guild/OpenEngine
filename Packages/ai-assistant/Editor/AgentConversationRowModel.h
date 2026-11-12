@@ -28,7 +28,7 @@ struct MarkupChip
 /// elements that show it.
 struct AgentConversationRowModel
 {
-    /// "You", or the connection and model that answered ("Claude (API) · claude-opus-5-5").
+    /// "You", or the connection and model that answered ("Claude (API key) · claude-opus-5-5").
     std::string Header;
     /// The message text; on a reply, what has streamed so far, and on a stopped or
     /// truncated reply followed by an ellipsis where it was cut.
@@ -49,6 +49,9 @@ struct AgentConversationRowModel
     /// counts ("5 undo steps · 1 refused"), led by "Reply truncated at 64 KB" on a
     /// truncated reply; empty on a user message.
     std::string Status;
+    /// On a reply the setup check refused (ConversationMessage::NotReady): the failed
+    /// step's finding and fix, shown in an error notice instead of Status.
+    std::string SetupRefusal;
     /// The user wrote the message.
     bool FromUser = false;
     /// The reply is being written, so the row offers Stop.
@@ -72,7 +75,7 @@ struct AgentConversationRowModel
     /// it started, or not yet streaming).
     bool ShowsText = true;
 
-    /// "Claude (local session) · Opus 5.5 · High": the connection, the model that answered (the
+    /// "Claude (Subscription) · Opus 5.5 · High": the connection, the model that answered (the
     /// one asked for until the turn reports it) and the effort asked for, if any, of a reply.
     static std::string ReplyHeader(const ConversationMessage& message);
 

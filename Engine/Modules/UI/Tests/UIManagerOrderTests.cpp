@@ -3,6 +3,7 @@
 #include <fstream>
 #include <gtest/gtest.h>
 #include <string>
+#include <vector>
 
 #include "Assets/AssetManager.h"
 #include "Rendering/Core/Device.h"
@@ -600,6 +601,70 @@ TEST(UIManagerInputTests, LiveMaskReleasesPhysicallyHeldModifierAndKeepsReported
     EXPECT_EQ(ui.GetModifierKeys(), Input::kModControl);
     ui.ReconcileModifierKeys(0);
     EXPECT_EQ(ui.GetModifierKeys(), 0);
+}
+
+namespace
+{
+// Logs each key-down it hears as "<key>:<id>". With a manager set, key A makes it move focus to
+// "b" and send key B while key A still bubbles.
+class KeyLogElement : public UIElement
+{
+  public:
+    std::vector<std::string>* Heard = nullptr;
+    UIManager* SendFromHandler = nullptr;
+
+    void OnEvent(UIEvent& e) override
+    {
+        if (e.Id != kEventKeyDown)
+            return;
+        Heard->push_back((e.Key == Input::kKeyCode_A ? "A:" : "B:") + GetId());
+        if (SendFromHandler && e.Key == Input::kKeyCode_A)
+        {
+            SendFromHandler->SetFocusById("b");
+            SendFromHandler->OnKey(Input::kKeyCode_B, GLFW_PRESS, 0);
+        }
+    }
+};
+
+KeyLogElement* AddKeyLogChild(UIElement& parent, const char* id, std::vector<std::string>& heard)
+{
+    auto child = std::make_unique<KeyLogElement>();
+    KeyLogElement* raw = child.get();
+    raw->SetId(id);
+    raw->Heard = &heard;
+    parent.AddChild(std::move(child));
+    return raw;
+}
+} // namespace
+
+// A key handler can send a key of its own. The inner key must not change the targets that the
+// outer key still has to visit.
+TEST(UIManagerInputTests, AKeySentFromAKeyHandlerLeavesTheOuterKeyOnItsOwnChain)
+{
+    auto* dev = SharedHeadlessDevice();
+    if (!dev)
+        GTEST_SKIP() << "Device init failed";
+
+    std::vector<std::string> heard;
+    auto root = std::make_unique<KeyLogElement>();
+    root->SetId("root");
+    root->Heard = &heard;
+    KeyLogElement* left = AddKeyLogChild(*root, "left", heard);
+    KeyLogElement* right = AddKeyLogChild(*root, "right", heard);
+    KeyLogElement* a = AddKeyLogChild(*left, "a", heard);
+    AddKeyLogChild(*right, "b", heard);
+
+    UIManager ui(dev);
+    ui.SetRoot(std::move(root));
+    ui.SetFocusById("a");
+    a->SendFromHandler = &ui;
+
+    ui.OnKey(Input::kKeyCode_A, GLFW_PRESS, 0);
+
+    // The two chains have the same depth. A chain buffer that both dispatches share keeps its
+    // size, so key A then goes on to "right" and not to "left".
+    const std::vector<std::string> expected{"A:a", "B:b", "B:right", "B:root", "A:left", "A:root"};
+    EXPECT_EQ(heard, expected);
 }
 
 TEST(UIManagerOrderTests, OrderPropertyReordersAndUnsettingRestoresOriginal)

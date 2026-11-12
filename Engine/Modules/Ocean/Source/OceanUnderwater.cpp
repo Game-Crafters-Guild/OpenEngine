@@ -219,7 +219,8 @@ bool OceanUnderwater::EnsurePipeline(IDevice& device)
                         {16, DescriptorType::CombinedImageSampler, 1, kUnderwaterFragmentStage},
                         {17, DescriptorType::StorageBuffer, 1, kUnderwaterFragmentStage},
                         {18, DescriptorType::StorageBuffer, 1, kUnderwaterFragmentStage},
-                        {19, DescriptorType::StorageBuffer, 1, kUnderwaterFragmentStage}};
+                        {19, DescriptorType::StorageBuffer, 1, kUnderwaterFragmentStage},
+                        {20, DescriptorType::UniformBuffer, 1, kUnderwaterFragmentStage}};
                     m_ShadowPipeline =
                         RenderGraph::MakeFullscreenPipelineDesc("Ocean.Underwater.Shadowed");
                     m_ShadowPipeline.vertexShader = vs->second;
@@ -400,7 +401,8 @@ void FillUnderwaterParams(OceanUnderwaterParamsGPU& out, const OceanParamsGPU& p
     u.Shape[3] = std::max(settings.WaterlineFadeDistance, 0.001f); // waterline edge softness (m)
 
     // Effect strengths from the authored OceanSurface settings (routed via the
-    // feature). The Crest/Wicked presets are just different values of these.
+    // feature). A look that follows Crest's or Wicked Engine's underwater effect is a
+    // different set of these values.
     u.Inscatter[0] = settings.Inscatter ? 1.0f : 0.0f;
     u.Inscatter[1] = settings.Inscatter_Strength;
     u.Inscatter[2] = settings.Inscatter_PhaseG; // HG phase g
@@ -667,7 +669,10 @@ bool OceanUnderwater::DeclareForView(Engine::Renderer::Pipeline::ViewDeclare& d,
     SamplerHandle shadowSampler{};
     if (const auto* shadowResources = d.Services.Views().GetViewShadowResources(d.View.id))
         shadowSampler = shadowResources->shadowSampler;
-    const bool useShadowedGodRays = shadowData.IsValid() && shadowArr.IsValid() &&
+    // The god rays read the cascades with positions relative to the view's render origin, from ViewParams.
+    const Engine::Renderer::Pipeline::PipelineBufferBindingRG viewParams =
+        d.ResolveBuffer(Engine::Renderer::Pipeline::Names::Res::ViewParams);
+    const bool useShadowedGodRays = shadowData.IsValid() && shadowArr.IsValid() && viewParams.IsValid() &&
                                     shadowSampler.IsValid() && m_ShadowPipelineId.IsValid();
 
     // Scene copy: the overlay reads the scene-as-built while writing back into the
@@ -804,6 +809,13 @@ bool OceanUnderwater::DeclareForView(Engine::Renderer::Pipeline::ViewDeclare& d,
         b.Offset = shadowData.Offset;
         b.Size = shadowData.Size;
         b.Declare = shadowData.Graph; // graph-produced: order/barrier the read
+
+        auto& view = bufferInputs.Add(); // the view parameters: the render origin
+        view.Binding = 20;
+        view.Buffer = viewParams.Buffer;
+        view.Offset = viewParams.Offset;
+        view.Size = viewParams.Size;
+        view.Declare = viewParams.Graph;
     }
 
     // Continuous spline volumes share the same triangles used for clipping and CPU queries.

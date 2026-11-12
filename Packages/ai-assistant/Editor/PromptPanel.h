@@ -17,6 +17,7 @@
 namespace GameEngine
 {
 
+class AgentConnectionDropdown;
 class AgentConversationController;
 class AgentConversationRow;
 class AgentModelPopover;
@@ -108,6 +109,7 @@ private:
     std::unique_ptr<AgentConversationController> m_Controller;
 
     Dropdown* m_ProviderDropdown = nullptr;
+    std::unique_ptr<AgentConnectionDropdown> m_Connections;
     // What the conversation's assistant may do; hidden for a connection without tools.
     Dropdown* m_ModeDropdown = nullptr;
     // The connection can call the editor's tools (ProviderCapabilities::CanActWithTools).

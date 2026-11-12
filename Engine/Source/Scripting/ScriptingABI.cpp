@@ -100,8 +100,9 @@ static void SA_DebugWrite(const char* msg)
 //   -2 => GE_Result_InvalidArg
 //   -3 => GE_Result_NotFound
 //   -4 => GE_Result_NotInitialized
+//   -9 => GE_Result_Busy (HotReloadManager.SwapPreloadedContext while another swap runs)
 //   any other negative => GE_Result_Fail
-static GE_Result MapManagedRcToGeResult(int rc)
+static constexpr GE_Result MapManagedRcToGeResult(int rc)
 {
     if (rc == 0)
         return GE_Result_Ok;
@@ -113,10 +114,19 @@ static GE_Result MapManagedRcToGeResult(int rc)
         return GE_Result_NotFound;
     case -4:
         return GE_Result_NotInitialized;
+    case -9:
+        return GE_Result_Busy;
     default:
         return GE_Result_Fail;
     }
 }
+
+static_assert(MapManagedRcToGeResult(0) == GE_Result_Ok);
+static_assert(MapManagedRcToGeResult(-2) == GE_Result_InvalidArg);
+static_assert(MapManagedRcToGeResult(-3) == GE_Result_NotFound);
+static_assert(MapManagedRcToGeResult(-4) == GE_Result_NotInitialized);
+static_assert(MapManagedRcToGeResult(-9) == GE_Result_Busy);
+static_assert(MapManagedRcToGeResult(-1) == GE_Result_Fail);
 
 #if 0
 // Resolve a candidate path that exists from a list of relative candidates

@@ -161,7 +161,10 @@ Examples of supported texture `format` strings:
 
 Relative `extent.scale` uses the view's internal render extent by default. Set
 `extent.basis` to `"output"` for a resource sized to the display extent after upscaling.
-At render scale 1, both extents are equal.
+At render scale 1, both extents are equal. Render scale works in every anti-aliasing mode. A view
+with MSAA draws and resolves its multisampled color and depth at the internal extent, so the
+pipeline needs a `DepthResolve` node and a `RenderScaleUpscale` node, and the view needs a
+single-sample resolve target.
 
 ## Pass types
 

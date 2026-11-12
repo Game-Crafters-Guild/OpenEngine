@@ -44,7 +44,7 @@ void PrintTo(const ControlLayout& control, std::ostream* stream)
     *stream << control.Name;
 }
 
-const std::array<ControlLayout, 51> kControlLayouts = {{
+const std::array<ControlLayout, 50> kControlLayouts = {{
     {"ConfirmActionModal",
      "UI/controls/ConfirmActionModal/ConfirmActionModal.uxml",
      {"confirm-action-title", "confirm-action-message", "confirm-action-detail", "confirm-action-closing",
@@ -65,8 +65,8 @@ const std::array<ControlLayout, 51> kControlLayouts = {{
       "download-progress-proceed", "download-progress-wait"}},
     {"PlayModeEntryModal",
      "UI/controls/PlayModeEntryModal/PlayModeEntryModal.uxml",
-     {"play-entry-title", "play-entry-message", "play-entry-activity", "play-entry-progress-track",
-      "play-entry-progress-fill", "play-entry-button"}},
+     {"play-entry-title", "play-entry-message", "play-entry-activity", "play-entry-progress",
+      "play-entry-button"}},
     {"TransientNotice", "UI/controls/TransientNotice/TransientNotice.uxml", {"TransientNoticeText"}},
     {"LogPanel",
      "UI/panels/LogPanel/LogPanel.uxml",
@@ -131,7 +131,7 @@ const std::array<ControlLayout, 51> kControlLayouts = {{
       "prefab-bar-stale-count-text"}},
     {"PrefabOverridesList",
      "UI/controls/PrefabOverridesList/PrefabOverridesList.uxml",
-     {"prefab-overrides-title", "prefab-overrides-against", "prefab-overrides-scroll", "prefab-overrides-empty",
+     {"prefab-overrides-title", "prefab-overrides-prefab", "prefab-overrides-scroll", "prefab-overrides-empty",
       "prefab-overrides-footer", "prefab-overrides-note", "prefab-overrides-revert-all", "prefab-overrides-apply-all"}},
     {"PrefabOverrideGroup",
      "UI/controls/PrefabOverridesList/PrefabOverrideGroup.uxml",
@@ -169,7 +169,6 @@ const std::array<ControlLayout, 51> kControlLayouts = {{
      {"project-card-preview", "project-card-preview-image", "project-card-name", "project-card-meta"}},
     {"RecentProjectNewCard", "UI/controls/ProjectPicker/RecentProjectNewCard.uxml", {}},
     {"RecentProjectOpenCard", "UI/controls/ProjectPicker/RecentProjectOpenCard.uxml", {}},
-    {"ProjectPickerSearchPlaceholder", "UI/controls/ProjectPicker/ProjectPickerSearchPlaceholder.uxml", {}},
     {"ProjectPickerRecentGrid", "UI/controls/ProjectPicker/ProjectPickerRecentGrid.uxml", {"recent-projects-container"}},
 }};
 

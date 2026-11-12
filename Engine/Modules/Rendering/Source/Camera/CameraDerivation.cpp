@@ -1,5 +1,6 @@
 #include "Rendering/Camera/CameraDerivation.h"
 
+#include <cassert>
 #include <cmath>
 #include <cstring>
 
@@ -8,7 +9,7 @@ namespace GameEngine
 namespace Rendering
 {
 
-CameraDerivedData DeriveCameraData(const CameraData& source)
+CameraDerivedData DeriveCameraData(const CameraData& source, const CameraRanges& ranges)
 {
     CameraDerivedData out{};
 
@@ -32,28 +33,12 @@ CameraDerivedData DeriveCameraData(const CameraData& source)
     const Vector4 forward4 = worldFromCamera.Transform(Vector4(0.0f, 0.0f, 1.0f, 0.0f));
     out.Forward = Vector3(forward4.x, forward4.y, forward4.z).Normalize();
 
-    // Reverse-Z near/far recovery from the left-handed [1,0] reverse-Z
-    // perspective matrix produced by MakePerspectiveLH_ZO_ReverseZ.
-    // Column-major glm indexing (proj[col][row]):
-    //   m22 = proj[2][2] = -near / (far - near)
-    //   m32 = proj[3][2] = (near * far) / (far - near)
-    // =>
-    //   near = m32 / (1 - m22)
-    //   far  = -m32 / m22
-    // The defensive checks below leave the default near/far if the matrix
-    // doesn't look like the expected reverse-Z perspective (e.g. ortho).
-    const float m22 = out.ProjMatrix[2][2];
-    const float m32 = out.ProjMatrix[3][2];
-    if (std::fabs(m22) > 1e-6f && std::fabs(1.0f - m22) > 1e-6f)
-    {
-        const float nearPlane = m32 / (1.0f - m22);
-        const float farPlane = -m32 / m22;
-        if (nearPlane > 0.0f && farPlane > nearPlane && std::isfinite(farPlane))
-        {
-            out.NearPlane = nearPlane;
-            out.FarPlane = farPlane;
-        }
-    }
+    // A camera with data and zero or inverted ranges is an owner that passed bad ranges.
+    // An unset camera (zero projection) has neither.
+    [[maybe_unused]] const bool unsetCamera = source.proj[0][0] == 0.0f && source.proj[1][1] == 0.0f;
+    assert(unsetCamera || (ranges.Near > 0.0f && ranges.CullingRange > ranges.Near));
+    out.NearPlane = ranges.Near;
+    out.FarPlane = ranges.CullingRange;
 
     // Orthographic detection + screen-space slope recovery.
     //   perspective: proj[3][3] = 0, proj[1][1] = 1 / tan(fovY/2)

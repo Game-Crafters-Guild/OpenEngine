@@ -3,8 +3,9 @@
 // The QueryPolicy backpressure constants (QueuePressureFactor=8,
 // PendingPressureFactor=16, PressuredMinBatchFloor=4096) were tuned when
 // GetApproximateQueueSize / GetPendingTasksApprox LIED — they included
-// phantom counts (pre-slice-1) and the Background backlog (pre-#327). Both
-// signals are honest now (Normal-lane, m_QueuedTasks-derived), so this bench
+// phantom counts (pre-slice-1) and the Background backlog (pre-#327). The
+// signals are m_Counters.QueuedTasks and m_Counters.PendingTasks, each minus
+// the queued Background backlog (m_Counters.BackgroundQueued), so this bench
 // measures whether backpressure engagement helps or hurts Query::Parallel
 // wall time against REAL Normal-lane contention regimes, and whether the
 // 1000 -> 4096 coarsening floor is the right response.
@@ -285,6 +286,16 @@ double OneParallelCall(World& w, JobSystem::WorkStealingThreadPool& js, int enti
     return us;
 }
 
+// One unmeasured storm wave. It only reads Velocity, which no wave writes, so
+// it cannot race the measured wave or another storm wave.
+void OneStormCall(World& w, int entityCount)
+{
+    std::atomic<size_t> visited{0};
+    w.Query<Read<Velocity>>().Parallel(
+        [&visited](EntityHandle, const Velocity&) { visited.fetch_add(1, std::memory_order_relaxed); }, 0);
+    EXPECT_EQ(visited.load(std::memory_order_relaxed), static_cast<size_t>(entityCount));
+}
+
 // Persistent caller thread: all measured calls run here, so the wave's
 // stubs ride ONE stable implicit-producer sub-queue (the production main-
 // thread shape) instead of a fresh sub-queue per call.
@@ -367,6 +378,42 @@ class CallerThread
     double m_ResultUs = 0.0;
 };
 
+// Unmeasured competing Parallel waves on the same World and pool, under the
+// policy the measured calls use. Every wave reads the policy without a lock,
+// so start a storm after World::SetQueryPolicy and destroy it before the next.
+class WaveStorm
+{
+  public:
+    WaveStorm(World& w, int entityCount, int threadCount)
+    {
+        for (int threadIndex = 0; threadIndex < threadCount; ++threadIndex)
+        {
+            m_Threads.emplace_back(&WaveStorm::RunWaves, this, std::ref(w), entityCount);
+        }
+    }
+
+    ~WaveStorm()
+    {
+        m_Stop.store(true, std::memory_order_release);
+        for (std::thread& thread : m_Threads)
+        {
+            thread.join();
+        }
+    }
+
+  private:
+    void RunWaves(World& w, int entityCount)
+    {
+        while (!m_Stop.load(std::memory_order_acquire))
+        {
+            OneStormCall(w, entityCount);
+        }
+    }
+
+    std::atomic<bool> m_Stop{false};
+    std::vector<std::thread> m_Threads;
+};
+
 void RunMatrix(bool fullMatrix)
 {
     constexpr size_t kWorkers = 8;
@@ -435,21 +482,6 @@ void RunMatrix(bool fullMatrix)
                     }
                 };
 
-                // Wave-storm threads: unmeasured competing Parallel waves on
-                // the same World/pool (they see the same per-World policy the
-                // measured calls sweep — every wave in a process does).
-                std::atomic<bool> stormStop{false};
-                std::vector<std::thread> storm;
-                for (int t = 0; t < regime.StormThreads; ++t)
-                {
-                    storm.emplace_back([&] {
-                        while (!stormStop.load(std::memory_order_acquire))
-                        {
-                            OneParallelCall(w, js, entityCount, /*workerShape=*/false);
-                        }
-                    });
-                }
-
                 struct CellStats
                 {
                     std::vector<double> SamplesUs;
@@ -471,6 +503,7 @@ void RunMatrix(bool fullMatrix)
                     for (size_t c = 0; c < configs.size() && !blockStarved; ++c)
                     {
                         w.SetQueryPolicy(configs[c].Policy);
+                        WaveStorm storm(w, entityCount, regime.StormThreads);
                         for (int i = 0; i < iters + 1; ++i) // first is warmup
                         {
                             const size_t q = js.GetApproximateQueueSize();
@@ -502,12 +535,6 @@ void RunMatrix(bool fullMatrix)
                             stats[c].Calls += 1;
                         }
                     }
-                }
-
-                stormStop.store(true, std::memory_order_release);
-                for (auto& t : storm)
-                {
-                    t.join();
                 }
 
                 const double ambient =

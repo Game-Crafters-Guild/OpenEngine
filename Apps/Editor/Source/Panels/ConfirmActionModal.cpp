@@ -139,8 +139,14 @@ void ConfirmActionModal::Present(const std::string& title, const std::string& me
     if (m_ConfirmBtn)
         m_ConfirmBtn->SetText(confirmLabel);
     AddClass("visible");
-    if (auto* manager = GetOwnerManager(); manager && focusTarget)
-        manager->PostToUI([manager, focusTarget]() { manager->FocusElement(focusTarget); });
+    if (GetOwnerManager() && focusTarget)
+    {
+        focusTarget->PostSafeAction([focusTarget]()
+        {
+            if (UIManager* manager = focusTarget->GetOwnerManager())
+                manager->FocusElement(focusTarget);
+        });
+    }
 }
 
 void ConfirmActionModal::Hide()

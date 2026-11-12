@@ -273,7 +273,7 @@ static std::unordered_map<uint32, std::filesystem::path> ExtractEmbeddedTextures
     for (uint32 i = 0; i < static_cast<uint32>(images.size()); ++i)
     {
         const auto& img = images[i];
-        if (img.Data.empty())
+        if (img.Data.Size() == 0)
             continue;
 
         std::string filename = modelStem + "_tex" + std::to_string(i) +
@@ -284,8 +284,8 @@ static std::unordered_map<uint32, std::filesystem::path> ExtractEmbeddedTextures
         {
             std::ofstream out(texPath, std::ios::binary | std::ios::trunc);
             if (out.is_open())
-                out.write(reinterpret_cast<const char*>(img.Data.data()),
-                          static_cast<std::streamsize>(img.Data.size()));
+                out.write(reinterpret_cast<const char*>(img.Data.Data()),
+                          static_cast<std::streamsize>(img.Data.Size()));
         }
 
         extracted[i] = texPath;

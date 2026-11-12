@@ -52,6 +52,14 @@ void AddTextureTransform(MaterialDocument& doc,
     if (!IsIdentityTransform(st))
         doc.textureTransforms[textureName] = st;
 }
+
+// The standard surface samples emissive and AO maps as well; only separate
+// roughness and metallic maps need the extended surface, which has no
+// combined metallic-roughness slot.
+bool NeedsExtendedSurface(const ImportedMaterialData& material)
+{
+    return !material.RoughnessTexture.empty() || !material.MetallicTexture.empty();
+}
 } // namespace
 
 GUID ModelMaterialBridge::DeriveMaterialGuid(const GUID& modelGuid, uint32_t materialIndex)
@@ -80,18 +88,8 @@ ConvertedModelMaterial ModelMaterialBridge::Convert(const GUID& modelGuid,
     // Lighting model: glTF materials are PBR by default.
     doc.lightingModel = "StandardPBR";
 
-    // The standard surface samples emissive and AO maps as well; only separate
-    // roughness and metallic maps need the extended surface, which has no
-    // combined metallic-roughness slot.
-    const bool hasExtendedTextures =
-        !material.RoughnessTexture.empty()
-        || !material.MetallicTexture.empty();
-
-    // Surface shader: use the extended surface only when imported material
-    // data needs the extra sampler slots.
-    doc.surfaceShader = hasExtendedTextures
-        ? "Surfaces/standard_pbr_extended.glsl"
-        : "Surfaces/standard_pbr.glsl";
+    const bool hasExtendedTextures = NeedsExtendedSurface(material);
+    doc.surfaceShader = SurfaceShaderOf(material);
 
     // --- Properties ---
 
@@ -174,6 +172,11 @@ ConvertedModelMaterial ModelMaterialBridge::Convert(const GUID& modelGuid,
     }
 
     return result;
+}
+
+std::string_view ModelMaterialBridge::SurfaceShaderOf(const ImportedMaterialData& material)
+{
+    return NeedsExtendedSurface(material) ? "Surfaces/standard_pbr_extended.glsl" : "Surfaces/standard_pbr.glsl";
 }
 
 std::vector<ConvertedModelMaterial> ModelMaterialBridge::ConvertAll(

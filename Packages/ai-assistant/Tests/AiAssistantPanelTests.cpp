@@ -4,6 +4,7 @@
 #include "AgentCallResourceResolver.h"
 #include "AgentCallResourceTile.h"
 #include "AgentCallRow.h"
+#include "AgentConnectionDropdown.h"
 #include "AgentConversationController.h"
 #include "AgentConversationRow.h"
 #include "AgentConversationRowModel.h"
@@ -17,30 +18,40 @@
 #include "AssistantMode.h"
 #include "Conversation.h"
 #include "AgentStatusMessages.h"
+#include "FakeApiKeyStore.h"
 #include "ScopedEnvironmentVariable.h"
 #include "ScopedPreferencesRoot.h"
 #include "TurnMailbox.h"
 #include "Providers/CancelToken.h"
+#include "Providers/ApiKeyStore.h"
 #include "Providers/ClaudeApiProvider.h"
 #include "Providers/ClaudeSessionProvider.h"
 #include "Providers/CliSessionProvider.h"
 #include "Providers/IAgentProvider.h"
+#include "Setup/AiAssistantSetupPage.h"
 
 #include "Assets/AssetManager.h"
 #include "Assets/AssetRegistry.h"
+#include "Assets/Packages/PackageMounts.h"
 #include "Core/Engine.h"
 #include "Editor/Assets/EditorAssetActions.h"
 #include "Editor/CaptureOutputDirectory.h"
 #include "Editor/EditorPaths.h"
 #include "Editor/Registries/DebugRequestGateRegistry.h"
 #include "Editor/Settings/EditorSettingsRegistry.h"
+#include "Input/InputSystem.h"
+#include "Input/KeyCodes.h"
 #include "JobSystem/WorkStealingThreadPool.h"
+#include "LoopbackServer.h"
 #include "Platform/Shell.h"
 #include "UI/Controls/Button.h"
 #include "UI/Controls/Dropdown.h"
+#include "UI/Controls/Foldout.h"
+#include "UI/Controls/InspectorNotice.h"
 #include "UI/Controls/Label.h"
 #include "UI/Controls/Slider.h"
 #include "UI/Controls/TextArea.h"
+#include "UI/Controls/TextField.h"
 #include "UI/Layout/ElementOverrideHelpers.h"
 #include "UI/Parsers/CSSParser.h"
 #include "UI/Registration/ElementRegistration.h"
@@ -110,6 +121,8 @@ public:
 
     std::string_view Id() const override { return m_Id; }
     ProviderCapabilities Capabilities() const override { return {.Streams = true}; }
+    SetupStatus CheckSetup(const CancelToken&, SetupSurface, const SetupStepSink&) const override { return {}; }
+    std::vector<SetupStep> SetupPlan() const override { return {}; }
 
     void RunTurn(const AgentTurnRequest& request, AgentTurnEvents& events, const CancelToken& cancel) override
     {
@@ -224,20 +237,17 @@ MessageStatus ReplyStatus(const AgentConversationController& controller, size_t 
     return controller.GetConversation().Messages()[turnIndex * 2 + 1].Status;
 }
 
-/// The Claude (local session) connection as the panel gets it (AgentSessionState),
+/// The Claude (Subscription) connection as the panel gets it (AgentSessionState),
 /// running FakeAgentCli in a project folder of its own, with fresh preferences.
 class LocalClaudeSession
 {
 public:
     LocalClaudeSession()
         : m_Project(std::filesystem::temp_directory_path() / "AiAssistantPanelTests-project")
+        , m_PreviousRoot(EngineCore::GetInstance().GetWorkspaceRoot())
     {
         std::filesystem::create_directories(m_Project);
         EngineCore::GetInstance().SetWorkspaceRoot(m_Project);
-        using Field = Editor::SettingsFieldDescriptor;
-        const Editor::SettingsCategoryDescriptor category = AiAssistantSettings::BuildCategory();
-        const auto executable = std::find_if(category.Fields.begin(), category.Fields.end(),
-                                             [](const Field& field) { return field.Label == "Claude executable"; });
 #if defined(_WIN32)
         const char* fakeCli = "FakeAgentCli.exe";
 #else
@@ -245,14 +255,17 @@ public:
 #endif
         // Another executable first, so the connection is a new provider whose login
         // check runs again in this test.
-        const auto& path = std::get<Field::PathField>(executable->Control);
-        path.Set("not-the-fake-cli");
+        AiAssistantSettings::SetClaudeExecutable("not-the-fake-cli");
         AgentSessionState::Get().Provider(ClaudeSessionProvider::kId);
-        path.Set((TestDirectory() / fakeCli).string());
+        AiAssistantSettings::SetClaudeExecutable((TestDirectory() / fakeCli).string());
         AgentSessionState::Get().ForgetSessions();
     }
+    /// Restores the workspace root before it removes the folder, so a later launch never
+    /// runs in a removed working directory.
     ~LocalClaudeSession()
     {
+        if (!m_PreviousRoot.empty())
+            EngineCore::GetInstance().SetWorkspaceRoot(m_PreviousRoot);
         std::error_code error;
         std::filesystem::remove_all(m_Project, error);
     }
@@ -273,6 +286,7 @@ public:
 private:
     ScopedPreferencesRoot m_Preferences;
     std::filesystem::path m_Project;
+    std::filesystem::path m_PreviousRoot;
 };
 
 constexpr const char* kFakeCliSession = "00000000-0000-4000-8000-000000000002";
@@ -290,7 +304,6 @@ public:
     }
 
     std::string_view Id() const override { return m_Id; }
-    LoginStatus CheckLogin(const CancelToken&) const override { return {}; }
 
     CliSessionList ListSessions(const CancelToken& cancel) const override
     {
@@ -316,7 +329,11 @@ private:
     std::string_view DisplayName() const override { return "Listing"; }
     std::vector<std::string> TurnArguments(const AgentTurnRequest&) const override { return {}; }
     void ReadLine(std::string_view, TurnState&) const override {}
-    std::string CheckReadiness(const CancelToken&) const override { return {}; }
+    SetupStep CheckProgram(const CancelToken&, SetupSurface) const override { return {.State = SetupStepState::Passed}; }
+    SetupStep CheckLogin(const CancelToken&, SetupSurface) const override { return {.State = SetupStepState::Passed}; }
+    std::string ProgramToPick() const override { return {}; }
+    std::string InstallSource() const override { return {}; }
+    std::string DesktopAppHint(bool) const override { return {}; }
 
     std::string m_Id;
 };
@@ -333,7 +350,6 @@ public:
     }
 
     std::string_view Id() const override { return m_Id; }
-    LoginStatus CheckLogin(const CancelToken&) const override { return {}; }
     CliSessionList ListSessions(const CancelToken&) const override { return {}; }
 
     mutable std::atomic<bool> Checking{false};
@@ -343,7 +359,11 @@ private:
     std::string_view DisplayName() const override { return "Slow check"; }
     std::vector<std::string> TurnArguments(const AgentTurnRequest&) const override { return {}; }
     void ReadLine(std::string_view, TurnState&) const override {}
-    std::string CheckReadiness(const CancelToken&) const override { return {}; }
+    SetupStep CheckProgram(const CancelToken&, SetupSurface) const override { return {.State = SetupStepState::Passed}; }
+    SetupStep CheckLogin(const CancelToken&, SetupSurface) const override { return {.State = SetupStepState::Passed}; }
+    std::string ProgramToPick() const override { return {}; }
+    std::string InstallSource() const override { return {}; }
+    std::string DesktopAppHint(bool) const override { return {}; }
     std::string ToolsBlocker(const std::string&, uint16_t, const CancelToken&) const override
     {
         Checking = true;
@@ -588,7 +608,7 @@ TEST(AiAssistantPanelTests, TheRowModelShowsEachStageOfAReply)
     EXPECT_TRUE(user.Status.empty());
 
     auto reply = [&] { return AgentConversationRowModel::From(*conversation.Reply(turn), {}, turn, {}); };
-    EXPECT_EQ(reply().Header, "Claude (API) · Opus 5.5");
+    EXPECT_EQ(reply().Header, "Claude (API key) · Opus 5.5");
     EXPECT_EQ(reply().Status, "Queued");
     EXPECT_FALSE(reply().CanStop);
     EXPECT_FALSE(reply().ShowsText) << "a queued reply has no text, so no blank body line";
@@ -1085,7 +1105,7 @@ AgentConversationRowModel TurnWithALongReason(const std::string& reason)
     call.Summary = {AgentCallPiece::Words("play"), AgentCallPiece::MutedWords("\xC2\xB7"), AgentCallPiece::Words(reason)};
     call.UndoState = "nothing changed";
     AgentConversationRowModel model;
-    model.Header = "Claude (local session)";
+    model.Header = "Claude (Subscription)";
     model.Text = "Done.";
     model.Calls = {call};
     model.Status = "1 token in, 1 out \xC2\xB7 2 undo steps \xC2\xB7 2 failed";
@@ -1166,7 +1186,7 @@ TEST(AiAssistantPanelTests, AOnceActionsButtonTurnsOffOnlyAfterAClickThatActed)
 {
     AgentReplyActions::Register({"test.once", "Once", "Run once", {}, {}, true, "Done already"});
     AgentConversationRowModel model;
-    model.Header = "Claude (local session)";
+    model.Header = "Claude (Subscription)";
     model.Text = "Done.";
     model.ShowsReplyActions = true;
     model.ReplyActions = {"test.once"};
@@ -1424,7 +1444,7 @@ TEST(AiAssistantPanelTests, AReplyShowsItsMarkdownAsLooksAndThePromptAsTyped)
     if (!layout.Device)
         GTEST_SKIP() << "No device";
     AgentConversationRowModel reply;
-    reply.Header = "Claude (local session)";
+    reply.Header = "Claude (Subscription)";
     reply.Text = "## Placed\n"
                  "- **Lantern_01** was created as entity 1048584\n"
                  "- the `torch` is lit\n"
@@ -1568,24 +1588,24 @@ TEST(AiAssistantPanelTests, TheReplyHeaderNamesTheModelThatAnsweredAndTheEffort)
     const Conversation::TurnId turn = conversation.AddTurn("hi", {}, session, "opus", "xhigh", {});
     auto header = [&](Conversation::TurnId id)
     { return AgentConversationRowModel::From(*conversation.Reply(id), {}, id, {}).Header; };
-    EXPECT_EQ(header(turn), "Claude (local session) · Opus (latest) · Extra high");
+    EXPECT_EQ(header(turn), "Claude (Subscription) · Opus (latest) · Extra high");
 
     conversation.Start(turn);
     TurnResult result;
     result.Outcome = TurnOutcome::Succeeded;
     result.Model = "claude-opus-5-5[1m]";
     conversation.Finish(turn, result);
-    EXPECT_EQ(header(turn), "Claude (local session) · Opus 5.5 · Extra high");
+    EXPECT_EQ(header(turn), "Claude (Subscription) · Opus 5.5 · Extra high");
 
     const Conversation::TurnId dated = conversation.AddTurn("hi", {}, session, "haiku", "low", {});
     result.Model = "claude-haiku-4-5-20251001";
     conversation.Finish(dated, result);
-    EXPECT_EQ(header(dated), "Claude (local session) · Haiku 4.5 · Low");
+    EXPECT_EQ(header(dated), "Claude (Subscription) · Haiku 4.5 · Low");
 
     const Conversation::TurnId codexDefault = conversation.AddTurn("hi", {}, "codex-session", "", "", {});
-    EXPECT_EQ(header(codexDefault), "Codex (local session) · default model");
+    EXPECT_EQ(header(codexDefault), "Codex (Subscription) · default model");
     const Conversation::TurnId codex = conversation.AddTurn("hi", {}, "codex-session", "gpt-5-codex", "high", {});
-    EXPECT_EQ(header(codex), "Codex (local session) · gpt-5-codex") << "another vendor's id as it is, no effort";
+    EXPECT_EQ(header(codex), "Codex (Subscription) · gpt-5-codex") << "another vendor's id as it is, no effort";
 }
 
 // A successful turn records the model that answered for the model it asked for, which
@@ -1680,7 +1700,7 @@ TEST(AiAssistantPanelTests, TheModelPopoverStoresEachChoiceAndItsButtonReadsIt)
     popover.SetProvider(std::string(ClaudeApiProvider::kId));
     EXPECT_FALSE(popover.IsPopupOpen()) << "another connection closes it";
     popover.Open();
-    EXPECT_TRUE(effortRow->HasClass("hidden")) << "Claude (API) has no effort levels";
+    EXPECT_TRUE(effortRow->HasClass("hidden")) << "Claude (API key) has no effort levels";
     EXPECT_EQ(button.GetText(), "Opus 5.5");
     popover.SetProvider("codex-session");
     EXPECT_TRUE(button.HasClass("hidden")) << "Codex names its own models in settings";
@@ -1733,6 +1753,61 @@ TEST(AiAssistantPanelTests, TheModelButtonTakesItsWidestTextAndShortensItsTextTo
     settle();
     EXPECT_EQ(button.GetText(), "Opus") << "then the effort; the tooltip keeps both";
     EXPECT_TRUE(button.GetTooltip().starts_with("Opus (latest) · High\n"));
+}
+
+// A connection dropdown that a 280 px panel narrows to its first word opens a list that shows each
+// connection's whole name, and its tooltip names the selected one whole.
+TEST(AiAssistantPanelTests, TheNarrowedConnectionDropdownShowsEachNameWhole)
+{
+    auto device = MakeHeadlessDevice();
+    if (!device)
+        GTEST_SKIP() << "No device";
+    ScopedPreferencesRoot preferences;
+    UIRegistration::RegisterBuiltInControls();
+    UIManager ui(device.get());
+    ui.SetLayoutSizeOverride(280, 600);
+    auto root = std::make_unique<UIElement>();
+    root->Style().Set(Style::Width, StyleLength::Px(280.0f));
+    // The popup width rules of the editor's theme/widgets.css.
+    auto sheet = std::make_shared<Stylesheet>();
+    ASSERT_TRUE(UIParsing::CSSParser::ParseStylesFromString(
+        ".dropdown-items { position: absolute; top: 100%; left: 0px; width: 100%; }\n"
+        ".dropdown-items.fit-content { width: auto; min-width: 100%; }\n"
+        ".dropdown-item-fit-content { white-space: nowrap; overflow: hidden; "
+        "text-overflow: ellipsis; }\n",
+        *sheet));
+    root->AddStylesheet(sheet);
+    ui.SetRoot(std::move(root));
+    auto owned = std::make_unique<Dropdown>();
+    Dropdown& dropdown = *owned;
+    // The width the control line leaves the connection at 280 px: "Claude…".
+    dropdown.Style().Set(Style::Width, StyleLength::Px(70.0f));
+    ui.GetRootElement()->AddChild(std::move(owned));
+    AgentConnectionDropdown connections(dropdown);
+    connections.Show(std::string(ClaudeSessionProvider::kId));
+    const auto settle = [&]
+    {
+        for (int frame = 0; frame < 4; ++frame)
+            ui.Update(0.016f, /*interactive=*/false);
+    };
+    settle();
+    const std::string name(AiAssistantSettings::ProviderChoiceOf(std::string(ClaudeSessionProvider::kId)).Label);
+    EXPECT_TRUE(dropdown.GetTooltip().starts_with(name + "\n")) << dropdown.GetTooltip();
+
+    dropdown.OpenMenuUi();
+    settle();
+    const UIElement* list = dropdown.GetItemsContainer();
+    ASSERT_NE(list, nullptr);
+    ASSERT_EQ(list->GetChildren().size(), AiAssistantSettings::ProviderChoices().size());
+    for (const auto& child : list->GetChildren())
+    {
+        const auto* item = dynamic_cast<const Label*>(child.get());
+        ASSERT_NE(item, nullptr);
+        const float text = ui.MeasureTextWidth(*item, item->GetText());
+        ASSERT_GT(text, 0.0f) << "the item is laid out as text";
+        const auto& padding = item->GetResolvedStyle().Layout.Padding;
+        EXPECT_GE(item->GetLayoutWidth() - padding.Left - padding.Right + 0.5f, text) << item->GetText();
+    }
 }
 
 // The mode control keeps its widest label whole while the control line still leaves the
@@ -1984,32 +2059,57 @@ TEST(AiAssistantPanelTests, AModeChosenBeforeTheSessionIdArrivesIsTheSessionsMod
               AssistantMode::EditFreely);
 }
 
+namespace
+{
+/// The editor side of the tools for one test: a debug port and a staged MCP server
+/// (AssistantAttachment::Unavailable() answers empty). The stand-in script and its
+/// folder are removed again unless a real server was staged there.
+class ScopedEditorTools
+{
+public:
+    ScopedEditorTools()
+    {
+        Editor::SetEditorDebugPort(9);
+        const std::filesystem::path script = AssistantAttachment::StagedServerScript();
+        m_StagedServer = script.parent_path().parent_path();
+        m_StagedBefore = std::filesystem::exists(m_StagedServer);
+        if (m_StagedBefore)
+            return;
+        std::filesystem::create_directories(script.parent_path());
+        std::ofstream(script) << "// test stand-in\n";
+    }
+    ~ScopedEditorTools()
+    {
+        Editor::SetEditorDebugPort(0);
+        if (!m_StagedBefore)
+            std::filesystem::remove_all(m_StagedServer);
+    }
+    ScopedEditorTools(const ScopedEditorTools&) = delete;
+    ScopedEditorTools& operator=(const ScopedEditorTools&) = delete;
+
+private:
+    std::filesystem::path m_StagedServer;
+    bool m_StagedBefore = false;
+};
+
+std::string FakeAgentCliPath()
+{
+#if defined(_WIN32)
+    return (LocalClaudeSession::TestDirectory() / "FakeAgentCli.exe").string();
+#else
+    return (LocalClaudeSession::TestDirectory() / "FakeAgentCli").string();
+#endif
+}
+} // namespace
+
 // Leaving a connection while its tools check runs does not wait for that check: the
 // panel's thread moves on and the check ends on its own.
 TEST(AiAssistantPanelTests, LeavingAConnectionDuringItsToolsCheckDoesNotWaitForIt)
 {
     LocalClaudeSession local;
     // The tools are available: a debug port, a staged server, and the fake CLI as Node.js.
-    Editor::SetEditorDebugPort(9);
-    const std::filesystem::path script = AssistantAttachment::StagedServerScript();
-    // <executable dir>/mcp, removed again unless a real server is staged there.
-    const std::filesystem::path stagedServer = script.parent_path().parent_path();
-    const bool stagedBefore = std::filesystem::exists(stagedServer);
-    if (!stagedBefore)
-    {
-        std::filesystem::create_directories(script.parent_path());
-        std::ofstream(script) << "// test stand-in\n";
-    }
-#if defined(_WIN32)
-    const char* fakeNode = "FakeAgentCli.exe";
-#else
-    const char* fakeNode = "FakeAgentCli";
-#endif
-    const Editor::SettingsCategoryDescriptor category = AiAssistantSettings::BuildCategory();
-    for (const Editor::SettingsFieldDescriptor& field : category.Fields)
-        if (field.Label == "Node executable")
-            std::get<Editor::SettingsFieldDescriptor::PathField>(field.Control)
-                .Set((LocalClaudeSession::TestDirectory() / fakeNode).string());
+    const ScopedEditorTools tools;
+    AiAssistantSettings::SetNodeExecutable(FakeAgentCliPath());
 
     auto slow = std::make_shared<SlowCheckProvider>("slow");
     auto other = std::make_shared<SlowCheckProvider>("other");
@@ -2026,9 +2126,6 @@ TEST(AiAssistantPanelTests, LeavingAConnectionDuringItsToolsCheckDoesNotWaitForI
     slow->Release = true;
 
     EXPECT_LT(waited, 500ms) << "leaving the connection waited for its check";
-    Editor::SetEditorDebugPort(0);
-    if (!stagedBefore)
-        std::filesystem::remove_all(stagedServer);
 }
 
 // A stored id the CLI no longer knows fails the first turn with the CLI's message;
@@ -2230,5 +2327,748 @@ TEST(AiAssistantPanelTests, SessionFooterCountsSessionsWithoutTheNewAndResumeAct
         dialog.Show();
         EXPECT_EQ(footer->GetText(), "0 sessions");
     }
+}
+
+namespace
+{
+/// Settings > AI Assistant in a headless UIManager: the page's layout from the staged package,
+/// mounted as the editor mounts an engine package (its .assetmanifest is the asset set), and the
+/// editor's controls from the install-assets root. Both executables name a missing program, so
+/// the check the page runs when it opens ends at once.
+class SetupPageHarness
+{
+public:
+    /// Attaches a page for the stored connection; false without a device. A page that does not
+    /// build from the staged assets also returns false and fails the test.
+    bool Attach(const char* folder)
+    {
+        m_Device = MakeHeadlessDevice();
+        if (!m_Device)
+            return false;
+        const bool built = AttachPage(folder);
+        if (!built)
+            ADD_FAILURE() << "The setup page did not build from the staged ai-assistant package; the log names the asset";
+        return built;
+    }
+
+    /// Updates the UI until `done` holds or kPumpTimeout passes; returns `done`.
+    template <typename Predicate>
+    bool PumpUntil(Predicate done)
+    {
+        const auto deadline = std::chrono::steady_clock::now() + kPumpTimeout;
+        while (!done() && std::chrono::steady_clock::now() < deadline)
+        {
+            m_Ui->Update(0.6f, /*interactive=*/false);
+            std::this_thread::sleep_for(1ms);
+        }
+        return done();
+    }
+
+    /// Destroys the page, as closing Settings does, then runs one UI update without it.
+    void Close()
+    {
+        m_Ui->GetRootElement()->RemoveAllChildren();
+        Page = nullptr;
+        m_Ui->Update(0.6f, /*interactive=*/false);
+    }
+
+    void Focus(UIElement& element) { m_Ui->FocusElement(&element); }
+
+    /// Presses and releases `key` once, as one keystroke reaches the focused control.
+    void PressKey(int key)
+    {
+        m_Ui->OnKey(key, Input::kKeyActionPress, 0);
+        m_Ui->OnKey(key, Input::kKeyActionRelease, 0);
+    }
+
+    const Label& Text(std::string_view id) const { return *dynamic_cast<const Label*>(Page->FindById(HashStringId(id))); }
+    const UIElement& Element(std::string_view id) const { return *Page->FindById(HashStringId(id)); }
+
+    AiAssistantSetupPage* Page = nullptr;
+
+private:
+    // Mounts the package, then builds the page under a fresh root; true when the page built.
+    bool AttachPage(const char* folder)
+    {
+        const std::string missing = (LocalClaudeSession::TestDirectory() / "missing-program.exe").string();
+        AiAssistantSettings::SetClaudeExecutable(missing);
+        AiAssistantSettings::SetCodexExecutable(missing);
+        UIRegistration::RegisterBuiltInControls();
+        const std::filesystem::path root = std::filesystem::temp_directory_path() / folder;
+        std::filesystem::create_directories(root);
+        // The page's providers run in the workspace root: it must exist.
+        EngineCore::GetInstance().SetWorkspaceRoot(root);
+        if (!m_Assets.Initialize(root, &m_Pool))
+            return false;
+        ResolvedPackage package;
+        package.Alias = "ai-assistant";
+        package.Priority = kPackageMountPriorityBase;
+        package.SourceKind = PackageSourceKind::Engine;
+        package.RootDir = LocalClaudeSession::TestDirectory() / "AiAssistantPanelFixtures" / "ai-assistant";
+        package.AssetsDir = package.RootDir;
+        if (!m_Assets.RegisterSource(MakeEnginePackageMount(package, root / "host-cache")))
+            return false;
+        m_Ui = std::make_unique<UIManager>(m_Device.get(), &m_Assets);
+        m_Ui->SetRoot(std::make_unique<UIElement>());
+        auto page = std::make_unique<AiAssistantSetupPage>();
+        Page = page.get();
+        m_Ui->GetRootElement()->AddChild(std::move(page));
+        return Page->FindById("SetupStepPill"_sid) != nullptr;
+    }
+
+    std::unique_ptr<Rendering::IDevice> m_Device;
+    JobSystem::WorkStealingThreadPool m_Pool{2};
+    AssetManager m_Assets;
+    std::unique_ptr<UIManager> m_Ui;
+};
+
+// The texts of every element under `root` that has the class `cls`, in tree order.
+std::vector<std::string> TextsWithClass(const UIElement& root, std::string_view cls)
+{
+    std::vector<std::string> texts;
+    for (const auto& child : root.GetChildren())
+    {
+        if (const auto* label = dynamic_cast<const Label*>(child.get()); label && child->HasClass(std::string(cls)))
+            texts.push_back(label->GetText());
+        for (std::string& text : TextsWithClass(*child, cls))
+            texts.push_back(std::move(text));
+    }
+    return texts;
+}
+
+// The hint that `field` shows (its TextField placeholder), or an empty string when it shows none.
+std::string ShownPlaceholder(const UIElement& field)
+{
+    for (const auto& child : field.GetChildren())
+        if (const auto* label = dynamic_cast<const Label*>(child.get()); label && child->HasClass("field-placeholder"))
+            return child->HasClass("hidden") ? std::string() : label->GetText();
+    return {};
+}
+
+// The state of each step row under `root`, in tree order: the suffix of its setup-step-mark-<state> class.
+std::vector<std::string> StepMarks(const UIElement& root)
+{
+    constexpr std::string_view kStates[] = {"waiting", "running", "passed", "warning", "failed"};
+    std::vector<std::string> marks;
+    for (const auto& child : root.GetChildren())
+    {
+        if (child->HasClass("setup-step-mark"))
+            for (std::string_view state : kStates)
+                if (child->HasClass("setup-step-mark-" + std::string(state)))
+                    marks.emplace_back(state);
+        for (std::string& mark : StepMarks(*child))
+            marks.push_back(std::move(mark));
+    }
+    return marks;
+}
+} // namespace
+
+// "How do you sign in?" follows the assistant: Claude has two method tiles, Codex one line.
+// The advanced rows sit inside the Model and options foldout's content.
+TEST(AiAssistantPanelTests, TheSetupPageShowsTwoSignInTilesForClaudeAndOneLineForCodex)
+{
+    ScopedPreferencesRoot preferences;
+    AiAssistantSettings::SetProvider(std::string(ClaudeSessionProvider::kId));
+    SetupPageHarness page;
+    if (!page.Attach("AiAssistantPanelTests-setup-methods"))
+        GTEST_SKIP() << "No device";
+
+    const UIElement& methods = page.Element("AiSetupMethodHost");
+    ASSERT_EQ(methods.GetChildren().size(), 1u);
+    EXPECT_EQ(methods.GetChildren().front()->GetChildren().size(), 2u) << "Subscription and API key tiles";
+    EXPECT_EQ(page.Text("AiSetupHeader").GetText(), "Setup for Claude (Subscription)");
+    EXPECT_FALSE(page.Element("AiSetupExecutableRow").HasClass("hidden"));
+    EXPECT_EQ(page.Text("AiSetupExecutableLabel").GetText(), "Claude Code executable");
+    const auto& options = dynamic_cast<const Foldout&>(page.Element("AiSetupOptions"));
+    EXPECT_EQ(page.Element("AiSetupModelRow").GetParent(), options.GetContentContainer())
+        << "a Foldout declared in a layout holds its children in its content";
+    EXPECT_FALSE(options.IsExpanded()) << "Model and options opens closed: its title names the choice";
+
+    AiAssistantSettings::SetAssistant("Codex");
+    ASSERT_TRUE(page.PumpUntil([&] { return page.Text("AiSetupHeader").GetText() == "Setup for Codex (Subscription)"; }));
+    ASSERT_EQ(methods.GetChildren().size(), 1u);
+    const auto* line = dynamic_cast<const Label*>(methods.GetChildren().front().get());
+    ASSERT_NE(line, nullptr) << "one method draws no tiles";
+    EXPECT_TRUE(line->GetText().starts_with("Subscription: ")) << line->GetText();
+    EXPECT_EQ(page.Text("AiSetupExecutableLabel").GetText(), "Codex executable");
+    EXPECT_FALSE(page.Element("AiSetupCodexModelRow").HasClass("hidden"));
+    EXPECT_TRUE(page.Element("AiSetupEffortRow").HasClass("hidden"));
+}
+
+// The API key method runs no program: the page hides the executable and Node rows, and the
+// check it runs at the change replaces the previous connection's result with the key steps.
+TEST(AiAssistantPanelTests, TheSetupPageShowsTheApiKeyStepWithoutTheProgramRows)
+{
+    ScopedPreferencesRoot preferences;
+    const ScopedEnvironmentVariable noKey(std::string(ApiKeyStore::kVariable).c_str(), nullptr);
+    AgentSessionState::Get().UseApiConnectionForTesting(FakeApiKeyStore{}.Store(), "http://127.0.0.1:1/v1/models");
+    AiAssistantSettings::SetProvider(std::string(ClaudeSessionProvider::kId));
+    SetupPageHarness page;
+    if (!page.Attach("AiAssistantPanelTests-setup-api"))
+        GTEST_SKIP() << "No device";
+    ASSERT_TRUE(page.PumpUntil([&] { return page.Text("SetupStepPill").GetText() == std::string(kNotReadyStatus); }));
+
+    AiAssistantSettings::SetProvider(std::string(ClaudeApiProvider::kId));
+
+    const auto names = [&] { return TextsWithClass(page.Element("AiSetupStepsHost"), "setup-step-name"); };
+    ASSERT_TRUE(page.PumpUntil([&] {
+        return names() == std::vector<std::string>{"API key", "Key accepted"} &&
+               page.Text("SetupStepSummary").GetText() == "1 step to fix.";
+    }));
+    EXPECT_EQ(page.Text("AiSetupHeader").GetText(), "Setup for Claude (API key)");
+    EXPECT_TRUE(page.Element("AiSetupExecutableRow").HasClass("hidden"));
+    EXPECT_TRUE(page.Element("AiSetupNodeRow").HasClass("hidden"));
+    EXPECT_EQ(page.Text("SetupStepPill").GetText(), kNotReadyStatus);
+    EXPECT_EQ(page.Text("SetupStepSummary").GetText(), "1 step to fix.");
+    const UIElement* error = FindByClass(page.Element("AiSetupStepsHost"), "inspector-notice-error");
+    ASSERT_NE(error, nullptr) << "InspectorNotice.uxml is staged beside the test executable";
+    const auto* fix = dynamic_cast<const Label*>(FindByClass(*error, "inspector-notice-text"));
+    ASSERT_NE(fix, nullptr);
+    EXPECT_EQ(fix->GetText(), "Paste a key from the Claude Console and click Save.");
+    EXPECT_FALSE(page.Element("AiSetupApiKeyHost").GetChildren().front()->HasClass("hidden"));
+}
+
+// The editor mounts the package from its .assetmanifest and registers no other file: the key
+// row's layout and style load only when the manifest lists them.
+TEST(AiAssistantPanelTests, TheApiKeyRowLoadsItsLayoutAndStyleFromThePackageManifest)
+{
+    ScopedPreferencesRoot preferences;
+    const ScopedEnvironmentVariable noKey(std::string(ApiKeyStore::kVariable).c_str(), nullptr);
+    AgentSessionState::Get().UseApiConnectionForTesting(FakeApiKeyStore{}.Store(), "http://127.0.0.1:1/v1/models");
+    AiAssistantSettings::SetProvider(std::string(ClaudeApiProvider::kId));
+    SetupPageHarness page;
+    if (!page.Attach("AiAssistantPanelTests-setup-key-manifest"))
+        GTEST_SKIP() << "No device";
+
+    const UIElement* row = FindByClass(page.Element("AiSetupApiKeyHost"), "ai-setup-key");
+    ASSERT_NE(row, nullptr) << "AiAssistantApiKeyRow.uxml is in the package's .assetmanifest";
+    EXPECT_NE(page.Page->FindById("AiSetupApiKeyField"_sid), nullptr);
+    EXPECT_FALSE(row->GetStylesheets().empty()) << "AiAssistantApiKeyRow.css is in the package's .assetmanifest";
+}
+
+namespace
+{
+// A models list as the Claude API answers it: any 2xx accepts the key.
+void SendModelList(LoopbackServer&, SocketHandle client)
+{
+    const std::string body = R"({"data":[{"type":"model","id":"claude-opus-5-5"}],"has_more":true})";
+    LoopbackServer::Send(client, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " +
+                                     std::to_string(body.size()) + "\r\nConnection: close\r\n\r\n" + body);
+}
+
+template <typename T>
+T* Control(SetupPageHarness& page, std::string_view id)
+{
+    return dynamic_cast<T*>(page.Page->FindById(HashStringId(id)));
+}
+
+// The editor inside `element`: the TextInput child a TextField types into.
+TextInput* FindTextInput(UIElement& element)
+{
+    if (TextInput* input = element.GetAsTextInput())
+        return input;
+    for (const auto& child : element.GetChildren())
+        if (TextInput* input = FindTextInput(*child))
+            return input;
+    return nullptr;
+}
+
+// Types `text` into `field` one character at a time, as the keyboard does.
+void TypeInto(TextField& field, std::string_view text)
+{
+    TextInput* input = FindTextInput(field);
+    ASSERT_NE(input, nullptr);
+    for (const char c : text)
+        input->OnChar(static_cast<unsigned char>(c));
+}
+} // namespace
+
+// The key row on the Claude (API key) page: Save is on only with text, saves through the store,
+// clears the field and checks again; the check accepts the key; Remove deletes it.
+TEST(AiAssistantPanelTests, TheApiKeyRowSavesAKeyClearsTheFieldAndRemovesIt)
+{
+    ScopedPreferencesRoot preferences;
+    const ScopedEnvironmentVariable noKey(std::string(ApiKeyStore::kVariable).c_str(), nullptr);
+    LoopbackServer models(SendModelList);
+    FakeApiKeyStore store;
+    AgentSessionState::Get().UseApiConnectionForTesting(store.Store(), models.Url("/v1/models"));
+    AiAssistantSettings::SetProvider(std::string(ClaudeApiProvider::kId));
+    SetupPageHarness page;
+    if (!page.Attach("AiAssistantPanelTests-setup-key-save"))
+        GTEST_SKIP() << "No device";
+    const UIElement& steps = page.Element("AiSetupStepsHost");
+    ASSERT_TRUE(page.PumpUntil([&] { return StepMarks(steps) == std::vector<std::string>{"failed", "waiting"}; }));
+    auto* field = Control<TextField>(page, "AiSetupApiKeyField");
+    auto* save = Control<Button>(page, "AiSetupApiKeySave");
+    auto* remove = Control<Button>(page, "AiSetupApiKeyRemove");
+    ASSERT_TRUE(field && save && remove) << "AiAssistantApiKeyRow.uxml is staged beside the test executable";
+    EXPECT_TRUE(field->IsMasked());
+    EXPECT_FALSE(save->IsEnabled()) << "nothing to save";
+    EXPECT_FALSE(remove->IsEnabled()) << "no key is saved";
+    EXPECT_TRUE(page.Text("AiSetupApiKeyNote").GetText().starts_with("A key you save stays in"))
+        << "with no key saved, the note must not read as if one were: " << page.Text("AiSetupApiKeyNote").GetText();
+    EXPECT_EQ(ShownPlaceholder(*field), "Paste your key");
+
+    TypeInto(*field, "test-key-value");
+    EXPECT_TRUE(save->IsEnabled());
+    EXPECT_EQ(ShownPlaceholder(*field), "") << "typed text hides the placeholder";
+    save->TriggerClick();
+
+    EXPECT_TRUE(field->GetValue().empty()) << "the page holds no copy of a saved key";
+    EXPECT_FALSE(save->IsEnabled());
+    EXPECT_FALSE(remove->IsEnabled()) << "both buttons stay off until the write ends";
+    ASSERT_TRUE(page.PumpUntil([&] {
+        return TextsWithClass(steps, "setup-step-name") == std::vector<std::string>{"API key", "Key accepted"} &&
+               StepMarks(steps) == std::vector<std::string>{"passed", "passed"};
+    }));
+    ASSERT_TRUE(store.Data->Saved.has_value());
+    EXPECT_EQ(*store.Data->Saved, "test-key-value");
+    EXPECT_EQ(store.Data->LastName, ApiKeyStore::kCredentialName);
+    EXPECT_NE(store.Data->WriteThread, std::this_thread::get_id()) << "a store write can block on a prompt";
+    EXPECT_EQ(page.Text("SetupStepPill").GetText(), kReadyStatus);
+    EXPECT_TRUE(remove->IsEnabled());
+    EXPECT_EQ(ShownPlaceholder(*field), "Paste a new key");
+
+    remove->TriggerClick();
+    EXPECT_FALSE(remove->IsEnabled());
+    ASSERT_TRUE(page.PumpUntil([&] { return StepMarks(steps) == std::vector<std::string>{"failed", "waiting"}; }));
+    EXPECT_FALSE(store.Data->Saved.has_value());
+    EXPECT_EQ(ShownPlaceholder(*field), "Paste your key");
+}
+
+// In the key field, Escape clears a pasted key and shows the hint again; Enter saves, as Save does, and
+// does nothing while Save is off: on an empty field and on a second Enter after a save.
+TEST(AiAssistantPanelTests, TheApiKeyFieldSavesOnEnterAndClearsOnEscape)
+{
+    ScopedPreferencesRoot preferences;
+    const ScopedEnvironmentVariable noKey(std::string(ApiKeyStore::kVariable).c_str(), nullptr);
+    LoopbackServer models(SendModelList);
+    FakeApiKeyStore store;
+    AgentSessionState::Get().UseApiConnectionForTesting(store.Store(), models.Url("/v1/models"));
+    AiAssistantSettings::SetProvider(std::string(ClaudeApiProvider::kId));
+    SetupPageHarness page;
+    if (!page.Attach("AiAssistantPanelTests-setup-key-keys"))
+        GTEST_SKIP() << "No device";
+    const UIElement& steps = page.Element("AiSetupStepsHost");
+    ASSERT_TRUE(page.PumpUntil([&] { return StepMarks(steps) == std::vector<std::string>{"failed", "waiting"}; }));
+    auto* field = Control<TextField>(page, "AiSetupApiKeyField");
+    auto* save = Control<Button>(page, "AiSetupApiKeySave");
+    ASSERT_TRUE(field && save);
+
+    page.Focus(*field);
+    TypeInto(*field, "test-key-not-a-secret");
+    page.PressKey(Input::kKeyCode_Escape);
+    EXPECT_TRUE(field->GetValue().empty()) << "Escape clears the pasted key";
+    EXPECT_EQ(ShownPlaceholder(*field), "Paste your key");
+    EXPECT_FALSE(save->IsEnabled()) << "nothing to save after Escape";
+    EXPECT_FALSE(store.Data->Saved.has_value());
+
+    const Label& note = page.Text("AiSetupApiKeyNote");
+    const std::string keptNote = note.GetText();
+    page.Focus(*field);
+    page.PressKey(Input::kKeyCode_Enter);
+    EXPECT_EQ(note.GetText(), keptNote) << "Enter on an empty field does nothing";
+    EXPECT_FALSE(note.HasClass("ai-setup-key-note-error"));
+
+    page.Focus(*field);
+    TypeInto(*field, "test-key-not-a-secret");
+    page.PressKey(Input::kKeyCode_Enter);
+    EXPECT_TRUE(field->GetValue().empty()) << "the page holds no copy of a saved key";
+    ASSERT_TRUE(page.PumpUntil([&] { return StepMarks(steps) == std::vector<std::string>{"passed", "passed"}; }));
+    ASSERT_TRUE(store.Data->Saved.has_value());
+    EXPECT_EQ(*store.Data->Saved, "test-key-not-a-secret");
+
+    const std::string savedNote = note.GetText();
+    page.Focus(*field);
+    page.PressKey(Input::kKeyCode_Enter);
+    EXPECT_EQ(note.GetText(), savedNote) << "a second Enter after the save does nothing";
+    EXPECT_FALSE(note.HasClass("ai-setup-key-note-error"));
+}
+
+// A saved key that the check cannot send (no server) warns: the network says nothing about the key.
+TEST(AiAssistantPanelTests, TheApiKeyRowWarnsWhenTheCheckCannotReachTheApi)
+{
+    ScopedPreferencesRoot preferences;
+    const ScopedEnvironmentVariable noKey(std::string(ApiKeyStore::kVariable).c_str(), nullptr);
+    FakeApiKeyStore store;
+    store.Data->Saved = "test-key-value";
+    AgentSessionState::Get().UseApiConnectionForTesting(store.Store(), "http://127.0.0.1:1/v1/models");
+    AiAssistantSettings::SetProvider(std::string(ClaudeApiProvider::kId));
+    SetupPageHarness page;
+    if (!page.Attach("AiAssistantPanelTests-setup-key-warning"))
+        GTEST_SKIP() << "No device";
+    const UIElement& steps = page.Element("AiSetupStepsHost");
+    ASSERT_TRUE(page.PumpUntil([&] { return StepMarks(steps) == std::vector<std::string>{"passed", "warning"}; }));
+    const std::vector<std::string> found = TextsWithClass(steps, "setup-step-found");
+    ASSERT_EQ(found.size(), 2u);
+    EXPECT_TRUE(found[1].starts_with("The Claude API could not be reached")) << found[1];
+    EXPECT_EQ(page.Text("SetupStepPill").GetText(), "Saved, not checked");
+    auto* remove = Control<Button>(page, "AiSetupApiKeyRemove");
+    ASSERT_NE(remove, nullptr);
+    EXPECT_TRUE(remove->IsEnabled()) << "a key is saved";
+}
+
+// Paste inserts the clipboard as it is: the row saves the key without the spaces around it and
+// refuses a key with a space or a control character inside, with a message that names the cause.
+TEST(AiAssistantPanelTests, TheApiKeyRowTrimsTheKeyAndRefusesAHiddenCharacterInside)
+{
+    ScopedPreferencesRoot preferences;
+    const ScopedEnvironmentVariable noKey(std::string(ApiKeyStore::kVariable).c_str(), nullptr);
+    FakeApiKeyStore store;
+    AgentSessionState::Get().UseApiConnectionForTesting(store.Store(), "http://127.0.0.1:1/v1/models");
+    AiAssistantSettings::SetProvider(std::string(ClaudeApiProvider::kId));
+    SetupPageHarness page;
+    if (!page.Attach("AiAssistantPanelTests-setup-key-trim"))
+        GTEST_SKIP() << "No device";
+    auto* field = Control<TextField>(page, "AiSetupApiKeyField");
+    auto* save = Control<Button>(page, "AiSetupApiKeySave");
+    auto* remove = Control<Button>(page, "AiSetupApiKeyRemove");
+    ASSERT_TRUE(field && save && remove);
+
+    field->SetValue("  test-key-value\r\n");
+    save->TriggerClick();
+    ASSERT_TRUE(page.PumpUntil([&] { return remove->IsEnabled(); })) << "the write ended";
+    ASSERT_TRUE(store.Data->Saved.has_value());
+    EXPECT_EQ(*store.Data->Saved, "test-key-value");
+
+    for (const char* pasted : {"test-key value", "test-key\x01value", "test-key\nvalue"})
+    {
+        field->SetValue(pasted);
+        save->TriggerClick();
+        EXPECT_EQ(*store.Data->Saved, "test-key-value") << "a refused key is not saved";
+        EXPECT_TRUE(page.Text("AiSetupApiKeyNote").GetText().starts_with("The key has a space, a line break"))
+            << page.Text("AiSetupApiKeyNote").GetText();
+        EXPECT_TRUE(page.Element("AiSetupApiKeyNote").HasClass("ai-setup-key-note-error"));
+    }
+}
+
+// A store that refuses a write: the row names the refusal, not the length, and the saved key
+// stays; a key over the store's limit is refused before the store is called.
+TEST(AiAssistantPanelTests, TheApiKeyRowSaysWhenTheStoreRefusesASaveOrARemove)
+{
+    ScopedPreferencesRoot preferences;
+    const ScopedEnvironmentVariable noKey(std::string(ApiKeyStore::kVariable).c_str(), nullptr);
+    FakeApiKeyStore store;
+    store.Data->Saved = "test-key-value";
+    AgentSessionState::Get().UseApiConnectionForTesting(store.Store(), "http://127.0.0.1:1/v1/models");
+    AiAssistantSettings::SetProvider(std::string(ClaudeApiProvider::kId));
+    SetupPageHarness page;
+    if (!page.Attach("AiAssistantPanelTests-setup-key-refused"))
+        GTEST_SKIP() << "No device";
+    const UIElement& steps = page.Element("AiSetupStepsHost");
+    ASSERT_TRUE(page.PumpUntil([&] { return StepMarks(steps) == std::vector<std::string>{"passed", "warning"}; }));
+    auto* field = Control<TextField>(page, "AiSetupApiKeyField");
+    auto* save = Control<Button>(page, "AiSetupApiKeySave");
+    auto* remove = Control<Button>(page, "AiSetupApiKeyRemove");
+    ASSERT_TRUE(field && save && remove);
+    const auto note = [&] { return page.Text("AiSetupApiKeyNote").GetText(); };
+
+    field->SetValue(std::string(Platform::kMaxSecretBytes + 1, 'k'));
+    save->TriggerClick();
+    ASSERT_TRUE(page.PumpUntil([&] { return note().starts_with("The key is longer than 2560 characters"); })) << note();
+    EXPECT_EQ(*store.Data->Saved, "test-key-value") << "the store is not called for a key over its limit";
+
+    store.Data->Refuse = Platform::SecretStoreStatus::Failed;
+    field->SetValue("test-key-other");
+    save->TriggerClick();
+    ASSERT_TRUE(page.PumpUntil([&] {
+        return note() == "The key was not saved: the test store refused it. Paste the key again and click Save.";
+    })) << note();
+    EXPECT_EQ(*store.Data->Saved, "test-key-value");
+    EXPECT_TRUE(page.Element("AiSetupApiKeyNote").HasClass("ai-setup-key-note-error"));
+
+    remove->TriggerClick();
+    ASSERT_TRUE(page.PumpUntil([&] {
+        return note() == "The key was not removed: the test store refused it. Remove it there, or try again.";
+    })) << note();
+    ASSERT_TRUE(store.Data->Saved.has_value());
+}
+
+// Closing the page right after Save: the write on the check thread still ends, the page's
+// destructor waits for it, and its result reaches no destroyed row.
+TEST(AiAssistantPanelTests, ClosingTheSetupPageRightAfterSaveKeepsTheKey)
+{
+    ScopedPreferencesRoot preferences;
+    const ScopedEnvironmentVariable noKey(std::string(ApiKeyStore::kVariable).c_str(), nullptr);
+    FakeApiKeyStore store;
+    AgentSessionState::Get().UseApiConnectionForTesting(store.Store(), "http://127.0.0.1:1/v1/models");
+    AiAssistantSettings::SetProvider(std::string(ClaudeApiProvider::kId));
+    SetupPageHarness page;
+    if (!page.Attach("AiAssistantPanelTests-setup-key-close"))
+        GTEST_SKIP() << "No device";
+    auto* field = Control<TextField>(page, "AiSetupApiKeyField");
+    auto* save = Control<Button>(page, "AiSetupApiKeySave");
+    ASSERT_TRUE(field && save);
+
+    field->SetValue("test-key-value");
+    save->TriggerClick();
+    page.Close();
+
+    ASSERT_TRUE(store.Data->Saved.has_value()) << "the write ran before the thread ended";
+    EXPECT_EQ(*store.Data->Saved, "test-key-value");
+}
+
+// Without a credential store the field and Save are off and the row says how to give a key.
+TEST(AiAssistantPanelTests, TheApiKeyRowTurnsOffWithoutACredentialStore)
+{
+    ScopedPreferencesRoot preferences;
+    const ScopedEnvironmentVariable noKey(std::string(ApiKeyStore::kVariable).c_str(), nullptr);
+    FakeApiKeyStore store;
+    store.Data->Refuse = Platform::SecretStoreStatus::NoStore;
+    AgentSessionState::Get().UseApiConnectionForTesting(store.Store(""), "http://127.0.0.1:1/v1/models");
+    AiAssistantSettings::SetProvider(std::string(ClaudeApiProvider::kId));
+    SetupPageHarness page;
+    if (!page.Attach("AiAssistantPanelTests-setup-key-nostore"))
+        GTEST_SKIP() << "No device";
+    const UIElement& steps = page.Element("AiSetupStepsHost");
+    ASSERT_TRUE(page.PumpUntil([&] { return StepMarks(steps) == std::vector<std::string>{"failed", "waiting"}; }));
+    auto* field = Control<TextField>(page, "AiSetupApiKeyField");
+    auto* save = Control<Button>(page, "AiSetupApiKeySave");
+    ASSERT_TRUE(field && save);
+    EXPECT_FALSE(field->IsEnabled());
+    EXPECT_FALSE(save->IsEnabled());
+    EXPECT_TRUE(page.Text("AiSetupApiKeyNote").GetText().starts_with("This system has no credential store"))
+        << page.Text("AiSetupApiKeyNote").GetText();
+}
+
+// Issue #6287: a failed step shows its finding and its fix; every step after it stays listed
+// and says what it waits for, never a second error for the same cause.
+TEST(AiAssistantPanelTests, TheSetupPageShowsAFailedStepsFixAndWhatEachLaterStepWaitsFor)
+{
+    ScopedPreferencesRoot preferences;
+    AiAssistantSettings::SetProvider(std::string(ClaudeSessionProvider::kId));
+    SetupPageHarness page;
+    if (!page.Attach("AiAssistantPanelTests-setup-failed"))
+        GTEST_SKIP() << "No device";
+    ASSERT_TRUE(page.PumpUntil([&] { return page.Text("SetupStepPill").GetText() == std::string(kNotReadyStatus); }));
+
+    const UIElement& steps = page.Element("AiSetupStepsHost");
+    EXPECT_EQ(TextsWithClass(steps, "setup-step-name"),
+              (std::vector<std::string>{"Claude Code", "Logged in", "Editor tools"}));
+    EXPECT_EQ(StepMarks(steps), (std::vector<std::string>{"failed", "waiting", "waiting"}));
+    const std::vector<std::string> found = TextsWithClass(steps, "setup-step-found");
+    ASSERT_EQ(found.size(), 3u);
+    EXPECT_EQ(found[1], "Checked once the Claude Code step passes.");
+    EXPECT_EQ(found[2], "Checked once the Claude Code step passes.");
+    const UIElement* error = FindByClass(steps, "inspector-notice-error");
+    ASSERT_NE(error, nullptr);
+    EXPECT_NE(dynamic_cast<const Label*>(FindByClass(*error, "inspector-notice-text")), nullptr);
+    EXPECT_TRUE(page.Element("SetupStepPill").HasClass("setup-status-pill-failed"));
+    EXPECT_EQ(page.Text("SetupStepSummary").GetText(), "1 step to fix.") << "a waiting step is not a step to fix";
+}
+
+// While the first step runs, every step of the pair is listed: the first one running, the
+// later ones waiting with what they check.
+TEST(AiAssistantPanelTests, TheSetupPageListsEveryStepWhileTheFirstOneRuns)
+{
+    ScopedPreferencesRoot preferences;
+    const ScopedEnvironmentVariable mode("FAKE_AGENT_CLI_MODE", "slow-version");
+    AiAssistantSettings::SetProvider(std::string(ClaudeSessionProvider::kId));
+    SetupPageHarness page;
+    if (!page.Attach("AiAssistantPanelTests-setup-running"))
+        GTEST_SKIP() << "No device";
+    ASSERT_TRUE(page.PumpUntil([&] { return page.Text("SetupStepPill").GetText() == std::string(kNotReadyStatus); }));
+
+    AiAssistantSettings::SetClaudeExecutable(FakeAgentCliPath());
+
+    const UIElement& steps = page.Element("AiSetupStepsHost");
+    ASSERT_TRUE(page.PumpUntil([&] {
+        return StepMarks(steps) == std::vector<std::string>{"running", "waiting", "waiting"};
+    })) << "the fake answers --version after 60 s";
+    EXPECT_EQ(TextsWithClass(steps, "setup-step-name"),
+              (std::vector<std::string>{"Claude Code", "Logged in", "Editor tools"}));
+    EXPECT_EQ(TextsWithClass(steps, "setup-step-found"),
+              (std::vector<std::string>{"Finds Claude Code and reads its version.",
+                                        "Checks your Claude Code login.",
+                                        "Node.js 20 or later, so the assistant can act in the editor."}));
+    EXPECT_EQ(page.Text("SetupStepPill").GetText(), kCheckingSetupStatus);
+}
+
+// Closing the page while its check runs stops the program at once: the page's destructor
+// cancels the check and joins its thread, and the result lands nowhere.
+TEST(AiAssistantPanelTests, ClosingTheSetupPageWhileItsCheckRunsStopsTheCheck)
+{
+    ScopedPreferencesRoot preferences;
+    const ScopedEnvironmentVariable mode("FAKE_AGENT_CLI_MODE", "slow-version");
+    AiAssistantSettings::SetProvider(std::string(ClaudeSessionProvider::kId));
+    SetupPageHarness page;
+    if (!page.Attach("AiAssistantPanelTests-setup-close"))
+        GTEST_SKIP() << "No device";
+    ASSERT_TRUE(page.PumpUntil([&] { return page.Text("SetupStepPill").GetText() == std::string(kNotReadyStatus); }));
+    AiAssistantSettings::SetClaudeExecutable(FakeAgentCliPath());
+    ASSERT_TRUE(
+        page.PumpUntil([&] { return page.Text("SetupStepPill").GetText() == std::string(kCheckingSetupStatus); }));
+
+    const auto before = std::chrono::steady_clock::now();
+    page.Close();
+    const auto waited = std::chrono::steady_clock::now() - before;
+
+    EXPECT_LT(waited, 5s) << "closing waited for the check; the fake answers --version after 60 s";
+}
+
+// Closing the page while Key accepted waits on a server that never answers stops the request:
+// the destructor's join returns within the cancel bound, not after the request's stall limit.
+TEST(AiAssistantPanelTests, ClosingTheSetupPageWhileTheKeyCheckStallsStopsTheRequest)
+{
+    ScopedPreferencesRoot preferences;
+    const ScopedEnvironmentVariable noKey(std::string(ApiKeyStore::kVariable).c_str(), nullptr);
+    LoopbackServer silent([](LoopbackServer& self, SocketHandle) { self.WaitForSignals(1, 60s); });
+    FakeApiKeyStore store;
+    store.Data->Saved = "test-key-value";
+    AgentSessionState::Get().UseApiConnectionForTesting(store.Store(), silent.Url("/v1/models"));
+    AiAssistantSettings::SetProvider(std::string(ClaudeApiProvider::kId));
+    SetupPageHarness page;
+    if (!page.Attach("AiAssistantPanelTests-setup-key-stall"))
+        GTEST_SKIP() << "No device";
+    ASSERT_TRUE(page.PumpUntil([&] { return silent.RequestCount() == 1; })) << "the check sent its request";
+
+    const auto before = std::chrono::steady_clock::now();
+    page.Close();
+    const auto waited = std::chrono::steady_clock::now() - before;
+
+    EXPECT_LT(waited, 3s) << "closing waited for the stalled request";
+}
+
+// The page and the panel share the setup words: the pill reads the panel's "Ready", and the
+// line beside it names the login and the connection the panel uses.
+TEST(AiAssistantPanelTests, TheSetupPageReadsReadyWithTheLoginAndTheConnection)
+{
+    ScopedPreferencesRoot preferences;
+    const ScopedEditorTools tools;
+    AiAssistantSettings::SetProvider(std::string(ClaudeSessionProvider::kId));
+    AiAssistantSettings::SetNodeExecutable(FakeAgentCliPath());
+    SetupPageHarness page;
+    if (!page.Attach("AiAssistantPanelTests-setup-ready"))
+        GTEST_SKIP() << "No device";
+    ASSERT_TRUE(page.PumpUntil([&] { return page.Text("SetupStepPill").GetText() == std::string(kNotReadyStatus); }));
+
+    AiAssistantSettings::SetClaudeExecutable(FakeAgentCliPath());
+
+    ASSERT_TRUE(page.PumpUntil([&] { return page.Text("SetupStepPill").GetText() == std::string(kReadyStatus); }))
+        << page.Text("SetupStepSummary").GetText();
+    EXPECT_EQ(StepMarks(page.Element("AiSetupStepsHost")), (std::vector<std::string>{"passed", "passed", "passed"}));
+    EXPECT_TRUE(page.Element("SetupStepPill").HasClass("setup-status-pill-ready"));
+    EXPECT_EQ(page.Text("SetupStepSummary").GetText(),
+              "Logged in (claude.ai). The AI Assistant panel uses Claude (Subscription).");
+    EXPECT_EQ(FindByClass(page.Element("AiSetupStepsHost"), "inspector-notice-error"), nullptr);
+}
+
+// A check that passes with the editor's tools off reads as one warning: the pill says
+// "Ready, limited" in the warning color, the line says why, and the Node fix names the row.
+TEST(AiAssistantPanelTests, TheSetupPageReadsReadyLimitedWhenNodeDoesNotRun)
+{
+    ScopedPreferencesRoot preferences;
+    const ScopedEditorTools tools;
+    AiAssistantSettings::SetProvider(std::string(ClaudeSessionProvider::kId));
+    const std::string node = (LocalClaudeSession::TestDirectory() / "missing-node.exe").string();
+    AiAssistantSettings::SetNodeExecutable(node);
+    SetupPageHarness page;
+    if (!page.Attach("AiAssistantPanelTests-setup-limited"))
+        GTEST_SKIP() << "No device";
+    ASSERT_TRUE(page.PumpUntil([&] { return page.Text("SetupStepPill").GetText() == std::string(kNotReadyStatus); }));
+
+    AiAssistantSettings::SetClaudeExecutable(FakeAgentCliPath());
+
+    ASSERT_TRUE(
+        page.PumpUntil([&] { return page.Text("SetupStepPill").GetText() == std::string(kReadyLimitedStatus); }))
+        << page.Text("SetupStepSummary").GetText() << " | "
+        << testing::PrintToString(TextsWithClass(page.Element("AiSetupStepsHost"), "setup-step-found"));
+    EXPECT_TRUE(page.Element("SetupStepPill").HasClass("setup-status-pill-warning"));
+    EXPECT_TRUE(page.Text("SetupStepSummary").GetText().ends_with(". Conversation only: the editor's tools are off."))
+        << page.Text("SetupStepSummary").GetText();
+    const UIElement& steps = page.Element("AiSetupStepsHost");
+    EXPECT_EQ(StepMarks(steps), (std::vector<std::string>{"passed", "passed", "warning"}));
+    EXPECT_EQ(TextsWithClass(steps, "inspector-notice-text"),
+              (std::vector<std::string>{"Could not start Node.js at " + node +
+                                        ". Install Node.js 20 or later, or set Node executable under Model and "
+                                        "options."}));
+}
+
+// The panel's tools answer follows the setup: a Node executable corrected in Settings moves
+// the setup generation, and the panel drops its refusal and reads Ready.
+TEST(AiAssistantPanelTests, ThePanelDropsItsToolsRefusalWhenTheNodeExecutableIsCorrected)
+{
+    LocalClaudeSession local;
+    const ScopedEditorTools tools;
+    AiAssistantSettings::SetNodeExecutable((LocalClaudeSession::TestDirectory() / "missing-node.exe").string());
+    AgentConversationController controller = LocalClaudeSession::MakeController();
+    controller.SetProvider(std::string(ClaudeSessionProvider::kId));
+    ASSERT_TRUE(PumpUntil(controller, [&] { return !controller.ActingCheckRunning(); }));
+    ASSERT_TRUE(controller.ActingRefusal().starts_with("Could not start Node.js")) << controller.ActingRefusal();
+
+    AiAssistantSettings::SetNodeExecutable(FakeAgentCliPath());
+
+    EXPECT_TRUE(PumpUntil(controller,
+                          [&] { return !controller.ActingCheckRunning() && controller.ActingRefusal().empty(); }))
+        << controller.ActingRefusal();
+}
+
+// Without the debug server the page's Editor tools step and the panel's mode control give
+// one answer: AssistantAttachment::Unavailable(), even though Node.js runs.
+TEST(AiAssistantPanelTests, TheSetupPageAndThePanelGiveOneActingAnswer)
+{
+    LocalClaudeSession local;
+    Editor::SetEditorDebugPort(0);
+    AiAssistantSettings::SetProvider(std::string(ClaudeSessionProvider::kId));
+    AiAssistantSettings::SetNodeExecutable(FakeAgentCliPath());
+    const std::string unavailable = AssistantAttachment::Unavailable();
+    ASSERT_FALSE(unavailable.empty());
+
+    AgentConversationController controller = LocalClaudeSession::MakeController();
+    controller.SetProvider(std::string(ClaudeSessionProvider::kId));
+    EXPECT_EQ(controller.ActingRefusal(), unavailable);
+
+    SetupPageHarness page;
+    if (!page.Attach("AiAssistantPanelTests-setup-acting"))
+        GTEST_SKIP() << "No device";
+    AiAssistantSettings::SetClaudeExecutable(FakeAgentCliPath());
+    ASSERT_TRUE(
+        page.PumpUntil([&] { return page.Text("SetupStepPill").GetText() == std::string(kReadyLimitedStatus); }))
+        << page.Text("SetupStepSummary").GetText();
+    EXPECT_EQ(TextsWithClass(page.Element("AiSetupStepsHost"), "inspector-notice-text"),
+              (std::vector<std::string>{unavailable}));
+}
+
+// A turn the setup check refused is not a failed reply: the row shows the finding and fix in
+// the error notice instead of the status, the panel's status line says "Not ready", and
+// Retry stays.
+TEST(AiAssistantPanelTests, ASetupRefusalShowsInTheRowsErrorNoticeAndTheStatusLineSaysNotReady)
+{
+    Conversation conversation;
+    const std::string session(ClaudeSessionProvider::kId);
+    const Conversation::TurnId refused = conversation.AddTurn("hi", {}, session, "", "", {});
+    conversation.Start(refused);
+    TurnResult refusal;
+    refusal.Outcome = TurnOutcome::Failed;
+    refusal.NotReady = true;
+    refusal.Error = "Not logged in. Run \"claude auth login\" in a terminal.";
+    conversation.Finish(refused, refusal);
+
+    const ConversationMessage& reply = *conversation.Reply(refused);
+    const AgentConversationRowModel model = AgentConversationRowModel::From(reply, {}, refused, {});
+    EXPECT_EQ(model.SetupRefusal, refusal.Error);
+    EXPECT_TRUE(model.Status.empty()) << model.Status;
+    EXPECT_TRUE(model.Failed) << "Retry stays";
+    EXPECT_EQ(FailedReplyStatus(reply, false), kNotReadyStatus);
+
+    const Conversation::TurnId failed = conversation.AddTurn("again", {}, session, "", "", {});
+    conversation.Start(failed);
+    conversation.Finish(failed, {.Outcome = TurnOutcome::Failed, .Error = "Claude Code exited with code 3."});
+    EXPECT_TRUE(AgentConversationRowModel::From(*conversation.Reply(failed), {}, failed, {}).SetupRefusal.empty());
+    EXPECT_EQ(FailedReplyStatus(*conversation.Reply(failed), false), "Reply failed");
+
+    ConversationLayout layout;
+    if (!layout.Device)
+        GTEST_SKIP() << "No device";
+    const std::string built = BuildConversation(layout, 579.0f, model);
+    ASSERT_TRUE(built.empty()) << built;
+    const UIElement* host = FindByClass(*layout.Row, "agent-row-setup-refusal");
+    ASSERT_NE(host, nullptr);
+    EXPECT_FALSE(host->HasClass("hidden"));
+    const UIElement* error = FindByClass(*host, "inspector-notice-error");
+    ASSERT_NE(error, nullptr);
+    const auto* text = dynamic_cast<const Label*>(FindByClass(*error, "inspector-notice-text"));
+    ASSERT_NE(text, nullptr) << "InspectorNotice.uxml is staged beside the test executable";
+    EXPECT_EQ(text->GetText(), refusal.Error);
 }
 } // namespace GameEngine

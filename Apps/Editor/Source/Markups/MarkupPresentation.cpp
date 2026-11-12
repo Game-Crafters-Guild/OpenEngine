@@ -269,15 +269,14 @@ const char* MarkupEntryKindClass(const MarkupECS::MarkupEntry& entry)
 }
 
 std::optional<MarkupWorldVolume> MarkupWorldVolumeFromMatrix(Components::MarkupVolumeShape shape,
-                                                             const float32 (&matrix)[16])
+                                                             const Mathematics::Matrix4x4& matrix)
 {
     using Mathematics::Vector3;
-    const std::array<Vector3, 3> columns = {Vector3(matrix[0], matrix[1], matrix[2]),
-                                            Vector3(matrix[4], matrix[5], matrix[6]),
-                                            Vector3(matrix[8], matrix[9], matrix[10])};
+    const std::array<Vector3, 3> columns = {Vector3(glm::vec3(matrix[0])), Vector3(glm::vec3(matrix[1])),
+                                            Vector3(glm::vec3(matrix[2]))};
     MarkupWorldVolume volume;
     volume.Shape = shape;
-    volume.Center = Vector3(matrix[12], matrix[13], matrix[14]);
+    volume.Center = Vector3(glm::vec3(matrix[3]));
     Vector3 scale;
     for (int axis = 0; axis < 3; ++axis)
     {
@@ -307,7 +306,8 @@ std::optional<MarkupWorldVolume> ReadMarkupWorldVolume(const ECS::World& world, 
     const auto* transform = world.GetComponent<Components::WorldTransform>(entity);
     if (!volume || !transform)
         return std::nullopt;
-    return MarkupWorldVolumeFromMatrix(volume->Shape, transform->matrix);
+    return MarkupWorldVolumeFromMatrix(volume->Shape,
+                                       transform->ToMatrix4x4(transform->GetPosition() - Mathematics::WorldPosition{}));
 }
 
 bool MarkupVolumeContains(const MarkupWorldVolume& volume, const Mathematics::Vector3& point)
@@ -326,11 +326,14 @@ bool MarkupVolumeContains(const MarkupWorldVolume& volume, const Mathematics::Ve
 
 float MarkupFrameTanHalfFov(const SceneViewController* view)
 {
-    Mathematics::Matrix4x4 projection;
+    Rendering::CameraData camera;
     std::uint32_t width = 0;
     std::uint32_t height = 0;
+    if (!view || !view->GetLastFrameCamera(camera, width, height))
+        return kMarkupDefaultTanHalfFov;
+    const Mathematics::Matrix4x4& projection = camera.proj;
     // An orthographic projection's w row is (0, 0, 0, 1); a perspective one's has no w term.
-    if (!view || !view->GetLastFrameProjection(projection, width, height) || projection[3][3] != 0.0f ||
+    if (projection[3][3] != 0.0f ||
         projection[0][0] == 0.0f || projection[1][1] == 0.0f)
         return kMarkupDefaultTanHalfFov;
     // The diagonal holds the cotangents of the half fields of view; the larger is the narrower.

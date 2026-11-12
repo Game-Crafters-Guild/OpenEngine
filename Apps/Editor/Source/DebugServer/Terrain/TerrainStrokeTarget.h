@@ -1,10 +1,20 @@
 #pragma once
 
 #include "Mathematics/Vector3.h"
+#include "Types/Types.h"
 
 #include <nlohmann/json.hpp>
 
 #include <string>
+
+namespace GameEngine::Components
+{
+struct Terrain;
+} // namespace GameEngine::Components
+namespace GameEngine::TerrainECS
+{
+class TerrainService;
+} // namespace GameEngine::TerrainECS
 
 namespace GameEngine::Editor
 {
@@ -31,5 +41,10 @@ Mathematics::Vector3 SlerpDir(const Mathematics::Vector3& a, const Mathematics::
 // Returns false with err empty when neither key is present.
 bool ResolveStrokeTarget(const nlohmann::json& params, const char* posKey, const char* dirKey,
                          bool spherical, Mathematics::Vector3& out, std::string& err);
+
+// Why a dab on planet `planet`, whose Terrain is `terrain`, writes nothing: the service refuses the
+// sculpt the planet holds (TerrainService::PlanetSculptRefusal). Empty when a dab may write.
+std::string DescribePlanetDabRefusal(const TerrainECS::TerrainService& service, uint32 planet,
+                                     const Components::Terrain& terrain);
 
 } // namespace GameEngine::Editor

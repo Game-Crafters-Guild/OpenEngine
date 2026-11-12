@@ -1,3 +1,4 @@
+#include "Logger/Logger.h"
 #include "UI/Controls/BaseField.h"
 #include "UI/Controls/FloatField.h"
 #include "UI/Controls/IntField.h"
@@ -14,6 +15,7 @@
 #include "UI/Controls/Dropdown.h"
 #include "UI/Controls/MaskField.h"
 #include "UI/Controls/PopoverArrow.h"
+#include "UI/Controls/ProgressBar.h"
 #include "UI/Controls/ScrollView.h"
 #include "UI/Controls/Scrollbar.h"
 #include "UI/Controls/Slider.h"
@@ -68,6 +70,24 @@ struct Parser<UI::ArrowDirection>
 };
 
 template<>
+struct Parser<ProgressBar::FillDirection>
+{
+    static ProgressBar::FillDirection Parse(std::string_view s)
+    {
+        const std::string lower = ToLowerAscii(s);
+        if (lower == "left")
+            return ProgressBar::FillDirection::Left;
+        if (lower == "up")
+            return ProgressBar::FillDirection::Up;
+        if (lower == "down")
+            return ProgressBar::FillDirection::Down;
+        if (lower != "right")
+            Logger::Log::Warning("UI: progress direction '{}' is not known; the bar fills to the right. Use right, left, up or down.", s);
+        return ProgressBar::FillDirection::Right;
+    }
+};
+
+template<>
 struct Parser<Accordion::Mode>
 {
     static Accordion::Mode Parse(std::string_view s)
@@ -111,6 +131,8 @@ void DefineBuiltInControls()
         auto reg = Register<TextField>("TextField");
         reg.Attr("value", &BaseField::SetValue);
         reg.Attr("selectallonmousefocus", &TextFieldBase<std::string>::SetSelectsAllOnMouseFocus);
+        reg.Attr("masked", &TextField::SetMasked);
+        reg.Attr("placeholder", &TextFieldBase<std::string>::SetPlaceholder);
         reg.TagAlias("textfield"); // legacy lowercase tag
         reg.TagAlias("input");     // legacy <input> alias
     }
@@ -203,6 +225,14 @@ void DefineBuiltInControls()
         .Attr("range", &Slider::SetRangeMode)
         .Attr("rangestart", &Slider::SetRangeStart)
         .TagAlias("slider");
+
+    RegisterWithFactory<ProgressBar>("ProgressBar", []()
+                                     { return std::make_unique<ProgressBar>(); })
+        .Attr("max", &ProgressBar::SetMax)
+        .Attr("value", &ProgressBar::SetValue)
+        .Attr("indeterminate", &ProgressBar::SetIndeterminate)
+        .Attr("direction", &ProgressBar::SetFillDirection)
+        .TagAlias("progress");
 
     Register<PopoverArrow>("PopoverArrow")
         .Attr("side", &PopoverArrow::SetSide)

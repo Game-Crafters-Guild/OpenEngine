@@ -17,6 +17,7 @@ namespace
 {
 
 constexpr const char* kBvhCacheSubdir = "MeshBvh";
+constexpr const char* kBvhFileExtension = ".meshbvh";
 
 // File header preceding the engine-serialized BVH payload.
 struct FileHeader
@@ -40,7 +41,7 @@ std::filesystem::path SubmeshCachePath(const std::filesystem::path& cacheRoot,
                                        uint32 submesh)
 {
     return AssetCacheDir(cacheRoot, guid) /
-           ("sm" + std::to_string(submesh) + "_v" + std::to_string(kBvhBuilderVersion) + ".meshbvh");
+           ("sm" + std::to_string(submesh) + "_v" + std::to_string(kBvhBuilderVersion) + kBvhFileExtension);
 }
 
 // Logs why a cached BVH file was not used and returns false. A load runs once per build, so
@@ -94,20 +95,22 @@ bool PersistBvh(const std::filesystem::path& cacheRoot,
         PersistFailureLog::Warn(modelGuid, "create_directories: " + ec.message());
         return false;
     }
+    GameEngine::FileSystem::RemoveOrphanedTemporaryFiles(dir, kBvhFileExtension);
 
+    // Another process can write the same entry at the same time: each writer stages its own file.
     const auto finalPath = SubmeshCachePath(cacheRoot, modelGuid, submesh);
-    const auto tempPath  = finalPath.string() + ".tmp";
+    const auto tempPath  = GameEngine::FileSystem::MakeTemporarySiblingPath(finalPath);
 
     std::vector<uint8> bvhBytes;
     bvh.Serialize(bvhBytes);
 
-    FileHeader hdr{};
-    hdr.Magic             = kBvhFileMagic;
-    hdr.FileVersion       = kBvhFileVersion;
-    hdr.BuilderVersion    = kBvhBuilderVersion;
-    hdr._pad              = 0;
-    hdr.GeometryHash      = geometryHash;
-    hdr.PayloadChecksum   = Hashing::Fnv1a64(bvhBytes.data(), bvhBytes.size());
+    FileHeader header{};
+    header.Magic           = kBvhFileMagic;
+    header.FileVersion     = kBvhFileVersion;
+    header.BuilderVersion  = kBvhBuilderVersion;
+    header._pad            = 0;
+    header.GeometryHash    = geometryHash;
+    header.PayloadChecksum = Hashing::Fnv1a64(bvhBytes.data(), bvhBytes.size());
 
     {
         std::ofstream out(tempPath, std::ios::binary | std::ios::trunc);
@@ -116,7 +119,7 @@ bool PersistBvh(const std::filesystem::path& cacheRoot,
             PersistFailureLog::Warn(modelGuid, "open temp for write");
             return false;
         }
-        out.write(reinterpret_cast<const char*>(&hdr), sizeof(hdr));
+        out.write(reinterpret_cast<const char*>(&header), sizeof(header));
         if (!bvhBytes.empty())
             out.write(reinterpret_cast<const char*>(bvhBytes.data()), bvhBytes.size());
         out.close();

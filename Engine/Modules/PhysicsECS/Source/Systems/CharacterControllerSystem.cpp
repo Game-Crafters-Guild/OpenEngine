@@ -83,13 +83,11 @@ void CharacterControllerSystem::Update(ECS::World& world, float32 deltaTime)
                       }
 
                       GameEngine::Components::Transform pose{};
-                      for (int i = 0; i < 16; ++i)
-                          pose.matrix[i] = worldTransform.matrix[i];
+                      pose.Basis = worldTransform.Basis;
 
                       Physics::CharacterSettings desc{};
                       desc.motor = cc.motor;
-                      desc.position = Physics::Vector3(
-                          pose.GetPosition().x, pose.GetPosition().y, pose.GetPosition().z);
+                      desc.position = worldTransform.Position;
                       desc.rotation = pose.GetRotation();
                       desc.radius = cc.radius;
                       desc.height = cc.height;

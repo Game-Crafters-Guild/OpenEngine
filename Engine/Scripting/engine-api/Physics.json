@@ -1,14 +1,14 @@
 {
   "format": 1,
   "name": "Physics",
-  "hash": "0xb34b7bef0b316f86",
+  "hash": "0xc7bda1ad6879c3a3",
   "constants": [
     {
       "id": "Physics.kAllLayers",
       "name": "kAllLayers",
       "cpp": "GameEngine::PhysicsECS::Script::kAllLayers",
       "header": "PhysicsECS/PhysicsScriptApi.h",
-      "line": 31,
+      "line": 32,
       "kind": "UInt32",
       "value": "4294967295"
     }
@@ -19,7 +19,7 @@
       "id": "Physics.ContactBegin",
       "name": "ContactBegin",
       "header": "PhysicsECS/PhysicsScriptApi.h",
-      "line": 138,
+      "line": 140,
       "doc": "Calls the handler when a solid body of the entity starts to touch another.",
       "scope": {
         "kind": "Entity"
@@ -33,7 +33,7 @@
       "id": "Physics.ContactEnd",
       "name": "ContactEnd",
       "header": "PhysicsECS/PhysicsScriptApi.h",
-      "line": 146,
+      "line": 148,
       "doc": "Calls the handler when a solid body of the entity stops touching another.",
       "scope": {
         "kind": "Entity"
@@ -47,7 +47,7 @@
       "id": "Physics.TriggerEnter",
       "name": "TriggerEnter",
       "header": "PhysicsECS/PhysicsScriptApi.h",
-      "line": 154,
+      "line": 156,
       "doc": "Calls the handler when a body enters a trigger, for the trigger's entity and for the body's.",
       "scope": {
         "kind": "Entity"
@@ -61,7 +61,7 @@
       "id": "Physics.TriggerExit",
       "name": "TriggerExit",
       "header": "PhysicsECS/PhysicsScriptApi.h",
-      "line": 162,
+      "line": 164,
       "doc": "Calls the handler when a body leaves a trigger, for the trigger's entity and for the body's.",
       "scope": {
         "kind": "Entity"
@@ -78,7 +78,7 @@
       "name": "AddImpulse",
       "cpp": "GameEngine::PhysicsECS::Script::AddImpulse",
       "header": "PhysicsECS/PhysicsScriptApi.h",
-      "line": 116,
+      "line": 118,
       "doc": "Applies an impulse at the body's center of mass: its velocity changes at once by impulse / mass.",
       "thread": "main",
       "context": "ECS::World",
@@ -101,7 +101,7 @@
       "name": "AddImpulseAtPosition",
       "cpp": "GameEngine::PhysicsECS::Script::AddImpulseAtPosition",
       "header": "PhysicsECS/PhysicsScriptApi.h",
-      "line": 120,
+      "line": 122,
       "doc": "Applies an impulse at a point in world space, which also spins the body.",
       "thread": "main",
       "context": "ECS::World",
@@ -119,7 +119,7 @@
         },
         {
           "name": "position",
-          "kind": "Vec3"
+          "kind": "WorldPosition"
         }
       ]
     },
@@ -128,7 +128,7 @@
       "name": "BoxOverlap",
       "cpp": "GameEngine::PhysicsECS::Script::BoxOverlap",
       "header": "PhysicsECS/PhysicsScriptApi.h",
-      "line": 90,
+      "line": 92,
       "doc": "Writes the entity of every body that overlaps a box into bodies, in no fixed order. The box is centered at center, extends halfExtents from it along each of its axes (in meters, each above 0), and is turned by rotation. Returns the number of bodies in the box. When that is more than bodies holds, the ones that fit are written: call again with a larger buffer to get all of them. A buffer of length 0 asks the number only. 0 outside play mode. Only bodies on a layer of layerMask are found; triggers are found unless ignoreTriggers is true.",
       "thread": "main",
       "context": "Physics::PhysicsWorld",
@@ -138,7 +138,7 @@
       "params": [
         {
           "name": "center",
-          "kind": "Vec3"
+          "kind": "WorldPosition"
         },
         {
           "name": "halfExtents",
@@ -174,7 +174,7 @@
       "name": "GetAngularVelocity",
       "cpp": "GameEngine::PhysicsECS::Script::GetAngularVelocity",
       "header": "PhysicsECS/PhysicsScriptApi.h",
-      "line": 106,
+      "line": 108,
       "doc": "The angular velocity of the entity's body, in radians per second about each axis.",
       "thread": "main",
       "context": "ECS::World",
@@ -193,7 +193,7 @@
       "name": "GetDesiredVelocity",
       "cpp": "GameEngine::PhysicsECS::Script::GetDesiredVelocity",
       "header": "PhysicsECS/PhysicsScriptApi.h",
-      "line": 126,
+      "line": 128,
       "doc": "The velocity the entity's CharacterController moves at: X and Z replace the motion every physics step, and a Y above 0 is a jump at that speed. Zero for an entity with no CharacterController.",
       "thread": "main",
       "context": "ECS::World",
@@ -212,7 +212,7 @@
       "name": "GetLinearVelocity",
       "cpp": "GameEngine::PhysicsECS::Script::GetLinearVelocity",
       "header": "PhysicsECS/PhysicsScriptApi.h",
-      "line": 96,
+      "line": 98,
       "doc": "The velocity of the entity's body. Zero for an entity with no PhysicsBody, and outside play mode.",
       "thread": "main",
       "context": "ECS::World",
@@ -231,7 +231,7 @@
       "name": "IsGrounded",
       "cpp": "GameEngine::PhysicsECS::Script::IsGrounded",
       "header": "PhysicsECS/PhysicsScriptApi.h",
-      "line": 134,
+      "line": 136,
       "doc": "True while the entity's CharacterController stands on ground.",
       "thread": "main",
       "context": "ECS::World",
@@ -250,7 +250,7 @@
       "name": "RayCast",
       "cpp": "GameEngine::PhysicsECS::Script::RayCast",
       "header": "PhysicsECS/PhysicsScriptApi.h",
-      "line": 70,
+      "line": 71,
       "doc": "Casts a ray and finds the nearest body it hits within maxDistance. False when it hits nothing, and outside play mode. The direction need not be of length 1. Only bodies on a layer of layerMask are hit; triggers are hit unless ignoreTriggers is true.",
       "thread": "main",
       "try": true,
@@ -261,7 +261,7 @@
       "params": [
         {
           "name": "origin",
-          "kind": "Vec3"
+          "kind": "WorldPosition"
         },
         {
           "name": "direction",
@@ -296,7 +296,7 @@
       "name": "RayCastAll",
       "cpp": "GameEngine::PhysicsECS::Script::RayCastAll",
       "header": "PhysicsECS/PhysicsScriptApi.h",
-      "line": 79,
+      "line": 81,
       "doc": "Casts a ray and writes every body it hits within maxDistance into hits, nearest first, each body once at its nearest hit. Returns the number of bodies the ray hits. When that is more than hits holds, the nearest ones that fit are written: call again with a larger buffer to get all of them. A buffer of length 0 asks the number only. 0 outside play mode. The direction need not be of length 1. Only bodies on a layer of layerMask are hit; triggers are hit unless ignoreTriggers is true.",
       "thread": "main",
       "context": "Physics::PhysicsWorld",
@@ -306,7 +306,7 @@
       "params": [
         {
           "name": "origin",
-          "kind": "Vec3"
+          "kind": "WorldPosition"
         },
         {
           "name": "direction",
@@ -344,7 +344,7 @@
       "name": "SetAngularVelocity",
       "cpp": "GameEngine::PhysicsECS::Script::SetAngularVelocity",
       "header": "PhysicsECS/PhysicsScriptApi.h",
-      "line": 112,
+      "line": 114,
       "doc": "Sets the angular velocity of the entity's body, in radians per second about each axis. A kinematic body follows its Transform: the call is ignored and logs a warning once per entity. Rotate its Transform instead.",
       "thread": "main",
       "context": "ECS::World",
@@ -367,7 +367,7 @@
       "name": "SetDesiredVelocity",
       "cpp": "GameEngine::PhysicsECS::Script::SetDesiredVelocity",
       "header": "PhysicsECS/PhysicsScriptApi.h",
-      "line": 130,
+      "line": 132,
       "doc": "Sets the velocity the entity's CharacterController moves at.",
       "thread": "main",
       "context": "ECS::World",
@@ -390,7 +390,7 @@
       "name": "SetLinearVelocity",
       "cpp": "GameEngine::PhysicsECS::Script::SetLinearVelocity",
       "header": "PhysicsECS/PhysicsScriptApi.h",
-      "line": 102,
+      "line": 104,
       "doc": "Sets the velocity of the entity's body. Does nothing for an entity with no PhysicsBody, for a static body, and outside play mode. A kinematic body follows its Transform: the call is ignored and logs a warning once per entity. Move its Transform instead.",
       "thread": "main",
       "context": "ECS::World",
@@ -416,10 +416,10 @@
       "name": "ContactEvent",
       "cpp": "GameEngine::PhysicsECS::Script::ContactEvent",
       "header": "PhysicsECS/PhysicsScriptApi.h",
-      "line": 48,
+      "line": 49,
       "doc": "Two solid bodies started or stopped touching: the entity you subscribed to (self), the entity it touches (other), and the contact point and normal in world space. The normal points from other into self: a body resting on the ground gets +Y.",
-      "size": 32,
-      "align": 4,
+      "size": 48,
+      "align": 8,
       "fields": [
         {
           "name": "self",
@@ -433,7 +433,7 @@
         },
         {
           "name": "point",
-          "kind": "Vec3",
+          "kind": "WorldPosition",
           "offset": 8,
           "default": [
             "0",
@@ -444,7 +444,7 @@
         {
           "name": "normal",
           "kind": "Vec3",
-          "offset": 20,
+          "offset": 32,
           "default": [
             "0",
             "1",
@@ -458,10 +458,10 @@
       "name": "RayHit",
       "cpp": "GameEngine::PhysicsECS::Script::RayHit",
       "header": "PhysicsECS/PhysicsScriptApi.h",
-      "line": 36,
+      "line": 37,
       "doc": "Where a ray hit a body: the body's entity, the hit point, the surface normal there, and the distance from the ray's origin.",
-      "size": 32,
-      "align": 4,
+      "size": 48,
+      "align": 8,
       "fields": [
         {
           "name": "entity",
@@ -470,8 +470,8 @@
         },
         {
           "name": "point",
-          "kind": "Vec3",
-          "offset": 4,
+          "kind": "WorldPosition",
+          "offset": 8,
           "default": [
             "0",
             "0",
@@ -481,7 +481,7 @@
         {
           "name": "normal",
           "kind": "Vec3",
-          "offset": 16,
+          "offset": 32,
           "default": [
             "0",
             "1",
@@ -491,7 +491,7 @@
         {
           "name": "distance",
           "kind": "Float",
-          "offset": 28,
+          "offset": 44,
           "default": "0"
         }
       ]
@@ -501,7 +501,7 @@
       "name": "TriggerEvent",
       "cpp": "GameEngine::PhysicsECS::Script::TriggerEvent",
       "header": "PhysicsECS/PhysicsScriptApi.h",
-      "line": 59,
+      "line": 60,
       "doc": "A body entered or left a trigger: the entity you subscribed to (self), the other entity of the pair, and whether self is the trigger.",
       "size": 12,
       "align": 4,

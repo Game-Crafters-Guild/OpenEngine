@@ -62,10 +62,8 @@ class FullscreenShaderNode : public IRenderPipelineNode
     bool Initialize(std::string nodeId, std::string nodeJson, std::string* outError) override;
     void Declare(RenderPipelineInstance& instance, const PipelineDeclareContext& ctx) override;
     void DeclareForView(ViewDeclare& d) override;
-    GameEngine::Rendering::GraphicsPipelineId GetBaseGraphicsPipelineId(GameEngine::Rendering::IDevice& /*device*/) const override
-    {
-        return m_BasePipelineId;
-    }
+    // Asks for the base pipeline under the format key of the node's output.
+    void RequestPausedViewPipelines(const PausedViewPrewarm& prewarm) override;
 
   private:
     friend class Detail::FullscreenShaderNodeRenderer;

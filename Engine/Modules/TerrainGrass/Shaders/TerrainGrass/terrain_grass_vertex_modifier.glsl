@@ -92,6 +92,8 @@ struct TerrainParamsEntry
     uint GrassControlBindless;
     uint ColorMapBindless;
     float GrassGroundTintHeight;
+    float LatticeOverhangX;
+    float LatticeOverhangZ;
 };
 
 layout(std430, set = 2, binding = 1) readonly buffer TerrainParamsBuffer
@@ -211,9 +213,6 @@ const mat2 kWindRot = mat2(0.86, 0.50, -0.50, 0.86) * 1.93;
 // Lod1StartDistance from the fitted radius and hands it to the compute as Place.Bounds.z, so a band
 // built on the authored radius would start the colour blend somewhere the geometry LOD does not.
 const float kGrassLod1RadiusFraction = 0.18;
-// Mirror of kGrassMinPixelWidth in terrain_grass_place.comp: the projected width of the whole leaf,
-// in pixels, the floor holds a blade to.
-const float kGrassMinPixelWidth = 1.5;
 // The lean a blade takes toward one of its faces, in the same angle units as the wind's resting
 // lean: what breaks one field-wide lean direction into many (a field leaning one way draws as a
 // starburst straight down).
@@ -221,10 +220,6 @@ const float kGrassLeanJitter = 0.3;
 // The largest tilt a blade takes at its root once its tuft's fan is added: past it the base lies on
 // the ground. Mirror of Components::kMaxTerrainGrassBladeTilt.
 const float kGrassMaxBladeTilt = 1.2;
-// The root sinks slightly INTO the terrain along its normal rather than standing on it: a blade
-// that starts exactly at the surface still shows a lit sliver of its own base through the ground
-// silhouette at grazing angles. Negative = embed.
-const float kGrassRootEmbed = -0.01;
 
 // The authored per-terrain wind seed as a noise-domain offset, in the SCALED domain each field
 // samples in. Every noise field in the wind path takes it, so two terrains authored with different
@@ -360,6 +355,10 @@ vec3 sampleTerrainNormalWS(TerrainParamsEntry tp, vec2 uv)
 // its GROUND COLOUR from. Lifted verbatim into the host suite (GrassBladeVertexTests), so its
 // literals carry the `f` suffix and it reads no buffer, texture or global.
 // GE_SHARED_GRASS_BLADE_VERTEX_BEGIN
+// The root sinks slightly INTO the terrain along its normal rather than standing on it: a blade
+// that starts exactly at the surface still shows a lit sliver of its own base through the ground
+// silhouette at grazing angles. Negative = embed.
+const float kGrassRootEmbed = -0.01f;
 // A blade's leaf is never wider than this fraction of its height, so a short blade cannot become a
 // square whatever BladeWidth asks for. A leaf is 3 to 8 mm wide on a 0.4 to 0.8 m blade, so a
 // fifth is well above any leaf and only intervenes at extreme aspect ratios.

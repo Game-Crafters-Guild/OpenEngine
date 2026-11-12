@@ -86,6 +86,11 @@ struct MaterialBuildContext
 std::filesystem::path MaterialSourceIdentity(const std::filesystem::path& materialPath,
                                              const MaterialBuildContext& context);
 
+// MaterialSourceIdentity in the asset registry's identity form (AssetPaths::NormalizeForRegistryKey:
+// NFC and Unicode case folding). The registry gives a case-folded path on a case-insensitive file system and a
+// cook gives the on-disk spelling; both give this one key. Empty when no mounted source holds the material.
+std::string MaterialSourceIdentityKey(const std::filesystem::path& materialPath, const MaterialBuildContext& context);
+
 // A shader source file the build reads, named the same wherever the trees sit: "engine/<path under
 // AdapterShaderDir>" for the engine shader tree (checked first: a packaged game mounts its project
 // at the folder that holds that tree), otherwise MaterialSourceIdentity's "<alias>/<path under the

@@ -2,7 +2,7 @@
 // falsifiable claims of the render-origin design:
 //   * sector pack/unpack round-trips and (0,0,0) packs to zero (byte-identical);
 //   * the rebased view is bit-identical to the full-world view when the origin
-//     is inactive (the dark-ship gate);
+//     is sector (0,0,0);
 //   * world -> (sector,local) -> reconstruct is bit-exact at small coordinates;
 //   * the rebased projection of a relative position equals the full-world
 //     projection of the world position (mathematical equivalence);
@@ -13,17 +13,26 @@
 // drift between the two is caught by the round-trip + fixed-bit-pattern cases.
 
 #include "Engine/Rendering/RenderOrigin.h"
+#include "ExtractionHarness.h"
 
 #include "Mathematics/Matrix4x4.h"
 #include "Mathematics/MatrixOps.h"
 #include "Rendering/Camera/CameraTypes.h"
 #include "Rendering/Common/Frustum.h"     // ExtractFrustumPlanes
-#include "Rendering/Core/GPUCulling.h"    // MakeFrustumPlanesCameraRelative
-#include "Types/FormatNumber.h"           // FormatFloat (Inspector compose-display)
+#include "Rendering/Core/GPUScene.h"      // SectorLocalPointRelativeTo
+#include "Components/Rendering/Camera.h"
+#include "Components/Rendering/Light.h"
+#include "Components/Rendering/PostProcessEffects/VolumetricFogEffect.h"
+#include "Components/Rendering/PostProcessVolume.h"
+#include "Components/Rendering/ReflectionProbe.h"
+#include "ECSModules/Rendering/Systems/ReflectionProbeSystem.h"
+#include "Engine/Rendering/ImageBasedLightingFeature.h"
+#include "Engine/Rendering/SceneReflectionProbeEnvironmentSource.h"
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstring>
 #include <iostream>
@@ -33,6 +42,9 @@
 using namespace GameEngine;
 using namespace GameEngine::Mathematics;
 namespace Origin = GameEngine::Engine::Renderer;
+
+// The sector size in the 32-bit arithmetic the shader and the composition use.
+constexpr float32 kSectorSize32 = static_cast<float32>(kWorldSectorSize);
 
 namespace
 {
@@ -67,15 +79,15 @@ void LegacyRebaseTranslationColumnFp32(const float* m, float ox, float oy, float
 TEST(RenderOrigin, SectorPackRoundTrip)
 {
     const int32 samples[] = {0,   1,   -1,   2,    -2,   1000, -1000, 65535, -65535,
-                             Origin::kSectorAxisMax, Origin::kSectorAxisMin, 6221, -6221};
+                             Rendering::kSectorAxisMax, Rendering::kSectorAxisMin, 6221, -6221};
     for (int32 x : samples)
         for (int32 y : samples)
             for (int32 z : samples)
             {
                 uint32 p0 = 0, p1 = 0;
-                Origin::PackSector(x, y, z, p0, p1);
+                Rendering::PackSector(x, y, z, p0, p1);
                 int32 rx = 0, ry = 0, rz = 0;
-                Origin::UnpackSector(p0, p1, rx, ry, rz);
+                Rendering::UnpackSector(p0, p1, rx, ry, rz);
                 EXPECT_EQ(rx, x) << "x=" << x << " y=" << y << " z=" << z;
                 EXPECT_EQ(ry, y) << "x=" << x << " y=" << y << " z=" << z;
                 EXPECT_EQ(rz, z) << "x=" << x << " y=" << y << " z=" << z;
@@ -88,7 +100,7 @@ TEST(RenderOrigin, SectorZeroPacksToZero)
     // zero, so the 240 B memcmp still treats them as identity (quiescence) and the
     // bytes match the pre-feature layout.
     uint32 p0 = 0xDEADBEEFu, p1 = 0xDEADBEEFu;
-    Origin::PackSector(0, 0, 0, p0, p1);
+    Rendering::PackSector(0, 0, 0, p0, p1);
     EXPECT_EQ(p0, 0u);
     EXPECT_EQ(p1, 0u);
 }
@@ -99,37 +111,71 @@ TEST(RenderOrigin, SectorPackFixedBitLayout)
     // p1 = [Yhi:10][Z:21]. A change here that isn't mirrored in the shader is a
     // silent corruption.
     uint32 p0 = 0, p1 = 0;
-    Origin::PackSector(1, 0, 0, p0, p1); // X=1 -> lowest bit of p0
+    Rendering::PackSector(1, 0, 0, p0, p1); // X=1 -> lowest bit of p0
     EXPECT_EQ(p0, 1u);
     EXPECT_EQ(p1, 0u);
 
-    Origin::PackSector(0, 1, 0, p0, p1); // Y=1 -> bit 21 of p0
+    Rendering::PackSector(0, 1, 0, p0, p1); // Y=1 -> bit 21 of p0
     EXPECT_EQ(p0, 1u << 21);
     EXPECT_EQ(p1, 0u);
 
-    Origin::PackSector(0, 0, 1, p0, p1); // Z=1 -> bit 10 of p1
+    Rendering::PackSector(0, 0, 1, p0, p1); // Z=1 -> bit 10 of p1
     EXPECT_EQ(p0, 0u);
     EXPECT_EQ(p1, 1u << 10);
 }
 
-// ---- Dark-ship gate: rebased == full-world when the origin is inactive --------
+// ---- The origin is the eye's sector; rebased == full-world in sector (0,0,0) ----
 
-TEST(RenderOrigin, InactiveInsideActivationRadius)
+TEST(RenderOrigin, TheOriginIsTheEyesSector)
 {
-    // A camera anywhere inside the activation radius stays at sector (0,0,0).
-    EXPECT_EQ(Origin::ComputeRenderOriginSector(0, 0, 0).x, 0);
-    const float r = Origin::kRenderOriginActivationRadius * 0.9f;
-    const auto s = Origin::ComputeRenderOriginSector(r, -r, r);
-    EXPECT_EQ(s.x, 0);
-    EXPECT_EQ(s.y, 0);
-    EXPECT_EQ(s.z, 0);
+    // The origin is the WorldPosition split of the eye at any distance, clamped to the packed range.
+    const auto nearOrigin = Origin::ComputeRenderOriginSector(WorldPosition{511.9, -512.0, 0.0});
+    EXPECT_EQ(nearOrigin.x, 0);
+    EXPECT_EQ(nearOrigin.y, 0);
+    EXPECT_EQ(nearOrigin.z, 0);
+    const WorldPosition far{125000.0, 512.0, -1536.0};
+    Vector3Int split;
+    Vector3 local;
+    far.ToSector(split, local);
+    const auto s = Origin::ComputeRenderOriginSector(far);
+    EXPECT_EQ(s.x, split.x);
+    EXPECT_EQ(s.y, split.y);
+    EXPECT_EQ(s.z, split.z);
+    EXPECT_EQ(s.y, 1);
+    const auto clamped = Origin::ComputeRenderOriginSector(WorldPosition{1.0e12, -1.0e12, 0.0});
+    EXPECT_EQ(clamped.x, Rendering::kSectorAxisMax);
+    EXPECT_EQ(clamped.y, Rendering::kSectorAxisMin);
+}
+
+TEST(RenderOrigin, CameraEyeIsTheDoubleEyeOfARebasedCamera)
+{
+    // At 125 km the fp32 step is 7.8 mm: the eye's 3.7 mm fraction is lost in cameraPos and kept here.
+    const WorldPosition eye{125000.0037, 31.25, -2048.5};
+    const Vector3 eyeF(static_cast<float>(eye.X), static_cast<float>(eye.Y), static_cast<float>(eye.Z));
+    const Matrix4x4 rot = MakeRotationY(0.7f) * MakeRotationX(-0.2f);
+    Rendering::CameraData cam{};
+    cam.view = Inverse(MakeCameraWorld(rot, eyeF));
+    cam.proj = MakePerspectiveLH_ZO_ReverseZ(60.0f * kDeg2Rad, 16.0f / 9.0f, 0.1f, 1.0e7f);
+    cam.viewProj = cam.proj * cam.view;
+    Origin::SetCameraEye(cam, eye);
+    const WorldPosition farEye = Origin::CameraEye(cam);
+    EXPECT_NEAR(farEye.X, eye.X, 1.0e-4);
+    EXPECT_NEAR(farEye.Y, eye.Y, 1.0e-4);
+    EXPECT_NEAR(farEye.Z, eye.Z, 1.0e-4);
+
+    // In sector (0,0,0) the view is the fp32 view, so the eye is cameraPos bit for bit.
+    Origin::SetCameraEye(cam, WorldPosition{300.0001, 2.0, -40.0});
+    const WorldPosition nearEye = Origin::CameraEye(cam);
+    EXPECT_EQ(nearEye.X, static_cast<double>(cam.cameraPos.x));
+    EXPECT_EQ(nearEye.Y, static_cast<double>(cam.cameraPos.y));
+    EXPECT_EQ(nearEye.Z, static_cast<double>(cam.cameraPos.z));
 }
 
 TEST(RenderOrigin, RebasedViewIsBitIdenticalWhenInactive)
 {
-    // Camera inside the activation radius: the rebased matrices must be a
+    // Camera inside sector (0,0,0): the rebased matrices must be a
     // bit-for-bit copy of the full-world ones (byte-identical render output).
-    const Vector3 camPos(1500.0f, 200.0f, -900.0f); // well inside the radius
+    const Vector3 camPos(300.0f, 200.0f, -400.0f); // inside sector (0,0,0)
     const Matrix4x4 rot = MakeRotationY(0.7f) * MakeRotationX(-0.2f);
     const Matrix4x4 view = Inverse(MakeCameraWorld(rot, camPos));
     const Matrix4x4 proj = MakePerspectiveLH_ZO_ReverseZ(60.0f * kDeg2Rad, 16.0f / 9.0f, 0.1f, 1.0e7f);
@@ -143,8 +189,8 @@ TEST(RenderOrigin, RebasedViewIsBitIdenticalWhenInactive)
     cam.cameraPos.y = camPos.y;
     cam.cameraPos.z = camPos.z;
 
-    Origin::ComputeRebasedView(cam.view, cam.proj, cam.viewProj, cam.cameraPos.x, cam.cameraPos.y,
-                               cam.cameraPos.z, cam.viewRel, cam.viewProjRel, cam.renderOriginSector);
+    Origin::ComputeRebasedView(cam.view, cam.proj, cam.viewProj, WorldPosition::FromVector3(camPos), cam.viewRel,
+                               cam.viewProjRel, cam.renderOriginSector);
 
     EXPECT_EQ(cam.renderOriginSector[0], 0);
     EXPECT_EQ(cam.renderOriginSector[1], 0);
@@ -161,15 +207,15 @@ TEST(RenderOrigin, ReconstructionIsBitExactForSmallLocal)
     // absolute world = sector*size + local must be exact, and the reconstructed
     // full world (as the shader computes it) must equal the sector-local + origin
     // path bit-for-bit for small local coordinates.
-    const auto originSector = Origin::ComputeRenderOriginSector(6.371e6f, 0.0f, 0.0f);
+    const auto originSector = Origin::ComputeRenderOriginSector(WorldPosition{6.371e6, 0.0, 0.0});
     ASSERT_NE(originSector.x, 0); // origin active at Earth radius
 
     // Entity 12.5 m from the render origin, tagged to the origin's sector.
     const Vector3 local(12.5f, -3.25f, 7.0f);
-    const Components::WorldSectorCoord instSector = originSector;
+    const Mathematics::Vector3Int instSector = originSector;
 
     // Shader math: relWorldPos = (instSector - originSector)*size + local.
-    const float s = Origin::kSectorSize;
+    const float s = kSectorSize32;
     const Vector3 rel((instSector.x - originSector.x) * s + local.x,
                       (instSector.y - originSector.y) * s + local.y,
                       (instSector.z - originSector.z) * s + local.z);
@@ -178,9 +224,8 @@ TEST(RenderOrigin, ReconstructionIsBitExactForSmallLocal)
     EXPECT_FLOAT_EQ(rel.z, local.z);
 
     // Reconstruct full world = rel + origin.
-    float ox, oy, oz;
-    Origin::SectorToWorld(originSector, ox, oy, oz);
-    const Vector3 full(rel.x + ox, rel.y + oy, rel.z + oz);
+    const Vector3 origin = Origin::SectorToWorld(originSector);
+    const Vector3 full = rel + origin;
     // Direct absolute world = instSector*size + local.
     const Vector3 direct(instSector.x * s + local.x, instSector.y * s + local.y, instSector.z * s + local.z);
     EXPECT_FLOAT_EQ(full.x, direct.x);
@@ -188,63 +233,12 @@ TEST(RenderOrigin, ReconstructionIsBitExactForSmallLocal)
     EXPECT_FLOAT_EQ(full.z, direct.z);
 }
 
-TEST(RenderOrigin, ComposeMatchesRenderReconstruction)
-{
-    // The CPU picking/TLAS composition (ComposeEffectiveWorldTransform) and the
-    // GPU render reconstruction (sector*kSectorSize + local) must agree on a
-    // tagged entity's absolute world position to the bit — otherwise it renders
-    // where it does NOT pick/raycast. The single shared constant is what makes
-    // this hold; this oracle fails the instant the two scales diverge again.
-    static_assert(Origin::kSectorSize == Components::kWorldSectorSize,
-                  "render and composition must use the ONE sector size");
-
-    Components::WorldTransform wt{}; // identity rotation + small sector-local translation
-    for (int i = 0; i < 16; ++i)
-        wt.matrix[i] = (i % 5 == 0) ? 1.0f : 0.0f;
-    wt.matrix[12] = 37.5f;
-    wt.matrix[13] = -12.25f;
-    wt.matrix[14] = 800.0f;
-
-    const Components::WorldSectorCoord sector{3595, -1200, 3595}; // ~3.68e6 m, planetary
-    const Components::WorldTransform composed =
-        Components::ComposeEffectiveWorldTransform(wt, &sector, Components::kWorldSectorSize);
-
-    // Render reconstruction of the same absolute world translation.
-    EXPECT_EQ(composed.matrix[12], sector.x * Origin::kSectorSize + wt.matrix[12]);
-    EXPECT_EQ(composed.matrix[13], sector.y * Origin::kSectorSize + wt.matrix[13]);
-    EXPECT_EQ(composed.matrix[14], sector.z * Origin::kSectorSize + wt.matrix[14]);
-}
-
-TEST(RenderOrigin, ComposeDisplayFormatsFullMeters)
-{
-    // The Inspector's "World (sector-composed)" row composes the sector via
-    // ComposeEffectiveWorldTransform and formats each axis with FormatFloat
-    // (shortest-exact). This oracle pins the exact strings the user sees for the
-    // charter's worked example: sector {3595,0,3595} + local (100,2,100) at a
-    // 1024 m sector must read (3681380, 2, 3681380) — the same absolute meters the
-    // mesh renders at. It fails if the composition, the constant, or the number
-    // formatting drifts from what the Inspector shows.
-    Components::WorldTransform wt{};
-    wt.matrix[12] = 100.0f;
-    wt.matrix[13] = 2.0f;
-    wt.matrix[14] = 100.0f;
-
-    const Components::WorldSectorCoord sector{3595, 0, 3595};
-    const Components::WorldTransform composed =
-        Components::ComposeEffectiveWorldTransform(wt, &sector, Components::kWorldSectorSize);
-
-    EXPECT_EQ(FormatFloat(composed.matrix[12]), "3681380");
-    EXPECT_EQ(FormatFloat(composed.matrix[13]), "2");
-    EXPECT_EQ(FormatFloat(composed.matrix[14]), "3681380");
-}
-
 TEST(RenderOrigin, RebasedProjectionMatchesFullWorldWhenClean)
 {
-    // Correctness (not precision): just past the activation radius fp32 is still
-    // clean, so viewProjRel*relPos and viewProj*worldPos must agree to well under
-    // a pixel — proof the rebased transform is the SAME transform, not garbage.
-    // (Far past this radius they diverge by design: the rebased path is the more
-    // accurate one — that is what the far-field boiling oracle below shows.)
+    // Correctness (not precision): at 34 km fp32 is still clean, so
+    // viewProjRel*relPos and viewProj*worldPos must agree to well under a pixel:
+    // the rebased transform is the same transform. (Far out they diverge by
+    // design: the rebased path is the more accurate one, see the far-field oracle.)
     const Vector3 camPos(34000.0f, 800.0f, -12000.0f); // ~34 km, origin active
     const Matrix4x4 rot = MakeRotationY(-0.5f) * MakeRotationX(0.15f);
     const Matrix4x4 view = Inverse(MakeCameraWorld(rot, camPos));
@@ -258,19 +252,16 @@ TEST(RenderOrigin, RebasedProjectionMatchesFullWorldWhenClean)
     cam.cameraPos.x = camPos.x;
     cam.cameraPos.y = camPos.y;
     cam.cameraPos.z = camPos.z;
-    Origin::ComputeRebasedView(cam.view, cam.proj, cam.viewProj, cam.cameraPos.x, cam.cameraPos.y,
-                               cam.cameraPos.z, cam.viewRel, cam.viewProjRel, cam.renderOriginSector);
+    Origin::ComputeRebasedView(cam.view, cam.proj, cam.viewProj, WorldPosition::FromVector3(camPos), cam.viewRel,
+                               cam.viewProjRel, cam.renderOriginSector);
     ASSERT_NE(cam.renderOriginSector[0] | cam.renderOriginSector[1] | cam.renderOriginSector[2], 0);
 
     Matrix4x4 vpRel = cam.viewProjRel;
 
-    float ox, oy, oz;
-    Origin::SectorToWorld(Components::WorldSectorCoord{cam.renderOriginSector[0], cam.renderOriginSector[1],
-                                                       cam.renderOriginSector[2]},
-                          ox, oy, oz);
+    const Vector3 origin = Origin::SectorToWorld(Origin::CameraRenderOriginSector(cam));
 
     const Vector3 worldPos(34050.0f, 780.0f, -11985.0f); // ~55 m from the camera
-    const Vector3 relPos(worldPos.x - ox, worldPos.y - oy, worldPos.z - oz);
+    const Vector3 relPos = worldPos - origin;
 
     const Vector4 full = viewProj.Transform(Vector4(worldPos.x, worldPos.y, worldPos.z, 1.0f));
     const Vector4 rel = vpRel.Transform(Vector4(relPos.x, relPos.y, relPos.z, 1.0f));
@@ -313,14 +304,13 @@ TEST(RenderOrigin, RebasedTranslationSmoothUnderRotationAtRange)
         cam.cameraPos.x = camPos.x;
         cam.cameraPos.y = camPos.y;
         cam.cameraPos.z = camPos.z;
-        Origin::ComputeRebasedView(cam.view, cam.proj, cam.viewProj, cam.cameraPos.x,
-                                   cam.cameraPos.y, cam.cameraPos.z, cam.viewRel,
-                                   cam.viewProjRel, cam.renderOriginSector);
+        Origin::ComputeRebasedView(cam.view, cam.proj, cam.viewProj, WorldPosition::FromVector3(camPos),
+                                   cam.viewRel, cam.viewProjRel, cam.renderOriginSector);
         ASSERT_NE(cam.renderOriginSector[0] | cam.renderOriginSector[1] | cam.renderOriginSector[2], 0);
 
         // Exact double reference: -M3x3 * (eye - origin), origin from the
         // integer sector (exact in double).
-        const double size = static_cast<double>(Origin::kSectorSize);
+        const double size = kWorldSectorSize;
         const double lx = static_cast<double>(camPos.x) - cam.renderOriginSector[0] * size;
         const double ly = static_cast<double>(camPos.y) - cam.renderOriginSector[1] * size;
         const double lz = static_cast<double>(camPos.z) - cam.renderOriginSector[2] * size;
@@ -334,14 +324,10 @@ TEST(RenderOrigin, RebasedTranslationSmoothUnderRotationAtRange)
             maxNewErr = std::max(maxNewErr, std::fabs(static_cast<double>(cam.viewRel[3][c]) - ref[c]));
 
         // Legacy fp32 column rebase for the fails-before contrast.
-        float ox, oy, oz;
-        Origin::SectorToWorld(
-            Components::WorldSectorCoord{cam.renderOriginSector[0], cam.renderOriginSector[1],
-                                         cam.renderOriginSector[2]},
-            ox, oy, oz);
+        const Vector3 origin = Origin::SectorToWorld(Origin::CameraRenderOriginSector(cam));
         float oldRel[16];
         std::memcpy(oldRel, view.Data(), sizeof(oldRel));
-        LegacyRebaseTranslationColumnFp32(view.Data(), ox, oy, oz, oldRel);
+        LegacyRebaseTranslationColumnFp32(view.Data(), origin.x, origin.y, origin.z, oldRel);
         for (int c = 0; c < 3; ++c)
             maxOldErr = std::max(maxOldErr, std::fabs(static_cast<double>(oldRel[12 + c]) - ref[c]));
     }
@@ -371,17 +357,17 @@ TEST(RenderOrigin, FarFieldDepthResolvedWhereBaselineZFights)
     const double w2d[3] = {5000.0, 200.0, R + sep};
 
     auto sectorOf = [](const double w[3]) {
-        return Components::WorldSectorCoord{
-            static_cast<int32>(std::llround(w[0] / static_cast<double>(Origin::kSectorSize))),
-            static_cast<int32>(std::llround(w[1] / static_cast<double>(Origin::kSectorSize))),
-            static_cast<int32>(std::llround(w[2] / static_cast<double>(Origin::kSectorSize)))};
+        return Mathematics::Vector3Int{
+            static_cast<int32>(std::llround(w[0] / kWorldSectorSize)),
+            static_cast<int32>(std::llround(w[1] / kWorldSectorSize)),
+            static_cast<int32>(std::llround(w[2] / kWorldSectorSize))};
     };
-    auto localOf = [](const double w[3], const Components::WorldSectorCoord& s) {
-        return Vector3(static_cast<float>(w[0] - s.x * static_cast<double>(Origin::kSectorSize)),
-                       static_cast<float>(w[1] - s.y * static_cast<double>(Origin::kSectorSize)),
-                       static_cast<float>(w[2] - s.z * static_cast<double>(Origin::kSectorSize)));
+    auto localOf = [](const double w[3], const Mathematics::Vector3Int& s) {
+        return Vector3(static_cast<float>(w[0] - s.x * kWorldSectorSize),
+                       static_cast<float>(w[1] - s.y * kWorldSectorSize),
+                       static_cast<float>(w[2] - s.z * kWorldSectorSize));
     };
-    const Components::WorldSectorCoord sec1 = sectorOf(w1d), sec2 = sectorOf(w2d);
+    const Mathematics::Vector3Int sec1 = sectorOf(w1d), sec2 = sectorOf(w2d);
     const Vector3 loc1 = localOf(w1d, sec1), loc2 = localOf(w2d, sec2);
     const Vector3 w1f(static_cast<float>(w1d[0]), static_cast<float>(w1d[1]), static_cast<float>(w1d[2]));
     const Vector3 w2f(static_cast<float>(w2d[0]), static_cast<float>(w2d[1]), static_cast<float>(w2d[2]));
@@ -400,21 +386,21 @@ TEST(RenderOrigin, FarFieldDepthResolvedWhereBaselineZFights)
     cam.cameraPos.x = camPos.x;
     cam.cameraPos.y = camPos.y;
     cam.cameraPos.z = camPos.z;
-    Origin::ComputeRebasedView(cam.view, cam.proj, cam.viewProj, cam.cameraPos.x, cam.cameraPos.y,
-                               cam.cameraPos.z, cam.viewRel, cam.viewProjRel, cam.renderOriginSector);
+    Origin::ComputeRebasedView(cam.view, cam.proj, cam.viewProj, WorldPosition::FromVector3(camPos), cam.viewRel,
+                               cam.viewProjRel, cam.renderOriginSector);
     ASSERT_NE(cam.renderOriginSector[0] | cam.renderOriginSector[1] | cam.renderOriginSector[2], 0);
 
     Matrix4x4 viewRel = cam.viewRel;
-    auto rel = [&](const Components::WorldSectorCoord& s, const Vector3& loc) {
-        return Vector3((s.x - cam.renderOriginSector[0]) * Origin::kSectorSize + loc.x,
-                       (s.y - cam.renderOriginSector[1]) * Origin::kSectorSize + loc.y,
-                       (s.z - cam.renderOriginSector[2]) * Origin::kSectorSize + loc.z);
+    const auto toCameraRelative = [&cam](const Mathematics::Vector3Int& sector, const Vector3& local) {
+        return Vector3((sector.x - cam.renderOriginSector[0]) * kSectorSize32 + local.x,
+                       (sector.y - cam.renderOriginSector[1]) * kSectorSize32 + local.y,
+                       (sector.z - cam.renderOriginSector[2]) * kSectorSize32 + local.z);
     };
 
     // View-space depth (z of view * worldPos) difference.
     const float baseDz = view.Transform(Vector4(w1f.x, w1f.y, w1f.z, 1.0f)).z -
                          view.Transform(Vector4(w2f.x, w2f.y, w2f.z, 1.0f)).z;
-    const Vector3 rel1 = rel(sec1, loc1), rel2 = rel(sec2, loc2);
+    const Vector3 rel1 = toCameraRelative(sec1, loc1), rel2 = toCameraRelative(sec2, loc2);
     const float relDz = viewRel.Transform(Vector4(rel1.x, rel1.y, rel1.z, 1.0f)).z -
                         viewRel.Transform(Vector4(rel2.x, rel2.y, rel2.z, 1.0f)).z;
 
@@ -427,7 +413,7 @@ TEST(RenderOrigin, FarFieldDepthResolvedWhereBaselineZFights)
 //
 // ShadowMapRenderFeature::ComputeCascadeLightVP fits a cascade orthographic VP
 // in world space, then builds CascadeFrameData::LightVPRel via RenderOrigin.h::
-// ComputeRebasedOrthoLightVP — rebuilt in DOUBLE from the fit's rotation-only
+// ComputeRebasedLightVP — rebuilt in DOUBLE from the fit's rotation-only
 // view + projection + shadow-camera eye, never through the world VP's fp32
 // translation column (whose storage rounding at planetary magnitude is coarser
 // than a shadow texel) nor through MakeLookAtLH(eye, eye + dir) (whose forward
@@ -522,16 +508,12 @@ void RefClipOfRel(const CascadeFitShape& f, const double lightPosRel[3], const V
 
 TEST(RenderOrigin, CascadeVPRebaseBitIdenticalWhenInactive)
 {
-    // Dark-ship: with the origin inactive (sector 0,0,0) ComputeRebasedOrthoLightVP
-    // is a byte-for-byte copy of the world VP, so LightVPRel, the depth pass, and
-    // ge_shadowVP are identical to the pre-feature build.
+    // With the origin at sector (0,0,0), ComputeRebasedLightVP is a byte-for-byte
+    // copy of the world VP, so LightVPRel equals LightVP.
     const CascadeFitShape f =
         MakeCascadeFit(Vector3{20.0f, 80.0f, -15.0f}, Vector3{-0.4f, -1.0f, -0.25f}, 40.0f, 220.0f);
-    const int32 sector[3] = {0, 0, 0};
-
-    Matrix4x4 vpRel = f.WorldVP;
-    Origin::ComputeRebasedOrthoLightVP(f.RotView.Data(), f.Proj.Data(), f.WorldVP.Data(), 20.0f,
-                                       80.0f, -15.0f, sector, vpRel.Data());
+    const Matrix4x4 vpRel = Origin::ComputeRebasedLightVP(f.RotView, f.Proj, f.WorldVP,
+                                                          WorldPosition{20.0, 80.0, -15.0}, Vector3Int{0, 0, 0});
     EXPECT_EQ(0, std::memcmp(vpRel.Data(), f.WorldVP.Data(), 16 * sizeof(float)));
 }
 
@@ -539,25 +521,21 @@ TEST(RenderOrigin, CascadeVPRebaseIsTheSameTransform)
 {
     // Correctness: the double-rebuilt cascade VP applied to a render-origin-
     // relative caster position equals the world VP applied to the full world
-    // position — proof the rebase is the SAME projection, not garbage. Just
-    // past the activation radius fp32 is still clean, so the two agree to well
-    // under a shadow texel.
+    // position — proof the rebase is the SAME projection, not garbage. At
+    // 40 km fp32 is still clean, so the two agree to well under a shadow texel.
     const Vector3 camPos(40000.0f, 300.0f, -9000.0f); // ~40 km, origin active
-    const auto originSector = Origin::ComputeRenderOriginSector(camPos.x, camPos.y, camPos.z);
+    const auto originSector = Origin::ComputeRenderOriginSector(WorldPosition::FromVector3(camPos));
     ASSERT_NE(originSector.x | originSector.y | originSector.z, 0);
-    const int32 sector[3] = {originSector.x, originSector.y, originSector.z};
-    float ox, oy, oz;
-    Origin::SectorToWorld(originSector, ox, oy, oz);
+    const Vector3 origin = Origin::SectorToWorld(originSector);
 
     // A cascade fit near the camera.
     const Vector3 lightPos(camPos.x + 30.0f, camPos.y + 120.0f, camPos.z - 20.0f);
     const CascadeFitShape f = MakeCascadeFit(lightPos, Vector3{-0.5f, -1.0f, -0.3f}, 60.0f, 300.0f);
-    Matrix4x4 vpRel = f.WorldVP;
-    Origin::ComputeRebasedOrthoLightVP(f.RotView.Data(), f.Proj.Data(), f.WorldVP.Data(),
-                                       lightPos.x, lightPos.y, lightPos.z, sector, vpRel.Data());
+    const Matrix4x4 vpRel = Origin::ComputeRebasedLightVP(f.RotView, f.Proj, f.WorldVP,
+                                                          WorldPosition::FromVector3(lightPos), originSector);
 
     const Vector3 caster(camPos.x + 12.0f, camPos.y, camPos.z + 8.0f);
-    const Vector3 rel(caster.x - ox, caster.y - oy, caster.z - oz);
+    const Vector3 rel = caster - origin;
 
     const Vector4 world = f.WorldVP.Transform(Vector4(caster.x, caster.y, caster.z, 1.0f));
     const Vector4 relClip = vpRel.Transform(Vector4(rel.x, rel.y, rel.z, 1.0f));
@@ -585,19 +563,16 @@ TEST(RenderOrigin, CascadeVPRebaseResolvesSelfShadowDepthAtRange)
 
     // Camera / render origin at the repro distance.
     const Vector3 camPos(static_cast<float>(R), 2.0f, static_cast<float>(R));
-    const auto originSector = Origin::ComputeRenderOriginSector(camPos.x, camPos.y, camPos.z);
+    const auto originSector = Origin::ComputeRenderOriginSector(WorldPosition::FromVector3(camPos));
     ASSERT_NE(originSector.x | originSector.y | originSector.z, 0);
-    const int32 sector[3] = {originSector.x, originSector.y, originSector.z};
-    float ox, oy, oz;
-    Origin::SectorToWorld(originSector, ox, oy, oz);
+    const Vector3 origin = Origin::SectorToWorld(originSector);
 
     // Light positioned near the camera; two casters 5 cm apart along +Y (a floor
     // fragment vs. the same fragment offset by the anti-acne bias magnitude).
     const Vector3 lightPos(camPos.x + 20.0f, camPos.y + 150.0f, camPos.z - 10.0f);
     const CascadeFitShape f = MakeCascadeFit(lightPos, lightDir, halfExtent, depthRange);
-    Matrix4x4 vpRel = f.WorldVP;
-    Origin::ComputeRebasedOrthoLightVP(f.RotView.Data(), f.Proj.Data(), f.WorldVP.Data(),
-                                       lightPos.x, lightPos.y, lightPos.z, sector, vpRel.Data());
+    const Matrix4x4 vpRel = Origin::ComputeRebasedLightVP(f.RotView, f.Proj, f.WorldVP,
+                                                          WorldPosition::FromVector3(lightPos), originSector);
 
     const double sep = 0.05; // 5 cm
     const Vector3 c1(camPos.x + 5.0f, 2.0f, camPos.z + 5.0f);
@@ -608,8 +583,8 @@ TEST(RenderOrigin, CascadeVPRebaseResolvesSelfShadowDepthAtRange)
     const float worldZ2 = f.WorldVP.Transform(Vector4(c2.x, c2.y, c2.z, 1.0f)).z;
 
     // Rebased NDC depth from render-origin-relative positions.
-    const Vector3 r1(c1.x - ox, c1.y - oy, c1.z - oz);
-    const Vector3 r2(c2.x - ox, c2.y - oy, c2.z - oz);
+    const Vector3 r1 = c1 - origin;
+    const Vector3 r2 = c2 - origin;
     const float relZ1 = vpRel.Transform(Vector4(r1.x, r1.y, r1.z, 1.0f)).z;
     const float relZ2 = vpRel.Transform(Vector4(r2.x, r2.y, r2.z, 1.0f)).z;
 
@@ -629,7 +604,7 @@ TEST(RenderOrigin, CascadeVPRebaseClosureAtPlanetScale)
     // the rebased VP from the exact double reference over caster points near the
     // camera. The deviation bounds frame-to-frame shadow-edge wobble (each
     // frame's matrix is within eps of the same exact transform).
-    //   * New path (ComputeRebasedOrthoLightVP): < 1e-5 NDC (~0.01 texel @2048).
+    //   * New path (ComputeRebasedLightVP): < 1e-5 NDC (~0.01 texel @2048).
     //   * Legacy path (MakeLookAtLH(eye, eye+dir) world VP + fp32 column
     //     rebase): the ULP(|eye|) direction quantization + big+big translation
     //     cancellation — texel-scale at 5e4, catastrophic at Earth radius.
@@ -648,11 +623,9 @@ TEST(RenderOrigin, CascadeVPRebaseClosureAtPlanetScale)
 
     for (const Case& tc : cases)
     {
-        const auto originSector =
-            Origin::ComputeRenderOriginSector(tc.CamPos.x, tc.CamPos.y, tc.CamPos.z);
+        const auto originSector = Origin::ComputeRenderOriginSector(WorldPosition::FromVector3(tc.CamPos));
         ASSERT_NE(originSector.x | originSector.y | originSector.z, 0);
-        const int32 sector[3] = {originSector.x, originSector.y, originSector.z};
-        const double size = static_cast<double>(Origin::kSectorSize);
+        const double size = kWorldSectorSize;
         const double originD[3] = {originSector.x * size, originSector.y * size,
                                    originSector.z * size};
 
@@ -666,10 +639,8 @@ TEST(RenderOrigin, CascadeVPRebaseClosureAtPlanetScale)
             const Vector3 lightPos(tc.CamPos.x + 20.0f + dt, tc.CamPos.y + 150.0f,
                                    tc.CamPos.z - 10.0f + 0.5f * dt);
             const CascadeFitShape f = MakeCascadeFit(lightPos, lightDir, halfExtent, depthRange);
-            Matrix4x4 vpRel = f.WorldVP;
-            Origin::ComputeRebasedOrthoLightVP(f.RotView.Data(), f.Proj.Data(), f.WorldVP.Data(),
-                                               lightPos.x, lightPos.y, lightPos.z, sector,
-                                               vpRel.Data());
+            const Matrix4x4 vpRel = Origin::ComputeRebasedLightVP(
+                f.RotView, f.Proj, f.WorldVP, WorldPosition::FromVector3(lightPos), originSector);
             const Matrix4x4 legacyVP =
                 MakeLegacyCascadeWorldVP(lightPos, lightDir, halfExtent, depthRange);
             Matrix4x4 legacyRel = legacyVP;
@@ -737,7 +708,7 @@ TEST(RenderOrigin, CascadeSnapshotSectorDeltaRebaseExactAcrossSectorStep)
     // sub-texel precision — at Earth radius, where the legacy world-VP re-rebase
     // carried ULP(|origin|) storage rounding.
     const Vector3 camPos(6371000.0f, 500.0f, 6371000.0f);
-    const auto secA = Origin::ComputeRenderOriginSector(camPos.x, camPos.y, camPos.z);
+    const auto secA = Origin::ComputeRenderOriginSector(WorldPosition::FromVector3(camPos));
     ASSERT_NE(secA.x | secA.y | secA.z, 0);
     const int32 from[3] = {secA.x, secA.y, secA.z};
     const int32 to[3] = {secA.x + 1, secA.y, secA.z - 2}; // a sector step mid-deferral
@@ -745,12 +716,11 @@ TEST(RenderOrigin, CascadeSnapshotSectorDeltaRebaseExactAcrossSectorStep)
     const Vector3 lightPos(camPos.x + 20.0f, camPos.y + 150.0f, camPos.z - 10.0f);
     const CascadeFitShape f = MakeCascadeFit(lightPos, Vector3{-0.5f, -1.0f, -0.3f}, 60.0f, 300.0f);
 
-    Matrix4x4 relA = f.WorldVP;
-    Origin::ComputeRebasedOrthoLightVP(f.RotView.Data(), f.Proj.Data(), f.WorldVP.Data(),
-                                       lightPos.x, lightPos.y, lightPos.z, from, relA.Data());
-    Matrix4x4 relB = f.WorldVP;
-    Origin::ComputeRebasedOrthoLightVP(f.RotView.Data(), f.Proj.Data(), f.WorldVP.Data(),
-                                       lightPos.x, lightPos.y, lightPos.z, to, relB.Data());
+    const WorldPosition eye = WorldPosition::FromVector3(lightPos);
+    const Matrix4x4 relA =
+        Origin::ComputeRebasedLightVP(f.RotView, f.Proj, f.WorldVP, eye, Vector3Int{from[0], from[1], from[2]});
+    const Matrix4x4 relB =
+        Origin::ComputeRebasedLightVP(f.RotView, f.Proj, f.WorldVP, eye, Vector3Int{to[0], to[1], to[2]});
 
     Matrix4x4 stepped = relA;
     Origin::RebaseTranslationColumnBySectorDelta(relA.Data(), from, to, stepped.Data());
@@ -763,28 +733,69 @@ TEST(RenderOrigin, CascadeSnapshotSectorDeltaRebaseExactAcrossSectorStep)
         EXPECT_NEAR(stepped.Data()[i], relB.Data()[i], 1e-5f) << "column element " << i;
 }
 
-// ---- Slice 2: camera-relative GPU culling (from stash, dark-ship-gated) -------
+// A model matrix moves to another sector on the left of the product: the translation moves by
+// (from - to) * 1,024 m in world axes, whatever the matrix's rotation and scale.
+TEST(RenderOrigin, PremultiplyTranslationBySectorDeltaMovesAModelMatrixInWorldAxes)
+{
+    // A quarter turn about +Y with scale 2: a right-side product would move the translation along Z.
+    Matrix4x4 m;
+    m[0] = glm::vec4(0.0f, 0.0f, -2.0f, 0.0f);
+    m[1] = glm::vec4(0.0f, 2.0f, 0.0f, 0.0f);
+    m[2] = glm::vec4(2.0f, 0.0f, 0.0f, 0.0f);
+    m[3] = glm::vec4(100.0f, 5.0f, -7.0f, 1.0f);
+    const Matrix4x4 out = Origin::PremultiplyTranslationBySectorDelta(m, Vector3Int(1, 0, 0), Vector3Int(2, 0, 0));
+
+    EXPECT_EQ(0, std::memcmp(out.Data(), m.Data(), 12 * sizeof(float))) << "the 3x3 and its last row stay";
+    EXPECT_EQ(out[3][0], 100.0f - 1024.0f);
+    EXPECT_EQ(out[3][1], 5.0f);
+    EXPECT_EQ(out[3][2], -7.0f);
+    EXPECT_EQ(out[3][3], 1.0f);
+}
+
+// The DDGI and RT-shadow TLAS builds compose an instance's world matrix from its split. For a
+// world position that is a float, the composed translation is that float bit for bit.
+TEST(RenderOrigin, ComposeWorldModelMatrixGivesAFloatPositionBitForBit)
+{
+    const float positions[] = {0.25f,      0.37f,      -511.99f,   511.99f,    512.0f,     -512.0f,
+                               1535.9f,    1536.1f,    -1536.1f,   4095.75f,   300000.0123f,
+                               -299000.0071f, 1200.5f, 1048575.5f, -2097152.25f, 16000000.0f};
+    for (const float x : positions)
+    {
+        for (const float y : {x, -x * 0.75f, 3.0f})
+        {
+            const WorldPosition position{x, y, -x};
+            Vector3Int sector;
+            Vector3 local;
+            position.ToSector(sector, local);
+            Matrix4x4 m;
+            m[3] = glm::vec4(local.x, local.y, local.z, 1.0f);
+            uint32 p0 = 0u;
+            uint32 p1 = 0u;
+            Rendering::PackSector(sector.x, sector.y, sector.z, p0, p1);
+            const Matrix4x4 out = Origin::ComposeWorldModelMatrix(m, p0, p1);
+            // No input is zero, so float equality here is equality of the bits.
+            EXPECT_EQ(out[3][0], x);
+            EXPECT_EQ(out[3][1], y);
+            EXPECT_EQ(out[3][2], -x);
+            EXPECT_EQ(0, std::memcmp(out.Data(), m.Data(), 12 * sizeof(float)));
+        }
+    }
+}
+
+// ---- Culling in the frame of the render origin sector ---------------------------
 //
-// Rendering::MakeFrustumPlanesCameraRelative translates each frustum plane's
-// offset by n*origin so the culling shaders can test (boundingCenter - origin) in
-// small magnitudes, recovering the true plane distance where the world-space
-// dot(center, n) + d collapses (big-minus-big) at planetary distance. These
-// oracles are the brute-force-vs-predicate correctness check + the dark-ship
-// no-op proof.
+// The culling kernels test a sector-local center composed against the view's sector
+// (ge_SectorRelativePoint) with planes from viewProjRel. This oracle is the CPU replica
+// of that predicate against a reference computed from the exact relative position.
 
 namespace
 {
-using GameEngine::Rendering::MakeFrustumPlanesCameraRelative;
-
-// CPU replica of frustum_culling.comp / hzb_culling.comp TestSphereFrustum: the
-// camera-relative sphere test the GPU runs (planes carry the translated offset).
-bool TestSphereFrustumRel(const Vector3& center, float radius, const Vector4* planes,
-                          const Vector3& origin)
+// CPU replica of SphereOutsideFrustum (Shaders/Includes/frustum_tests.glsl) as a visible verdict, without the margin.
+bool TestSphereFrustumExact(const Vector3& center, float radius, const Vector4* planes)
 {
-    const Vector3 rel = center - origin;
     for (int i = 0; i < 6; ++i)
     {
-        const float dist = rel.x * planes[i].x + rel.y * planes[i].y + rel.z * planes[i].z + planes[i].w;
+        const float dist = center.x * planes[i].x + center.y * planes[i].y + center.z * planes[i].z + planes[i].w;
         if (dist < -radius)
             return false;
     }
@@ -792,146 +803,317 @@ bool TestSphereFrustumRel(const Vector3& center, float radius, const Vector4* pl
 }
 } // namespace
 
-TEST(RenderOrigin, CullPlanesCameraRelativeIsNoOpAtZeroOrigin)
+TEST(RenderOrigin, CullPredicateOnComposedCentersMatchesReferenceAtRange)
 {
-    // Dark-ship: with origin (0,0,0) the plane translation is a bit-for-bit no-op,
-    // and the shader's (center - 0) == center, so the whole camera-relative cull
-    // path is byte-identical to the world-space test for sector-0 scenes.
-    const Matrix4x4 proj = MakePerspectiveLH_ZO_ReverseZ(60.0f * kDeg2Rad, 16.0f / 9.0f, 0.1f, 5000.0f);
-    const Matrix4x4 view = Inverse(MakeCameraWorld(MakeRotationY(0.3f), Vector3(120.0f, 40.0f, -80.0f)));
-    const Matrix4x4 viewProj = proj * view;
-
-    Vector4 planes[6];
-    GameEngine::Rendering::ExtractFrustumPlanes(viewProj, planes);
-    Vector4 translated[6];
-    std::memcpy(translated, planes, sizeof(planes));
-    MakeFrustumPlanesCameraRelative(translated, Vector3(0.0f, 0.0f, 0.0f));
-    EXPECT_EQ(0, std::memcmp(translated, planes, sizeof(planes)));
-}
-
-TEST(RenderOrigin, CullDistanceMoreAccurateCameraRelativeAtRange)
-{
-    // The core numeric claim: at ~6371 km the world-space plane distance
-    // dot(center, n) + d is big-minus-big and collapses (errors of order the fp32
-    // ULP at that magnitude, ~0.76 m — enough to cull a clearly-visible instance,
-    // the "culls everything" bug). The camera-relative form dot(center - origin, n)
-    // + (d + n*origin) keeps every term small and recovers the true distance to
-    // within the storage quantum. Statistical over many instances so it never
-    // depends on one lucky rounding.
-    const double R = 6.371e6;
-    const Vector3 nrm = Vector3(0.6f, 0.3f, -0.74f).Normalize();
-    const double nd[3] = {nrm.x, nrm.y, nrm.z};
-
-    const double Qd[3] = {R, 2000.0, R * 0.5};
-    const Vector3 Qf(static_cast<float>(Qd[0]), static_cast<float>(Qd[1]), static_cast<float>(Qd[2]));
-    const float dWorld = -(Qf.x * nrm.x + Qf.y * nrm.y + Qf.z * nrm.z);
-
-    const auto originSector = Origin::ComputeRenderOriginSector(Qf.x, Qf.y, Qf.z);
-    ASSERT_NE(originSector.x | originSector.y | originSector.z, 0);
-    float ox, oy, oz;
-    Origin::SectorToWorld(originSector, ox, oy, oz);
-    const Vector3 origin(ox, oy, oz);
-
-    Vector4 world[6];
-    for (int i = 0; i < 6; ++i)
-        world[i] = Vector4(0.0f, 0.0f, 0.0f, 1.0e30f); // 5 always-inside sentinels
-    world[0] = Vector4(nrm.x, nrm.y, nrm.z, dWorld);   // the one tested plane
-    Vector4 rel[6];
-    std::memcpy(rel, world, sizeof(world));
-    MakeFrustumPlanesCameraRelative(rel, origin);
-
-    float maxWorldErr = 0.0f, maxRelErr = 0.0f;
-    for (int k = -100; k <= 100; ++k)
-    {
-        const double off = 0.05 * static_cast<double>(k); // +/- 5 m
-        const double cd[3] = {Qd[0] + nd[0] * off, Qd[1] + nd[1] * off, Qd[2] + nd[2] * off};
-        const Vector3 cf(static_cast<float>(cd[0]), static_cast<float>(cd[1]), static_cast<float>(cd[2]));
-
-        const double trueSd = static_cast<double>(cf.x) * nd[0] + static_cast<double>(cf.y) * nd[1]
-                            + static_cast<double>(cf.z) * nd[2] - (Qd[0] * nd[0] + Qd[1] * nd[1] + Qd[2] * nd[2]);
-        const float worldSd = cf.x * nrm.x + cf.y * nrm.y + cf.z * nrm.z + dWorld;
-        const Vector3 relC = cf - origin;
-        const float relSd = relC.x * nrm.x + relC.y * nrm.y + relC.z * nrm.z + rel[0].w;
-
-        maxWorldErr = std::max(maxWorldErr, std::fabs(worldSd - static_cast<float>(trueSd)));
-        maxRelErr = std::max(maxRelErr, std::fabs(relSd - static_cast<float>(trueSd)));
-    }
-
-    // Honest magnitudes (measured ~0.35 m world vs ~0.05 m camera-relative at
-    // 6371 km): the camera-relative distance is materially more accurate and
-    // stays comfortably sub-decimeter (well inside the 1.5x cull margin), while
-    // the world-space distance carries the cancellation error the design doc
-    // calls the "~1 m harmless" baseline. Neither collapses to garbage at THIS
-    // radius for a normal object — the win is precision hardening for the
-    // extreme-distance / tiny-object edge, not a fix for a reproduced mis-cull.
-    EXPECT_LT(maxRelErr, 0.15f) << "camera-relative plane distance stays sub-decimeter at 6371 km";
-    EXPECT_GT(maxWorldErr, maxRelErr * 1.5f)
-        << "world-space plane distance is materially less accurate than camera-relative";
-}
-
-TEST(RenderOrigin, CullPredicateMatchesPreciseReferenceAtRange)
-{
-    // Correctness (predicate vs reference): a real extracted frustum at planetary
-    // distance. The reference is the precise relative-frame test (small magnitude
-    // => fp32 ~ exact); the camera-relative predicate (world planes translated by
-    // n*origin, tested against center - origin) must reproduce it for every
-    // instance, while the naive world-space predicate misclassifies some.
+    // A camera at about 5,200 km. Each instance is stored local to its own sector, one
+    // sector from the camera's at most, and is composed against the camera's sector.
     const Vector3 camPos(3.681e6f, 500.0f, 3.681e6f);
     const Matrix4x4 rot = MakeRotationY(0.6f) * MakeRotationX(-0.15f);
     const Matrix4x4 view = Inverse(MakeCameraWorld(rot, camPos));
     const Matrix4x4 proj = MakePerspectiveLH_ZO_ReverseZ(55.0f * kDeg2Rad, 16.0f / 9.0f, 0.5f, 4000.0f);
-    const Matrix4x4 viewProj = proj * view;
 
     Rendering::CameraData cam{};
     cam.view = view;
     cam.proj = proj;
-    cam.viewProj = viewProj;
-    cam.cameraPos.x = camPos.x; cam.cameraPos.y = camPos.y; cam.cameraPos.z = camPos.z;
-    Origin::ComputeRebasedView(cam.view, cam.proj, cam.viewProj, cam.cameraPos.x, cam.cameraPos.y,
-                               cam.cameraPos.z, cam.viewRel, cam.viewProjRel, cam.renderOriginSector);
-    ASSERT_NE(cam.renderOriginSector[0] | cam.renderOriginSector[1] | cam.renderOriginSector[2], 0);
-    float ox, oy, oz;
-    Origin::SectorToWorld(Components::WorldSectorCoord{cam.renderOriginSector[0], cam.renderOriginSector[1],
-                                                       cam.renderOriginSector[2]}, ox, oy, oz);
-    const Vector3 origin(ox, oy, oz);
+    cam.viewProj = proj * view;
+    Origin::ComputeRebasedView(cam.view, cam.proj, cam.viewProj, WorldPosition::FromVector3(camPos), cam.viewRel,
+                               cam.viewProjRel, cam.renderOriginSector);
+    const Vector3Int cameraSector{cam.renderOriginSector[0], cam.renderOriginSector[1],
+                                  cam.renderOriginSector[2]};
+    ASSERT_NE(cameraSector.x | cameraSector.y | cameraSector.z, 0);
 
-    Matrix4x4 vpWorld, vpRel;
-    vpWorld = cam.viewProj;
-    vpRel = cam.viewProjRel;
-    Vector4 worldPlanes[6], refPlanes[6], relPlanes[6];
-    GameEngine::Rendering::ExtractFrustumPlanes(vpWorld, worldPlanes);
-    GameEngine::Rendering::ExtractFrustumPlanes(vpRel, refPlanes); // precise reference planes
-    std::memcpy(relPlanes, worldPlanes, sizeof(worldPlanes));
-    MakeFrustumPlanesCameraRelative(relPlanes, origin);
+    Vector4 planes[6];
+    GameEngine::Rendering::ExtractFrustumPlanes(cam.viewProjRel, planes);
 
-    // The brute-force-vs-predicate correctness check: the camera-relative
-    // predicate the GPU runs (world planes translated by n*origin, tested against
-    // center - origin) must equal the precise relative-frame reference for EVERY
-    // instance across and just outside the frustum at planetary distance. A grid
-    // of instances spanning in/out of the frustum, small object radius so the
-    // decision is sharp at the boundary. (worldMismatches is informational: at
-    // 3.68 Mm with a 1.5 m object the world predicate happens to still agree —
-    // the accuracy delta shows up as a sub-decimeter distance error in the
-    // numeric oracle above, not a mis-cull here.)
+    const double sectorSize = kWorldSectorSize;
+    const Vector3 eye(static_cast<float>(camPos.x - cameraSector.x * sectorSize),
+                         static_cast<float>(camPos.y - cameraSector.y * sectorSize),
+                         static_cast<float>(camPos.z - cameraSector.z * sectorSize));
     const float radius = 1.5f;
-    int worldMismatches = 0;
+    int insideCount = 0;
     for (int gx = -6; gx <= 6; ++gx)
         for (int gy = -4; gy <= 4; ++gy)
             for (int gz = 1; gz <= 8; ++gz)
             {
-                const Vector3 rel(static_cast<float>(gx) * 40.0f, static_cast<float>(gy) * 40.0f,
-                                  static_cast<float>(gz) * 60.0f);
-                const Vector3 world(origin.x + rel.x, origin.y + rel.y, origin.z + rel.z);
-                const Vector3 relFromOrigin = world - origin;
+                // A grid in front of the eye, relative to the origin of the camera's sector.
+                const Vector4 step = rot.Transform(Vector4(static_cast<float>(gx) * 40.0f, static_cast<float>(gy) * 40.0f,
+                                                           static_cast<float>(gz) * 60.0f, 0.0f));
+                const Vector3 center(eye.x + step.x, eye.y + step.y, eye.z + step.z);
+                const Vector3Int offset{static_cast<int32_t>(std::floor(center.x / sectorSize)),
+                                        static_cast<int32_t>(std::floor(center.y / sectorSize)),
+                                        static_cast<int32_t>(std::floor(center.z / sectorSize))};
+                const Vector3 local(static_cast<float>(center.x - offset.x * sectorSize),
+                                    static_cast<float>(center.y - offset.y * sectorSize),
+                                    static_cast<float>(center.z - offset.z * sectorSize));
+                uint32_t p0 = 0, p1 = 0;
+                Rendering::PackSector(cameraSector.x + offset.x, cameraSector.y + offset.y, cameraSector.z + offset.z,
+                                   p0, p1);
+                const Vector3 composed =
+                    GameEngine::Rendering::SectorLocalPointRelativeTo(local, p0, p1, cameraSector);
 
-                const bool ref = TestSphereFrustumRel(relFromOrigin, radius, refPlanes, Vector3(0, 0, 0));
-                const bool camRel = TestSphereFrustumRel(world, radius, relPlanes, origin);
-                const bool worldSpace = TestSphereFrustumRel(world, radius, worldPlanes, Vector3(0, 0, 0));
-
-                EXPECT_EQ(camRel, ref) << "camera-relative predicate must match the precise reference"
-                                       << " (" << gx << "," << gy << "," << gz << ")";
-                if (worldSpace != ref)
-                    ++worldMismatches;
+                const bool reference = TestSphereFrustumExact(center, radius, planes);
+                EXPECT_EQ(TestSphereFrustumExact(composed, radius, planes), reference)
+                    << "(" << gx << "," << gy << "," << gz << ")";
+                insideCount += reference ? 1 : 0;
             }
-    EXPECT_GE(worldMismatches, 0); // informational; camRel==ref above is the correctness gate
+    EXPECT_GT(insideCount, 0) << "the grid must straddle the frustum";
+    EXPECT_LT(insideCount, 13 * 9 * 8) << "the grid must straddle the frustum";
+}
+
+// A center in the sector of the view keeps its local value bit for bit at any distance, as
+// ge_SectorRelativePoint gives on the GPU: the integer sectors subtract first, then one rounding.
+TEST(RenderOrigin, SectorLocalPointRoundsOnceAtAnyDistance)
+{
+    const Vector3Int sector{Rendering::kSectorAxisMax, -6222, 1024};
+    const Vector3 local(0.3f, 0.003f, 0.001f);
+    uint32 p0 = 0, p1 = 0;
+    Rendering::PackSector(sector.x, sector.y, sector.z, p0, p1);
+    const Vector3 composed = Rendering::SectorLocalPointRelativeTo(local, p0, p1, sector);
+    EXPECT_EQ(composed.x, local.x);
+    EXPECT_EQ(composed.y, local.y);
+    EXPECT_EQ(composed.z, local.z);
+}
+
+namespace
+{
+// A camera whose view is built from the fp32 eye and whose double eye is set by SetCameraEye.
+Rendering::CameraData MakeCameraAtEye(const WorldPosition& eye)
+{
+    const Vector3 eyeF(static_cast<float>(eye.X), static_cast<float>(eye.Y), static_cast<float>(eye.Z));
+    Rendering::CameraData cam{};
+    cam.view = Inverse(MakeCameraWorld(MakeRotationY(0.7f), eyeF));
+    cam.proj = MakePerspectiveLH_ZO_ReverseZ(60.0f * kDeg2Rad, 16.0f / 9.0f, 0.1f, 1.0e5f);
+    cam.viewProj = cam.proj * cam.view;
+    Origin::SetCameraEye(cam, eye);
+    return cam;
+}
+
+// A point light spawned at `position` and extracted for one frame: the world's one extracted light.
+Origin::ExtractedLight ExtractPointLightAt(Testing::ExtractionFastPath::ExtractionHarness& harness,
+                                           const WorldPosition& position)
+{
+    ECS::Entity e = harness.world->Create();
+    e.Set(Components::Transform::FromTRS(position, Quaternion{}, Vector3{1.0f, 1.0f, 1.0f}));
+    Components::Light light{};
+    light.Type = Components::LightType::Point;
+    e.Set(light);
+    harness.StepFrame();
+    const auto lights = harness.rs.GetWorldLights(harness.worldId);
+    EXPECT_EQ(lights.size(), 1u);
+    return lights.empty() ? Origin::ExtractedLight{} : lights.front();
+}
+
+void ExpectBitEqual(const Vector3& actual, const Vector3& expected)
+{
+    EXPECT_EQ(std::bit_cast<uint32>(actual.x), std::bit_cast<uint32>(expected.x));
+    EXPECT_EQ(std::bit_cast<uint32>(actual.y), std::bit_cast<uint32>(expected.y));
+    EXPECT_EQ(std::bit_cast<uint32>(actual.z), std::bit_cast<uint32>(expected.z));
+}
+
+// A non-global 2 m box volume at `center` with a volumetric fog effect of density 1.
+void AddFogVolumeAt(Testing::ExtractionFastPath::ExtractionHarness& harness, const WorldPosition& center,
+                    float blendDistance)
+{
+    ECS::Entity e = harness.world->Create();
+    e.Set(Components::Transform::FromTRS(center, Quaternion{}, Vector3{2.0f, 2.0f, 2.0f}));
+    Components::PostProcessVolume volume{};
+    volume.IsGlobal = false;
+    volume.BlendDistance = blendDistance;
+    e.Set(volume);
+    Components::VolumetricFogEffect fog{};
+    fog.Density = 1.0f;
+    e.Set(fog);
+}
+
+// The world's resolved fog density for a fog volume at `center` seen from `eye`.
+float ResolvedFogDensity(Testing::ExtractionFastPath::ExtractionHarness& harness, const WorldPosition& center,
+                         const WorldPosition& eye)
+{
+    AddFogVolumeAt(harness, center, 0.01f);
+    harness.rs.Views().SetCameraData(harness.cameraId, MakeCameraAtEye(eye),
+                                     Testing::ExtractionFastPath::kIdentityCameraRanges);
+    harness.StepFrame();
+    return harness.rs.GetWorldPostProcessSettings(harness.worldId).VolumetricFogDensity;
+}
+
+// A 4 m box probe at `center` with its capture origin moved by `originOffset`, a camera at `eye`, and one
+// selection pass. Returns the probe source that the IBL feature captures, or null.
+const Origin::SceneReflectionProbeEnvironmentSource* SelectBoxProbeAt(
+    Testing::ExtractionFastPath::ExtractionHarness& harness, const WorldPosition& center,
+    const Vector3& originOffset, const WorldPosition& eye)
+{
+    ECS::Entity probeEntity = harness.world->Create();
+    probeEntity.Set(Components::Transform::FromTRS(center, Quaternion{}, Vector3{4.0f, 4.0f, 4.0f}));
+    Components::ReflectionProbe probe{};
+    probe.BoxProjection = true;
+    probe.BlendDistance = 0.0f;
+    probe.OriginOffsetX = originOffset.x;
+    probe.OriginOffsetY = originOffset.y;
+    probe.OriginOffsetZ = originOffset.z;
+    probeEntity.Set(probe);
+    ECS::Entity cameraEntity = harness.world->Create();
+    cameraEntity.Set(Components::Transform::FromTRS(eye, Quaternion{}, Vector3{1.0f, 1.0f, 1.0f}));
+    cameraEntity.Set(Components::Camera{});
+    harness.StepFrame();
+
+    Origin::ReflectionProbeSystem system(&harness.rs);
+    system.Update(*harness.world, 0.016f);
+    const auto* feature = harness.rs.GetFeature<Origin::ImageBasedLightingFeature>();
+    return feature ? dynamic_cast<const Origin::SceneReflectionProbeEnvironmentSource*>(feature->GetEnvironmentSource())
+                   : nullptr;
+}
+
+int32 UlpDistance(float a, float b)
+{
+    return std::abs(std::bit_cast<int32>(a) - std::bit_cast<int32>(b));
+}
+
+class RenderOriginExtraction : public Testing::ExtractionFastPath::ExtractionFastPathTest
+{
+};
+} // namespace
+
+// A light 2 m from the eye at 100 km: the point and the eye relative to the view's sector differ by the
+// exact 2 m. The fp32 world positions differ by up to 7.8 mm there.
+TEST(RenderOrigin, ViewRelativePointSubtractsInDoubleAndRoundsOnce)
+{
+    const WorldPosition eye{100002.3, 2.0, 100000.0};
+    const WorldPosition light{100000.3, 2.0, 100000.0};
+    const Rendering::CameraData cam = MakeCameraAtEye(eye);
+
+    const Vector3 eyeRel = Origin::CameraEyeRelativeToOrigin(cam);
+    const Vector3 toLight = Origin::ViewRelativePoint(cam, light) - eyeRel;
+    EXPECT_NEAR(toLight.x, -2.0f, 1.0e-4f);
+    EXPECT_NEAR(toLight.y, 0.0f, 1.0e-4f);
+    EXPECT_NEAR(toLight.z, 0.0f, 1.0e-4f);
+    const WorldPosition eyeBack =
+        WorldPosition::FromSector(Origin::CameraRenderOriginSector(cam), Vector3{}) + eyeRel;
+    EXPECT_NEAR(eyeBack.X, eye.X, 1.0e-4);
+    EXPECT_NEAR(eyeBack.Z, eye.Z, 1.0e-4);
+
+    // In sector (0,0,0) the point is the position rounded to fp32 and the eye is cameraPos, bit for bit.
+    const Rendering::CameraData nearCam = MakeCameraAtEye(WorldPosition{200.1, 2.3, -40.7});
+    const WorldPosition nearLight{198.13, 2.71, -40.07};
+    const Vector3 nearRel = Origin::ViewRelativePoint(nearCam, nearLight);
+    const Vector3 rounded = nearLight - WorldPosition{};
+    ExpectBitEqual(nearRel, rounded);
+    const Vector3 nearEye = Origin::CameraEyeRelativeToOrigin(nearCam);
+    ExpectBitEqual(nearEye, Vector3{nearCam.cameraPos.x, nearCam.cameraPos.y, nearCam.cameraPos.z});
+}
+
+// The extracted light keeps its exact world position, so its point relative to a view at 100 km is
+// exact. A light rounded to fp32 at extraction is off by up to 7.8 mm there.
+TEST_F(RenderOriginExtraction, AFarLightIsExactRelativeToTheView)
+{
+    Testing::ExtractionFastPath::ExtractionHarness harness;
+    ASSERT_TRUE(harness.Initialize(m_Device.get(), /*fastPath*/ true));
+    const Origin::ExtractedLight light = ExtractPointLightAt(harness, WorldPosition{100000.3, 2.0, 100000.0});
+
+    const Rendering::CameraData cam = MakeCameraAtEye(WorldPosition{100002.3, 2.0, 100000.0});
+    const Vector3 toLight = Origin::ViewRelativePoint(cam, light.positionWS) - Origin::CameraEyeRelativeToOrigin(cam);
+    EXPECT_NEAR(toLight.x, -2.0f, 1.0e-4f);
+    EXPECT_NEAR(toLight.y, 0.0f, 1.0e-4f);
+    EXPECT_NEAR(toLight.z, 0.0f, 1.0e-4f);
+}
+
+// Within 512 m the extracted light position, rounded to fp32, is the fp32 rounding of the transform's
+// world position, bit for bit.
+TEST_F(RenderOriginExtraction, ANearLightRoundsToTheSameBytes)
+{
+    Testing::ExtractionFastPath::ExtractionHarness harness;
+    ASSERT_TRUE(harness.Initialize(m_Device.get(), /*fastPath*/ true));
+    const WorldPosition position{198.13, 2.71, -40.07};
+    const Origin::ExtractedLight light = ExtractPointLightAt(harness, position);
+
+    const Vector3 uploaded = light.positionWS - WorldPosition{};
+    const Vector3 golden = Components::Transform::FromTRS(position, Quaternion{}, Vector3{1.0f, 1.0f, 1.0f})
+                               .GetPosition() -
+                           WorldPosition{};
+    ExpectBitEqual(uploaded, golden);
+}
+
+// A fog volume at 100 km with a 1 cm blend band and the eye 5 mm outside its face: the spatial weight
+// reads the exact 5 mm, as it does at 100 m. A center rounded to fp32 moves the face by up to 3.9 mm.
+TEST_F(RenderOriginExtraction, AFarFogVolumeWeighsTheExactDistanceToTheEye)
+{
+    float nearDensity = 0.0f;
+    {
+        Testing::ExtractionFastPath::ExtractionHarness harness;
+        ASSERT_TRUE(harness.Initialize(m_Device.get(), /*fastPath*/ true));
+        nearDensity = ResolvedFogDensity(harness, WorldPosition{100.3, 2.0, 100.0}, WorldPosition{101.305, 2.0, 100.0});
+    }
+    Testing::ExtractionFastPath::ExtractionHarness harness;
+    ASSERT_TRUE(harness.Initialize(m_Device.get(), /*fastPath*/ true));
+    const float farDensity =
+        ResolvedFogDensity(harness, WorldPosition{100000.3, 2.0, 100000.0}, WorldPosition{100001.305, 2.0, 100000.0});
+    EXPECT_GT(nearDensity, 0.0f);
+    EXPECT_NEAR(farDensity, nearDensity, 0.01f);
+}
+
+// Within 512 m the fog volume center that the world settings and the local fog volume list upload is the
+// fp32 rounding of the transform's world position, bit for bit.
+TEST_F(RenderOriginExtraction, ANearFogVolumeUploadsTheSameBytes)
+{
+    Testing::ExtractionFastPath::ExtractionHarness harness;
+    ASSERT_TRUE(harness.Initialize(m_Device.get(), /*fastPath*/ true));
+    const WorldPosition center{198.13, 2.71, -40.07};
+    ResolvedFogDensity(harness, center, center);
+
+    const Vector3 golden =
+        Components::Transform::FromTRS(center, Quaternion{}, Vector3{2.0f, 2.0f, 2.0f}).GetPosition() - WorldPosition{};
+    const Origin::PostProcessSettings& settings = harness.rs.GetWorldPostProcessSettings(harness.worldId);
+    ExpectBitEqual(Vector3{settings.VolumetricFogVolumeCenterX, settings.VolumetricFogVolumeCenterY,
+                           settings.VolumetricFogVolumeCenterZ},
+                   golden);
+    const auto volumes = harness.rs.GetWorldVolumetricFogVolumes(harness.worldId);
+    ASSERT_EQ(volumes.size(), 1u);
+    ExpectBitEqual(Vector3{volumes[0].center[0], volumes[0].center[1], volumes[0].center[2]}, golden);
+}
+
+// A box probe at 100 km: its box corner and its capture position relative to a view inside it are exact.
+// A center rounded to fp32 is off by up to 3.9 mm there.
+TEST_F(RenderOriginExtraction, AFarProbeBoxIsExactRelativeToTheView)
+{
+    Testing::ExtractionFastPath::ExtractionHarness harness;
+    ASSERT_TRUE(harness.Initialize(m_Device.get(), /*fastPath*/ true));
+    const WorldPosition center{100000.3, 2.0, 100000.0};
+    const WorldPosition eye{100001.8, 2.5, 100000.0};
+    const auto* source = SelectBoxProbeAt(harness, center, Vector3{0.25f, 0.0f, 0.0f}, eye);
+    ASSERT_NE(source, nullptr);
+
+    const Rendering::CameraData cam = MakeCameraAtEye(eye);
+    const Vector3 eyeRel = Origin::CameraEyeRelativeToOrigin(cam);
+    const Vector3 toCorner =
+        Origin::ViewRelativePoint(cam, source->GetProbe().BoxCenter + Vector3{2.0f, 2.0f, 2.0f}) - eyeRel;
+    EXPECT_NEAR(toCorner.x, 0.5f, 1.0e-4f);
+    EXPECT_NEAR(toCorner.y, 1.5f, 1.0e-4f);
+    EXPECT_NEAR(toCorner.z, 2.0f, 1.0e-4f);
+    const Vector3 toCapture = Origin::ViewRelativePoint(cam, source->GetProbe().Position) - eyeRel;
+    EXPECT_NEAR(toCapture.x, -1.25f, 1.0e-4f);
+    EXPECT_NEAR(toCapture.y, -0.5f, 1.0e-4f);
+    EXPECT_NEAR(toCapture.z, 0.0f, 1.0e-4f);
+}
+
+// Within 512 m the uploaded box center is the fp32 rounding of the transform's world position, bit for bit.
+// For this axis-aligned probe with small offsets, the capture position (offset added in double, rounded
+// once) is within one unit in the last place of the fp32 sum of the rounded center and the offset.
+TEST_F(RenderOriginExtraction, ANearProbeUploadsTheSameBoxCenterAndACapturePositionWithinOneUlp)
+{
+    Testing::ExtractionFastPath::ExtractionHarness harness;
+    ASSERT_TRUE(harness.Initialize(m_Device.get(), /*fastPath*/ true));
+    const WorldPosition center{198.13, 2.71, -40.07};
+    const Vector3 offset{0.37f, -0.21f, 0.13f};
+    const auto* source = SelectBoxProbeAt(harness, center, offset, center);
+    ASSERT_NE(source, nullptr);
+
+    const Vector3 roundedCenter =
+        Components::Transform::FromTRS(center, Quaternion{}, Vector3{4.0f, 4.0f, 4.0f}).GetPosition() - WorldPosition{};
+    const Vector3 fp32Capture = roundedCenter + Vector3{1.0f, 0.0f, 0.0f} * offset.x +
+                                Vector3{0.0f, 1.0f, 0.0f} * offset.y + Vector3{0.0f, 0.0f, 1.0f} * offset.z;
+    const Origin::EnvironmentLocalReflectionData uploaded = source->LocalReflectionData();
+    ASSERT_TRUE(uploaded.BoxProjection);
+    ExpectBitEqual(uploaded.BoxCenterWS, roundedCenter);
+    EXPECT_LE(UlpDistance(uploaded.ProbePositionWS.x, fp32Capture.x), 1);
+    EXPECT_LE(UlpDistance(uploaded.ProbePositionWS.y, fp32Capture.y), 1);
+    EXPECT_LE(UlpDistance(uploaded.ProbePositionWS.z, fp32Capture.z), 1);
 }

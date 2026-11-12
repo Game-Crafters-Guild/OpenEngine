@@ -50,6 +50,7 @@
 #include "Memory/ScratchScope.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstring>
 #include <limits>
 #include <memory_resource>
@@ -68,13 +69,16 @@ namespace
 // Mirrors the DrainPC push-constant block in sorted_transparent_drain.comp.
 struct SortedTransparentDrainPC
 {
-    float CameraPos[3];
+    Rendering::Vector3 CameraPos;
     uint32_t LiveCount;
-    float CameraForward[3];
+    Rendering::Vector3 CameraForward;
     uint32_t RunCount;
+    int32_t OriginSector[3];
 };
-static_assert(sizeof(SortedTransparentDrainPC) == 32,
+static_assert(sizeof(SortedTransparentDrainPC) == 44,
               "must match the drain shader's push-constant block");
+static_assert(offsetof(SortedTransparentDrainPC, CameraForward) == 16, "DrainPC.fwd offset drift");
+static_assert(offsetof(SortedTransparentDrainPC, OriginSector) == 32, "DrainPC.uOriginSector offset drift");
 
 constexpr uint32_t kIndirectCommandStride = 5u * sizeof(uint32_t); // VkDrawIndexedIndirectCommand
 
@@ -148,6 +152,10 @@ void RenderServices::BuildSortedTransparentForView(Rendering::ViewId viewId)
         Rendering::MeshGPUHandle Mesh;
         const Rendering::MeshGPUEntry* Entry;
     };
+    // The cull runs in the frame of the view's render origin sector: the planes come from
+    // viewProjRel and each sector-local center is composed against the sector, as the GPU cull does.
+    const Rendering::CameraData cam = m_ViewRegistry.ResolveCameraData(viewId);
+    const Mathematics::Vector3Int originSector = CameraRenderOriginSector(cam);
     std::pmr::vector<PendingRecord> pending{&scratch.Resource()};
     std::pmr::vector<TransparentSphere> candidates{&scratch.Resource()};
     pending.reserve(submissions.size());
@@ -168,35 +176,23 @@ void RenderServices::BuildSortedTransparentForView(Rendering::ViewId viewId)
             continue;
         const Rendering::GPUInstance& inst = instances[sub.instanceIndex];
         candidates.push_back({static_cast<uint32_t>(pending.size()),
-                              {inst.boundingCenter.x, inst.boundingCenter.y, inst.boundingCenter.z},
+                              Rendering::SectorLocalPointRelativeTo(inst.boundingCenter, inst.sectorPacked[0],
+                                                                    inst.sectorPacked[1], originSector),
                               inst.boundingRadius});
         pending.push_back({sub.instanceIndex, sub.material, sub.meshHandle, entry});
     }
     if (candidates.empty())
         return;
 
-    // Resolve the view frustum ONCE, in the SAME world space as GPUScene's
-    // boundingCenter, then cull camera-relative: the planes and centres are
-    // both rebased against the view's render origin — the EXACT arithmetic the
-    // GPU cull performs (RenderServicesGpuDriven fills ViewCullingContext the
-    // same way) — so sector-tagged (planetary) transparents cull correctly and
-    // an instance moving between the batched and sorted paths never flips its
-    // cull decision. Origin (0,0,0) makes every rebase a bit-for-bit no-op.
-    const Rendering::CameraData cam = m_ViewRegistry.ResolveCameraData(viewId);
-    const Rendering::CameraDerivedData camDerived = Rendering::DeriveCameraData(cam);
+    const Rendering::CameraDerivedData camDerived =
+        Rendering::DeriveCameraData(cam, m_ViewRegistry.ResolveCameraRanges(viewId));
     Vector4 frustumPlanes[6];
-    Rendering::ExtractFrustumPlanes(camDerived.ViewProjMatrix, frustumPlanes);
-    Rendering::Vector3 origin{0.0f, 0.0f, 0.0f};
-    {
-        const auto originSector =
-            ComputeRenderOriginSector(cam.cameraPos.x, cam.cameraPos.y, cam.cameraPos.z);
-        SectorToWorld(originSector, origin.x, origin.y, origin.z);
-    }
+    Rendering::ExtractFrustumPlanes(cam.viewProjRel, frustumPlanes);
 
     std::pmr::vector<TransparentCentroid> visible{&scratch.Resource()};
     visible.reserve(candidates.size());
     const uint32_t culledCount =
-        CullTransparentsToFrustum(candidates, frustumPlanes, origin, visible);
+        CullTransparentsToFrustum(candidates, frustumPlanes, visible);
     if (visible.empty())
         return; // everything off-screen; the batched path GPU-culls it identically
 
@@ -217,7 +213,7 @@ void RenderServices::BuildSortedTransparentForView(Rendering::ViewId viewId)
         &scratch.Resource()};
 
     holder.Records.reserve(visible.size());
-    const Rendering::Vector3 camPos = camDerived.Position;
+    const Rendering::Vector3 camPos = CameraEyeRelativeToOrigin(cam);
     const Rendering::Vector3 camFwd = camDerived.Forward;
     for (const TransparentCentroid& vis : visible)
     {
@@ -262,21 +258,18 @@ void RenderServices::BuildSortedTransparentForView(Rendering::ViewId viewId)
             holder.Runs.push_back({p.Mat, p.Mesh});
         }
 
-        const float viewDepth = (vis.Center[0] - camPos.x) * camFwd.x +
-                                (vis.Center[1] - camPos.y) * camFwd.y +
-                                (vis.Center[2] - camPos.z) * camFwd.z;
+        const float viewDepth = (vis.Center.x - camPos.x) * camFwd.x +
+                                (vis.Center.y - camPos.y) * camFwd.y +
+                                (vis.Center.z - camPos.z) * camFwd.z;
         holder.Records.push_back({p.InstanceIndex, p.Entry->indexCount, p.Entry->firstIndex,
                                   static_cast<int32_t>(p.Entry->vertexOffset), group, viewDepth});
     }
 
     BuildSortedTransparentRunPartition(holder.Records, static_cast<uint32_t>(holder.Runs.size()),
                                        scratch.Resource(), holder.Partition);
-    holder.CameraPos[0] = camPos.x;
-    holder.CameraPos[1] = camPos.y;
-    holder.CameraPos[2] = camPos.z;
-    holder.CameraForward[0] = camFwd.x;
-    holder.CameraForward[1] = camFwd.y;
-    holder.CameraForward[2] = camFwd.z;
+    holder.CameraPos = camPos;
+    holder.CameraForward = camFwd;
+    holder.OriginSector = originSector;
 
     holder.Stats.Collected = static_cast<uint32_t>(candidates.size());
     holder.Stats.Culled = culledCount;
@@ -554,14 +547,13 @@ void RenderServices::AddSortedTransparentDrainForView(Rendering::RenderGraph::RG
                     runCount * sizeof(uint32_t));
 
         SortedTransparentDrainPC pc{};
-        pc.CameraPos[0] = holder.CameraPos[0];
-        pc.CameraPos[1] = holder.CameraPos[1];
-        pc.CameraPos[2] = holder.CameraPos[2];
+        pc.CameraPos = holder.CameraPos;
         pc.LiveCount = liveCount;
-        pc.CameraForward[0] = holder.CameraForward[0];
-        pc.CameraForward[1] = holder.CameraForward[1];
-        pc.CameraForward[2] = holder.CameraForward[2];
+        pc.CameraForward = holder.CameraForward;
         pc.RunCount = runCount;
+        pc.OriginSector[0] = holder.OriginSector.x;
+        pc.OriginSector[1] = holder.OriginSector.y;
+        pc.OriginSector[2] = holder.OriginSector.z;
 
         const auto sceneRG = scene->ImportFrameResources(frame);
         const Rendering::BufferHandle instanceBuffer = scene->GetInstanceBuffer();

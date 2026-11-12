@@ -93,11 +93,11 @@ Pathfinding::PathRequest BuildPathRequest(const Components::NavigationAgent& age
                                           const Components::NavigationAgentState& state,
                                           const Components::WorldTransform& wt, float32 currentTime)
 {
-    // WorldTransform is column-major: [12], [13], [14] hold the translation.
+    const Mathematics::Vector3 start = wt.GetPosition() - Mathematics::WorldPosition{};
     Pathfinding::PathRequest request;
-    request.StartX = wt.matrix[12];
-    request.StartY = wt.matrix[13];
-    request.StartZ = wt.matrix[14];
+    request.StartX = start.x;
+    request.StartY = start.y;
+    request.StartZ = start.z;
     request.EndX = state.DestinationX;
     request.EndY = state.DestinationY;
     request.EndZ = state.DestinationZ;
@@ -311,9 +311,10 @@ void NavigationPathfindingSystem::PrepareBodies(ECS::World& world)
             // Idle/direct peers need rebuilding only if actual body cells
             // are missing, expired or at their previous position. The
             // CellReservationOwner hint can outlive its expired cells.
-            if (!requesting && HasCurrentBody(*grid, agent, wt.matrix[12], wt.matrix[14], m_AccumulatedTime))
+            const Mathematics::Vector3 position = wt.GetPosition() - Mathematics::WorldPosition{};
+            if (!requesting && HasCurrentBody(*grid, agent, position.x, position.z, m_AccumulatedTime))
                 return;
-            StampNavigationAgentOccupancy(agent, state, wt.matrix[12], wt.matrix[14], m_AccumulatedTime);
+            StampNavigationAgentOccupancy(agent, state, position.x, position.z, m_AccumulatedTime);
         });
 }
 

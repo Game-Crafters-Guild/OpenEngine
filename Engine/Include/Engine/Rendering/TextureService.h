@@ -534,13 +534,13 @@ class TextureService
     // Queues the embedded bind and, once per content key, a job that decodes `bytes` and builds
     // their mips; FlushPendingUploads submits the upload and binds. Render thread.
     void ScheduleEmbeddedUploadJob(const GUID& derivedGuid, const GUID& matGuid, StringId slotName,
-                                   const Vector<uint8>& bytes, bool linear);
+                                   std::span<const uint8> bytes, bool linear);
     void RunEmbeddedUploadJob(const GUID& derivedGuid, uint32_t epoch, const std::shared_ptr<std::atomic<bool>>& cancel,
                               const Vector<uint8>& bytes, bool linear);
     // The CPU half of an embedded image's upload: decode, then the cook's mip chain.
     static void PrepareEmbeddedUpload(const Vector<uint8>& bytes, bool linear, const GUID& derivedGuid,
                                       PreparedTextureUpload& prepared);
-    // A job's result: queued for the drain, or the binds that wait on it released. Takes the lock.
+    // A job's result, queued for the drain, which uploads it or publishes its failure. Takes the lock.
     void CompleteUploadJob(const GUID& texGuid, uint32_t epoch, const std::shared_ptr<std::atomic<bool>>& cancel,
                            std::shared_ptr<const PreparedTextureUpload> prepared);
     // Cancels every upload job and waits for the running ones to finish (Shutdown, destructor).
@@ -554,7 +554,7 @@ class TextureService
                                                                       SharedPtr<TextureAsset> resident,
                                                                       const std::atomic<bool>* cancel,
                                                                       bool logTiming);
-    // The upload half: create, upload and publish (or publish the refusal), in a submission of its
+    // The upload half: create, upload and publish (or publish the failure), in a submission of its
     // own. GetOrUpload's path (an extraction worker) and the hot swap; FlushPendingUploads batches.
     TextureGPUCache::Entry SubmitPreparedUpload(const GUID& textureGuid, const PreparedTextureUpload& prepared);
     // Creates a ready upload's texture and its normal-variance companion, fills a staging buffer for
@@ -563,9 +563,9 @@ class TextureService
     TextureGPUCache::Entry StagePreparedUpload(const PreparedTextureUpload& prepared,
                                                std::vector<Rendering::StagedTextureUpload>& batch,
                                                const char*& refusal);
-    // A texture that does not upload (the device refuses it, or it has no pixels) fails as a failed
-    // load does: one error line with `reason`, and no texture cached until an Evict or a reupload, so
-    // its binds take the slot default and leave the pending set, and GetOrUpload does not try again.
+    // A texture that does not upload (the device refuses it, or its prepare fails) fails as a failed
+    // load does: one error line with `reason`, and the texture cached as no texture until an Evict or a
+    // reupload, so its binds take the slot default and leave the pending set, and GetOrUpload does not try again.
     TextureGPUCache::Entry PublishFailedUpload(const GUID& textureGuid, const std::filesystem::path& path,
                                                const char* reason);
     // Logs the load and mip times of an upload that asked for timing, and `stepMs` under the name

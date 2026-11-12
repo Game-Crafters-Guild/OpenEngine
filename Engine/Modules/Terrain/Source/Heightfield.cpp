@@ -1,5 +1,7 @@
 #include "Terrain/Heightfield.h"
 
+#include "Terrain/TerrainNoiseStack.h"
+
 #include "Image/Decode.h"
 #include "Image/ImageHeader.h"
 
@@ -298,23 +300,6 @@ void HeightfieldData::Fill(float32 value)
     std::fill(m_Samples.begin(), m_Samples.end(), value);
 }
 
-} // namespace GameEngine::Terrain
-
-// The grid noise fill is content (a procedural base, a generated heightmap). It must give the
-// same bits on every machine, so contraction is off (the rule of CBTDeepDecode.h).
-#if defined(_MSC_VER)
-#pragma float_control(push)
-#pragma fp_contract(off)
-#elif defined(__GNUC__) && !defined(__clang__)
-#pragma GCC push_options
-#pragma GCC optimize ("fp-contract=off")
-#else
-#pragma STDC FP_CONTRACT OFF
-#endif
-
-namespace GameEngine::Terrain
-{
-
 // Simple hash-based value noise with smoothstep interpolation (no external dependency)
 namespace
 {
@@ -398,38 +383,19 @@ void HeightfieldData::FillRegionWithNoise(float32 frequency, float32 amplitude,
     }
 }
 
-} // namespace GameEngine::Terrain
-
-// The world-space fill stays outside: TileSampleWorld (GeneratedHeightPageProvider.cpp) repeats
-// its sample position expression, and the two must round it the same way.
-#if defined(_MSC_VER)
-#pragma float_control(pop)
-#elif defined(__GNUC__) && !defined(__clang__)
-#pragma GCC pop_options
-#else
-#pragma STDC FP_CONTRACT DEFAULT
-#endif
-
-namespace GameEngine::Terrain
+void HeightfieldData::FillWithNoiseWorldSpace(const TerrainNoiseStack& stack,
+                                              float32 worldOriginX, float32 worldOriginZ,
+                                              float32 worldSizeX, float32 worldSizeZ)
 {
-
-void HeightfieldData::FillWithNoiseWorldSpace(float32 frequency, float32 amplitude,
-                                                float32 worldOriginX, float32 worldOriginZ,
-                                                float32 worldSizeX, float32 worldSizeZ,
-                                                uint32 octaves, uint32 seed)
-{
-    FillRegionWithNoiseWorldSpace(frequency, amplitude, worldOriginX, worldOriginZ,
-                                  worldSizeX, worldSizeZ,
-                                  0, 0,
-                                  static_cast<int32>(m_Width) - 1, static_cast<int32>(m_Height) - 1,
-                                  octaves, seed);
+    FillRegionWithNoiseWorldSpace(stack, worldOriginX, worldOriginZ, worldSizeX, worldSizeZ, 0, 0,
+                                  static_cast<int32>(m_Width) - 1, static_cast<int32>(m_Height) - 1, 0.0f);
 }
 
-void HeightfieldData::FillRegionWithNoiseWorldSpace(float32 frequency, float32 amplitude,
-                                                     float32 worldOriginX, float32 worldOriginZ,
-                                                     float32 worldSizeX, float32 worldSizeZ,
-                                                     int32 minX, int32 minZ, int32 maxX, int32 maxZ,
-                                                     uint32 octaves, uint32 seed)
+void HeightfieldData::FillRegionWithNoiseWorldSpace(const TerrainNoiseStack& stack,
+                                                    float32 worldOriginX, float32 worldOriginZ,
+                                                    float32 worldSizeX, float32 worldSizeZ,
+                                                    int32 minX, int32 minZ, int32 maxX, int32 maxZ,
+                                                    float32 minResolvedCellMeters)
 {
     if (m_Samples.empty())
         return;
@@ -451,22 +417,28 @@ void HeightfieldData::FillRegionWithNoiseWorldSpace(float32 frequency, float32 a
             // World-space position of this sample.
             const float32 wx = worldOriginX + static_cast<float32>(x) * spacingX;
             const float32 wz = worldOriginZ + static_cast<float32>(z) * spacingZ;
-            SetSample(x, z, SampleWorldSpaceNoise(wx, wz, frequency, amplitude, octaves, seed));
+            SetSample(x, z, SampleWorldSpaceNoise(wx, wz, stack, minResolvedCellMeters));
         }
     }
 }
 
-float32 SampleWorldSpaceNoise(float32 worldX, float32 worldZ, float32 frequency, float32 amplitude, uint32 octaves,
-                              uint32 seed, float32 minResolvedCellMeters)
+float32 SampleWorldSpaceNoise(float32 worldX, float32 worldZ, const TerrainNoiseStack& stack,
+                              float32 minResolvedCellMeters)
 {
     constexpr float32 kValueNoiseMean = 0.5f;
-    float32 value = 0.0f;
-    float32 freq = frequency;
+    const uint32 largeOctaves = stack.LargeOctaves();
     float32 amp = 1.0f;
-    float32 totalAmp = 0.0f;
+    for (uint32 o = 0; o < largeOctaves; ++o)
+        amp *= TerrainNoiseStack::kLargeOctaveGrowth;
+    float32 value = 0.0f;
+    float32 freq = stack.TopFrequency;
+    float32 detailTotal = 0.0f;
 
-    for (uint32 o = 0; o < octaves; ++o)
+    for (uint32 o = 0; o < stack.Octaves; ++o)
     {
+        // The detail band starts at amplitude 1 exactly: a stack under 2 km is the plain 5-octave sum.
+        if (o == largeOctaves)
+            amp = 1.0f;
         if (freq * minResolvedCellMeters > 1.0f)
         {
             value += kValueNoiseMean * amp;
@@ -475,14 +447,19 @@ float32 SampleWorldSpaceNoise(float32 worldX, float32 worldZ, float32 frequency,
         {
             const float32 nx = worldX * freq;
             const float32 nz = worldZ * freq;
-            value += SmoothNoise(nx, nz, seed + o) * amp;
+            value += SmoothNoise(nx, nz, stack.TopSeed + o) * amp;
         }
-        totalAmp += amp;
         freq *= 2.0f;
-        amp *= 0.5f;
+        if (o < largeOctaves)
+        {
+            amp /= TerrainNoiseStack::kLargeOctaveGrowth;
+            continue;
+        }
+        detailTotal += amp;
+        amp *= stack.Gain;
     }
 
-    return (value / totalAmp) * amplitude;
+    return value / detailTotal * stack.Amplitude;
 }
 
 void HeightfieldData::Resize(uint32 width, uint32 height, float32 defaultValue)

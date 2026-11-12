@@ -46,6 +46,11 @@ void InjectMouseMove(const WindowInputRouterConfig& config, Platform::Window* wi
                      float logicalY);
 void InjectMouseButton(const WindowInputRouterConfig& config, UIManager* ui, int button, bool pressed);
 
+// (dx, dy) in wheel steps, with the modifier mask `mods`, on a platform wheel's router path. No sink gets
+// it while another window holds the pointer. Else, unlocked: the host's wheel hook, the UI, a game HUD,
+// the gameplay sink, then the editor input, until one uses it; a non-finite delta reaches no sink.
+void InjectScroll(const WindowInputRouterConfig& config, UIManager* ui, float dx, float dy, int mods);
+
 // The keyboard half, through the same router entry point a typed key takes, so
 // an injected key exercises the application's key pre-hooks, a HUD over a running
 // game, gameplay and the editor's own actions — the whole chain the tool exists

@@ -10,6 +10,7 @@ using namespace GameEngine::Mathematics;
 
 using GameEngine::Engine::Renderer::ExtractNearFarLH_ZO;
 using GameEngine::Engine::Renderer::LinearizeReverseZDepthLH_ZO;
+using GameEngine::Engine::Renderer::ProjectionDepthTerms;
 
 namespace {
 
@@ -233,6 +234,20 @@ TEST(ReverseZMath, ExtractNearFarRoundTrips)
     EXPECT_NEAR(recoveredFar, zFar, zFar * kExtractRelTol);
 }
 
+TEST(ReverseZMath, ExtractNearFarRoundTripsALongRangeCamera)
+{
+    // far / near = 5e7, an editor camera framed from 250 km: m22 is about -2e-8.
+    const float zNear = 0.01f;
+    const float zFar = 500000.0f;
+    auto proj = MakePerspectiveLH_ZO_ReverseZ(kFovY, kAspect, zNear, zFar);
+
+    float recoveredNear = 0.0f, recoveredFar = 0.0f;
+    ExtractNearFarLH_ZO(proj, recoveredNear, recoveredFar);
+
+    EXPECT_NEAR(recoveredNear, zNear, zNear * kExtractRelTol);
+    EXPECT_NEAR(recoveredFar, zFar, zFar * kExtractRelTol);
+}
+
 TEST(ReverseZMath, ExtractNearFarRoundTripsOrthographic)
 {
     const float zNear = 0.5f;
@@ -256,8 +271,42 @@ TEST(ReverseZMath, LinearizeReverseZDepthRoundTripsOrthographic)
     for (float viewZ : samples)
     {
         const float ndcDepth = NdcDepthFromViewZ(proj, viewZ);
-        const float recovered = LinearizeReverseZDepthLH_ZO(ndcDepth, zNear, zFar, true);
+        const float recovered = LinearizeReverseZDepthLH_ZO(ndcDepth, ProjectionDepthTerms::Of(proj));
         EXPECT_NEAR(recovered, viewZ, 1e-3f)
             << "Reverse-Z ortho linearization failed at view-Z=" << viewZ;
     }
+}
+
+// === The linearization is exact at a finite and an infinite perspective matrix. ===
+
+namespace {
+
+// The infinite reverse-Z perspective: m22 = 0, m32 = near. Depth is near / z.
+Matrix4x4 MakeInfinitePerspective(float zNear)
+{
+    Matrix4x4 proj = MakePerspectiveLH_ZO_ReverseZ(kFovY, kAspect, zNear, 1000.0f);
+    proj[2][2] = 0.0f;
+    proj[3][2] = zNear;
+    return proj;
+}
+
+} // namespace
+
+TEST(ReverseZMath, LinearizeIsExactAtAFiniteAndAnInfiniteMatrix)
+{
+    const float zNear = 0.1f;
+    const float zFar = 200000.0f;
+    const Matrix4x4 finite = MakePerspectiveLH_ZO_ReverseZ(kFovY, kAspect, zNear, zFar);
+    const Matrix4x4 infinite = MakeInfinitePerspective(zNear);
+    const float samples[] = {zNear, 1.0f, 1000.0f, 100000.0f};
+    for (float viewZ : samples)
+    {
+        const float finiteZ =
+            LinearizeReverseZDepthLH_ZO(NdcDepthFromViewZ(finite, viewZ), ProjectionDepthTerms::Of(finite));
+        const float infiniteZ =
+            LinearizeReverseZDepthLH_ZO(NdcDepthFromViewZ(infinite, viewZ), ProjectionDepthTerms::Of(infinite));
+        EXPECT_NEAR(finiteZ, viewZ, viewZ * 1e-5f) << "finite matrix at view-Z=" << viewZ;
+        EXPECT_NEAR(infiniteZ, viewZ, viewZ * 1e-5f) << "infinite matrix at view-Z=" << viewZ;
+    }
+    EXPECT_NEAR(LinearizeReverseZDepthLH_ZO(0.0f, ProjectionDepthTerms::Of(finite)), zFar, zFar * 1e-5f);
 }

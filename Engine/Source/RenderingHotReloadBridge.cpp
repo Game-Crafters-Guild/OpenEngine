@@ -22,8 +22,8 @@ namespace {
         return h;
     }
 
-    bool ReadFileAll(const std::filesystem::path& p, std::vector<uint8_t>& out) {
-        return ReadFileBytesShared(p, out) && !out.empty();
+    bool ReadFileAll(const std::filesystem::path& p, ByteBuffer& out) {
+        return ReadFileBytesShared(p, out) && out.Size() != 0;
     }
 
     static inline std::string ToLowerExt(const std::filesystem::path& p) {

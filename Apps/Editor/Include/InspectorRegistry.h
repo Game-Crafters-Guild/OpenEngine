@@ -48,6 +48,7 @@ struct InspectorContext {
     ECS::World* World = nullptr;      // ECS world (may be null for non-ECS targets)
     ECS::EntityHandle Entity{};       // Primary entity being inspected (invalid for non-entity targets)
     std::vector<ECS::EntityHandle> Entities; // All selected entities (includes Entity; empty = single-edit)
+    std::vector<std::filesystem::path> AssetPaths; // The selected asset files and folders (asset selection rows)
     void* Object = nullptr;           // Pointer to the component/asset being inspected
     Editor::UndoRedoService* Undo = nullptr; // optional editor undo/redo service
     Editor::EditorChangeNotifications* ChangeNotifications = nullptr; // optional editor change notifications
@@ -159,7 +160,7 @@ struct ComponentOverrides
     // The header badge for the component ("Added"), and its tooltip; empty for none.
     std::string Badge;
     std::string BadgeTooltip;
-    // The reflected names of the fields that differ from the source.
+    // The fields that differ from the source: each one's reflected name, or its scene key when it has none.
     std::vector<std::string> Fields;
 
     bool IsFieldOverridden(std::string_view fieldName) const
@@ -190,10 +191,12 @@ struct OverrideMenuTarget
     ECS::World* World = nullptr;
     ECS::EntityHandle Entity{};
     ECS::ComponentTypeId Component = 0;
-    // The reflected name of the field; empty for the component's header.
+    // The field's reflected name, or its scene key when it has none; empty for the component's header.
     std::string Field;
     Editor::UndoRedoService* Undo = nullptr;
     Editor::EditorChangeNotifications* Notifications = nullptr;
+    // The row's label, which the undo step names; empty for the header or a row with no label.
+    std::string Label;
 };
 
 using OverrideMenuFn = std::function<std::vector<OverrideMenuEntry>(const OverrideMenuTarget& target)>;
@@ -282,6 +285,31 @@ public:
             if (banner.Placement == placement)
                 banners.push_back(banner.Fn);
         return banners;
+    }
+    // Register the row `key` that the Inspector adds above the view of every asset selection: one or
+    // many files and folders, loaded or not (InspectorContext::AssetPaths). A second registration of
+    // `key` replaces the first in its place. The function adds nothing for a selection it has no row for.
+    void RegisterAssetSelectionRow(std::string_view key, InspectorFn fn)
+    {
+        std::lock_guard<std::mutex> lock(m_Mutex);
+        for (AssetSelectionRow& row : m_AssetSelectionRows)
+        {
+            if (row.Key == key)
+            {
+                row.Fn = std::move(fn);
+                return;
+            }
+        }
+        m_AssetSelectionRows.push_back({std::string(key), std::move(fn)});
+    }
+    // The registered asset selection rows, in registration order.
+    std::vector<InspectorFn> GetAssetSelectionRows() const
+    {
+        std::lock_guard<std::mutex> lock(m_Mutex);
+        std::vector<InspectorFn> rows;
+        for (const AssetSelectionRow& row : m_AssetSelectionRows)
+            rows.push_back(row.Fn);
+        return rows;
     }
     // Set the one answerer the component sections and the default field rows ask how a component
     // differs from its entity's source; a second call replaces the first. The entity header asks for
@@ -376,6 +404,12 @@ private:
         InspectorFn Fn;
     };
     std::vector<EntityBanner> m_EntityBanners;
+    struct AssetSelectionRow
+    {
+        std::string Key;
+        InspectorFn Fn;
+    };
+    std::vector<AssetSelectionRow> m_AssetSelectionRows;
     ComponentOverridesFn m_ComponentOverrides;
     OverrideMenuFn m_OverrideMenu;
     std::unordered_map<int, AssetLoadingSuffixFn> m_AssetLoadingSuffixes;

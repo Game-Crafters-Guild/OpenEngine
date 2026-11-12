@@ -11,6 +11,8 @@
 
 #include <gtest/gtest.h>
 
+#include "TerrainTestHelpers.h"
+
 #include "Components/Spline/SplineComponent.h"
 #include "Components/Terrain/Terrain.h"
 #include "Components/Terrain/TerrainModifiers.h"
@@ -93,10 +95,7 @@ TerrainHandle CreateBakedTerrain(TerrainService& svc)
 {
     const TerrainHandle handle = svc.CreateTerrain(MakeTestConfig());
     auto* data = svc.GetTerrainData(handle);
-    FillHeightfieldBaseRegion(data->Heightfield, Components::TerrainBaseSource::ProceduralNoise,
-                              nullptr, 0, 0,
-                              static_cast<int32>(kHeightmapDim) - 1,
-                              static_cast<int32>(kHeightmapDim) - 1);
+    TerrainTests::SeedNoiseBaseHeightmap(svc, data->Heightfield);
     data->MarkFullDirty();
     svc.RebuildQuadtree(handle);
     data->ResetSplatmapAndCommitRange();
@@ -112,7 +111,7 @@ ECS::EntityHandle CreateTerrainEntity(ECS::World& world, TerrainHandle handle)
     terrain.HeightScale = kHeightScale;
     terrain.TerrainDataHandle = handle.Index;
     terrain.TerrainDataGeneration = handle.Generation;
-    terrain.BaseSource = Components::TerrainBaseSource::ProceduralNoise;
+    TerrainTests::UseNoiseBaseHeightmap(terrain);
     world.AddComponentImmediate<Components::Terrain>(e, terrain);
     world.AddComponentImmediate<Components::WorldTransform>(e, Components::WorldTransform{});
     return e;
@@ -121,9 +120,9 @@ ECS::EntityHandle CreateTerrainEntity(ECS::World& world, TerrainHandle handle)
 Components::WorldTransform IdentityAt(float32 x, float32 y, float32 z)
 {
     Components::WorldTransform xf{};
-    xf.matrix[12] = x;
-    xf.matrix[13] = y;
-    xf.matrix[14] = z;
+    xf.Position.X = x;
+    xf.Position.Y = y;
+    xf.Position.Z = z;
     return xf;
 }
 

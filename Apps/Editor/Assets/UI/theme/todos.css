@@ -26,6 +26,9 @@
     border-radius: 4px;
     color: var(--text-primary, #ffffff);
     font-size: 13px;
+    /* The hint starts and ends where the typed text does (the horizontal padding). */
+    --ui_field_placeholder_left: 8px;
+    --ui_field_placeholder_right: 8px;
 }
 
 .todo-add-field:focus {
@@ -33,15 +36,8 @@
     outline: none;
 }
 
-.todo-add-field.todo-add-placeholder {
-    color: var(--text-muted, #8A8A8A);
-}
-
 .todo-add-button,
-button.todo-add-button,
-.button.todo-add-button,
-.todo-panel .todo-add-button,
-.todo-panel button.todo-add-button {
+.todo-panel .todo-add-button {
     width: 24px;
     height: 24px;
     min-width: 24px;
@@ -66,10 +62,7 @@ button.todo-add-button,
 }
 
 .todo-add-button:hover,
-button.todo-add-button:hover,
-.button.todo-add-button:hover,
-.todo-panel .todo-add-button:hover,
-.todo-panel button.todo-add-button:hover {
+.todo-panel .todo-add-button:hover {
     background: transparent;
     background-color: transparent;
     border-color: transparent;
@@ -180,10 +173,7 @@ button.todo-add-button:hover,
 }
 
 .todo-checkbox,
-button.todo-checkbox,
-.button.todo-checkbox,
-.todo-panel .todo-checkbox,
-.todo-panel button.todo-checkbox {
+.todo-panel .todo-checkbox {
     width: 24px;
     height: 24px;
     min-width: 24px;
@@ -207,10 +197,7 @@ button.todo-checkbox,
 }
 
 .todo-checkbox:hover,
-button.todo-checkbox:hover,
-.button.todo-checkbox:hover,
-.todo-panel .todo-checkbox:hover,
-.todo-panel button.todo-checkbox:hover {
+.todo-panel .todo-checkbox:hover {
     background: transparent;
     background-color: transparent;
     background-image: url("editor:Icons/checkmark-circle.svg");
@@ -219,10 +206,7 @@ button.todo-checkbox:hover,
 }
 
 .todo-checkbox.todo-checkbox-checked,
-button.todo-checkbox.todo-checkbox-checked,
-.button.todo-checkbox.todo-checkbox-checked,
-.todo-panel .todo-checkbox.todo-checkbox-checked,
-.todo-panel button.todo-checkbox.todo-checkbox-checked {
+.todo-panel .todo-checkbox.todo-checkbox-checked {
     background: transparent;
     background-color: transparent;
     background-image: url("editor:Icons/checkmark-circle.svg");
@@ -292,41 +276,17 @@ button.todo-checkbox.todo-checkbox-checked,
     flex-shrink: 0;
 }
 
-.todo-delete,
-button.todo-delete,
-.button.todo-delete,
-.todo-panel .todo-delete,
-.todo-panel button.todo-delete {
+/* An icon button: Button.css draws its states; this rule sets only its size.
+   Named with .button.icon-button to outrank the variant's 24 px rule (0,2,0). */
+.button.icon-button.todo-delete {
     width: 20px;
     height: 20px;
     min-width: 20px;
     min-height: 20px;
     padding: 0;
-    cursor: pointer;
-    opacity: 0.4;
     font-size: 16px;
     line-height: 20px;
     text-align: center;
-    border: none;
-    border-width: 0;
-    border-style: none;
-    border-color: transparent;
-    background: transparent;
-    background-color: transparent;
-    color: var(--text-secondary, rgba(255, 255, 255, 0.84));
-    transition: opacity 0.2s ease, color 0.2s ease;
-}
-
-.todo-delete:hover,
-button.todo-delete:hover,
-.button.todo-delete:hover,
-.todo-panel .todo-delete:hover,
-.todo-panel button.todo-delete:hover {
-    background: transparent;
-    background-color: transparent;
-    border-color: transparent;
-    opacity: 1.0;
-    color: #ff5555;
 }
 
 /* Dragging state */

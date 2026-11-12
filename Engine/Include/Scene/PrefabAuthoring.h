@@ -59,7 +59,7 @@ enum class PrefabUnpackDepth
     Completely,
 };
 
-/// The kind of one difference between a prefab entity and the prefab.
+/// The kind of one override of a prefab entity.
 enum class PrefabOverrideKind
 {
     Field,
@@ -68,7 +68,8 @@ enum class PrefabOverrideKind
     RemovedChild,
 };
 
-/// One difference between a prefab entity and the prefab, as a scene save writes it.
+/// One override of a prefab entity, as a scene save writes it: a field that differs from the prefab or that the
+/// instance holds a record for, a component added or removed, or a child removed.
 struct PrefabOverride
 {
     PrefabOverrideKind Kind = PrefabOverrideKind::Field;
@@ -87,7 +88,7 @@ struct PrefabInstanceEntity
     /// True for an entity under the instance that is not part of the prefab: a scene save writes it
     /// as an entity of its own.
     bool AddedOnInstance = false;
-    /// How a prefab entity differs from the prefab, in component order. The root's placement
+    /// The overrides of a prefab entity, in component order. The root's placement
     /// (transform, name, sibling order) is no override. Empty for an entity added on the instance.
     std::vector<PrefabOverride> Overrides;
 
@@ -146,7 +147,8 @@ void SetPrefabPropagationDeferred(ECS::World& world, bool deferred);
 
 /// Gives the prefab entity `entity` the prefab's value for `prefabOverride`: the field's value, the component
 /// removed when the instance added it, or the component with the prefab's values when the instance
-/// removed it. False, with the cause in `outError`, when the prefab does not have the target. Main thread only.
+/// removed it. A reverted field keeps no record. False, with the cause in `outError`, when the prefab does not have
+/// the target. Main thread only.
 bool RevertPrefabOverride(ECS::World& world, ECS::EntityHandle entity, const PrefabOverride& prefabOverride,
                           std::string& outError);
 
@@ -164,7 +166,7 @@ PrefabTemplateEntity FindPrefabTemplateEntity(ECS::World& world, ECS::EntityHand
 /// `address`. Main thread only.
 PrefabTemplateEntity FindPrefabTemplateEntityAt(ECS::World& world, ECS::EntityHandle entity, std::string_view address);
 
-/// One override of one prefab entity, for ApplyPrefabOverrides.
+/// One override of one prefab entity, for ApplyPrefabOverrides and the record calls.
 struct PrefabOverrideTarget
 {
     ECS::EntityHandle Entity;
@@ -174,9 +176,20 @@ struct PrefabOverrideTarget
 /// Writes each of `targets` into the innermost prefab file that authors its entity, with one write per file, then
 /// rebuilds the written files once and updates the instances in every open world as WritePrefabFileText does. `outEdits` holds
 /// the text before and after of each written file. False, with the cause in `outError`, when the prefab does not have
-/// a target (then no file is written) or a write fails. Main thread only.
+/// a target (then no file is written) or a write fails. An applied field keeps no record. Main thread only.
 bool ApplyPrefabOverrides(ECS::World& world, std::span<const PrefabOverrideTarget> targets,
                           std::vector<PrefabFileEdit>& outEdits, std::string& outError);
+
+/// Gives each Field target of `targets` a record: the field stays an override of its entity when its value equals
+/// the prefab's, and a prefab change does not move it. Other kinds have no record. Returns the targets that had no
+/// record before. Any thread.
+std::vector<PrefabOverrideTarget> RecordPrefabOverrides(const ECS::World& world,
+                                                        std::span<const PrefabOverrideTarget> targets);
+
+/// Drops the record of each Field target of `targets`: the field is an override again only while its value
+/// differs from the prefab's. Returns the targets that had a record. Any thread.
+std::vector<PrefabOverrideTarget> ForgetPrefabOverrides(const ECS::World& world,
+                                                        std::span<const PrefabOverrideTarget> targets);
 
 /// Writes `text` to the prefab file `file`, rebuilds every resident prefab that reads it, and gives each
 /// instance of those prefabs in every open world the new prefab values of every field, component and entity

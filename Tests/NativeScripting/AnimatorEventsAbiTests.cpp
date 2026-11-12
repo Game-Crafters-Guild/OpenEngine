@@ -248,9 +248,10 @@ TEST(AnimatorEventsAbi, PollEventsFromAWaveBodyOnAWorkerIsAdmitted)
     ScopedEngine engine(NoScripting());
     ASSERT_TRUE(engine.Initialized());
     OneEventWorld world;
+    // Declared before the pool: the job can still be inside set_value() after get() returns.
+    std::promise<std::pair<GE_Result, bool>> polled;
     JobSystem::WorkStealingThreadPool pool(2);
 
-    std::promise<std::pair<GE_Result, bool>> polled;
     int32_t count = -1;
     pool.EnqueueWork([&] {
         GE_AnimationEventRecord record{};

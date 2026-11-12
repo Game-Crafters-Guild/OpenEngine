@@ -10,7 +10,6 @@
 
 #include "Components/Rendering/LocalBounds.h"
 #include "Components/Rendering/MeshRenderer.h"
-#include "Components/Rendering/WorldSectorCoord.h"
 #include "Components/Transform.h"
 #include "Core/CpuProfiler.h"
 #include "ECS/ECSTemplates.h"
@@ -50,7 +49,8 @@ inline Mathematics::AABB DeriveWorldAabb(
         box.center.x + box.halfExtents.x,
         box.center.y + box.halfExtents.y,
         box.center.z + box.halfExtents.z};
-    const float32* m = wt.matrix;
+    const Mathematics::Matrix4x4 worldMatrix = wt.ToMatrix4x4(wt.GetPosition() - Mathematics::WorldPosition{});
+    const float32* m = worldMatrix.Data();
 
     const Mathematics::Vector3 corners[8] = {
         {minP.x, minP.y, minP.z}, {maxP.x, minP.y, minP.z},
@@ -354,9 +354,9 @@ SceneTlas::SyncResult SceneTlas::SyncEntities(
     }
 
     // S1b (review A1): batched component resolve — ONE worldMutex
-    // shared-lock hold resolves {WorldTransform, LocalBounds,
-    // WorldSectorCoord} for every deduped candidate (embedded IsValid;
-    // dead/absent resolve to nullptr), replacing up to three GetComponent
+    // shared-lock hold resolves {WorldTransform, LocalBounds} for every
+    // deduped candidate (embedded IsValid; dead/absent resolve to nullptr),
+    // replacing up to two GetComponent
     // calls at two lock cycles each per unique mover. Candidates are
     // resolved and visited in dedup order — no chunk sorting — so the
     // visit sequence, and with it DirtyLeavesScratch content and order,
@@ -366,21 +366,17 @@ SceneTlas::SyncResult SceneTlas::SyncEntities(
     // single-writer-wave assumption (I9) covers both shapes.
     auto& resolved = m_Impl->ResolvedScratch;
     resolved.resize(dedup.size());
-    world.GetComponentsBatch<Components::WorldTransform,
-                             Components::LocalBounds,
-                             Components::WorldSectorCoord>(
-        dedup, std::span{resolved});
+    world.GetComponentsBatch<Components::WorldTransform, Components::LocalBounds>(dedup, std::span{resolved});
 
     // Dead handles and movers without a WorldTransform resolved to null and
     // are not candidates.
-    const float32 sectorSize = m_Impl->SectorSize.load(std::memory_order_relaxed);
     auto& candidates = m_Impl->RefitCandidates;
     candidates.clear();
     for (std::size_t i = 0; i < dedup.size(); ++i)
     {
-        const auto& [wt, lb, sc] = resolved[i];
+        const auto& [wt, lb] = resolved[i];
         if (wt)
-            candidates.push_back({dedup[i], wt->Version, Internal::DeriveCandidateBounds(*wt, lb, sc, sectorSize)});
+            candidates.push_back({dedup[i], wt->Version, Internal::DeriveCandidateBounds(*wt, lb)});
     }
 
     // The world's own pool is authoritative; the fallback is the
@@ -809,14 +805,10 @@ namespace Internal
 {
 
 AABB DeriveCandidateBounds(const Components::WorldTransform& transform,
-                           const Components::LocalBounds* bounds,
-                           const Components::WorldSectorCoord* sector,
-                           float32 sectorSize)
+                           const Components::LocalBounds* bounds)
 {
     static const Components::LocalBounds kDefaultLocalBounds{};
-    const Components::WorldTransform effective =
-        Components::ComposeEffectiveWorldTransform(transform, sector, sectorSize);
-    return DeriveWorldAabb(effective, bounds ? *bounds : kDefaultLocalBounds);
+    return DeriveWorldAabb(transform, bounds ? *bounds : kDefaultLocalBounds);
 }
 
 SectorState& GetOrCreateSector(SceneTlasImpl& impl, const SectorKey& key)
@@ -1026,15 +1018,8 @@ void ReconcileFromRecords(
         const Components::LocalBounds& effectiveBounds =
             rec.hasBounds ? rec.bounds : kDefaultLocalBounds;
 
-        // E.5.2: when entity authors WorldSectorCoord, compose the world
-        // matrix as Translate(sectorCoord * sectorSize) * worldTransform.
-        const Components::WorldSectorCoord* secPtr =
-            rec.hasSectorCoord ? &rec.sectorCoord : nullptr;
-        const Components::WorldTransform effectiveXf =
-            Components::ComposeEffectiveWorldTransform(rec.worldTransform, secPtr, sectorSize);
-
         const Mathematics::AABB worldBounds =
-            DeriveWorldAabb(effectiveXf, effectiveBounds);
+            DeriveWorldAabb(rec.worldTransform, effectiveBounds);
 
         const bool capExceeded = BuildReplicaSet(worldBounds, sectorSize, newReplicas);
         if (capExceeded)

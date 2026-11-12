@@ -28,6 +28,24 @@ MaterialTextureFilter MaterialTextureFilterFromString(const std::string& s)
     return MaterialTextureFilter::Trilinear;
 }
 
+const char* MaterialPatternSymmetryToString(MaterialPatternSymmetry symmetry)
+{
+    switch (symmetry)
+    {
+    case MaterialPatternSymmetry::Rectangular: return "Rectangular";
+    case MaterialPatternSymmetry::Square:      return "Square";
+    case MaterialPatternSymmetry::None:
+    default:                                   return "None";
+    }
+}
+
+MaterialPatternSymmetry MaterialPatternSymmetryFromString(const std::string& s)
+{
+    if (s == "Square")      return MaterialPatternSymmetry::Square;
+    if (s == "Rectangular") return MaterialPatternSymmetry::Rectangular;
+    return MaterialPatternSymmetry::None;
+}
+
 float MaterialDocument::DefaultOpacity() const
 {
     if (auto it = properties.find("baseColor"); it != properties.end())

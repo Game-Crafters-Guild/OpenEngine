@@ -2,6 +2,7 @@
 
 #include "Mathematics/Vector3.h"
 #include "Rendering/Core/Handle.h"
+#include "Rendering/Sky/SkyPlanet.h"
 #include "Types/Color.h"
 
 #include <cstdint>
@@ -170,6 +171,9 @@ struct SkySettings
     float groundHorizonCosWidth = 0.035f;
     /// Night rim half-width; shaders mix with `groundHorizonCosWidth` using `nightSkyBlend`.
     float groundHorizonNightCosWidth = 0.035f;
+
+    /// The planet under the atmosphere: the flat scene's planet unless a spherical terrain sets it.
+    SkyPlanet planet{};
 
     TextureHandle environmentTexture{};
 };

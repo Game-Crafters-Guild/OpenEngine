@@ -9,6 +9,8 @@
 //    barrier tasks executed not dropped (B7), sequential fallbacks, and the
 //    create/storm/shutdown stress incl. mid-ParallelFor shutdown.
 
+#include "JoinOnScopeExit.h"
+#include "ScopedLogLevel.h"
 #include "Logger/Logger.h"
 #include "JobSystem/ParallelAlgorithms.h"
 #include "JobSystem/WorkStealingThreadPool.h"
@@ -90,10 +92,8 @@ void OccupyWorkers(WorkStealingThreadPool& pool, size_t count, std::atomic<bool>
 } // namespace
 
 class CancellationTest : public ::testing::Test {
-protected:
-    void SetUp() override {
-        Logger::Log::SetLogLevel(Logger::LogLevel::Warning);
-    }
+private:
+    ScopedLogLevel m_LogLevel{Logger::LogLevel::Warning};
 };
 
 /**
@@ -103,10 +103,11 @@ protected:
  * worked).
  */
 TEST_F(CancellationTest, CancelQueuedLambdaTaskNeverExecutes) {
+    // Declared before the pool: a blocker can still read it after the guard opens it.
+    std::atomic<bool> gate{false};
     WorkStealingThreadPool pool(2);
 
     // Occupy every worker so the victim tasks stay queued (Pending).
-    std::atomic<bool> gate{false};
     GateGuard gateGuard{gate};
     std::atomic<size_t> blockersRunning{0};
     OccupyWorkers(pool, 2, gate, blockersRunning);
@@ -301,9 +302,10 @@ TEST_F(CancellationTest, TileStreamingShapeCancelHalfMidFlight) {
  * second cancel is refused.
  */
 TEST_F(CancellationTest, CancelParkedDependentFiresExactlyOnce) {
+    // Declared before the pool: the held job can still read it after the guard opens it.
+    std::atomic<bool> gate{false};
     WorkStealingThreadPool pool(2);
 
-    std::atomic<bool> gate{false};
     GateGuard gateGuard{gate};
     TaskHandle depHandle = SubmitInGraph(pool, [&gate] {
         while (!gate.load(std::memory_order_acquire)) {
@@ -336,10 +338,8 @@ TEST_F(CancellationTest, CancelParkedDependentFiresExactlyOnce) {
 }
 
 class ShutdownContractTest : public ::testing::Test {
-protected:
-    void SetUp() override {
-        Logger::Log::SetLogLevel(Logger::LogLevel::Warning);
-    }
+private:
+    ScopedLogLevel m_LogLevel{Logger::LogLevel::Warning};
 };
 
 /**
@@ -349,12 +349,13 @@ protected:
  * and these waiters hung forever.
  */
 TEST_F(ShutdownContractTest, ShutdownWakesAllWaiters) {
+    // Declared before the pool: a job can still use it when an ASSERT returns early.
+    std::atomic<size_t> blockersRunning{0};
     WorkStealingThreadPool pool(2);
 
     // Blockers occupy both workers until shutdown begins, so the victim
     // tasks stay queued/parked. They poll the pool's own flag: Shutdown's
     // join then completes naturally.
-    std::atomic<size_t> blockersRunning{0};
     for (int i = 0; i < 2; ++i) {
         pool.EnqueueWork([&pool, &blockersRunning] {
             blockersRunning.fetch_add(1, std::memory_order_acq_rel);
@@ -421,6 +422,10 @@ TEST_F(ShutdownContractTest, ShutdownWakesAllWaiters) {
  * execute — a hand-rolled caller barrier over them must always release, before, during, and after shutdown.
  */
 TEST_F(ShutdownContractTest, ShutdownExecutesBareBarrierTasks) {
+    // Declared before the pool: the jobs of a round that timed out still use them after the storm returns.
+    std::atomic<uint32_t> remaining{0};
+    std::mutex mtx;
+    std::condition_variable cv;
     WorkStealingThreadPool pool(4);
 
     std::atomic<bool> stop{false};
@@ -432,9 +437,8 @@ TEST_F(ShutdownContractTest, ShutdownExecutesBareBarrierTasks) {
         while (!stop.load(std::memory_order_acquire)) {
             constexpr uint32_t kBatch = 8;
             const bool startedAfterShutdown = pool.IsShuttingDown();
-            std::atomic<uint32_t> remaining{kBatch};
-            std::mutex mtx;
-            std::condition_variable cv;
+            // Every job of the last round has counted down: its wait saw zero.
+            remaining.store(kBatch, std::memory_order_release);
             for (uint32_t i = 0; i < kBatch; ++i) {
                 pool.EnqueueWork([&remaining, &mtx, &cv] {
                     std::lock_guard<std::mutex> lock(mtx);
@@ -457,6 +461,7 @@ TEST_F(ShutdownContractTest, ShutdownExecutesBareBarrierTasks) {
             }
         }
     });
+    JoinOnScopeExit stopAndJoin({&storm, 1}, [&stop] { stop.store(true, std::memory_order_release); });
 
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
     pool.Shutdown();
@@ -648,11 +653,12 @@ TEST_F(ShutdownContractTest, SubmitRacingShutdownNeverStrandsWaiter) {
  * could ever complete it: Shutdown hung forever.
  */
 TEST_F(ShutdownContractTest, DrainedBareTaskWaitingOnQueuedHandleTaskReturns) {
+    // Declared before the pool: a job can still use it when an ASSERT returns early.
+    std::atomic<size_t> blockersRunning{0};
     WorkStealingThreadPool pool(2);
 
     // Pin both workers until shutdown so both victim tasks stay queued and
     // deterministically reach the post-join drain.
-    std::atomic<size_t> blockersRunning{0};
     for (int i = 0; i < 2; ++i) {
         pool.EnqueueWork([&pool, &blockersRunning] {
             blockersRunning.fetch_add(1, std::memory_order_acq_rel);

@@ -4,7 +4,8 @@
 // tree, with the theme loaded globally the way the editor loads it. Each popup row
 // holds the picture at its fixed size with the name and one line of text beside it,
 // the closed header keeps the height of every other field, and a list without
-// pictures keeps its text rows.
+// pictures keeps its text rows. An entry of a list that fits its content stays on
+// one line, and an entry wider than the window ends in an ellipsis.
 
 #include "IsolatedUIFixture.h"
 #include "UIRgTestHarness.h"
@@ -15,6 +16,7 @@
 #include "JobSystem/WorkStealingThreadPool.h"
 #include "UI/Controls/Dropdown.h"
 #include "UI/Controls/Label.h"
+#include "UI/ITextMeasurable.h"
 #include "UI/Parsers/CSSParser.h"
 #include "UI/Registration/ElementRegistration.h"
 #include "UI/ResolvedStyle.h"
@@ -291,4 +293,55 @@ TEST(ShippedDropdownPictureRowTests, AListWithoutPicturesKeepsItsTextRows)
         EXPECT_GT(row->GetLayoutHeight(), 12.0f);
     }
     EXPECT_EQ(ChildWithClass(*fixture.Plain->GetHeaderContainer(), "dropdown-header-picture"), nullptr);
+}
+
+TEST(ShippedDropdownPictureRowTests, AnAutoWidthListShowsEachEntryOnOneLine)
+{
+    PICTURE_DROPDOWN_FIXTURE(fixture);
+    // A header narrower than the longest word of an entry.
+    fixture.Plain->Style().Set(Style::Width, StyleLength::Px(60.0f));
+    fixture.Plain->SetAutoWidthPopup(true);
+    fixture.Plain->SetOptionsFromString("Point,Claude (Subscription)");
+    fixture.Plain->CloseMenuUi();
+    fixture.Plain->OpenMenuUi();
+    fixture.Settle();
+
+    const auto& rows = fixture.Plain->GetItemsContainer()->GetChildren();
+    ASSERT_EQ(rows.size(), 2u);
+    EXPECT_NEAR(rows[1]->GetLayoutHeight(), rows[0]->GetLayoutHeight(), kTolerance) << "the long entry wrapped";
+}
+
+TEST(ShippedDropdownPictureRowTests, AnEntryWiderThanTheWindowEndsInAnEllipsis)
+{
+    PICTURE_DROPDOWN_FIXTURE(fixture);
+    const std::string longName(200, 'W');
+    fixture.Plain->SetAutoWidthPopup(true);
+    fixture.Plain->SetOptionsFromLabels({"Point", longName}, 0);
+    fixture.Pictures->SetOptions({{"vivid", longName, {}, {}, "probe-picture-vivid"}});
+    for (Dropdown* dropdown : {fixture.Plain, fixture.Pictures})
+    {
+        dropdown->CloseMenuUi();
+        dropdown->OpenMenuUi();
+    }
+    fixture.Settle();
+
+    // The fixture's window is 800 px wide.
+    const auto& plainRows = fixture.Plain->GetItemsContainer()->GetChildren();
+    ASSERT_EQ(plainRows.size(), 2u);
+    EXPECT_LE(fixture.Plain->GetItemsContainer()->GetWindowRect().Right(), 800.0f + kTolerance);
+    EXPECT_NEAR(plainRows[1]->GetLayoutHeight(), plainRows[0]->GetLayoutHeight(), kTolerance) << "the entry wrapped";
+    const auto* plainRow = dynamic_cast<const Label*>(plainRows[1].get());
+    ASSERT_NE(plainRow, nullptr);
+    ASSERT_NE(plainRow->GetTextMeasurable(), nullptr);
+    EXPECT_TRUE(plainRow->GetTextMeasurable()->WasLastRunEllipsized()) << "a text row ends in an ellipsis";
+
+    const auto& pictureRows = fixture.Pictures->GetItemsContainer()->GetChildren();
+    ASSERT_EQ(pictureRows.size(), 1u);
+    EXPECT_LE(fixture.Pictures->GetItemsContainer()->GetWindowRect().Right(), 800.0f + kTolerance);
+    const UIElement* column = ChildWithClass(*pictureRows[0], "dropdown-item-text");
+    ASSERT_NE(column, nullptr);
+    const UIElement* name = ChildWithClass(*column, "dropdown-item-label");
+    ASSERT_NE(name, nullptr);
+    ASSERT_NE(name->GetTextMeasurable(), nullptr);
+    EXPECT_TRUE(name->GetTextMeasurable()->WasLastRunEllipsized()) << "the name of a picture row ends in an ellipsis";
 }

@@ -26,6 +26,9 @@ struct Log::LoggerState
     Config m_Config;
     std::vector<std::unique_ptr<LogSink>> Sinks;
     std::mutex Mutex;
+    /// Lets one thread at a time write its line to std::cout while Initialized is false; Initialized changes only
+    /// under this lock. No other lock is taken while a thread holds it.
+    std::mutex FallbackMutex;
     std::atomic<bool> Initialized{false};
     /// The global level and every channel's level; the global level is Off until Initialize.
     LogChannelTable Channels;

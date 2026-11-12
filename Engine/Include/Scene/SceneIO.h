@@ -11,6 +11,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -32,9 +33,14 @@ struct SceneIOError
     bool worldCleared = false;
 };
 
-// Last SceneIO error for the calling thread (cleared on success, overwritten on failure).
-const SceneIOError& GetLastSceneIOError();
-void ClearLastSceneIOError();
+// What WriteSceneFile returns. A set error means the call failed. It converts to true when no error is
+// set.
+struct SceneIOResult
+{
+    std::optional<SceneIOError> Error;
+
+    explicit operator bool() const { return !Error.has_value(); }
+};
 
 // Everything one load could not apply. Empty => the scene loaded cleanly.
 struct SceneDegradation
@@ -124,13 +130,6 @@ struct SceneHierarchyUi
     std::vector<std::string> selectionSceneEntityTagsOrdered;
 };
 
-// Result of loading a scene file regarding [hierarchy_ui]: whether the section existed, and its payload when it did.
-struct SceneHierarchyUiFromFile
-{
-    bool hadSection = false;
-    SceneHierarchyUi ui{};
-};
-
 // Editor scene-view camera pose persisted under [editor_camera] in .scene files.
 struct SceneEditorCamera
 {
@@ -143,64 +142,48 @@ struct SceneEditorCamera
     bool Is2D = false;
 };
 
-struct SceneEditorCameraFromFile
-{
-    bool hadSection = false;
-    SceneEditorCamera camera{};
-};
-
-// Main-thread phase split of one ReadSceneInto call, in milliseconds. The
-// single "parse+instantiate" number a caller can measure from outside hides
-// which phase dominates, and a delta-based reload can only ever skip the
-// instantiate half — so the split is what makes that trade-off falsifiable.
+// The phase split of one read and its instantiate, in milliseconds. ReadSceneDocument fills the read's
+// phases, InstantiateSceneDocument ClearMs and InstantiateMs, ReadSceneInto all of them. A phase that did
+// not run (an early failure, or Clear when ClearWorldFirst is false) stays 0.
 struct SceneReadTimings
 {
     double ReadMs = 0.0;
     double ParseMs = 0.0;     // tokenise + include expansion
     double ValidateMs = 0.0;
-    double ClearMs = 0.0;     // World::Clear, only when clearWorldFirst
+    double SourcesMs = 0.0;   // read, parse and validate each prefab and subscene source
+    double ClearMs = 0.0;     // World::Clear, only when ClearWorldFirst
     double InstantiateMs = 0.0;
 };
 
+// How ReadSceneDocument finds files. The document keeps a copy: InstantiateSceneDocument resolves asset
+// references through the same resolver, so the resolver must outlive the document's instantiate.
 struct SceneReadOptions
 {
-    // True: clear the world, then read the scene into it. False: keep the world's entities; the scene's entity
-    // ids get a unique "import_N." prefix so they cannot collide with them.
-    bool clearWorldFirst = true;
-
     // Optional resolver for GUID/path/asset-root integration.
     // If null, SceneIO falls back to best-effort lexical GUID derivation and extension-based typing.
-    ISceneAssetResolver* assetResolver = nullptr;
+    ISceneAssetResolver* AssetResolver = nullptr;
 
-    // Optional override for the project's asset root. If empty and assetResolver is provided,
-    // SceneIO uses assetResolver->GetAssetRoot(). If both are empty, SceneIO falls back to paths
+    // Optional override for the project's asset root. If empty and AssetResolver is provided,
+    // SceneIO uses AssetResolver->GetAssetRoot(). If both are empty, SceneIO falls back to paths
     // relative to the scene file's directory.
-    std::filesystem::path assetRootOverride;
+    std::filesystem::path AssetRootOverride;
 
     // The project directory. A file the loader names in an error message is spelled relative to it
     // ("Assets/props/crate.prefab"), the way the user finds it; empty, or a file outside it, the
     // message spells the path absolute.
-    std::filesystem::path projectRoot;
+    std::filesystem::path ProjectRoot;
+};
+
+// How InstantiateSceneDocument puts a document into a world.
+struct SceneInstantiateOptions
+{
+    // True: clear the world, then place the scene in it. False: keep the world's entities; the scene's
+    // entity ids get a unique "import_N." prefix so they cannot collide with them.
+    bool ClearWorldFirst = true;
 
     // Optional embed executor/materializer. If provided, embed references (#id where id is from [embed])
     // can be materialized into real loadable assets (e.g., embedded materials).
-    ISceneEmbedMaterializer* embedMaterializer = nullptr;
-
-    // When non-null, filled after a successful load when the file contained [hierarchy_ui].
-    SceneHierarchyUiFromFile* outHierarchyUiFromFile = nullptr;
-
-    // When non-null, filled after a successful load when the file contained [editor_camera].
-    SceneEditorCameraFromFile* outEditorCameraFromFile = nullptr;
-
-    // When non-null, filled with the main-thread phase split. Phases that did
-    // not run (an early failure, or Clear when clearWorldFirst is false) stay 0.
-    SceneReadTimings* outTimings = nullptr;
-
-    // When non-null, filled with every assignment the load could not apply. A non-empty census on a
-    // load that RETURNED TRUE means the scene is degraded: it opened, but it is not all of what the
-    // file says. The loader always logs the census; this is how a caller gets the full list rather
-    // than the first few, and how the editor marks the document.
-    SceneDegradation* outDegradation = nullptr;
+    ISceneEmbedMaterializer* EmbedMaterializer = nullptr;
 };
 
 struct SceneWriteOptions
@@ -210,6 +193,11 @@ struct SceneWriteOptions
     // If true, the file is a prefab file: it starts with the [prefab version=1] header. The world
     // must hold one root entity, with the id "root", and every other id must be a valid prefab id.
     bool writePrefabHeader = false;
+
+    // If true, the [scene] header holds the world's simulation tick (simulation_tick=N), and a load
+    // that clears the world restores it. A game save sets it, so the systems that count simulation
+    // ticks continue after a load. An authored scene leaves it false. A prefab file ignores it.
+    bool writeSimulationTick = false;
 
     // If true, each prefab instance is saved as a [prefab] section (with its [resource] line) that holds
     // what the instance changes in its prefab, rather than flattened into [entity] blocks. The save
@@ -234,19 +222,66 @@ struct SceneWriteOptions
     const SceneEditorCamera* editorCamera = nullptr;
 };
 
-// Read a human-readable .scene file into an ECS world.
-// - clearWorldFirst (the default): clears the world first.
-// - Otherwise: keeps existing entities; loaded entity ids are namespace-prefixed where needed (subscenes/prefabs).
-// A false return is reported through GetLastSceneIOError, not the log: the caller owns the outcome
-// and logs the record once, at the level the outcome deserves. The loader logs only Debug detail.
-bool ReadSceneInto(ECS::World& world,
-                   const std::filesystem::path& sceneFilePath,
-                   const SceneReadOptions& options = {});
+// The parsed files of one scene read. Private to the scene IO sources.
+struct SceneDocumentFiles;
 
-// Serialize the world to a human-readable .scene file (INI-like schema format).
-bool WriteSceneFile(ECS::World& world,
-                    const std::filesystem::path& sceneFilePath,
-                    const SceneWriteOptions& options = {});
+// One .scene file read with no world: the file with its includes expanded, and each distinct prefab and
+// subscene source that it names (and that those sources name), each read, parsed and validated once, by
+// the path that the read resolved. Copies share the files.
+struct SceneDocument
+{
+    std::filesystem::path Path;
+    std::shared_ptr<const SceneDocumentFiles> Files; // null when the read failed
+    std::optional<SceneHierarchyUi> HierarchyUi;     // the [hierarchy_ui] section, when the file has one
+    std::optional<SceneEditorCamera> EditorCamera;   // the [editor_camera] section, when the file has one
+};
+
+// What ReadSceneDocument returns. A set error means the read failed, and the document holds no files.
+// It converts to true when no error is set.
+struct SceneReadResult
+{
+    SceneDocument Document;
+    std::optional<SceneIOError> Error;
+    SceneReadTimings Timings; // ReadMs, ParseMs, ValidateMs and SourcesMs
+
+    explicit operator bool() const { return !Error.has_value(); }
+};
+
+// What InstantiateSceneDocument and ReadSceneInto return. A set error means the call failed; its
+// worldCleared says whether the world was cleared first. The degradation holds every line that did not
+// apply, also on a failure after the clear. It converts to true when no error is set.
+struct SceneInstantiateResult
+{
+    std::optional<SceneIOError> Error;
+    SceneDegradation Degradation;
+    SceneReadTimings Timings; // ClearMs and InstantiateMs; every phase from ReadSceneInto
+
+    explicit operator bool() const { return !Error.has_value(); }
+};
+
+// Read a .scene file and each prefab and subscene source that it names, with no world. It can run on a
+// worker thread when options.AssetResolver can. It refuses a source loop, and the error is in the result.
+SceneReadResult ReadSceneDocument(const std::filesystem::path& sceneFilePath, const SceneReadOptions& options = {});
+
+// Put a document's entities into the world, on the main thread. It reads no file and resolves no source
+// path again. When options.ClearWorldFirst is false, the scene's entity ids get a unique "import_N." prefix.
+SceneInstantiateResult InstantiateSceneDocument(ECS::World& world,
+                                                const SceneDocument& document,
+                                                const SceneInstantiateOptions& options = {});
+
+// ReadSceneDocument and InstantiateSceneDocument in one call on the main thread: the Player's scene load,
+// a game's level load, tools and tests. The error is in the result, not the log: the caller owns the
+// outcome and logs it once, at the level the outcome deserves. The loader logs only Debug detail.
+SceneInstantiateResult ReadSceneInto(ECS::World& world,
+                                     const std::filesystem::path& sceneFilePath,
+                                     const SceneReadOptions& readOptions = {},
+                                     const SceneInstantiateOptions& instantiateOptions = {});
+
+// Serialize the world to a human-readable .scene file (INI-like schema format). The error is in the
+// result.
+SceneIOResult WriteSceneFile(ECS::World& world,
+                             const std::filesystem::path& sceneFilePath,
+                             const SceneWriteOptions& options = {});
 
 // Helpers for AssetReference encoding in .scene files.
 // The path is optional and non-authoritative (debugging only).

@@ -3,10 +3,10 @@
 // Internal helpers shared by per-parser ExtractDependencies implementations.
 // Keep tiny and inline-able — these run on the asset-scan hot path.
 
+#include "AssetCore/SharedFileRead.h"
+
 #include <algorithm>
 #include <filesystem>
-#include <fstream>
-#include <sstream>
 #include <string>
 #include <string_view>
 
@@ -40,16 +40,15 @@ inline bool LooksLikeGuid(std::string_view s) noexcept
     return true;
 }
 
-// Slurp the entire file into a std::string. Returns empty string on I/O
-// failure; the parser treats empty as "couldn't extract" and returns false.
+// Reads the whole file into a std::string through the shared-open read, so an external
+// safe-save can replace the file during the read (see SharedFileRead.h).
+// An I/O failure returns an empty string, and the parser then returns false.
 inline std::string ReadFileBody(const std::filesystem::path& path)
 {
-    std::ifstream in(path, std::ios::binary);
-    if (!in.is_open())
+    std::string body;
+    if (!ReadFileTextShared(path, body))
         return {};
-    std::stringstream ss;
-    ss << in.rdbuf();
-    return ss.str();
+    return body;
 }
 
 // Path-form targets are stored canonical mount-relative — same form as

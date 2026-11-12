@@ -22,6 +22,9 @@ public:
         return {.Streams = true, .OwnsTranscript = true, .NeedsKey = false, .CanActWithTools = false};
     }
 
+    SetupStatus CheckSetup(const CancelToken&, SetupSurface, const SetupStepSink&) const override { return {}; }
+    std::vector<SetupStep> SetupPlan() const override { return {}; }
+
     void RunTurn(const AgentTurnRequest& request, AgentTurnEvents& events, const CancelToken&) override
     {
         events.OnSessionId(request.SessionId.empty() ? "session-1" : request.SessionId);

@@ -6,6 +6,7 @@
 #include "Mathematics/Interpolation.h"
 #include "Terrain/TerrainTypes.h"
 #include "Components/Terrain/TerrainModifierEffects.h"
+#include "Components/Terrain/TerrainPlanetRelief.h"
 #include "ECS/World.h"
 #include "Editor/Entities/EditorECSHelpers.h"
 #include "EditorChangeNotifications.h"
@@ -14,10 +15,15 @@
 #include "Inspectors/InspectorDragHelpers.h"
 #include "Inspectors/InspectorUIHelpers.h"
 #include "Terrain/TerrainRule/TerrainRuleNotices.h"
+#include "Terrain/TerrainRule/TerrainRulePresetPicker.h"
 #include "Terrain/TerrainInteractiveModifierEdit.h"
 #include "Terrain/TerrainRoleMaterials.h"
 #include "Terrain/TerrainRule/TerrainRuleConditionVocabulary.h"
 #include "Terrain/TerrainRule/TerrainRuleWeightProfileStrip.h"
+#include "TerrainECS/SurfaceHeightQuery.h"
+#include "TerrainECS/TerrainDefaultSurfaceRules.h"
+#include "TerrainECS/TerrainModifierComponents.h"
+#include "TerrainECS/TerrainService.h"
 #include "Thumbnails/IThumbnailProvider.h"
 #include "UI/Controls/Button.h"
 #include "UI/Controls/Dropdown.h"
@@ -36,8 +42,11 @@
 #include "Core/Engine.h"
 
 #include <algorithm>
+#include <array>
 #include <memory>
+#include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -55,10 +64,6 @@ using Kind = TerrainRuleConditionKind;
 using Curve = TerrainRuleFalloffCurve;
 
 constexpr float kProfileStripHeightPx = 26.0f;
-
-// Mirrors the "Add Effect" button one level up. Capped to the panel width by a max-width
-// override, so a narrow Inspector shrinks it rather than clipping it.
-constexpr float kAddButtonWidthPx = 360.0f;
 
 // The albedo thumbnail beside the result-material picker. Sized to the picker's
 // own row rather than to the image: it identifies the material at a glance and
@@ -90,6 +95,16 @@ constexpr int kUnitFieldDecimals = 2; // Strength, which has no condition kind
 // Fields take their digits from the SAME place the captions do, so the two can
 // never disagree about how precise this kind is.
 int BandFieldDecimals(Kind kind) { return Vocab::ConditionDecimals(kind); }
+
+// The slider's high handle stops at the top of the terrain. A height band with no
+// upper limit keeps it while that handle stays at the top.
+float32 BandHighFromSlider(const Slider& band, const FloatField& highField, float32 domainMax)
+{
+    const float32 high = band.GetValue();
+    if (high >= domainMax && highField.GetValue() >= TerrainECS::kDefaultHeightDomainMaxMeters)
+        return highField.GetValue();
+    return high;
+}
 
 // The band a two-handle drag reports: both handles move through one callback, so
 // the edit is the pair, never one end of it.
@@ -156,11 +171,16 @@ void RequestRebuild(const RuleEditTarget& target)
 
 // A discrete edit: one undo entry, applied immediately. Used by every control
 // that is not dragged (dropdowns, add / remove).
+// An edited row is the author's: the rows stop following the terrain's height range.
 template <typename MutateFn>
 void EditRules(const RuleEditTarget& target, const std::string& name, MutateFn&& mutate)
 {
     CommitComponentWithUndo<RulesEffect>(target.World, target.Entity, target.Notifications,
-                                         target.Undo, name, std::forward<MutateFn>(mutate));
+                                         target.Undo, name,
+                                         [mutate = std::forward<MutateFn>(mutate)](RulesEffect& u) {
+                                             mutate(u);
+                                             u.ProvisionedDefaults = false;
+                                         });
 }
 
 // Wraps an interactive (preview, commit) pair so the terrain preview-cadence
@@ -215,7 +235,11 @@ MakeRuleDragHandlers(const InspectorContext& ctx, const std::string& name, Apply
     auto handlers = HoldThrottleForGesture<V>(
         MakeComponentInteractiveHandlers<RulesEffect, V>(
             ctx.World, ctx.Entity, ctx.ChangeNotifications, ctx.Undo, name,
-            std::forward<ApplyFn>(apply), GetAdditionalEntities(ctx), ctx.GetWorld),
+            [apply = std::forward<ApplyFn>(apply)](RulesEffect& u, V v) {
+                apply(u, v);
+                u.ProvisionedDefaults = false;
+            },
+            GetAdditionalEntities(ctx), ctx.GetWorld),
         ctx.Parent);
 
     if (!onAfter)
@@ -269,10 +293,10 @@ Button* AddPrimaryAddButton(UIElement* parent, const std::string& text, const ch
     raw->SetText(text);
     raw->AddClass("inspector-add-component-button");
     raw->Style()
-        .Set(Style::Width, StyleLength::Px(kAddButtonWidthPx))
+        .Set(Style::Width, StyleLength::Px(kTerrainRuleActionWidthPx))
         .Set(Style::MaxWidth, StyleLength::Percent(100.0f))
         .Set(Style::AlignSelf, AlignItems::Center)
-        .Set(Style::MarginTop, StyleLength::Px(6.0f));
+        .Set(Style::MarginTop, StyleLength::Px(kTerrainRuleActionMarginTopPx));
 
     if (disabled)
     {
@@ -391,39 +415,59 @@ void RefreshAllConditions(const ConditionRefreshers& refreshers)
 
 void AddConditionRows(const InspectorContext& ctx, UIElement* parent,
                       const TerrainSurfaceRule& rule, uint32 ruleIndex, uint32 conditionIndex,
-                      float32 terrainHeightMetres, const ConditionRefreshers& refreshers)
+                      Vocab::ConditionDomain heightRangeMeters, Components::TerrainDomain terrainDomain,
+                      const ConditionRefreshers& refreshers)
 {
     const RuleEditTarget target = MakeEditTarget(ctx);
     const TerrainRuleCondition& condition = rule.Conditions[conditionIndex];
     const Vocab::ConditionDomain domain =
-        Vocab::ConditionAuthoringDomain(condition.Kind, terrainHeightMetres);
+        Vocab::ConditionAuthoringDomain(condition.Kind, heightRangeMeters);
     const float32 domainSpan = std::max(domain.Max - domain.Min, 1e-3f);
 
     const std::string idSuffix =
         " (rule " + std::to_string(ruleIndex + 1) + ", condition "
         + std::to_string(conditionIndex + 1) + ")";
 
+    Editor::AddRefusedConditionNotice(parent, ruleIndex, conditionIndex, condition.RefusedKind);
+
     // ---- kind ----
     {
+        // A refused row shows its refused kind until the user picks a real one; the entry edits nothing.
+        static constexpr std::string_view kRefusedOptionValue = "refused";
+        const bool refused = condition.RefusedKind != 0;
         std::vector<Dropdown::Option> options;
-        for (uint32 k = 0; k <= static_cast<uint32>(Kind::Noise); ++k)
+        if (refused)
+            options.push_back({std::string(kRefusedOptionValue), Vocab::RefusedKindLabel(condition.RefusedKind)});
+        int selectedIndex = 0;
+        const std::span<const Kind> kinds = Vocab::ConditionKinds(terrainDomain);
+        // A condition that holds a kind its terrain's list leaves out still shows that kind.
+        const bool listed = std::find(kinds.begin(), kinds.end(), condition.Kind) != kinds.end();
+        if (!listed && !refused)
+            options.push_back({std::to_string(static_cast<uint32>(condition.Kind)),
+                               std::string(Vocab::ConditionKindLabel(condition.Kind))});
+        for (const Kind kind : kinds)
         {
-            options.push_back({std::to_string(k),
-                               std::string(Vocab::ConditionKindLabel(static_cast<Kind>(k)))});
+            if (kind == condition.Kind && !refused)
+                selectedIndex = static_cast<int>(options.size());
+            options.push_back({std::to_string(static_cast<uint32>(kind)),
+                               std::string(Vocab::ConditionKindLabel(kind))});
         }
         auto* dd = InspectorUI::AddDropdownRow(
-            parent, "Measures", options, static_cast<int>(condition.Kind),
+            parent, "Measures", options, selectedIndex,
             "What this condition bands. Changing the unit re-maps the band to the same fraction "
             "of the new range - the two slope units are different measurements, not one "
             "rescaled, so check the band after switching.");
-        dd->SetOnValueChanged([target, ruleIndex, conditionIndex, terrainHeightMetres](
+        dd->SetOnValueChanged([target, ruleIndex, conditionIndex, heightRangeMeters](
                                   const std::string& value) {
+            if (value == kRefusedOptionValue)
+                return;
             const Kind newKind = static_cast<Kind>(std::stoi(value));
             EditRules(target, "Condition Measures", [=](RulesEffect& u) {
                 TerrainRuleCondition& c = u.Rules[ruleIndex].Conditions[conditionIndex];
-                RemapBandToDomain(c, Vocab::ConditionAuthoringDomain(c.Kind, terrainHeightMetres),
-                                  Vocab::ConditionAuthoringDomain(newKind, terrainHeightMetres));
+                RemapBandToDomain(c, Vocab::ConditionAuthoringDomain(c.Kind, heightRangeMeters),
+                                  Vocab::ConditionAuthoringDomain(newKind, heightRangeMeters));
                 c.Kind = newKind;
+                c.RefusedKind = 0;
             });
             RequestRebuild(target); // the unit, domain and help all change
         });
@@ -434,7 +478,7 @@ void AddConditionRows(const InspectorContext& ctx, UIElement* parent,
         // covered the first rows of the list it was documenting, including the
         // selected one. The help reads better as a line that is simply always
         // there, under the row rather than over it.
-        InspectorUI::AddInfoCard(parent, std::string(Vocab::ConditionKindHelp(condition.Kind)));
+        InspectorUI::AddInfoCard(parent, std::string(Vocab::ConditionKindHelp(condition.Kind, terrainDomain)));
     }
 
     // ---- the band: one row, two handles ----
@@ -474,6 +518,8 @@ void AddConditionRows(const InspectorContext& ctx, UIElement* parent,
     FloatField* highField = highFieldOwned.get();
     highField->SetValue(condition.Max);
     highField->SetFixedDecimalPlaces(BandFieldDecimals(condition.Kind));
+    if (condition.Kind == Kind::HeightMeters)
+        highField->SetNoneValue(TerrainECS::kDefaultHeightDomainMaxMeters, std::string(Vocab::kNoUpperLimitText));
     ApplySliderFloatValueFieldStyle(highField);
     bandField->AddChild(std::move(highFieldOwned));
 
@@ -492,6 +538,9 @@ void AddConditionRows(const InspectorContext& ctx, UIElement* parent,
     // Slider header states this obligation for exactly this case — companion UI
     // that maps values to x "must mirror" GetTrackPaddingPx().
     UIElement* profileRow = InspectorUI::AddRow(parent);
+    // A refused band has no unit, so the row hides its weight preview. A kind pick rebuilds the row.
+    if (condition.RefusedKind != 0)
+        profileRow->Style().Set(Style::Display, DisplayMode::None);
     InspectorUI::AddLabel(profileRow, "");
     UIElement* profileField = InspectorUI::AddFieldContainer(profileRow);
     ApplySliderWithValueContainerStyle(profileField);
@@ -594,11 +643,11 @@ void AddConditionRows(const InspectorContext& ctx, UIElement* parent,
     // BOTH handles route through this one callback, and its argument is always
     // the HIGH value (the low thumb notifies without changing Field's value), so
     // the pair is read off the slider rather than taken from the argument.
-    band->SetOnValueChanging([band, bandPreview](const float&) {
-        bandPreview(RuleBand{band->GetRangeStart(), band->GetValue()});
+    band->SetOnValueChanging([band, highField, bandPreview, domain](const float&) {
+        bandPreview(RuleBand{band->GetRangeStart(), BandHighFromSlider(*band, *highField, domain.Max)});
     });
-    band->SetOnValueChanged([band, bandCommit](const float&) {
-        bandCommit(RuleBand{band->GetRangeStart(), band->GetValue()});
+    band->SetOnValueChanged([band, highField, bandCommit, domain](const float&) {
+        bandCommit(RuleBand{band->GetRangeStart(), BandHighFromSlider(*band, *highField, domain.Max)});
     });
 
     // Typed edges commit directly. Each field owns ONE end, and neither reorders
@@ -710,14 +759,14 @@ void RemoveCondition(const RuleEditTarget& target, uint32 ruleIndex, uint32 cond
     RequestRebuild(target);
 }
 
-void AddCondition(const RuleEditTarget& target, uint32 ruleIndex, float32 terrainHeightMetres)
+void AddCondition(const RuleEditTarget& target, uint32 ruleIndex, Vocab::ConditionDomain heightRangeMeters)
 {
     EditRules(target, "Add Rule Condition", [=](RulesEffect& u) {
         TerrainSurfaceRule& r = u.Rules[ruleIndex];
         if (r.ConditionCount >= kMaxTerrainRuleConditions)
             return;
         r.Conditions[r.ConditionCount] =
-            Vocab::MakeDefaultCondition(Kind::SlopeDegrees, terrainHeightMetres);
+            Vocab::MakeDefaultCondition(Kind::SlopeDegrees, heightRangeMeters);
         ++r.ConditionCount;
     });
     RequestRebuild(target);
@@ -741,7 +790,7 @@ void RemoveRule(const RuleEditTarget& target, uint32 ruleIndex)
 
 void AddRuleRow(const InspectorContext& ctx, UIElement* parent, const RulesEffect& effect,
                 uint32 ruleIndex, const Components::Terrain* terrain,
-                TerrainMaterialLibraryAsset* library, float32 terrainHeightMetres)
+                TerrainMaterialLibraryAsset* library, Vocab::ConditionDomain heightRangeMeters)
 {
     const RuleEditTarget target = MakeEditTarget(ctx);
     const TerrainSurfaceRule& rule = effect.Rules[ruleIndex];
@@ -752,7 +801,7 @@ void AddRuleRow(const InspectorContext& ctx, UIElement* parent, const RulesEffec
     // collapsed stays collapsed through the rebuild every discrete edit triggers.
     Foldout* section = InspectorUI::AddComponentSection(
         parent, "TerrainSurfaceRules/Rule" + std::to_string(ruleIndex),
-        "Rule " + std::to_string(ruleIndex + 1) + " - "
+        "Rule " + std::to_string(ruleIndex + 1) + " - " + std::string(Vocab::RuleHeadingQualifier(rule))
             + (terrain ? Editor::TerrainRoleMaterials::RoleLabel(*terrain, library,
                                                                 rule.MaterialSlot)
                        : std::to_string(rule.MaterialSlot)));
@@ -773,8 +822,8 @@ void AddRuleRow(const InspectorContext& ctx, UIElement* parent, const RulesEffec
         section, ctx.Window,
         {{"Add Condition", EditorIcons::kPlus, !conditionsFull,
           conditionsFull ? "limit reached" : "",
-          [target, ruleIndex, terrainHeightMetres] {
-              AddCondition(target, ruleIndex, terrainHeightMetres);
+          [target, ruleIndex, heightRangeMeters] {
+              AddCondition(target, ruleIndex, heightRangeMeters);
           }},
          {"Remove Rule", EditorIcons::kTrash, true, "",
           [target, ruleIndex] { RemoveRule(target, ruleIndex); }}});
@@ -913,7 +962,8 @@ void AddRuleRow(const InspectorContext& ctx, UIElement* parent, const RulesEffec
 
         if (UIElement* conditionBody =
                 conditionSection ? conditionSection->GetContentContainer() : nullptr)
-            AddConditionRows(ctx, conditionBody, rule, ruleIndex, c, terrainHeightMetres,
+            AddConditionRows(ctx, conditionBody, rule, ruleIndex, c, heightRangeMeters,
+                             terrain ? terrain->Domain : Components::TerrainDomain::Planar,
                              conditionRefreshers);
     }
 
@@ -924,22 +974,50 @@ void AddRuleRow(const InspectorContext& ctx, UIElement* parent, const RulesEffec
         Editor::AddConditionCapNotice(body, ruleIndex, conditionCount);
 }
 
+// The meters domain: a flat terrain's own height range, so a meters heightmap at Height Scale 1
+// authors its real relief; a planet's relief range about its radius. Empty with no terrain.
+Vocab::ConditionDomain TerrainHeightRangeMeters(ECS::World* world, ECS::EntityHandle terrainEntity,
+                                                const Components::Terrain* terrain)
+{
+    TerrainECS::TerrainService* terrainService = TerrainECS::TerrainService::TryGet();
+    if (!terrain || !terrainService)
+        return {0.0f, 0.0f};
+    if (terrain->Domain != Components::TerrainDomain::Spherical)
+    {
+        const TerrainECS::TerrainHeightRangeMeters range = terrainService->GetHeightRangeMeters(
+            *terrain, world ? TerrainECS::ResolveGeneratedNoiseRelief(*world) : std::nullopt);
+        return {range.Min, range.Max};
+    }
+    const Components::TerrainPlanetRelief* relief =
+        world ? world->GetComponent<Components::TerrainPlanetRelief>(terrainEntity) : nullptr;
+    if (!relief)
+        return {0.0f, 0.0f};
+    const TerrainECS::TerrainHeightRangeMeters range = TerrainECS::PlanetHeightRangeMeters(*relief);
+    return {range.Min, range.Max};
+}
+
 } // namespace
 
 void AddTerrainSurfaceRuleRows(const InspectorContext& ctx, const RulesEffect& effect,
-                               const Components::Terrain* terrain,
+                               ECS::EntityHandle terrainEntity,
                                TerrainMaterialLibraryAsset* library)
 {
     if (!ctx.Parent)
         return;
 
+    const Components::Terrain* terrain =
+        ctx.World && terrainEntity.IsValid() ? ctx.World->GetComponent<Components::Terrain>(terrainEntity) : nullptr;
     const RuleEditTarget target = MakeEditTarget(ctx);
-    const float32 terrainHeightMetres = terrain ? terrain->HeightScale : 0.0f;
+    const Components::TerrainDomain terrainDomain = terrain ? terrain->Domain : Components::TerrainDomain::Planar;
+    const Vocab::ConditionDomain heightRangeMeters = TerrainHeightRangeMeters(ctx.World, terrainEntity, terrain);
     const uint32 ruleCount = std::min<uint32>(effect.RuleCount, kMaxTerrainSurfaceRules);
 
+    Editor::AddSurfaceRulesPlanetNotice(ctx.Parent, terrainDomain);
     Editor::AddSurfaceRulesEmptyNotice(ctx.Parent, ruleCount);
 
     InspectorUI::AddInfoCard(ctx.Parent, std::string(Vocab::SurfaceRulesSectionHelp()));
+    if (const std::string rangeNote = Vocab::HeightRangeNote(heightRangeMeters, terrainDomain); !rangeNote.empty())
+        InspectorUI::AddInfoCard(ctx.Parent, rangeNote);
 
     // Add Rule LEADS the list. Under every rule and condition foldout it sat
     // roughly a fifth of a panel below the fold, so the affordance that starts
@@ -961,11 +1039,12 @@ void AddTerrainSurfaceRuleRows(const InspectorContext& ctx, const RulesEffect& e
                         RequestRebuild(target);
                     },
                     rulesFull);
+    AddTerrainRulePresetRow(ctx, terrainDomain, {heightRangeMeters.Min, heightRangeMeters.Max});
     if (rulesFull)
         Editor::AddRuleCapNotice(ctx.Parent, ruleCount);
 
     for (uint32 r = 0; r < ruleCount; ++r)
-        AddRuleRow(ctx, ctx.Parent, effect, r, terrain, library, terrainHeightMetres);
+        AddRuleRow(ctx, ctx.Parent, effect, r, terrain, library, heightRangeMeters);
 }
 
 } // namespace GameEngine

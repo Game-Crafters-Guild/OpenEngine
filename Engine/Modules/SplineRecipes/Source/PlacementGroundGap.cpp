@@ -141,7 +141,9 @@ void MeasureRouteGroundGaps(ECS::World& world, ECS::EntityHandle route,
 
         PieceGroundGap gap{};
         gap.Piece = child;
-        MeasurePieceGroundGap(ground, bounds->Box, Mathematics::Matrix4x4::FromColumnMajor(worldTransform->matrix), gap);
+        MeasurePieceGroundGap(ground, bounds->Box,
+                              worldTransform->ToMatrix4x4(worldTransform->GetPosition() - Mathematics::WorldPosition{}),
+                              gap);
         out.push_back(gap);
     }
 }

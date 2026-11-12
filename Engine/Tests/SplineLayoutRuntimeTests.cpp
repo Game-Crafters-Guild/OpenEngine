@@ -60,6 +60,6 @@ TEST(SplineLayoutRuntime, SurfaceCallbackAndPoseHelpersNeedNoEditor)
     const auto inverse = Layout::InvertPlacerWorld(identity.Data());
     Components::Transform transform;
     Layout::WriteParentLocalPose(transform, inverse, poses.front(), Layout::PieceAxis::Z, 1);
-    EXPECT_FLOAT_EQ(transform.GetPosition().y, 4);
+    EXPECT_DOUBLE_EQ(transform.GetPosition().Y, 4.0);
     EXPECT_GT(Layout::CenterlineSampleCount(6), 2u);
 }

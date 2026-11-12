@@ -192,8 +192,8 @@ GameEngine::Components::OceanRenderer addable=1 doNotSerialize=0
   LodDataResolution type=8 offset=8 size=4 category=0 flags=0 label=LOD Data Resolution tooltip=Texel resolution per axis for ocean simulation cascades.
   MinScale type=10 offset=12 size=4 category=0 flags=0 range=1..256 tooltip=World size of the finest ocean cascade. Smaller values concentrate detail near the camera.
   MaxScale type=10 offset=16 size=4 category=0 flags=0 range=1..4096 tooltip=Maximum world size of the coarsest ocean cascade.
-  GeometryUpSampleFactor type=8 offset=20 size=4 category=0 flags=0 tooltip=Multiplier for the camera-centered ocean grid density.
-  GeometryDownSampleFactor type=8 offset=24 size=4 category=0 flags=0 tooltip=Divider for ocean grid density and triangle count.
+  GeometryUpSampleFactor type=8 offset=20 size=4 category=0 flags=0 tooltip=Water mesh detail near the camera: 3 is the default; 4 for close shots. Cells per tile side = 8 x Up / Down, 8 to 64.
+  GeometryDownSampleFactor type=8 offset=24 size=4 category=0 flags=0 tooltip=Lowers the water mesh detail: 1 is the default; 2 for slow GPUs, with a quarter of the triangles. Cells per tile side = 8 x Up / Down.
   GravityMultiplier type=10 offset=28 size=4 category=0 flags=0 range=0..10 tooltip=Scales wave dispersion gravity for FFT and dynamic waves.
   TimeScale type=10 offset=32 size=4 category=0 flags=0 range=0..4 tooltip=Multiplies ocean animation time. 0 freezes wave and simulation motion.
   TimeOffset type=10 offset=36 size=4 category=0 flags=0 range=-1e+05..1e+05 tooltip=Offsets ocean animation phase without changing speed.

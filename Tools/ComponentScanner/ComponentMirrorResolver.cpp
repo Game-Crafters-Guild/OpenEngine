@@ -37,18 +37,23 @@ constexpr std::int64_t kSaturated = std::numeric_limits<std::int64_t>::max();
 
 // The layouts of the hand-written kinds of Scripting.Bindings: a GUID is 16 bytes, Math::Curve is
 // CurveBase<32> (a key count, 3 bytes of padding and 32 keys of 20 bytes), a BoundingBox is two
-// Vector3. The layout pins prove them for every field that holds one.
+// Vector3, a WorldPosition is three doubles and a Matrix3x3 is three float columns. The layout pins
+// prove them for every field that holds one.
 constexpr std::uint32_t kAssetGuidSize = 16;
 constexpr std::uint32_t kCurveSize = 644;
 constexpr std::uint32_t kCurveAlign = 4;
 constexpr std::uint32_t kBoundingBoxSize = 24;
 constexpr std::uint32_t kBoundingBoxAlign = 4;
+constexpr std::uint32_t kWorldPositionSize = 24;
+constexpr std::uint32_t kWorldPositionAlign = 8;
+constexpr std::uint32_t kMatrix3x3Size = 36;
+constexpr std::uint32_t kMatrix3x3Align = 4;
 
 constexpr std::string_view kNoKindFix =
     "give it a type a mirror holds (a scalar, a Mathematics type, ColorLinear, ECS::EntityHandle, StringId, "
-    "Rendering::RenderLayerMask, an AssetRef, GUID, Math::Curve, Mathematics::BoundingBox, an enum, a reflected "
-    "struct, or a fixed array of one of them; a char array for text), or mark the component // @ge-engine-internal "
-    "when it is engine runtime state";
+    "Rendering::RenderLayerMask, an AssetRef, GUID, Math::Curve, Mathematics::BoundingBox, Mathematics::WorldPosition, "
+    "Mathematics::Matrix3x3, an enum, a reflected struct, or a fixed array of one of them; a char array for text), or mark "
+    "the component // @ge-engine-internal when it is engine runtime state";
 
 // The types a generated mirror would collide with or hide: the hand-written types of
 // GameEngine.Scripting in Scripting.Bindings and ECS.ABI, GameEngine.Entity, and the
@@ -70,6 +75,7 @@ constexpr std::string_view kHandWrittenTypes[] = {
     "EngineCallException",
     "Entity",
     "IComponent",
+    "Matrix3x3",
     "Matrix4x4",
     "Quaternion",
     "RenderLayerMask",
@@ -80,6 +86,7 @@ constexpr std::string_view kHandWrittenTypes[] = {
     "Vector2",
     "Vector3",
     "Vector4",
+    "WorldPosition",
 };
 
 // One enum declaration of the mirror's table.
@@ -416,6 +423,10 @@ class Resolver
             return FieldType{MirrorKind::Curve, ApiKind::Void, {}, kCurveSize, kCurveAlign};
         if (NamesFromScope(base, "GameEngine::Mathematics::BoundingBox", owner.CppName))
             return FieldType{MirrorKind::BoundingBox, ApiKind::Void, {}, kBoundingBoxSize, kBoundingBoxAlign};
+        if (NamesFromScope(base, "GameEngine::Mathematics::WorldPosition", owner.CppName))
+            return FieldType{MirrorKind::WorldPosition, ApiKind::Void, {}, kWorldPositionSize, kWorldPositionAlign};
+        if (NamesFromScope(base, "GameEngine::Mathematics::Matrix3x3", owner.CppName))
+            return FieldType{MirrorKind::Matrix3x3, ApiKind::Void, {}, kMatrix3x3Size, kMatrix3x3Align};
 
         const std::size_t enumIndex = LookUp(base, owner.CppName, m_EnumNames);
         if (enumIndex == kAmbiguous)

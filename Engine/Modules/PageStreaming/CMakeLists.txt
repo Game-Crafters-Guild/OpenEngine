@@ -19,9 +19,11 @@ add_library(PageStreaming OBJECT
     Source/PageStore/PageStoreReader.cpp
     Source/PageLoader.cpp
     Source/PageCache.cpp
+    Source/CpuPage/CpuPageEntries.cpp
     Source/PageResidency.cpp
     Source/GeneratedHeightPageProvider.cpp
     Source/Height/HeightPageLayer.cpp
+    Source/Height/HeightLayerStore.cpp
     Source/Height/HeightStoreKey.cpp
     Source/Height/HeightStoreCache.cpp
     Source/Height/HeightSourceRows.cpp
@@ -54,6 +56,8 @@ target_link_libraries(PageStreaming
         AssetCore
         # Mathematics::Vector3 in the public headers (PageStoreFormat.h, HeightPageCooker.h).
         Mathematics
+        # Terrain::TerrainNoiseStack in GeneratedHeightPageProvider.h.
+        Terrain
     PRIVATE
         # The loader's reader threads (Assets/AssetIOService.h); objects link once into Engine.
         AssetRuntime
@@ -62,7 +66,6 @@ target_link_libraries(PageStreaming
         Memory
         FileSystem
         FileWatcher
-        Terrain
         Logger
         # The 16-bit PNG heightmap decode.
         Image

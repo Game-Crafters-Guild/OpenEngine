@@ -38,6 +38,7 @@ struct GPUCullingData {
 };
 
 #include "Includes/cull_pass_membership.glsl"
+#include "Includes/instance_sector.glsl"
 
 #define GE_CULL_DEFORMATION_MARGIN_BINDING 6
 #include "Includes/cull_deformation_margin.glsl"
@@ -79,19 +80,9 @@ layout(push_constant) uniform PushConstants {
     uint sliceOffset;   // element base into the shared visibility buffer for this slice
 } pc;
 
-// Inward-pointing, CPU-normalized planes (ExtractFrustumPlanes). Identical to
-// frustum_culling.comp's TestSphereFrustum: camera-relative (plane offsets were
-// translated by n*cameraPos on the CPU), so testing (center - cameraPos) keeps
-// the dot small-magnitude and avoids the big-minus-big collapse at planetary
-// distance. Bit-identical when cameraPos is (0,0,0).
-bool TestSphereFrustum(vec3 center, float radius, vec4 planes[6], vec3 cameraPos) {
-    vec3 rel = center - cameraPos;
-    for (int i = 0; i < 6; ++i) {
-        vec4 p = planes[i];
-        if (dot(rel, p.xyz) + p.w < -radius) return false;
-    }
-    return true;
-}
+// The planes are relative to the origin of cullingData.originSector, as in
+// frustum_culling.comp. `center` is relative to that origin.
+#include "Includes/frustum_tests.glsl"
 
 // NDC.xy -> UV with the engine's negative-viewport Y flip (matches
 // gtao.comp::view_pos_from_raw and shadow_sampling::GE_CascadeShadowUV). The
@@ -102,9 +93,10 @@ vec2 NdcToUV(vec2 ndc) {
 }
 
 // Reverse-Z Hi-Z occlusion test. Returns true = possibly visible (do NOT cull).
-bool HzbTest(vec3 worldCenter, float radius) {
+// `center` is relative to the origin of cullingData.originSector, the frame of viewMatrix.
+bool HzbTest(vec3 center, float radius) {
     // View space (LH, +Z forward).
-    vec3 viewCenter = (cullingData.viewMatrix * vec4(worldCenter, 1.0)).xyz;
+    vec3 viewCenter = (cullingData.viewMatrix * vec4(center, 1.0)).xyz;
     float viewZ = viewCenter.z;
 
     // Near-plane crossing / behind camera: the sphere bound is unreliable there
@@ -167,12 +159,14 @@ void main() {
     GPUInstance instance = instances[instanceIndex];
 
     float radius = DeformedCullRadius(instance) * cullingData.cullMargins[0];
-    bool f = TestSphereFrustum(instance.boundingCenter, radius, cullingData.frustumPlanes[0], cullingData.cameraPosition);
-    f = f && (instance.renderLayerMask & cullingData.renderLayerMask) != 0u;
+    vec3 center = ge_SectorRelativePoint(instance.boundingCenter, instance.sectorPacked0,
+                                         instance.sectorPacked1, cullingData.originSector);
+    bool inFrustum = !SphereOutsideFrustum(center, radius, cullingData.frustumPlanes[0]);
+    inFrustum = inFrustum && (instance.renderLayerMask & cullingData.renderLayerMask) != 0u;
     // The pass membership frustum_culling.comp applies: an HZB main view is a
     // color dispatch, so it drops shadows-only instances, and in the Scene View
     // the ones its eye hides.
-    f = f && InstanceInPass(instance.flags, cullingData.passFlags);
+    inFrustum = inFrustum && InstanceInPass(instance.flags, cullingData.passFlags);
 
     uint outVis;
     if (cullingData.hzbMode == 2u) {
@@ -181,18 +175,18 @@ void main() {
         // the margin carries skinned-pose slack (bind-pose bounds), and a false
         // occlusion cull persists via the prevVisible drop-out — unlike a
         // frustum miss, it is not confined to screen edges.
-        bool h = f && HzbTest(instance.boundingCenter, radius);
-        bool drawnInA = f && (prevVisible[instanceIndex] != 0u);
-        outVis = (h && !drawnInA) ? 1u : 0u;
-        prevVisible[instanceIndex] = h ? 1u : 0u;
+        bool passesHzb = inFrustum && HzbTest(center, radius);
+        bool drawnInA = inFrustum && (prevVisible[instanceIndex] != 0u);
+        outVis = (passesHzb && !drawnInA) ? 1u : 0u;
+        prevVisible[instanceIndex] = passesHzb ? 1u : 0u;
 
-        if (f) atomicAdd(stats.frustumPassed, 1u);
-        if (f && !h) atomicAdd(stats.hzbCulled, 1u);
+        if (inFrustum) atomicAdd(stats.frustumPassed, 1u);
+        if (inFrustum && !passesHzb) atomicAdd(stats.hzbCulled, 1u);
         if (outVis != 0u) atomicAdd(stats.recovered, 1u);
-        if (h) atomicAdd(stats.prevVisibleNew, 1u);
+        if (passesHzb) atomicAdd(stats.prevVisibleNew, 1u);
     } else {
         // PHASE A: frustum AND last frame's visible set (prevVisible read-only).
-        outVis = (f && (prevVisible[instanceIndex] != 0u)) ? 1u : 0u;
+        outVis = (inFrustum && (prevVisible[instanceIndex] != 0u)) ? 1u : 0u;
     }
 
     visibility[pc.sliceOffset + localIndex] = outVis;

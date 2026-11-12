@@ -7,21 +7,28 @@ endif()
 add_executable(MathematicsTests
     AngleTests.cpp
     CurveEvaluationTests.cpp
+    Float8Tests.cpp
     GeometryTests.cpp
     MathInterpolationTests.cpp
     QuaternionTests.cpp
+    RectTests.cpp
     RectIntTests.cpp
     TriangulationTests.cpp
     Matrix3x3AffineTests.cpp
     Matrix4x4Tests.cpp
+    MulAddTests.cpp
+    TranscendentalTests.cpp
     Vector3IntTests.cpp
     Vector3Tests.cpp
+    Vector3F64Tests.cpp
     VectorComponentTests.cpp
+    WorldPositionTests.cpp
 )
 
 target_link_libraries(MathematicsTests
     PRIVATE
         Mathematics
+        Types
         GTest::gtest
         GTest::gtest_main
 )

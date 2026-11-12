@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Mathematics/Quaternion.h"
+#include "Mathematics/WorldPosition.h"
 #include "Types/Types.h"
 
 #include <algorithm>
@@ -93,43 +94,6 @@ inline constexpr uint32 kNavMeshTileCells = 64;
 inline constexpr uint32 kNavChartTilesPerSide = 64;
 inline constexpr uint32 kNavChartTilePool = kNavChartTilesPerSide * kNavChartTilesPerSide;
 
-// Metres in one world sector: the size of Components::WorldSectorCoord, which this module cannot
-// include (PathfindingECS checks that the two agree).
-inline constexpr float32 kNavChartSectorSize = 1024.0f;
-
-// Where a chart's frame sits in the world, exactly: an integer world sector plus a float offset
-// inside it, the representation the render origin uses. A world point converts to the chart by
-// subtracting the sector in integers and the offset in float, so a chart 100 km out keeps the
-// precision of one at the origin.
-struct ChartOrigin
-{
-    int32 SectorX = 0;
-    int32 SectorY = 0;
-    int32 SectorZ = 0;
-    float32 LocalX = 0.0f;
-    float32 LocalY = 0.0f;
-    float32 LocalZ = 0.0f;
-
-    // The origin at world point (x, y, z): the sector that holds it and the offset inside it.
-    static ChartOrigin AtWorld(float64 x, float64 y, float64 z)
-    {
-        ChartOrigin origin;
-        origin.SectorX = static_cast<int32>(std::floor(x / kNavChartSectorSize));
-        origin.SectorY = static_cast<int32>(std::floor(y / kNavChartSectorSize));
-        origin.SectorZ = static_cast<int32>(std::floor(z / kNavChartSectorSize));
-        origin.LocalX = static_cast<float32>(x - static_cast<float64>(origin.SectorX) * kNavChartSectorSize);
-        origin.LocalY = static_cast<float32>(y - static_cast<float64>(origin.SectorY) * kNavChartSectorSize);
-        origin.LocalZ = static_cast<float32>(z - static_cast<float64>(origin.SectorZ) * kNavChartSectorSize);
-        return origin;
-    }
-
-    float64 WorldX() const { return static_cast<float64>(SectorX) * kNavChartSectorSize + LocalX; }
-    float64 WorldY() const { return static_cast<float64>(SectorY) * kNavChartSectorSize + LocalY; }
-    float64 WorldZ() const { return static_cast<float64>(SectorZ) * kNavChartSectorSize + LocalZ; }
-
-    bool operator==(const ChartOrigin&) const = default;
-};
-
 // The unit that owns one Detour mesh: a frame (origin and rotation) and a span. Detour runs in the
 // chart's own coordinates with its origin at zero, so every tile's vertices are floats within a
 // span of zero wherever the chart sits. Rotation is the frame's orientation; a chart is
@@ -138,23 +102,24 @@ struct ChartOrigin
 struct NavMeshChart
 {
     uint32 Id = 0;
-    ChartOrigin Origin;
+    // Where the chart's frame sits in the world, exactly.
+    Mathematics::WorldPosition Origin;
     Mathematics::Quaternion Rotation;
     // Metres along each side.
     float32 Span = 0.0f;
 
-    // World point to chart-local, and back.
+    // World point to chart-local, and back. Both subtract or add the origin in double.
     void ToChart(float64 x, float64 y, float64 z, float32 out[3]) const
     {
-        out[0] = static_cast<float32>(x - Origin.WorldX());
-        out[1] = static_cast<float32>(y - Origin.WorldY());
-        out[2] = static_cast<float32>(z - Origin.WorldZ());
+        out[0] = static_cast<float32>(x - Origin.X);
+        out[1] = static_cast<float32>(y - Origin.Y);
+        out[2] = static_cast<float32>(z - Origin.Z);
     }
     void ToWorld(const float32 local[3], float64 out[3]) const
     {
-        out[0] = Origin.WorldX() + local[0];
-        out[1] = Origin.WorldY() + local[1];
-        out[2] = Origin.WorldZ() + local[2];
+        out[0] = Origin.X + local[0];
+        out[1] = Origin.Y + local[1];
+        out[2] = Origin.Z + local[2];
     }
     bool HasIdentityRotation() const
     {
@@ -239,7 +204,7 @@ enum class GridSolveEnd : uint8
     Reached,     ///< A path reaches the goal cell.
     Refused,     ///< The start or the goal is off the grid or on a blocked cell; no search.
     OtherRegion, ///< The goal is outside the start's region; no search.
-    Unreachable  ///< The search closed every cell it could reach from the start and did not reach the goal.
+    Unreachable  ///< No step joins the start to the goal: the search ran out of cells from the start or from the goal.
 };
 inline constexpr uint32 kGridSolveEndCount = 4;
 
@@ -249,7 +214,7 @@ struct GridSolveRecord
 {
     uint32 StartX = 0, StartZ = 0;
     uint32 GoalX = 0, GoalZ = 0;
-    uint32 Expansions = 0;      ///< Cells the search closed.
+    uint32 Expansions = 0;      ///< Cells the search closed, from the start and from the goal.
     uint32 Microseconds = 0;    ///< Wall time of the solve, path smoothing included.
     uint32 AgentCellRadius = 0; ///< The footprint radius the search tested, in cells; 0 tests the cell only.
     GridSolveEnd End = GridSolveEnd::Refused;

@@ -21,7 +21,7 @@ public:
     bool IsCancelled() const noexcept { return m_Cancelled.load(std::memory_order_acquire); }
 
     /// The flag itself, for an engine API that polls a raw flag: pass its address as
-    /// HttpClient's PostOptions::Cancellation. Lives as long as the token.
+    /// the Cancellation of HttpClient's PostOptions or GetOptions. Lives as long as the token.
     const std::atomic<bool>& Flag() const noexcept { return m_Cancelled; }
 
 private:

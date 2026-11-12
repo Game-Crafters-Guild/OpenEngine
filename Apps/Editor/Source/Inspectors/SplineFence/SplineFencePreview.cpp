@@ -13,6 +13,7 @@
 #include "UI/Registration/ElementRegistration.h"
 #include "UI/ResolvedStyle.h"
 #include "UI/StyleProperties.h"
+#include "UI/StyleUtil.h"
 #include "UI/UIPrimitive.h"
 
 #include <algorithm>
@@ -137,16 +138,6 @@ FencePieceBounds ResolvedBounds(const SplineRecipes::FencePool& pool, uint32 slo
     const SplineRecipes::FenceMeshBounds* found = FindMeasured(measured, pool.Meshes[slot]);
     outMeasured = found != nullptr;
     return found ? found->Bounds : StandInBounds(kind, spanLength);
-}
-
-void SetShown(UIElement* element, bool shown)
-{
-    if (!element)
-        return;
-    if (shown)
-        element->RemoveClass("hidden");
-    else
-        element->AddClass("hidden");
 }
 
 // The along length of `bounds` along its piece axis, in meters.
@@ -467,7 +458,7 @@ void SplineFencePreview::Relayout()
     if (m_GateLength)
     {
         m_GateLength->SetText(gateLength);
-        SetShown(m_GateLength, !gateLength.empty());
+        UIUtil::SetShown(*m_GateLength, !gateLength.empty());
     }
     for (const SplineLayout::FenceCrest& crest : built.Crests)
     {
@@ -599,6 +590,9 @@ void SplineFencePreview::AddShape(const SplineLayout::TilePose& pose, const Fenc
 
 void SplineFencePreview::UpdateLegend()
 {
+    // The strip built without its layout has no legend; a loaded layout holds every required id.
+    if (!m_Note)
+        return;
     const bool anySpan = std::any_of(m_Shapes.begin(), m_Shapes.end(),
                                      [](const Shape& shape) { return shape.PartRole == Role::Span; });
     const bool anyGate = std::any_of(m_Shapes.begin(), m_Shapes.end(),
@@ -607,11 +601,11 @@ void SplineFencePreview::UpdateLegend()
                                       [](const Shape& shape) { return shape.PartRole == Role::Crest; });
     const bool anyStandIn =
         std::any_of(m_Shapes.begin(), m_Shapes.end(), [](const Shape& shape) { return !shape.Measured; });
-    SetShown(m_PostEntry, !m_Pools[kPostPool].Bounds.empty());
-    SetShown(m_SpanEntry, anySpan);
-    SetShown(m_GateEntry, anyGate);
-    SetShown(m_CrestEntry, anyCrest);
-    SetShown(m_Note, anyStandIn);
+    UIUtil::SetShown(*m_PostEntry, !m_Pools[kPostPool].Bounds.empty());
+    UIUtil::SetShown(*m_SpanEntry, anySpan);
+    UIUtil::SetShown(*m_GateEntry, anyGate);
+    UIUtil::SetShown(*m_CrestEntry, anyCrest);
+    UIUtil::SetShown(*m_Note, anyStandIn);
 }
 
 void SplineFencePreview::EmitShapes(UI::PrimitiveEmitContext& ctx, const RecipePreviewFrame& frame,

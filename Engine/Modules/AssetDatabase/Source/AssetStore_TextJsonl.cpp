@@ -1569,6 +1569,21 @@ bool AssetStore_TextJsonl::TryGetKeyValue(const GUID& guid, const std::string& k
     return true;
 }
 
+bool AssetStore_TextJsonl::RemoveKeyValue(const GUID& guid, const std::string& key, std::string* outError)
+{
+    (void)outError;
+    if (guid.IsNull() || key.empty())
+        return false;
+    std::lock_guard<std::mutex> lk(m_Mutex);
+    auto it = m_Assets.find(guid);
+    if (it == m_Assets.end())
+        return false;
+    // The save journals the whole record again without the key; the loader keeps the last record per GUID.
+    if (it->second.kv.erase(key) != 0)
+        m_DirtyAssets.insert(guid);
+    return true;
+}
+
 bool AssetStore_TextJsonl::AddRedirect(const GUID& from, const GUID& to, std::string* outError)
 {
     (void)outError;

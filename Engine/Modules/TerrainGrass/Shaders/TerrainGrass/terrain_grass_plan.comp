@@ -95,6 +95,8 @@ struct TerrainParamsEntry
     uint GrassControlBindless;
     uint ColorMapBindless;
     float GrassGroundTintHeight;
+    float LatticeOverhangX;
+    float LatticeOverhangZ;
 };
 
 struct DrawIndexedIndirectCommand
@@ -130,11 +132,11 @@ layout(std430, set = 0, binding = 3) GE_COHERENT buffer TerrainGrassIndirectArgs
 {
     DrawIndexedIndirectCommand drawArgs[kGrassLodCount];
     uint CandidatesConsidered;
-    uint CellsVisible;
+    uint CellsCounted;
     uint AcceptedBlades;
     uint FittedRangeScaleBits;
     uint Capacity;
-    uint _CounterPad0;
+    uint CellsPlaced;
     uint _CounterPad1;
     uint _CounterPad2;
 } Args;
@@ -148,28 +150,48 @@ layout(std140, set = 0, binding = 6) uniform GrassPlaceParamsBuffer
     vec4 ViewRotCol0;
     vec4 ViewRotCol1;
     vec4 ViewRotCol2;
-    // Worst case across every active grass terrain: x = densest blades per square metre at the
-    // camera, y = flattest falloff. The fit below is a BOUND, and these are what make it one.
+    // Worst case across every active grass terrain: x = densest blades per square meter at the
+    // camera, y = flattest falloff, z = thinnest blade (0 when a terrain draws cards), w = shortest
+    // blade; FloorThinning.x = widest blade. The fit below is a BOUND, and these are what make it one.
+    // FloorThinning.y = the lowest far-thinning dial, applied to every cell and to the bound.
     vec4 Summary;
     ivec4 RenderOriginSector; // read only by the emit kernel (terrain_grass_place.comp)
+    vec2 FloorThinning;
+    float BladeReach; // read by the classify kernel
+    float MaxBladeHeight; // read by the classify kernel
 } Place;
 
 shared uint sRingCells[kGrassMaxRings];
 shared uvec2 sScan[kPlanWorkgroupSize];
 shared uint sReduce[kPlanWorkgroupSize];
 shared float sFittedScale;
-shared uint sVisibleCells;
+shared uint sCountedCells;
+shared uint sPlacedCells;
 
-// Upper bound on the slots one cell of `ring` wants at radius scale `scale`. The ring's INNER
-// distance is used because that is the closest a cell of that ring can sit and a closer cell wants
-// more slots; the terrain SUMMARY dominates every per-terrain value for the same reason. Together
-// they make the total below a bound the per-cell sweep cannot exceed, so nothing downstream needs
-// a runtime clamp when slots are handed out.
+// Pixels per meter at one meter from the eye (H * P11 / 2), 0 when the view has no pixel size.
+float floorThinningPixelsPerMeter()
+{
+    return Place.ViewRotCol0.w * Place.ViewRotCol2.w * 0.5;
+}
+
+// The camera above the world's lowest ground: at least every cell's h, so the ring bound holds.
+float floorThinningCameraHeight()
+{
+    return Place.CameraPos.y - Place.Bounds.x;
+}
+
+// Upper bound on the slots one cell of `ring` wants at radius scale `scale`: the ring's inner distance
+// and the terrain summary dominate every cell of the ring, so the total below bounds the per-cell sweep
+// and the slot hand-out needs no runtime clamp.
 uint ringSlotBound(uint ring, float scale)
 {
     float range = (Place.Bounds.w - kGrassCellSize) * scale;
-    float wanted = GrassSlotsWantedForCell(Place.Summary.x, range, Place.Summary.y,
-                                           float(ring) * kGrassCellSize);
+    float distanceToRing = float(ring) * kGrassCellSize;
+    float wanted = GrassSlotsWantedForCell(Place.Summary.x, range, Place.Summary.y, distanceToRing);
+    float floorShare = GrassFloorThinningRingFactor(wanted / kGrassCellArea, Place.FloorThinning.x, Place.Summary.z,
+                                                    Place.Summary.w, distanceToRing, floorThinningCameraHeight(),
+                                                    floorThinningPixelsPerMeter());
+    wanted *= GrassFarThinningKeptShare(floorShare, Place.FloorThinning.y);
     return GrassSlotsToIterate(wanted);
 }
 
@@ -218,6 +240,19 @@ uint cellSlots(uint cell, int span, float fittedScale, uint terrainIdx, out floa
     float range = max(tp.GrassRange, 0.0) * Place.CameraPos.w * fittedScale;
     slotsWanted = GrassSlotsWantedForCell(nearDensity, range, tp.GrassDensityFalloff,
                                           distanceToCamera);
+    // The kept slots are a prefix of the Halton order, and the slots above leave by the growth ramp.
+    // The ground Y of the cell center and under the camera, both written by the classify kernel. The
+    // floor reads the view depth of the cell center on the lower of the two, as the place kernel does.
+    float cellGroundY = uintBitsToFloat(CellPlan.Cells[cell].SlotsWantedBits);
+    float groundUnderCameraY = uintBitsToFloat(CellPlan.RingCells[kGrassCameraGroundWord]);
+    vec3 forward = vec3(Place.ViewRotCol0.z, Place.ViewRotCol1.z, Place.ViewRotCol2.z);
+    vec2 toCenter = centre - Place.CameraPos.xz;
+    float depthAtEyeHeight = forward.x * toCenter.x + forward.z * toCenter.y;
+    float bladeWidth = textureGrass ? 0.0 : tp.GrassBladeWidth;
+    float floorShare = GrassFloorThinningCellFactor(slotsWanted / kGrassCellArea, bladeWidth, tp.GrassBladeHeight,
+                                                    distanceToCamera, depthAtEyeHeight, forward.y, Place.CameraPos.y,
+                                                    cellGroundY, groundUnderCameraY, floorThinningPixelsPerMeter());
+    slotsWanted *= GrassFarThinningKeptShare(floorShare, Place.FloorThinning.y);
     lod = distanceToCamera < Place.Bounds.z ? 0u : 1u;
     return GrassSlotsToIterate(slotsWanted);
 }
@@ -229,7 +264,7 @@ void main()
     uint cellCount = span <= 0 ? 0u : min(uint(span) * uint(span), kGrassMaxCells);
     uint capacity = Args.Capacity;
 
-    // The histogram the classify kernel filled, and the visible-cell tally it implies.
+    // The histogram the classify kernel filled, and the tally of the cells it counts.
     uint ringCount = 0u;
     if (lane < kGrassMaxRings)
     {
@@ -246,10 +281,13 @@ void main()
         barrier();
     }
     if (lane == 0u)
-        sVisibleCells = sReduce[0];
+    {
+        sCountedCells = sReduce[0];
+        sPlacedCells = 0u;
+    }
     barrier();
 
-    // ---- Fit the density radius to the pool, against the cells this view actually sees ----
+    // ---- Fit the density radius to the pool, against the cells whose height band is in view ----
     //
     // The same fit the CPU runs, with the frustum share MEASURED instead of assumed. Spending the
     // budget by shortening the density curve rather than by cutting cells is what keeps the field
@@ -295,6 +333,7 @@ void main()
     uint last = min(first + chunk, cellCount);
 
     uvec2 mine = uvec2(0u);
+    uint placedCells = 0u;
     for (uint cell = first; cell < last; ++cell)
     {
         uint packed = CellPlan.Cells[cell].LodAndTerrain;
@@ -312,8 +351,13 @@ void main()
         CellPlan.Cells[cell].LodAndTerrain =
             slots > 0u ? (kGrassCellValidBit | (lod << kGrassCellLodShift) | terrainIdx) : 0u;
         if (slots > 0u)
+        {
             mine[lod] += slots;
+            ++placedCells;
+        }
     }
+    // The scan's barriers below complete this sum before lane 0 writes it.
+    atomicAdd(sPlacedCells, placedCells);
 
     sScan[lane] = mine;
     barrier();
@@ -360,7 +404,8 @@ void main()
         Args.drawArgs[1].FirstInstance = capacity - totals.y;
 
         Args.CandidatesConsidered = totals.x + totals.y;
-        Args.CellsVisible = sVisibleCells;
+        Args.CellsCounted = sCountedCells;
+        Args.CellsPlaced = sPlacedCells;
         // Zeroed here rather than by a CPU fill: the emit kernel accumulates into it immediately
         // after this dispatch, and the plan already owns every other counter in the block.
         Args.AcceptedBlades = 0u;

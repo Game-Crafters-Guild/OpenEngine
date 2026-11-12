@@ -32,6 +32,7 @@ struct GPUCullingData {
 };
 
 #include "Includes/cull_pass_membership.glsl"
+#include "Includes/instance_sector.glsl"
 
 #define GE_CULL_DEFORMATION_MARGIN_BINDING 3
 #include "Includes/cull_deformation_margin.glsl"
@@ -65,22 +66,9 @@ layout(push_constant) uniform PushConstants {
 	    uint sliceOffsets[4];
 } pushConstants;
 
-// Frustum culling test. Plane equations are ax + by + cz + d = 0 with inward-
-// pointing, CPU-normalized normals from ExtractFrustumPlanes(), whose offset d
-// was TRANSLATED by n*cameraPos on the CPU (MakeFrustumPlanesCameraRelative). So
-// the test runs camera-relative: (center - cameraPos) stays small-magnitude,
-// avoiding the big-minus-big collapse of dot(center, n) + d at planetary distance
-// (which culls everything). Mathematically identical to the world-space test, and
-// bit-identical when cameraPos is (0,0,0) (origin inactive => dark-ship).
-bool TestSphereFrustum(vec3 center, float radius, vec4 planes[6], vec3 cameraPos) {
-    vec3 rel = center - cameraPos;
-    for (int i = 0; i < 6; ++i) {
-        vec4 p = planes[i];
-        float dist = dot(rel, p.xyz) + p.w;
-        if (dist < -radius) return false;
-    }
-    return true;
-}
+// The planes come from the view-projection relative to the origin of cullingData.originSector.
+// `center` is relative to that origin, so both terms stay small at any distance.
+#include "Includes/frustum_tests.glsl"
 
 void main() {
 	    uint localIndex = gl_GlobalInvocationID.x;
@@ -104,11 +92,13 @@ void main() {
 	    // main view / cascade 0, tight for distant cascades — SCALE-11). It
 	    // wraps the deformed extent, so it applies after the material's margin.
 	    float radius = DeformedCullRadius(instance);
+	    vec3 center = ge_SectorRelativePoint(instance.boundingCenter, instance.sectorPacked0,
+	                                      instance.sectorPacked1, cullingData.originSector);
 	    for (uint c = 0u; c < kViewCount; ++c) {
-	        bool isVisible = TestSphereFrustum(
-	            instance.boundingCenter,
+	        bool isVisible = !SphereOutsideFrustum(
+	            center,
 	            radius * cullingData.cullMargins[c],
-	            cullingData.frustumPlanes[c], cullingData.cameraPosition
+	            cullingData.frustumPlanes[c]
 	        );
 
 	        // Every color and shadow slice honors the requesting view's layers.

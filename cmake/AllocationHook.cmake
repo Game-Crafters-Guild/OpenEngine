@@ -13,8 +13,8 @@
 #     a replacement. The switch is in that source because the Xcode generator rejects
 #     sources that vary by configuration.
 #
-# A test executable is an executable that ge_set_output_tests marks or that links a
-# GoogleTest target directly. The pass runs once, deferred to the end of the top-level
+# A test executable is one that ge_is_test_executable (BuildsystemTargets.cmake) accepts.
+# The pass runs once, deferred to the end of the top-level
 # directory, so it sees executables from every subdirectory without each one opting in.
 
 include(${CMAKE_CURRENT_LIST_DIR}/BuildsystemTargets.cmake)
@@ -57,24 +57,11 @@ function(_ge_allocation_counter_compile_empty_when_linked target_name)
         "$<$<BOOL:$<TARGET_PROPERTY:GE_ALLOCATION_COUNTER_LINKED>>:GE_ALLOCATION_COUNTER_LINKED>")
 endfunction()
 
-function(_ge_is_test_executable target_name out_var)
-    set(${out_var} FALSE PARENT_SCOPE)
-    get_target_property(_type ${target_name} TYPE)
-    if(NOT _type STREQUAL "EXECUTABLE")
-        return()
-    endif()
-    get_target_property(_marked ${target_name} GE_TEST_EXECUTABLE)
-    get_target_property(_libraries ${target_name} LINK_LIBRARIES)
-    if(_marked OR "${_libraries}" MATCHES "(^|;)(GTest::|gtest|gmock)")
-        set(${out_var} TRUE PARENT_SCOPE)
-    endif()
-endfunction()
-
 function(ge_add_allocation_hook_to_test_executables)
     ge_collect_buildsystem_targets("${CMAKE_SOURCE_DIR}" _targets)
     set(_count 0)
     foreach(_target IN LISTS _targets)
-        _ge_is_test_executable(${_target} _is_test)
+        ge_is_test_executable(${_target} _is_test)
         if(NOT _is_test)
             continue()
         endif()

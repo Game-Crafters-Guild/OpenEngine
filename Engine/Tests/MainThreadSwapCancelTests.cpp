@@ -1,6 +1,6 @@
 // Pins how a hot-reload run reaches its swap: the preparation job's completion
-// queues it on the main thread, Cancel makes a queued swap do nothing, and with
-// no frame loop the swap runs inline.
+// queues it on the main thread, Cancel makes a queued swap do nothing, with no
+// frame loop the swap runs inline, and a swap that did not happen fails the run.
 //
 // The engine is initialized headless with scripting fully disabled, so the
 // swap takes its main-thread path against a ScriptManager whose queue these
@@ -15,6 +15,7 @@
 #include "Jobs/HotReloadTasks.h"
 #include "Jobs/MockHotReloadDependencies.h" // Tests/Jobs
 #include "Scripting/ScriptManager.h"
+#include "Scripting/ScriptingABI.h"
 #include "Scripting/ScriptsConfig.h"
 #include "TestTempDir.h" // Tests/
 
@@ -74,6 +75,24 @@ void Release(GatedCompiler::Gate& gate)
     gate.Cv.notify_all();
 }
 
+GE_Result GE_CDECL SwapReportsAFailure()
+{
+    return GE_Result_Fail;
+}
+
+GE_Result GE_CDECL SwapFindsAnotherSwapRunning()
+{
+    return GE_Result_Busy;
+}
+
+// Makes GE_SwapPreloadedContext call the given function in place of the managed swap.
+void InstallManagedSwap(GE_SwapPreloadedContext_Fn swap)
+{
+    GE_HotReloadCallbacks callbacks{};
+    callbacks.SwapPreloadedContext = swap;
+    GE_RegisterHotReloadCallbacks(&callbacks);
+}
+
 template <typename Predicate>
 bool WaitUntil(Predicate done, std::chrono::steady_clock::duration timeout)
 {
@@ -115,6 +134,7 @@ class MainThreadSwapCancel : public ::testing::Test
 
     void TearDown() override
     {
+        GE_RegisterHotReloadCallbacks(nullptr);
         m_Pipeline.reset();
         m_Compiles.reset();
         m_Pool.reset();
@@ -237,6 +257,38 @@ TEST_F(MainThreadSwapCancel, AnOverdueRunIsEndedAsATimeout)
     EXPECT_EQ(stats.errorMessage, "Pipeline execution timeout");
     EXPECT_FALSE(m_Pipeline->IsExecuting());
     Release(*gate);
+}
+
+TEST_F(MainThreadSwapCancel, FailedSwapEndsTheRunAsFailedWithItsReason)
+{
+    InstallManagedSwap(&SwapReportsAFailure);
+    auto run = m_Pipeline->ExecuteAsync("GameEngine.Scripts.dll");
+    ASSERT_TRUE(WaitForQueuedSwap());
+    EXPECT_EQ(Scripts().ProcessMainThreadTasks(), 1u);
+    ASSERT_EQ(run.wait_for(0s), std::future_status::ready);
+    const auto stats = run.get();
+
+    EXPECT_FALSE(stats.success) << "a run whose swap failed must not report success";
+    EXPECT_EQ(stats.result, HotReloadResult::SwapFailed);
+    EXPECT_NE(stats.errorMessage.find("code -1"), std::string::npos) << stats.errorMessage;
+    EXPECT_NE(stats.errorMessage.find("Save a script again to retry"), std::string::npos) << stats.errorMessage;
+    EXPECT_FALSE(m_Pipeline->IsExecuting());
+}
+
+TEST_F(MainThreadSwapCancel, BusySwapEndsTheRunAsNotSwapped)
+{
+    InstallManagedSwap(&SwapFindsAnotherSwapRunning);
+    auto run = m_Pipeline->ExecuteAsync("GameEngine.Scripts.dll");
+    ASSERT_TRUE(WaitForQueuedSwap());
+    EXPECT_EQ(Scripts().ProcessMainThreadTasks(), 1u);
+    ASSERT_EQ(run.wait_for(0s), std::future_status::ready);
+    const auto stats = run.get();
+
+    EXPECT_FALSE(stats.success) << "a run whose swap did not start must not report success";
+    EXPECT_EQ(stats.result, HotReloadResult::SwapBusy);
+    EXPECT_FALSE(IsCancellation(stats.result)) << "the edit is not live, so the editor must show a failure";
+    EXPECT_NE(stats.errorMessage.find("another script reload was running"), std::string::npos) << stats.errorMessage;
+    EXPECT_NE(stats.errorMessage.find("Save a script again to retry"), std::string::npos) << stats.errorMessage;
 }
 
 TEST_F(MainThreadSwapStandalone, TheSwapRunsInlineWhenNoFrameLoopRuns)

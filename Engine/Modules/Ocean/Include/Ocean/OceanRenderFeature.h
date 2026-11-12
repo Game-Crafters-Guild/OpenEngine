@@ -104,6 +104,17 @@ public:
                                     std::span<const Rendering::RenderGraph::RGTexture>*
                                         outSampledCascades = nullptr);
 
+    // A paused view (OceanRenderNode::RequestPausedViewPipelines) asks the device for the pipelines
+    // of its first live frame: the simulation passes that serve a view that sees water, the wave
+    // simulation (which gameplay queries also run), and the surface at `formats`. The builds run off
+    // the calling thread. RequestSurfacePipeline returns true when it asked for the surface, that is
+    // when the surface draws into the view.
+    void RequestViewSimulationPipelines();
+    void RequestWaveSimulationPipelines();
+    bool RequestSurfacePipeline(Engine::Renderer::RenderServices& rs, ::GameEngine::Rendering::ViewId viewId,
+                                Rendering::MaterialKeyword passKeywords,
+                                const ::GameEngine::Rendering::PipelineFormatKey& formats);
+
     // ---- Camera-snapped concentric clipmap-ring mesh (single indexed draw) ----
     ::GameEngine::Rendering::BufferHandle GetGridVB() const { return m_GridVB; }
     ::GameEngine::Rendering::BufferHandle GetGridIB() const { return m_GridIB; }
@@ -160,6 +171,9 @@ public:
     // copies: their waves are from an earlier ocean time, so queries use the
     // analytic surface until a new bake reads back.
     void BeginSimulationFrame();
+    // Adds the noted gameplay surface queries to the hold that HasRecentSurfaceQueries reads.
+    // It keeps the height fields' CPU copies. Declare thread.
+    void FoldSurfaceQueries() { m_SimulationDemand.Update(OceanSimulationDemand::Clock::now()); }
     // True while a gameplay surface query (SampleSurface, SampleSurfaces) arrived
     // within OceanSimulationDemand::kHold: the wave simulation and its height
     // field keep running for it with no water in view.
@@ -490,10 +504,11 @@ public:
     // finest (LOD 0) cascade — smaller concentrates resolution nearer the camera.
     // LodDataResolution is the per-axis texel size of the snapped sim cascades
     // (foam/flow/dyn-waves/seabed/clip/albedo); a change resizes those textures.
-    // GeometryGridSize is the generated surface grid cells per edge.
     void SetCascadeBaseScale(float value) { m_CascadeBaseScale.store(value, std::memory_order_release); }
     void SetCascadeResolution(uint32 value) { m_CascadeResolution.store(value, std::memory_order_release); }
-    void SetGeometryGridSize(uint32 value) { m_GeometryGridSize.store(value, std::memory_order_release); }
+    // Cells per tile side of the surface ring mesh: 0 selects the default, any
+    // other value is even and in [8, 64] (ResolveOceanRingCellsPerTile).
+    void SetRingCellsPerTile(uint32 value);
     // Apply the authored base scale / resolution to every snapped sim and rebuild
     // the grid mesh if the requested density changed. Call once per frame BEFORE
     // the sims' BeginFrame snaps (so the new base scale takes effect this frame).
@@ -524,18 +539,21 @@ public:
         return m_WaveOriginOffsetZ.load(std::memory_order_acquire);
     }
 
-    // Stamp the per-view submersion result into the stored params' Underwater
-    // flag (1 = camera below the displaced surface this frame, so the surface
-    // shades two-sided + the overlay runs). The extraction system stored the
-    // authored toggle; this ANDs the render-time submersion onto it. Called by
-    // OceanRenderNode once per view after the camera snap.
-    // Pre-world node stamps the submersion state + depth here; that view's post-world
-    // underwater node reads GetSubmergedDepth() to drive the overlay (the overlay
-    // can't run in the same node — it must be scheduled after the world pass).
+    // Record this view's submersion sample: the flag (ANDed with the authored look) and the camera's
+    // depth under the displaced surface (negative above it). The pre-world node calls it once per
+    // view; the post-world underwater node reads the depth for its overlay.
     void SetUnderwaterActive(::GameEngine::Rendering::ViewId viewId, bool active, float submergedDepth);
     OceanParamsGPU GetParamsForView(::GameEngine::Rendering::ViewId viewId) const;
     float GetSubmergedDepthForView(::GameEngine::Rendering::ViewId viewId) const;
-    bool IsUnderwaterEnabled() const { return m_UnderwaterEnabled.load(std::memory_order_acquire); }
+    /// Height in meters of the camera above the displaced surface under it at which the
+    /// surface starts to cull back faces. It covers the error of the CPU surface sample
+    /// against the drawn surface: readback latency, texel spacing and sideways displacement.
+    static constexpr float kSurfaceCullClearance = 2.0f;
+    /// True when this view's camera can see the surface from below, so the surface draws
+    /// two-sided. False when the authored underwater look is off, or when the camera is at least
+    /// kSurfaceCullClearance above the displaced surface under it. True for a view with no
+    /// sample this frame.
+    bool IsSurfaceUndersideVisible(::GameEngine::Rendering::ViewId viewId) const;
 
     // ---- Underwater volumes (Crest volume / fly-through mode) ----
     // An axis-aligned box that confines the underwater overlay to a bounded water
@@ -812,9 +830,9 @@ public:
     ::GameEngine::Rendering::SamplerHandle GetUserCausticsSampler() const { return m_UserTextureSampler; }
 
 private:
-    void CreateGridMesh(::GameEngine::Rendering::IDevice* device, uint32 gridSize);
+    void CreateGridMesh(::GameEngine::Rendering::IDevice* device, uint32 cellsPerTile);
     // Free the current clipmap VB/IB and rebuild at a new vertex density.
-    void RebuildGridMesh(::GameEngine::Rendering::IDevice* device, uint32 gridSize);
+    void RebuildGridMesh(::GameEngine::Rendering::IDevice* device, uint32 cellsPerTile);
 
     ::GameEngine::Rendering::IDevice* m_Device = nullptr;
     bool m_Initialized = false;
@@ -824,7 +842,7 @@ private:
     ::GameEngine::Rendering::BufferHandle m_GridIB;
     uint32 m_GridIndexCount = 0;
     uint32 m_GridVertexCount = 0;
-    uint32 m_GridSize = 0;
+    uint32 m_RingCellsPerTile = 0;
 
     // FFT wave simulation (displacement cascade array + compute pipelines).
     OceanFFT m_FFT;
@@ -1020,7 +1038,7 @@ private:
     // Applied once per frame by ApplyCascadeConfig.
     std::atomic<float> m_CascadeBaseScale{0.0f};  // MinScale (LOD0 world extent)
     std::atomic<uint32> m_CascadeResolution{0};   // LodDataResolution (texels/axis)
-    std::atomic<uint32> m_GeometryGridSize{0};    // generated surface grid cells per edge
+    std::atomic<uint32> m_RequestedRingCellsPerTile{0}; // ring mesh cells per tile side, 0 = default
 
     std::unique_ptr<OceanForwardContributor> m_ForwardContributor;
 };

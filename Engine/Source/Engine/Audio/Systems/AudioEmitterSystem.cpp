@@ -256,8 +256,7 @@ void AudioEmitterSystem::Update(ECS::World& world, float32 /*deltaTime*/)
                {
                    if (spatialize)
                    {
-                       const float32* m = wt->matrix;
-                       Mathematics::Vector3 pos{m[12], m[13], m[14]};
+                       const Mathematics::Vector3 pos = wt->GetPosition() - Mathematics::WorldPosition{};
                        Mathematics::Vector3 v{0, 0, 0};
 
                        rt.voice = m_Audio->Play3D(rt.clip, static_cast<Audio::AudioWorldId>(emitter.worldId), pos, v, opts);
@@ -302,8 +301,7 @@ void AudioEmitterSystem::Update(ECS::World& world, float32 /*deltaTime*/)
                // Keep 3D state updated.
                if (rt.voice.IsValid() && spatialize)
                {
-                   const float32* m = wt->matrix;
-                   Mathematics::Vector3 pos{m[12], m[13], m[14]};
+                   const Mathematics::Vector3 pos = wt->GetPosition() - Mathematics::WorldPosition{};
                    Mathematics::Vector3 v{0, 0, 0};
 
                    m_Audio->SetEmitter3D(rt.voice, static_cast<Audio::AudioWorldId>(emitter.worldId), pos, v);

@@ -2,6 +2,8 @@
 
 #include "Types/Types.h"
 
+#include <array>
+
 // The texel arithmetic of the colour map compose (TerrainColorMap.cpp), for the compose and its tests.
 
 namespace GameEngine::TerrainECS
@@ -14,5 +16,8 @@ void CompositePremultipliedOver(float32 (&texel)[4], const float32 (&premultipli
 
 // The sRGB byte of a linear value in [0, 1]: what the RGBA8_SRGB image decodes back to linear.
 uint8 EncodeLinearToSrgbByte(float32 linear);
+
+// The linear value of each sRGB byte, Detail::SRGBChannelToLinear(byte / 255), built once.
+const std::array<float32, 256>& SrgbByteToLinearTable();
 
 } // namespace GameEngine::TerrainECS

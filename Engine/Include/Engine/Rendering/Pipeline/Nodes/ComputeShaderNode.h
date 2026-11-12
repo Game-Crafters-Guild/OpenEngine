@@ -13,7 +13,7 @@
 #include <string>
 #include <array>
 
-namespace GameEngine::Engine::Renderer { class RenderServices; }
+namespace GameEngine::Engine::Renderer { class RenderServices; struct PostProcessSettings; }
 #include <unordered_map>
 #include <vector>
 
@@ -51,9 +51,15 @@ class ComputeShaderNode final : public IRenderPipelineNode
 
     bool Initialize(std::string nodeId, std::string nodeJson, std::string* outError) override;
     void DeclareForView(ViewDeclare& d) override;
+    void RequestPausedViewPipelines(const PausedViewPrewarm& prewarm) override;
 
   private:
     void EnsureCachedPipeline(GameEngine::Rendering::IDevice* device);
+    // True when requiresLights is set and the view's world has no light this frame.
+    bool LacksRequiredLights(const RenderServices& services, GameEngine::Rendering::ViewId viewId) const;
+    // True when every skipWhen field reads its skip value in `settings`, with the fields derived from
+    // the view's `renderHeight`. A field that the settings do not know runs the node.
+    bool IsSkippedBy(const PostProcessSettings& settings, uint32_t renderHeight) const;
 
     std::string m_Id;
     std::string m_Json;

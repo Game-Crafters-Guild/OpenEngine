@@ -30,6 +30,10 @@ namespace
 // the editor to bilinear-sample a million points on the main thread.
 constexpr std::size_t kMaxGroundSamples = 8192u;
 
+// A request fetches at most this many finest height pages on the main thread. Each fetch reads one
+// page from the cooked height store on disk and decodes it, or evaluates it for a generated terrain.
+constexpr uint32 kMaxFinestPageFetches = 64u;
+
 // The composed-ground description shared by every handler in this file. Reported
 // alongside the samples so a reading carries the terrain it was taken against:
 // two runs that disagree are usually two different terrains, not two heights.
@@ -85,14 +89,83 @@ const char* DescribeGapStatus(SplineRecipes::GroundGapStatus status)
     return "unknown";
 }
 
-// "No planar terrain in this scene" is an answer, not a failure: the surface is
-// absent on a planet, before provisioning, and in an empty scene, and a caller
-// that cannot tell those from a malformed request will read zero as ground.
+// "No terrain here" is an answer, not a failure: the surface is absent before
+// provisioning and in an empty scene, and a caller that cannot tell those from a
+// malformed request will read zero as ground.
 json UnresolvedSurface()
 {
     return json{{"resolved", false},
-                {"note", "no enabled planar terrain with resident heightfield data — a "
-                         "spherical terrain, an unprovisioned one, or an empty scene"}};
+                {"note", "no enabled terrain with height data at the first point: an unprovisioned "
+                         "terrain, a planet that does not stream its pages yet, or an empty scene"}};
+}
+
+// A point of the request: [x, z] (y 0) or [x, y, z].
+bool IsGroundPoint(const json& point)
+{
+    return point.is_array() && (point.size() == 2u || point.size() == 3u) &&
+           std::ranges::all_of(point, [](const json& value) { return value.is_number(); });
+}
+
+Mathematics::Vector3 GroundPointOf(const json& point)
+{
+    if (point.size() == 2u)
+        return Mathematics::Vector3(point[0].get<float32>(), 0.0f, point[1].get<float32>());
+    return Mathematics::Vector3(point[0].get<float32>(), point[1].get<float32>(), point[2].get<float32>());
+}
+
+// The planar height under `point` at the finest level, the height a caller places on. A Coarse
+// answer fetches the level-0 page under the point and samples again from `query`, resolved again
+// at `first`. After kMaxFinestPageFetches fetches, a Coarse answer stays Coarse.
+bool SampleFinestGround(ECS::World& world, const Mathematics::Vector3& first, TerrainECS::SurfaceHeightQuery& query,
+                        const Mathematics::Vector3& point, uint32& fetches, TerrainECS::SurfaceHeightSample& out)
+{
+    constexpr TerrainECS::SurfaceHeightPolicy kAcceptCoarse = TerrainECS::SurfaceHeightPolicy::AcceptCoarse;
+    if (!query.SampleHeight(point, kAcceptCoarse, out))
+        return false;
+    if (out.Detail == TerrainECS::SurfaceHeightDetail::Finest || fetches == kMaxFinestPageFetches)
+        return true;
+    ++fetches;
+    if (!TerrainECS::FetchFinestSurfaceHeightPage(world, point))
+        return true;
+    query = TerrainECS::ResolveSurfaceHeightQuery(world, first);
+    return query.SampleHeight(point, kAcceptCoarse, out);
+}
+
+json DescribePlanetSurface(const TerrainECS::SurfaceHeightQuery& query)
+{
+    const TerrainECS::SurfaceHeightSphere& sphere = query.Sphere();
+    return json{{"kind", "planet"},
+                {"center", {sphere.Center.x, sphere.Center.y, sphere.Center.z}},
+                {"referenceRadius", sphere.ReferenceRadius},
+                {"faceSamples", sphere.FaceSamples}};
+}
+
+// Each point's height above the reference radius on the line from the center through it, and the
+// surface point there. Unsampled when no page under it is on the CPU, or at the center.
+json SamplePlanetGround(const TerrainECS::SurfaceHeightQuery& query, const json& points)
+{
+    const TerrainECS::SurfaceHeightSphere& sphere = query.Sphere();
+    json samples = json::array();
+    for (const json& point : points)
+    {
+        const Mathematics::Vector3 position = GroundPointOf(point);
+        TerrainECS::SurfaceHeightSample height;
+        const bool sampled =
+            query.SampleHeight(position, TerrainECS::SurfaceHeightPolicy::AcceptCoarse, height);
+        json sample{{"x", position.x}, {"y", position.y}, {"z", position.z}, {"sampled", sampled}};
+        if (sampled)
+        {
+            const Mathematics::Vector3 surface =
+                sphere.Center + (position - sphere.Center).Normalize() *
+                                    static_cast<float32>(sphere.ReferenceRadius + height.Height);
+            sample["height"] = height.Height;
+            sample["surface"] = {surface.x, surface.y, surface.z};
+            sample["level"] = height.Level;
+            sample["finest"] = height.Detail == TerrainECS::SurfaceHeightDetail::Finest;
+        }
+        samples.push_back(std::move(sample));
+    }
+    return samples;
 }
 
 } // namespace
@@ -113,7 +186,8 @@ void RegisterGroundQueryDebugHandlers(EditorDebugServer& server)
                            [](const EditorDebugServer::RequestContext& ctx) -> json
     {
         if (!ctx.params.contains("points") || !ctx.params["points"].is_array())
-            return Editor::RefuseRequest("Missing points parameter — expected [[x, z], ...]");
+            return Editor::RefuseRequest("Missing points parameter — expected [[x, z], ...] or, on a planet, "
+                                         "[[x, y, z], ...]");
 
         const auto& points = ctx.params["points"];
         if (points.size() > kMaxGroundSamples)
@@ -128,9 +202,8 @@ void RegisterGroundQueryDebugHandlers(EditorDebugServer& server)
         // terrain scene, which is the one thing a caller cannot debug.
         for (const auto& point : points)
         {
-            if (!point.is_array() || point.size() != 2u || !point[0].is_number() ||
-                !point[1].is_number())
-                return Editor::RefuseRequest("Each point must be [x, z] — two numbers");
+            if (!IsGroundPoint(point) || point.size() != points[0].size())
+                return Editor::RefuseRequest("Each point must be [x, z] or [x, y, z], every point the same");
         }
 
         auto* world = EngineCore::GetInstance().GetPrimaryWorld();
@@ -138,43 +211,63 @@ void RegisterGroundQueryDebugHandlers(EditorDebugServer& server)
             return Editor::RefuseRequest("No world available");
 
         // The terrain under the first point answers every point.
-        const Mathematics::Vector3 first =
-            points.empty() ? Mathematics::Vector3{}
-                           : Mathematics::Vector3(points[0][0].get<float32>(), 0.0f, points[0][1].get<float32>());
-        const TerrainECS::SurfaceHeightQuery query = TerrainECS::ResolveSurfaceHeightQuery(*world, first);
+        const Mathematics::Vector3 first = points.empty() ? Mathematics::Vector3{} : GroundPointOf(points[0]);
+        TerrainECS::SurfaceHeightQuery query = TerrainECS::ResolveSurfaceHeightQuery(*world, first);
+        if (query.IsSpherical())
+        {
+            if (!points.empty() && points[0].size() != 3u)
+                return Editor::RefuseRequest("On a planet each point must be [x, y, z]: the height is read on "
+                                             "the line from the planet's center through the point");
+            return json{{"resolved", true},
+                        {"surface", DescribePlanetSurface(query)},
+                        {"samples", SamplePlanetGround(query, points)}};
+        }
         if (!query.IsValid())
             return UnresolvedSurface();
 
         json samples = json::array();
+        uint32 fetches = 0;
+        uint32 coarsePastCap = 0;
+        uint32 coarseNoFinestPage = 0;
         for (const auto& point : points)
         {
-            const auto x = point[0].get<float32>();
-            const auto z = point[1].get<float32>();
+            const Mathematics::Vector3 position = GroundPointOf(point);
+            const float32 x = position.x;
+            const float32 z = position.z;
+            const bool pastCap = fetches == kMaxFinestPageFetches;
 
             // Outside the footprint there is no ground and never will be;
             // inside it but unsampled means no page is on the CPU there yet.
             // Collapsing those into one "false" is how a caller ends up bedding
             // geometry into a streaming hole, so they stay separate. A coarse
-            // answer is reported (AcceptCoarse) with its level and `finest`
-            // false, so a caller judging precision reads both.
+            // answer is reported with its level and `finest` false.
             const bool inside = query.ContainsXZ(x, z);
             TerrainECS::SurfaceHeightSample height;
-            const bool sampled = query.SampleHeight(Mathematics::Vector3(x, 0.0f, z),
-                                                    TerrainECS::SurfaceHeightPolicy::AcceptCoarse, height);
+            const bool sampled =
+                SampleFinestGround(*world, first, query, Mathematics::Vector3(x, 0.0f, z), fetches, height);
 
             json sample{{"x", x}, {"z", z}, {"inside", inside}, {"sampled", sampled}};
             if (sampled)
             {
+                const bool finest = height.Detail == TerrainECS::SurfaceHeightDetail::Finest;
+                coarsePastCap += !finest && pastCap ? 1u : 0u;
+                coarseNoFinestPage += !finest && !pastCap ? 1u : 0u;
                 sample["y"] = height.Height;
                 sample["level"] = height.Level;
-                sample["finest"] = height.Detail == TerrainECS::SurfaceHeightDetail::Finest;
+                sample["finest"] = finest;
             }
             samples.push_back(std::move(sample));
         }
 
-        return json{{"resolved", true},
-                    {"surface", DescribeSurface(query)},
-                    {"samples", std::move(samples)}};
+        json reply{{"resolved", true}, {"surface", DescribeSurface(query)}, {"samples", std::move(samples)}};
+        if (coarsePastCap + coarseNoFinestPage > 0u)
+            reply["note"] = std::to_string(coarsePastCap) + " samples answered from a coarser level after the request "
+                            "used its " + std::to_string(kMaxFinestPageFetches) + " page fetches: ask again for "
+                            "those points. " + std::to_string(coarseNoFinestPage) + " samples answered from a "
+                            "coarser level because the height store gives no finest page there: asking again "
+                            "gives the same answer until the store holds that page. Do not place on a sample with "
+                            "finest false.";
+        return reply;
     });
 
     // The signed ground-to-underside gap for every piece a spline route placed:
@@ -203,7 +296,7 @@ void RegisterGroundQueryDebugHandlers(EditorDebugServer& server)
 
         const auto* routeTransform = world->GetComponent<Components::WorldTransform>(route);
         const TerrainECS::SurfaceHeightQuery query = TerrainECS::ResolveSurfaceHeightQuery(
-            *world, routeTransform ? routeTransform->GetPosition() : Mathematics::Vector3{});
+            *world, routeTransform ? routeTransform->GetPosition() - Mathematics::WorldPosition{} : Mathematics::Vector3{});
         if (!query.IsValid())
             return UnresolvedSurface();
 

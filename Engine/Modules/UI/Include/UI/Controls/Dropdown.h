@@ -160,7 +160,9 @@ private:
     void RebuildUiItems();
     void UpdateHeaderLabel();
     void UpdateHeaderArt();
+    bool PopupFitsEntries() const;
     void UpdatePopupWidthClass();
+    void UpdateTextRowClass(UIElement& row) const;
     void SyncItemSelectionClasses();
     void UpdatePopupPlacement();
 

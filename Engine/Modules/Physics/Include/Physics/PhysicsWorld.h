@@ -58,6 +58,15 @@ public:
     // notice the ground moving.
     void ActivateBodiesInAABB(const AABB& worldBox);
 
+    /// The dynamic bodies, asleep or awake, whose broadphase box meets `worldBox` (the bodies
+    /// ActivateBodiesInAABB wakes, without the kinematic ones), each with its world-space bounds.
+    /// Clears `outBodies` first.
+    void GetDynamicBodiesInAABB(const AABB& worldBox, std::vector<BodyBounds>& outBodies) const;
+
+    /// The distance in meters at which two bodies start a contact. A body placed this far above a
+    /// surface comes to rest on it.
+    float32 GetContactDistance() const;
+
     // ---------------------------------------------------------------------
     // Bodies
     // ---------------------------------------------------------------------
@@ -78,17 +87,14 @@ public:
     Vector3 GetAngularVelocity(BodyHandle body) const;
     void SetAngularVelocity(BodyHandle body, const Vector3& velocity);
 
-    // World-space center of mass (reference point for buoyancy torque).
-    Vector3 GetCenterOfMassPosition(BodyHandle body) const;
-
     // Forces/torques accumulate and apply during the next Step(); impulses
     // change velocity immediately. The "AtPosition" variants apply at a
     // world-space point (producing torque) — used for buoyancy at probe points.
     void AddForce(BodyHandle body, const Vector3& force);
-    void AddForceAtPosition(BodyHandle body, const Vector3& force, const Vector3& worldPosition);
+    void AddForceAtPosition(BodyHandle body, const Vector3& force, const WorldPosition& worldPosition);
     void AddTorque(BodyHandle body, const Vector3& torque);
     void AddImpulse(BodyHandle body, const Vector3& impulse);
-    void AddImpulseAtPosition(BodyHandle body, const Vector3& impulse, const Vector3& worldPosition);
+    void AddImpulseAtPosition(BodyHandle body, const Vector3& impulse, const WorldPosition& worldPosition);
 
     // ---------------------------------------------------------------------
     // Characters
@@ -98,7 +104,9 @@ public:
     bool IsCharacterValid(CharacterHandle character) const;
 
     Transform GetCharacterTransform(CharacterHandle character) const;
-    void SetCharacterPosition(CharacterHandle character, const Vector3& position);
+    // Moves the character to `position` at once (a teleport or a respawn). The writeback writes a
+    // character's pose over its Transform, so this is how game code moves a character.
+    void SetCharacterPosition(CharacterHandle character, const WorldPosition& position);
 
     Vector3 GetCharacterLinearVelocity(CharacterHandle character) const;
     void SetCharacterLinearVelocity(CharacterHandle character, const Vector3& velocity);

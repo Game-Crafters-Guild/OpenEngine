@@ -10,6 +10,9 @@
 
 namespace GameEngine
 {
+class CancelToken;
+class CliSessionProvider;
+
 /// Attaches the editor's MCP server to a conversation's turns: the staged server, the
 /// editor's port, the assistant's tool set and the session token, written as the
 /// configuration file the CLI reads.
@@ -22,6 +25,11 @@ public:
     /// not, with the fix (no debug server running, no staged server). Cheap: reads no
     /// process and starts none.
     static std::string Unavailable();
+    /// Empty when a turn of `provider` can act in the editor; otherwise why not, with the
+    /// fix: Unavailable(), then `provider`'s ToolsRefusal(). The setup page and the panel
+    /// both ask this, so they agree. Blocks while Node.js is checked: call it off the UI thread.
+    static std::string ActingRefusal(CliSessionProvider& provider, const std::string& node, uint16_t port,
+                                     SetupSurface surface, const CancelToken& cancel);
 
     /// The attachment for one turn of conversation `conversation` in the project at
     /// `projectRoot`, its configuration file written under this editor's per-process

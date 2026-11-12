@@ -54,9 +54,12 @@ inline constexpr uint32 kPageSampleCount = kPageStrideSamples * kPageStrideSampl
 inline constexpr uint32 kPageBlockTexels = 4u;
 /// Bytes of one BC5 block: two BC4 blocks (one a channel) of 8 bytes.
 inline constexpr uint32 kBc5BlockBytes = 16u;
-/// Version of the .gepage layout and of every rule that decides its bytes (the level rule, the
-/// filters, the encoding and its step rule). It seeds every cook key, so a bump turns every store
-/// into a miss.
+/// Samples past a page's owned region of the height window a surface page is generated from: the
+/// block apron and one more for the slope's central difference (a window of 138 samples).
+inline constexpr uint32 kPageSurfaceWindowMarginSamples = kPageBlockTexels + 1u;
+/// Version of the .gepage layout and of every rule that decides its bytes; it seeds every cook key. A
+/// height layer is read at any value: a change to the header layout, the level rule or the encoding
+/// also bumps kHeightLayerFormatVersion.
 inline constexpr uint32 kPageStoreFormatVersion = 2u;
 /// The most faces a store holds (a cube's six).
 inline constexpr uint32 kPageStoreMaxFaces = 6u;
@@ -119,6 +122,9 @@ enum class PageHeightUnits : uint8
 {
     Normalized = 0, ///< [0, 1], scaled by the terrain's Height Scale (.r16 and 16-bit PNG sources).
     Absolute = 1,   ///< The source's own values, scaled by the Height Scale (.r32: meters at Height Scale 1).
+    /// Meters an authored height layer adds to the surface (HeightLayerStore.h). The layer keeps its own
+    /// version in Key, so a store of another kPageStoreFormatVersion in these units is not refused.
+    LayerMeters = 2,
 };
 
 /// How a face's page grid maps to the surface.
@@ -168,6 +174,11 @@ struct PageFaceSample
 /// (PageFaceNeighbor); past two sides (a cube corner) it is the corner sample.
 PageFaceSample PageCubeSampleAt(uint8 face, int64 x, int64 z, uint32 samples);
 
+/// The sample a height window stores at (x, z) of `face`, clamped to `margin` past a side: past one side
+/// by d, the neighbor face's sample d in from the shared side; past two sides, the cube corner sample.
+/// PageCubeSampleAt is the case margin = 1.
+PageFaceSample PageCubeWindowSampleAt(uint8 face, int64 x, int64 z, uint32 samples, uint32 margin);
+
 /// The equal-angle coordinate s in [-1, 1] of the gnomonic (straight cube) coordinate a in [-1, 1]:
 /// p(a) = a + a (a^2 - 1) r(a^2), r a cubic fit to (4 / pi) atan(a), odd and exact at -1, 0 and 1.
 /// A format constant, in double precision with contraction off: a new coefficient changes every cooked planet byte.
@@ -191,6 +202,19 @@ Mathematics::Vector3 EqualAngleSampleDirection(uint8 face, uint32 x, uint32 z, u
 /// The unit direction of the point at gnomonic coordinates (alongX, alongZ) of `face`.
 /// EqualAngleSampleDirection calls it with the GnomonicFaceCoordinate of each sample coordinate.
 Mathematics::Vector3 GnomonicFaceDirection(uint8 face, float64 alongX, float64 alongZ);
+
+/// A point on a face of an EqualAngleCube store, in level-0 sample coordinates (between samples).
+struct PageFacePoint
+{
+    uint8 Face = 0;
+    float64 X = 0.0;
+    float64 Z = 0.0;
+};
+
+/// The point of direction `direction` (not zero, any length) on a store of `samples` samples a side:
+/// the face whose normal is nearest (the lowest face index on a tie), and X and Z in [0, samples - 1].
+/// The inverse of EqualAngleSampleDirection.
+PageFacePoint EqualAngleFacePointOf(const Mathematics::Vector3& direction, uint32 samples);
 
 /// The fixed header of a store. Units, ReferenceRadius and StepPerLevel describe a HeightSteps
 /// store and are zero on every other format.
@@ -219,7 +243,7 @@ struct PageStoreLevel
     uint32 PagesX = 0;
     uint32 PagesZ = 0;
     /// The level's first page in a dense row-major table of every page of one face's levels: the
-    /// position the dense consumers (the page tables, the CPU directory) give the level. Not on disk.
+    /// position the dense consumers (the page tables) give the level. Not on disk.
     uint64 FirstEntry = 0;
 };
 
@@ -280,10 +304,19 @@ struct PageStoreLayout
     uint64 TotalBytes() const;
 };
 
+/// `value` on the lattice of `step`: step x k for the nearest integer k. A value already on the
+/// lattice is returned unchanged.
+float32 QuantizeHeight(float32 value, float32 step);
+
 /// The levels of a field of `samplesX` x `samplesZ` level-0 samples: each coarser level has
 /// samples / 2 + 1 per axis (the lattice covering the level below), down to the first level that
 /// fits one page.
 std::vector<PageStoreLevel> BuildPageStoreLevels(uint32 samplesX, uint32 samplesZ);
+
+/// The levels of BuildPageStoreLevels, written to the front of `storage` without a heap allocation.
+/// Returns the written part of `storage`.
+std::span<PageStoreLevel> FillPageStoreLevels(uint32 samplesX, uint32 samplesZ,
+                                              std::span<PageStoreLevel, kPageStoreMaxLevels> storage);
 
 /// True when a planet face of `samples` a side (5 to kPageStoreMaxSamplesPerAxis) halves evenly at
 /// every level but the last, so each level has a sample on both of the face's sides.
@@ -322,8 +355,10 @@ std::span<float32> HeightSamples(std::vector<uint8>& bytes);
 PageStoreLayout MakePageStoreLayout(const PageStoreHeader& header, std::span<const uint8> present = {});
 
 /// The layout of `layout`'s store with more pages present: its own present pages keep their
-/// entries, and each page `present` marks (as MakePageStoreLayout reads it) is added unwritten.
-/// For a store that grows as its pages are baked; PageStoreWriter::OpenForPatch takes the result.
-PageStoreLayout AddPresentPages(const PageStoreLayout& layout, std::span<const uint8> present);
+/// entries, and each page of `added` (in any order) that it does not hold is added unwritten. The
+/// cost follows the present and added pages, not the store's lattice. None when an address of
+/// `added` is outside the store. For a store that grows as its pages are baked;
+/// PageStoreWriter::OpenForPatch takes the result.
+std::optional<PageStoreLayout> AddPresentPages(const PageStoreLayout& layout, std::span<const PageAddress> added);
 
 } // namespace GameEngine::PageStreaming

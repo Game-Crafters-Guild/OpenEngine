@@ -83,7 +83,7 @@ ViewLetterbox ComputeLetterboxRect(uint32_t viewportWidth,
 
 class RenderServices;
 
-struct Camera;
+class Camera;
 
 void ApplyActiveCameraAspect(RenderServices& rs,
                              ::GameEngine::Rendering::ViewId viewId,

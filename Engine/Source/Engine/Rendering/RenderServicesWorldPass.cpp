@@ -13,6 +13,7 @@
 #include "Engine/Rendering/MaterialBinder.h"
 #include "Engine/Rendering/MaterialCompiler.h"
 #include "Engine/Rendering/PropCoverageFloor.h"
+#include "Engine/Rendering/RenderOrigin.h"
 #include "Engine/Rendering/ShaderGraphMaterial.h"
 #include "Rendering/Geometry/VertexLayoutBuilder.h"
 #include "Rendering/Materials/MaterialBuildService.h"
@@ -214,9 +215,12 @@ void LogPropCoverageCensus(const Rendering::GPUScene& gpuScene,
     if (projScaleY <= 0.0f || viewportH == 0u)
         return;
 
-    Rendering::Matrix4x4 viewProj = cam.viewProj;
+    // The census runs in the frame of the camera's render origin sector: viewProjRel planes,
+    // each sector-local center composed against the sector.
+    const Mathematics::Vector3Int originSector = CameraRenderOriginSector(cam);
+    const Mathematics::Vector3 eye = CameraEyeRelativeToOrigin(cam);
     Rendering::Vector4 planes[6];
-    Rendering::ExtractFrustumPlanes(viewProj, planes);
+    Rendering::ExtractFrustumPlanes(cam.viewProjRel, planes);
 
     uint32_t visible = 0, subFloor = 0, subAdmit = 0, sub1 = 0, sub2 = 0, sub4 = 0, sub8 = 0;
     const float floorNdc = Rendering::CoverageFloorNdc(
@@ -229,12 +233,14 @@ void LogPropCoverageCensus(const Rendering::GPUScene& gpuScene,
             continue; // tombstone
         if (worldKey != 0u && ((inst.flags >> 16u) & 0xFFFFu) != worldKey)
             continue;
-        if (!Rendering::TestSphereFrustum(inst.boundingCenter, inst.boundingRadius, planes))
+        const Rendering::Vector3 center = Rendering::SectorLocalPointRelativeTo(
+            inst.boundingCenter, inst.sectorPacked[0], inst.sectorPacked[1], originSector);
+        if (!Rendering::TestSphereFrustum(center, inst.boundingRadius, planes))
             continue;
         ++visible;
-        const float dx   = cam.cameraPos.x - inst.boundingCenter.x;
-        const float dy   = cam.cameraPos.y - inst.boundingCenter.y;
-        const float dz   = cam.cameraPos.z - inst.boundingCenter.z;
+        const float dx   = eye.x - center.x;
+        const float dy   = eye.y - center.y;
+        const float dz   = eye.z - center.z;
         const float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
         const float covNdc = Rendering::CoverageNdc(inst.boundingRadius, projScaleY, dist);
         // The recommended floor's candidate set (base threshold + the band top).
@@ -314,11 +320,13 @@ Passes::MsaaResolveViewBuffers PipelineMsaaResolveViewBuffers(const Pipeline::Re
     if (const Pipeline::PipelineFrameResources* resources = instance ? instance->FrameResourcesFor(&frame) : nullptr)
         resources->ForEachBufferBinding(
             viewId,
-            [&viewParams, &exposureHistory](const std::string& name, const Pipeline::PipelineBufferBindingRG& binding)
+            [&viewParams, &exposureHistory](StringId nameId, const Pipeline::PipelineBufferBindingRG& binding)
             {
-                if (name == Pipeline::Names::Res::ViewParams)
+                constexpr StringId kViewParams = HashStringId(Pipeline::Names::Res::ViewParams);
+                constexpr StringId kExposureHistory = HashStringId(Pipeline::Names::Res::ExposureHistory);
+                if (nameId == kViewParams)
                     viewParams = binding;
-                else if (name == Pipeline::Names::Res::ExposureHistory)
+                else if (nameId == kExposureHistory)
                     exposureHistory = binding;
             });
     return Pipeline::MsaaResolveViewBuffersFor(viewParams, exposureHistory, placeholder);
@@ -443,8 +451,8 @@ ResolvedPassResources RenderServices::BuildPassResourcesRG(
         if (const auto* fr = instance->FrameResourcesFor(&frame))
         {
             fr->ForEachBufferBinding(
-                viewId, [&](const std::string& name, const Pipeline::PipelineBufferBindingRG& b)
-                { add(HashStringId(name), b.Buffer, b.Offset, b.Size); });
+                viewId, [&](StringId nameId, const Pipeline::PipelineBufferBindingRG& b)
+                { add(nameId, b.Buffer, b.Offset, b.Size); });
         }
     }
 
@@ -1508,7 +1516,7 @@ RenderServices::WorldPassRG RenderServices::AddWorldPassImpl(
                 {
                     fr->ForEachBufferBinding(
                         viewId,
-                        [&](const std::string&, const Pipeline::PipelineBufferBindingRG& b)
+                        [&](StringId, const Pipeline::PipelineBufferBindingRG& b)
                         {
                             if (b.Graph.IsValid())
                                 p.Read(b.Graph, RenderGraph::RGBufferRead::Storage);
@@ -2120,8 +2128,10 @@ RenderServices::WorldPassRG RenderServices::AddWorldPassImpl(
             FlatSet<uint64_t> drawnGroups;
             if (!meshGroups.empty())
                 drawnGroups.Reserve(entityKeys.size());
+            const DrawProducerRegistry::ScopeNameTable& producerNames = DrawProducerRegistry::ScopeNames();
             const auto recordEntity = [&](const WorldDrawBuilder::BatchKey& key)
             {
+                ctx.SetProfilerScope(producerNames[DrawProducerRegistry::kInstances].data());
                 // Color-table slices key on the color class whatever their cascade index.
                 const DrawStreamLookupKey lookup = ResolveDrawStreamLookupKey(
                     key, sliceCascadeIndex,
@@ -2129,11 +2139,17 @@ RenderServices::WorldPassRG RenderServices::AddWorldPassImpl(
                 if (meshGroups.empty() || ClaimConsolidatedDraw(drawnGroups, lookup))
                     recordEntityBatch(key, lookup);
             };
+            const auto recordScopedContributor = [&](const DrawCommand& cmd)
+            {
+                ctx.SetProfilerScope(producerNames[cmd.Producer].data());
+                recordContributor(cmd);
+            };
             DrainWorldForwardOpaqueFirst(
                 runEntityDraws ? entityKeys : std::span<const WorldDrawBuilder::BatchKey>{},
                 scope != WorldPassDrawScope::TransmissiveOnly
                     ? std::span<const DrawCommand>(fwdCommands) : std::span<const DrawCommand>{},
-                recordEntity, recordContributor);
+                recordEntity, recordScopedContributor);
+            ctx.SetProfilerScope(nullptr);
 
             if (DrawAttributionEnabled())
                 LogDrawAttribution("color", viewId, entityKeys.size(), attribDrawsIssued,
@@ -2342,7 +2358,7 @@ Rendering::RenderGraph::RGPass RenderServices::AddForwardCommandPassForView(
                 {
                     fr->ForEachBufferBinding(
                         viewId,
-                        [&](const std::string&, const Pipeline::PipelineBufferBindingRG& b)
+                        [&](StringId, const Pipeline::PipelineBufferBindingRG& b)
                         {
                             if (b.Graph.IsValid())
                                 p.Read(b.Graph, RenderGraph::RGBufferRead::Storage);
@@ -2553,6 +2569,15 @@ Rendering::RenderGraph::RGPass RenderServices::AddForwardCommandPassForView(
                                                      resolveView, (debugName + ".ColorResolve").c_str());
     }
     return drawPass;
+}
+
+void RenderServices::RequestScreenSpaceShadowPipelines()
+{
+    if (!GetDevice())
+        return;
+    if (!m_ScreenSpaceShadows)
+        m_ScreenSpaceShadows = std::make_unique<ScreenSpaceShadowPasses>(GetDevice());
+    m_ScreenSpaceShadows->RequestPipelines();
 }
 
 } // namespace Engine::Renderer

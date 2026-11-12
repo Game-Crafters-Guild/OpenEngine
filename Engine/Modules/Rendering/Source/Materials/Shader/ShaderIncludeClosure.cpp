@@ -3,6 +3,8 @@
 #include "ShaderSourceCache.h"
 
 #include "AssetCore/SharedFileRead.h"
+#include "Logger/Logger.h"
+#include "Rendering/Materials/MaterialShaderIncludeRoots.h"
 
 namespace GameEngine { namespace Rendering {
 
@@ -145,6 +147,31 @@ void CollectIncludeClosure(const std::string& sourceText,
     // that exists on no disk -- so it is scanned here rather than read.
     CollectFromOperands(ScanShaderIncludeDirectives(sourceText), requestingSource.parent_path(), searchDirs,
                         ShaderSourceCache::MakeRootsSignature(searchDirs), out);
+}
+
+std::vector<std::filesystem::path> ResolveShaderIncludes(const std::filesystem::path& source,
+                                                         const std::vector<std::filesystem::path>& roots)
+{
+    // Read from disk, not from the held cache: a caller asks after an edit and before its announcement.
+    std::string text;
+    if (!ReadShaderFileText(source, text, nullptr))
+        return {};
+    ShaderSourceCache& cache = ShaderSourceCache::Get();
+    const std::string rootsSignature = ShaderSourceCache::MakeRootsSignature(roots);
+    std::vector<std::filesystem::path> includes;
+    for (const std::string& operand : ScanShaderIncludeDirectives(text))
+    {
+        const ShaderSourceCache::ResolutionPtr resolved =
+            cache.Resolve(source.parent_path(), roots, rootsSignature, operand);
+        if (!resolved)
+        {
+            Logger::Log::Debug("ResolveShaderIncludes: the #include '{}' of '{}' resolves to no file", operand,
+                               source.generic_string());
+            continue;
+        }
+        includes.push_back(resolved->Candidate.lexically_normal());
+    }
+    return includes;
 }
 
 }} // namespace GameEngine::Rendering

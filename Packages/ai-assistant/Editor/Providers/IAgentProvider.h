@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ConversationMessage.h"
+#include "SetupStatus.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -115,6 +116,9 @@ struct TurnResult
     /// named does not exist (any other failure, a refused login check included,
     /// leaves it false), so continuing that session can never succeed.
     bool SessionNotFound = false;
+    /// On Failed: the setup check refused the turn before it started (CheckSetup), so
+    /// Error is the first failed step's finding and fix and no reply was asked for.
+    bool NotReady = false;
 };
 
 /// What a provider can do; the panel adapts its controls to it.
@@ -176,6 +180,17 @@ public:
     virtual std::string_view Id() const = 0;
     /// What this provider can do; constant for the provider's lifetime.
     virtual ProviderCapabilities Capabilities() const = 0;
+
+    /// The checks a turn runs before it starts, in order; a step after a failed one
+    /// stays Waiting. A step can run a program for seconds, at most its time limit, or
+    /// until `cancel` fires: call it off the UI thread. The fixes name the controls of
+    /// `surface`, where the result is shown. `onStep` gets each step when it ends, so a
+    /// surface can show the steps one by one.
+    virtual SetupStatus CheckSetup(const CancelToken& cancel, SetupSurface surface,
+                                   const SetupStepSink& onStep) const = 0;
+    /// The steps CheckSetup() runs, in check order, each Waiting with what it checks as its
+    /// Found: a surface lists every step before the first one ends.
+    virtual std::vector<SetupStep> SetupPlan() const = 0;
 
     /// Runs one turn and blocks until it ends, reporting through `events`; every
     /// outcome, failure included, ends with one OnFinished(). Polls `cancel` and ends

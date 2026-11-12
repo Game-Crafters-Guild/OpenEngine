@@ -31,7 +31,7 @@ struct TerrainData;
 // a unified map assembled from the tiles.
 //
 // While an interactive edit runs (a gizmo or inspector drag) the maps wait and recompose once it
-// settles, as the splat's whole-terrain renormalize does.
+// settles.
 class TerrainColorMapBaker
 {
 public:

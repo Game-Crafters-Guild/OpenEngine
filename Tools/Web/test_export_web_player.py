@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """export_web_player.py stages the project content the engine lists and nothing else: a
 project's C# and C++ sources and its Editor/ folders sit beside its assets, and only the
-files the engine's content list names (StageWebExportContent) reach the web build.
+files the engine's content list names (StageWebExportContent) reach the web build. The
+player template's notices reach every game, and a template without them is refused.
 
     python Tools/Web/test_export_web_player.py
 """
@@ -68,6 +69,28 @@ class ProjectContentTests(unittest.TestCase):
                 with self.assertRaisesRegex(export_web_player.ExportError, "outside the build"):
                     export_web_player.CopyProjectContent(self.project, self.contentList, self.staging)
                 self.assertFalse(outside.exists())
+
+
+class TemplateTests(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix="ge_web_export_template_"))
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        self.template = self.root / "template"
+        for name in ("WebPlayer.html", "WebPlayer.js", "WebPlayer.wasm"):
+            WriteFile(self.template / name, name)
+        self.out = self.root / "dist"
+        self.out.mkdir()
+
+    def testTheExportCopiesTheTemplateNoticesBesideTheGame(self):
+        WriteFile(self.template / "THIRD_PARTY_NOTICES.md", "# Third-party notices")
+        export_web_player.CopyTemplate(self.template, self.out)
+        self.assertEqual((self.out / "THIRD_PARTY_NOTICES.md").read_text(), "# Third-party notices")
+
+    def testATemplateWithoutNoticesIsRefusedNamingTheBuild(self):
+        with self.assertRaisesRegex(export_web_player.ExportError,
+                                    "THIRD_PARTY_NOTICES.md missing. Build the WebPlayer target"):
+            export_web_player.CopyTemplate(self.template, self.out)
+        self.assertEqual(list(self.out.iterdir()), [])
 
 
 if __name__ == "__main__":

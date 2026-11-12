@@ -29,6 +29,13 @@ struct AABB
 	Vector3 min{0.0f, 0.0f, 0.0f};
 	Vector3 max{0.0f, 0.0f, 0.0f};
 
+	// Exact compare of every corner component. Vector3 has no operator==, so this one cannot be defaulted.
+	bool operator==(const AABB& other) const
+	{
+		return min.x == other.min.x && min.y == other.min.y && min.z == other.min.z && max.x == other.max.x &&
+		       max.y == other.max.y && max.z == other.max.z;
+	}
+
 	// Inverted box (min = max float, max = lowest float) that the first
 	// Expand overwrites. Finite sentinels: an empty box never carries inf.
 	static AABB Empty()
@@ -135,13 +142,16 @@ struct BoundingBox
 	{
 		const float* m = worldMatrix;
 
-		const float wcx = m[0] * center.x + m[4] * center.y + m[8]  * center.z + m[12];
-		const float wcy = m[1] * center.x + m[5] * center.y + m[9]  * center.z + m[13];
-		const float wcz = m[2] * center.x + m[6] * center.y + m[10] * center.z + m[14];
+		const float wcx = Math::MulAdd(m[8], center.z, Math::MulAdd(m[0], center.x, m[4] * center.y)) + m[12];
+		const float wcy = Math::MulAdd(m[9], center.z, Math::MulAdd(m[1], center.x, m[5] * center.y)) + m[13];
+		const float wcz = Math::MulAdd(m[10], center.z, Math::MulAdd(m[2], center.x, m[6] * center.y)) + m[14];
 
-		const float whx = std::abs(m[0]) * halfExtents.x + std::abs(m[4]) * halfExtents.y + std::abs(m[8])  * halfExtents.z;
-		const float why = std::abs(m[1]) * halfExtents.x + std::abs(m[5]) * halfExtents.y + std::abs(m[9])  * halfExtents.z;
-		const float whz = std::abs(m[2]) * halfExtents.x + std::abs(m[6]) * halfExtents.y + std::abs(m[10]) * halfExtents.z;
+		const float whx = Math::MulAdd(std::abs(m[8]), halfExtents.z,
+		                               Math::MulAdd(std::abs(m[0]), halfExtents.x, std::abs(m[4]) * halfExtents.y));
+		const float why = Math::MulAdd(std::abs(m[9]), halfExtents.z,
+		                               Math::MulAdd(std::abs(m[1]), halfExtents.x, std::abs(m[5]) * halfExtents.y));
+		const float whz = Math::MulAdd(std::abs(m[10]), halfExtents.z,
+		                               Math::MulAdd(std::abs(m[2]), halfExtents.x, std::abs(m[6]) * halfExtents.y));
 
 		return {{wcx - whx, wcy - why, wcz - whz},
 		        {wcx + whx, wcy + why, wcz + whz}};

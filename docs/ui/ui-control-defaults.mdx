@@ -1,17 +1,19 @@
 ---
 title: UI control defaults
-description: The default stylesheet under every UI document, why your rules always win, its color properties, the slider track, selected text, Markdown text, and the resize gesture.
+description: The default stylesheet under every UI document, why your rules always win, its color properties, the slider track, the progress bar, selected text, Markdown text, and the resize gesture.
 sidebar:
   order: 3
 ---
 
-A game UI document ships only its own stylesheet. So that a `<slider>`, `<toggle>`, or `<checkbox>` you have not styled is still visible and usable, the UI module has a **default stylesheet** that every UI manager loads under your sheets, the way a browser's built-in sheet sits under every page. It gives each control the parts that would otherwise draw nothing: a slider's track and thumb, a toggle's knob, a checkbox's box, and a scrollbar's thumb. It also defines the `hidden` class, which controls put on parts they are not showing.
+A game UI document ships only its own stylesheet. So that a `<slider>`, `<toggle>`, or `<checkbox>` you have not styled is still visible and usable, the UI module has a **default stylesheet** that every UI manager loads under your sheets, the way a browser's built-in sheet sits under every page. It gives each control the parts that would otherwise draw nothing: a slider's track and thumb, a toggle's knob, a checkbox's box, a scrollbar's thumb, and a progress bar's track and fill. It also defines the `hidden` class, which controls put on parts they are not showing.
 
 The sheet is compiled into the engine, so every game and every exported build has it with nothing to copy. It is engine code: an edit to `Engine/Modules/UI/Assets/defaults.css` takes a rebuild, and it is not hot-reloaded.
 
 ## Your rules always win
 
 The default stylesheet's rules have the cascade's lowest tier, the **user-agent origin**. A rule in your theme or document that sets the same property wins over the default whatever its selector: a type selector like `slider` or a single class beats the default's `.slider-thumb` or `.toggle:checked`, and it does not matter in which order the sheets were loaded. Between your own rules, the normal cascade applies: specificity, then the later rule.
+
+A control that loads its own stylesheet (`Button`, `Dropdown`, `ScrollView` and the other UI module controls) loses every tie of equal specificity to your sheets, in any load order. So `.menu-entry { align-items: flex-start; }` restyles a Button that has the `menu-entry` class. The control's more specific rules, such as `.button:hover`, still apply until you write a rule that is as specific.
 
 ```css title="Your rules win over the defaults"
 /* Wins over the default .toggle:checked { justify-content: flex-end }, which is more specific. */
@@ -36,6 +38,9 @@ Every color in the default sheet is a custom property set on `:root`. Set the pr
 | `--ui_color_checkbox_box_checked` | `#3B85E0` | A checked checkbox's box |
 | `--ui_color_checkbox_box_border` | `#777777` | The checkbox box's 1px border |
 | `--ui_color_scrollbar_thumb` | `#808080` | A scrollbar's thumb (`.scrollbar-thumb`) |
+| `--ui_color_progress_track` | `var(--slider-track)` | A progress bar's track (`.progress-bar`) |
+| `--ui_color_progress_fill` | `var(--slider-track-fill)` | A progress bar's fill (`.progress-bar-fill`) |
+| `--ui_progress_radius` | `999px` | The corner radius of a progress bar's track and fill. The default makes round ends at any height |
 
 ```css title="Recolor every slider, or one"
 :root {
@@ -59,6 +64,49 @@ The track properties take any color `background-color` takes: hex, a color name,
 ### The thumb, knob and box
 
 These are child elements with ordinary classes, so any property can be restyled on them, sizes included: `.slider-thumb` (8×8 px by default), `.toggle-knob` (12×12 px), `.checkbox-box` (16×16 px), and `.scrollbar-thumb`. A checked toggle moves its knob to the end with `.toggle:checked { justify-content: flex-end; }`. A rule of yours on the toggle's `justify-content` replaces that.
+
+### The progress bar
+
+`<progress>` (also `<ProgressBar>`) shows how far along a task or a timer is, or how full a stat is: health, stamina, a craft timer, a load screen. The element is the track (`.progress-bar`, 160×6 px by default) and its one child is the fill (`.progress-bar-fill`). The fill's length is the value's share of the range. By default the bar has the slider's rail colors, so a bar and a slider look like one family.
+
+| Attribute | Default | Set from a script | What it does |
+|---|---|---|---|
+| `value` | `0` | yes, `Value` | The value, clamped to 0 through `max` |
+| `max` | `1` | yes, `Max` | The end of the range. A new max clamps the value again, so the order of `value` and `max` does not matter |
+| `indeterminate` | `false` | yes, `Indeterminate` | For a task with no known end: the fill is a short segment (30 percent of the track) centered on the track (`.progress-bar-fill-indeterminate`). The segment does not move. A value always fills from the start edge, so the segment does not read as a value. The value is kept and shows again when the bar stops being indeterminate |
+| `direction` | `right` | no, layout only | The edge the fill grows toward: `right`, `left`, `up` or `down`. `up` and `down` make a vertical bar, 6×160 px by default. A class of yours that sets the size keeps that size in every direction |
+
+Give the bar a class of your own for its size and colors. The fill takes the colors and the radius from the bar, so one rule styles both parts:
+
+```xml title="A health bar in a HUD"
+<progress id="hp" class="health-bar" value="78" max="100" />
+```
+
+```css
+.health-bar {
+    width: 100%;
+    height: 16px;
+    --ui_color_progress_track: rgba(0, 0, 0, 0.3);
+    --ui_color_progress_fill: rgba(80, 220, 130, 0.95);
+}
+
+/* With this rule every bar eases to a new value over 0.3 s, in all four directions. */
+.progress-bar-fill {
+    transition: width 0.3s ease-out, height 0.3s ease-out;
+}
+```
+
+From C#, `Ui.FindElement` returns a `Ui.ProgressBar` for a bar. A script sets its range and its value:
+
+```csharp title="Drive the health bar from a script"
+if (Ui.FindElement("hp") is Ui.ProgressBar hp)
+{
+    hp.Max = stats.MaxHealth;   // clamps Value again
+    hp.Value = stats.Health;    // clamped to 0 through Max
+}
+```
+
+A bar sends no change event. From C++, call `ProgressBar::SetValue`, `SetMax`, `SetIndeterminate` and `SetFillDirection` (`UI/Controls/ProgressBar.h`).
 
 ### Selected text
 

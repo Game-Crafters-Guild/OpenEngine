@@ -900,6 +900,21 @@ TEST_F(GPUMeshTableTest, ReloadModelMeshesSwapsGeometryUnderTheSameHandlesAndRow
         << "the GPUMesh row the scatter reads must describe the reloaded mesh";
 }
 
+// A hot reload adopts the meshes of a staged load and the hashes that load made, so the changed submesh re-uploads.
+TEST_F(GPUMeshTableTest, ReloadModelMeshesReuploadsTheMeshesAHotReloadAdopted)
+{
+    const GUID guid = GUID::Generate();
+    ModelAsset live(guid, "synthetic://model.glb");
+    ModelAsset staged(guid, "synthetic://model.glb");
+    live.SetMeshesForTest({MakeTriangleMesh(4, false)});
+    live.PostLoad();
+    m_Registry.RegisterModelMeshes(guid, live);
+    staged.SetMeshesForTest({MakeTriangleMesh(9, false)});
+    staged.PostLoad();
+    ASSERT_TRUE(live.AdoptReload(staged));
+    EXPECT_EQ(m_Registry.ReloadModelMeshes(guid, live).SubmeshesReuploaded, 1u) << "the GPU keeps the old mesh";
+}
+
 TEST_F(GPUMeshTableTest, ReloadModelMeshesWithIdenticalGeometryUploadsNothing)
 {
     GUID guid{};

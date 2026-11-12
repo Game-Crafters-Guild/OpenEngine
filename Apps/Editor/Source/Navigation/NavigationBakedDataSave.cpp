@@ -70,8 +70,8 @@ std::filesystem::path BakedDataTarget(ECS::World& world, ECS::EntityHandle entit
 
 bool SameBytes(const std::filesystem::path& file, const std::vector<uint8>& bytes)
 {
-    std::vector<uint8> existing;
-    return ReadFileBytesShared(file, existing) && existing == bytes;
+    ByteBuffer existing;
+    return ReadFileBytesShared(file, existing) && std::ranges::equal(existing, bytes);
 }
 
 } // namespace

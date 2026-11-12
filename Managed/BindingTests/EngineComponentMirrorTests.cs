@@ -31,9 +31,47 @@ namespace GameEngine.ManagedBindingTests
             Assert.That(Transform.Identity.ToMatrix4x4(), Is.EqualTo(System.Numerics.Matrix4x4.Identity));
 
             var yaw = System.Numerics.Quaternion.CreateFromAxisAngle(System.Numerics.Vector3.UnitY, MathF.PI / 2f);
-            Transform turned = Transform.FromTRS(new System.Numerics.Vector3(1f, 2f, 3f), yaw, System.Numerics.Vector3.One);
+            Transform turned = Transform.FromTRS(new WorldPosition { X = 1.0, Y = 2.0, Z = 3.0 }, yaw, System.Numerics.Vector3.One);
             Assert.That(turned.Forward.X, Is.EqualTo(1f).Within(1e-5f));
-            Assert.That(turned.GetPosition(), Is.EqualTo(new System.Numerics.Vector3(1f, 2f, 3f)));
+            Assert.That(turned.Position, Is.EqualTo(new WorldPosition { X = 1.0, Y = 2.0, Z = 3.0 }));
+        }
+
+        /// <summary>The exact Position field is the one position surface: a move at 300 km stays in doubles, and no float accessor exists.</summary>
+        [Test]
+        public void PositionIsExactAndHasNoFloatAccessor()
+        {
+            Transform t = Transform.Identity;
+            t.Position = new WorldPosition { X = 300000.0001, Y = 1200.0001, Z = -299000.0001 };
+            t.Position += new System.Numerics.Vector3(0.5f, 0f, 0f);
+
+            Assert.That(t.Position, Is.EqualTo(new WorldPosition { X = 300000.0001 + 0.5, Y = 1200.0001, Z = -299000.0001 }));
+            var flags = System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance;
+            foreach (string accessor in new[] { "X", "Y", "Z", "GetPosition", "SetPosition" })
+            {
+                Assert.That(typeof(Transform).GetMember(accessor, flags), Is.Empty, accessor);
+                Assert.That(typeof(WorldTransform).GetMember(accessor, flags), Is.Empty, accessor);
+            }
+        }
+
+        /// <summary>Rotate keeps the position in doubles: an entity at 300 km does not move when it turns.</summary>
+        [Test]
+        public void RotateKeepsAFarPositionExact()
+        {
+            Transform far = Transform.Identity;
+            far.Position = new WorldPosition { X = 300000.0001, Y = 1200.0001, Z = -299000.0001 };
+            far.Rotate(System.Numerics.Quaternion.CreateFromAxisAngle(System.Numerics.Vector3.UnitY, MathF.PI / 2f));
+
+            Assert.That(far.Position, Is.EqualTo(new WorldPosition { X = 300000.0001, Y = 1200.0001, Z = -299000.0001 }));
+            Assert.That(far.Forward.X, Is.EqualTo(1f).Within(1e-5f));
+        }
+
+        /// <summary>The padding the hierarchy compares as bytes is not public: a script cannot make it nonzero.</summary>
+        [Test]
+        public void TransformPaddingIsNotPublic()
+        {
+            var flags = System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance;
+            Assert.That(typeof(Transform).GetField("Padding", flags), Is.Null);
+            Assert.That(typeof(Transform).GetProperty("Padding", flags), Is.Null);
         }
 
         /// <summary>ToMatrix4x4 is a System.Numerics matrix: it moves and turns a point as Vector3.Transform expects.</summary>
@@ -42,7 +80,7 @@ namespace GameEngine.ManagedBindingTests
         {
             var yaw = System.Numerics.Quaternion.CreateFromAxisAngle(System.Numerics.Vector3.UnitY, MathF.PI / 2f);
             var position = new System.Numerics.Vector3(1f, 2f, 3f);
-            System.Numerics.Matrix4x4 matrix = Transform.FromTRS(position, yaw, System.Numerics.Vector3.One).ToMatrix4x4();
+            System.Numerics.Matrix4x4 matrix = Transform.FromTRS(WorldPosition.FromVector3(position), yaw, System.Numerics.Vector3.One).ToMatrix4x4();
 
             Assert.That(matrix.Translation, Is.EqualTo(position));
             System.Numerics.Vector3 moved = System.Numerics.Vector3.Transform(System.Numerics.Vector3.UnitZ, matrix);
@@ -51,6 +89,33 @@ namespace GameEngine.ManagedBindingTests
             Transform back = default;
             back.FromMatrix4x4(matrix);
             Assert.That(back.ToMatrix4x4(), Is.EqualTo(matrix));
+        }
+
+        /// <summary>FromMatrix4x4 refuses a projective matrix with a message that names the fix, and leaves the transform as it was.</summary>
+        [Test]
+        public void FromMatrix4x4RefusesAProjectiveMatrix()
+        {
+            System.Numerics.Matrix4x4 projective = System.Numerics.Matrix4x4.CreatePerspectiveFieldOfView(1f, 1f, 0.1f, 100f);
+            Transform t = Transform.Identity;
+
+            var refusal = Assert.Throws<ArgumentException>(() => t.FromMatrix4x4(projective));
+            Assert.That(refusal!.Message, Does.Contain("affine"));
+            Assert.That(refusal.Message, Does.Contain("FromTRS"));
+            Assert.That(t.ToMatrix4x4(), Is.EqualTo(System.Numerics.Matrix4x4.Identity));
+        }
+
+        /// <summary>FromMatrix4x4 accepts a fourth column within the affine tolerance and refuses one past it, as the C++ check does.</summary>
+        [Test]
+        public void FromMatrix4x4AcceptsRoundingInTheFourthColumn()
+        {
+            System.Numerics.Matrix4x4 rounded = System.Numerics.Matrix4x4.Identity;
+            rounded.M34 = 1e-6f;
+            Transform t = Transform.Identity;
+            Assert.DoesNotThrow(() => t.FromMatrix4x4(rounded));
+
+            System.Numerics.Matrix4x4 projective = System.Numerics.Matrix4x4.Identity;
+            projective.M34 = 1e-3f;
+            Assert.Throws<ArgumentException>(() => t.FromMatrix4x4(projective));
         }
 
         /// <summary>SendEvent queues named events until the queue is full, then refuses.</summary>

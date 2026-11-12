@@ -175,15 +175,15 @@ const Mathematics::Matrix4x4& IdentityPlacer()
 
 float32 BasisDeterminant(const Components::Transform& t)
 {
-    const V3 c0(t.matrix[0], t.matrix[1], t.matrix[2]);
-    const V3 c1(t.matrix[4], t.matrix[5], t.matrix[6]);
-    const V3 c2(t.matrix[8], t.matrix[9], t.matrix[10]);
+    const V3 c0(t.Basis[0].x, t.Basis[0].y, t.Basis[0].z);
+    const V3 c1(t.Basis[1].x, t.Basis[1].y, t.Basis[1].z);
+    const V3 c2(t.Basis[2].x, t.Basis[2].y, t.Basis[2].z);
     return V3::Dot(c0, V3::Cross(c1, c2));
 }
 
 V3 Column(const Components::Transform& t, int index)
 {
-    return V3(t.matrix[index * 4], t.matrix[index * 4 + 1], t.matrix[index * 4 + 2]);
+    return V3(t.Basis[index].x, t.Basis[index].y, t.Basis[index].z);
 }
 
 bool AnyValidationContains(const FenceLayoutResult& result, const char* needle)
@@ -920,9 +920,9 @@ TEST(FenceLayout, NearSquarePostKeepsTheZConventionAndItsPlacement)
         EXPECT_NEAR(V3::Dot(Column(t, 0), station.Pose.Right), 1.0f, 1.0e-4f);
         EXPECT_NEAR(V3::Dot(Column(t, 1), station.Pose.Up), 1.0f, 1.0e-4f);
         EXPECT_NEAR(V3::Dot(Column(t, 2), station.Pose.Forward), 1.0f, 1.0e-4f);
-        EXPECT_NEAR(t.matrix[12], station.Pose.Position.x, 1.0e-4f);
-        EXPECT_NEAR(t.matrix[13], station.Pose.Position.y, 1.0e-4f);
-        EXPECT_NEAR(t.matrix[14], station.Pose.Position.z, 1.0e-4f);
+        EXPECT_NEAR(t.GetPosition().X, station.Pose.Position.x, 1.0e-4f);
+        EXPECT_NEAR(t.GetPosition().Y, station.Pose.Position.y, 1.0e-4f);
+        EXPECT_NEAR(t.GetPosition().Z, station.Pose.Position.z, 1.0e-4f);
     }
 }
 
@@ -3860,7 +3860,7 @@ V3 LocalToWorld(const TilePose& pose, PieceAxis axis, float32 lengthScale, const
     Components::Transform t{};
     WriteParentLocalPose(t, IdentityPlacer(), pose, axis, lengthScale);
     return Column(t, 0) * local.x + Column(t, 1) * local.y + Column(t, 2) * local.z +
-           V3(t.matrix[12], t.matrix[13], t.matrix[14]);
+           (t.GetPosition() - Mathematics::WorldPosition{});
 }
 
 V3 GroundBisector(const V3& a, const V3& b)

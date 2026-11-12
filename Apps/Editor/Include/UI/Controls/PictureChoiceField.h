@@ -28,7 +28,7 @@ public:
         std::string Label;
         /// One line under the name: what the choice does.
         std::string Description;
-        /// The CSS class of the choice's picture.
+        /// The CSS class of the choice's picture; empty for a tile with no picture.
         std::string PictureClass;
     };
 

@@ -528,10 +528,11 @@ TEST(JobCounterTest, AVisitLeavingAsAJobArrivesStays)
 #if !GE_DEBUG_INSTRUMENTATION
     GTEST_SKIP() << "needs the Debug-only tagged-visit hook (GE_DEBUG_INSTRUMENTATION)";
 #else
-    JobSystem::WorkStealingThreadPool pool(1);
-    const size_t bound = JobSystem::WorkStealingThreadPool::kMaxUnstartedForkTasksPerWorker * pool.GetWorkerCount();
+    // Declared before the pool: a job can still use them when an ASSERT returns early.
     std::atomic<int> ran{0};
     JobSystem::JobCounter leaving;
+    JobSystem::WorkStealingThreadPool pool(1);
+    const size_t bound = JobSystem::WorkStealingThreadPool::kMaxUnstartedForkTasksPerWorker * pool.GetWorkerCount();
     JobSystem::JobCounter spent;
     bool ranWithoutAWaiter = false;
     {
@@ -698,15 +699,16 @@ TEST(JobCounterDeathTest, ResetWithOutstandingTasksAsserts)
 // finishes, in publication order.
 TEST(ParticipatingWaitTest, WorkerWaiterExecutesOnlySameCounterTasks)
 {
-    JobSystem::WorkStealingThreadPool pool(1);
-
-    std::atomic<bool> workerTaskStarted{false};
+    // Declared before the pool: the worker task can still use them after the release, or when an
+    // ASSERT returns early.
     std::atomic<bool> foreignPlanted{false};
+    std::atomic<bool> workerTaskStarted{false};
     std::atomic<int> foreignRan{0};
     std::atomic<int> taggedRan{0};
     std::atomic<int> foreignSeenDuringWait{-1};
     std::atomic<int> taggedSeenAfterWait{-1};
     std::atomic<bool> done{false};
+    JobSystem::WorkStealingThreadPool pool(1);
 
     pool.EnqueueWork(
         [&]
@@ -800,9 +802,10 @@ TEST(ParticipatingWaitTest, NestedCountersNoDeadlock)
 // parks for the ones the workers hold, so Wait returns with every job done.
 TEST(ParticipatingWaitTest, ExternalWaiterJoinsUntilLastDecrement)
 {
+    // Declared before the pool: the held job can still read it after the release.
+    std::atomic<bool> release{false};
     JobSystem::WorkStealingThreadPool pool(2);
 
-    std::atomic<bool> release{false};
     std::atomic<int> ran{0};
     JobSystem::JobCounter counter;
     for (int t = 0; t < 4; ++t)

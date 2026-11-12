@@ -2,10 +2,11 @@
 
 #include "Inspectors/InspectorUIHelpers.h"
 #include "TerrainECS/TerrainSizingPlan.h"
+#include "Types/FormatNumber.h"
+#include "Types/StringUtils.h"
 #include "UI/Controls/InspectorNotice.h"
 
-#include <array>
-#include <cstdio>
+#include <cmath>
 #include <memory>
 
 namespace GameEngine::Editor
@@ -13,55 +14,57 @@ namespace GameEngine::Editor
 namespace
 {
 
-// Metres per texel spans four orders of magnitude across the legal range (0.25 m on a small
+// Meters per sample span four orders of magnitude across the legal range (0.25 m on a small
 // terrain to 500 m on a coarse far field), so a fixed precision reads as either noise or a lie.
-std::string FormatMetres(float32 metres)
+// Whole meters group their digits: "1,048,576 m".
+std::string FormatLength(float32 meters)
 {
-    std::array<char, 32> buf{};
-    if (metres < 1.0f)
-        std::snprintf(buf.data(), buf.size(), "%.2f m", metres);
-    else if (metres < 100.0f)
-        std::snprintf(buf.data(), buf.size(), "%.1f m", metres);
-    else
-        std::snprintf(buf.data(), buf.size(), "%.0f m", metres);
-    return std::string(buf.data());
-}
-
-std::string FormatMebibytes(uint64 bytes)
-{
-    std::array<char, 32> buf{};
-    std::snprintf(buf.data(), buf.size(), "%.0f MiB",
-                  static_cast<double>(bytes) / (1024.0 * 1024.0));
-    return std::string(buf.data());
+    if (meters >= 100.0f)
+        return FormatGroupedWholeNumber(meters) + " m";
+    return FormatMeters(meters, meters < 1.0f ? 2 : 1);
 }
 
 } // namespace
 
 std::string DescribeTerrainSizing(const TerrainECS::TerrainSizingPlan& plan)
 {
-    if (plan.SampleResolution == 0u)
+    if (plan.UnifiedWidth == 0u)
         return {};
 
-    std::string text = std::to_string(plan.SampleResolution) + " x " +
-                       std::to_string(plan.SampleResolution) + " samples, " +
-                       FormatMetres(plan.MetresPerTexelNear) + " per texel";
+    // Keyed on the pinned pages, not the tile count: a terrain whose whole height pyramid is pinned
+    // does not stream, whatever its tile grid says.
+    const bool pinned = plan.HeightPages > 0u && plan.PinnedHeightPages == plan.HeightPages;
+    const std::string tileGrid = FormatGroupedInteger(plan.TilesPerAxisX) + " x " +
+                                 FormatGroupedInteger(plan.TilesPerAxisZ);
 
-    // Keyed on the SOURCE, not the tile count: the plan derives a tile grid for every terrain
-    // (the service needs it), but a terrain below the tiling threshold is one heightmap and does
-    // not stream, whatever that grid says.
-    if (plan.Source == TerrainECS::TerrainHeightSource::Single)
-        text += " - one tile, no streaming";
+    // The terrain draws only its authored size, but its samples and their memory cover whole tiles.
+    // This clause goes first so that a short panel shows it. The pinned form names the tile grid
+    // here: the clause after it does not.
+    std::string text;
+    const float32 storedX = static_cast<float32>(plan.TilesPerAxisX) * plan.TileWorldSize;
+    const float32 storedZ = static_cast<float32>(plan.TilesPerAxisZ) * plan.TileWorldSize;
+    if (storedX > plan.WorldSizeX || storedZ > plan.WorldSizeZ)
+    {
+        text = "Stores samples for " + FormatLength(storedX) + " x " + FormatLength(storedZ);
+        if (pinned)
+            text += " (" + tileGrid + " tiles of " + FormatLength(plan.TileWorldSize) + ")";
+        text += ", more than it draws. ";
+    }
+
+    text += FormatGroupedInteger(plan.UnifiedWidth) + " x " + FormatGroupedInteger(plan.UnifiedHeight) +
+            " samples, " + FormatLength(plan.MetresPerTexelNear) + " per sample";
+    if (pinned)
+        text += " - fits in memory, nothing streams (" +
+                FormatCount(plan.HeightPages, "page", "pages") + ")";
     else
-        text += " - " + std::to_string(plan.TilesPerAxisX) + " x " +
-                std::to_string(plan.TilesPerAxisZ) + " streamed tiles of " +
-                FormatMetres(plan.TileWorldSize);
+        text += " - " + tileGrid + " streamed tiles of " + FormatLength(plan.TileWorldSize);
 
     return text;
 }
 
 std::string DescribeTerrainResidency(const TerrainECS::TerrainSizingPlan& plan)
 {
-    if (plan.SampleResolution == 0u)
+    if (plan.UnifiedWidth == 0u)
         return {};
 
     const std::string vram = FormatMebibytes(plan.PredictedVramBytes);
@@ -74,23 +77,27 @@ std::string DescribeTerrainResidency(const TerrainECS::TerrainSizingPlan& plan)
     // far field, so the two cases must not share a sentence — saying "beyond the window" of a
     // terrain that has no outside is a contradiction the author would have to disprove.
     if (plan.FullyResident())
-        return "Streams all " + std::to_string(plan.TotalTiles) + " tiles at full detail for " +
+        return "Streams all " + FormatGroupedInteger(plan.TotalTiles) + " tiles at full detail for " +
                vram + ". Nothing falls back to the coarse field at this size.";
 
     // Past that point the window is what stays sharp, and everything beyond it resolves through
     // one coarse field spanning the whole world. That trade is the decision this notice exists
     // to surface.
-    return "Streams " + std::to_string(plan.ResidentSlots) + " of " +
-           std::to_string(plan.TotalTiles) + " tiles at full detail (a " +
-           FormatMetres(plan.ResidentWindowMetres) + " window) for " + vram +
+    return "Streams " + FormatGroupedInteger(plan.ResidentSlots) + " of " +
+           FormatGroupedInteger(plan.TotalTiles) + " tiles at full detail (a " +
+           FormatLength(plan.ResidentWindowMetres) + " window) for " + vram +
            ". Beyond the window the terrain falls back to " +
-           FormatMetres(plan.MetresPerTexelFar) +
+           FormatLength(plan.MetresPerTexelFar) +
            " per texel, so distant ground reads smooth rather than detailed.";
 }
 
-void AddTerrainSizingNotice(UIElement* parent, const TerrainECS::TerrainSizingPlan& plan)
+void AddTerrainSizingNotice(UIElement* parent, float32 sizeX, float32 sizeZ, float32 samplesPerMeter)
 {
-    if (!parent || plan.SampleResolution == 0u)
+    // A refused size creates no terrain, so it has nothing to store or stream.
+    if (!parent || !TerrainECS::PlanarTerrainSizeError(sizeX, sizeZ, samplesPerMeter).empty())
+        return;
+    const TerrainECS::TerrainSizingPlan plan = TerrainECS::DeriveTerrainSizingPlan(sizeX, sizeZ, samplesPerMeter);
+    if (plan.UnifiedWidth == 0u)
         return;
 
     InspectorUI::AddInfoCard(parent, DescribeTerrainSizing(plan));

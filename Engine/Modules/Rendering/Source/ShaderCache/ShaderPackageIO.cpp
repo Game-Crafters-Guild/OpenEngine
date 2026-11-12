@@ -9,6 +9,7 @@
 #include "Rendering/ShaderCache/ShaderPackageContainer.h"
 
 #include <fstream>
+#include <mutex>
 #include <span>
 #include <string_view>
 #include <utility>
@@ -227,6 +228,24 @@ ShaderPackageRebuildActionFunc GetShaderPackageRebuildAction()
 void SetShaderPackageRebuildAction(ShaderPackageRebuildActionFunc action)
 {
     s_ShaderPackageRebuildAction = action;
+}
+
+namespace
+{
+std::mutex s_PrecompiledShaderFilesMutex;
+PrecompiledShaderFiles s_PrecompiledShaderFiles;
+} // namespace
+
+void SetPrecompiledShaderFiles(PrecompiledShaderFiles files)
+{
+    std::lock_guard lock(s_PrecompiledShaderFilesMutex);
+    s_PrecompiledShaderFiles = std::move(files);
+}
+
+PrecompiledShaderFiles GetPrecompiledShaderFiles()
+{
+    std::lock_guard lock(s_PrecompiledShaderFilesMutex);
+    return s_PrecompiledShaderFiles;
 }
 
 bool LoadShaderPkg(const std::string& pathOrName,

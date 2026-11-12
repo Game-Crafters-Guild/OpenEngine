@@ -12,7 +12,7 @@ layout(set = 0, binding = 1) uniform sampler2D uDepth;
 
 layout(set = 0, binding = 2, std140) uniform ViewParamsBlock
 {
-    // 160 B core prefix of the shared ViewParams list.
+    // 176 B core prefix of the shared ViewParams list.
 #define GE_VP_MAT4(name) mat4 name;
 #define GE_VP_VEC4(name) vec4 name;
 #define GE_VIEWPARAMS_CORE_ONLY 1
@@ -71,7 +71,7 @@ void main()
         return;
     }
 
-    float linearDepth = LinearizeReverseZ(rawDepth, ViewParams.ge_nearFar.xy);
+    float linearDepth = LinearizeReverseZ(rawDepth, ViewParams.ge_depthTerms);
     float coc = CircleOfConfusion(linearDepth) * intensity;
     float radiusPx = coc * maxRadius;
     if (radiusPx <= 0.25)

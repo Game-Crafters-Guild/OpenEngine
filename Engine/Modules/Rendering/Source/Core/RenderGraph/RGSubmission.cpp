@@ -42,6 +42,14 @@ void RGGraph::RecordCrossFrameAccess(RGResourceId resource, const RGSubmission& 
                                 submission.PhysicalQueue, writes, submission.SignalValue);
 }
 
+uint32_t RGGraph::WaitedSubmission(const RGSemaphoreWait& wait) const
+{
+    for (uint32_t i = 0; i < m_Submissions.size(); ++i)
+        if (m_Submissions[i].PhysicalQueue == wait.Queue && m_Submissions[i].SignalValue == wait.Value)
+            return i;
+    return kInvalidId;
+}
+
 void RGGraph::BuildSubmissionPlan(const uint8_t physicalQueueOfLogical[3])
 {
     m_Submissions.clear();
@@ -56,11 +64,11 @@ void RGGraph::BuildSubmissionPlan(const uint8_t physicalQueueOfLogical[3])
         return;
 
     auto physOf = [&](RGPassId p)
-    { return physicalQueueOfLogical[static_cast<uint32_t>(m_Passes[p].Desc.Queue)]; };
+    { return physicalQueueOfLogical[static_cast<uint32_t>(m_Passes[p].ExecutionQueue)]; };
 
-    // 1. Partition the scheduled order into maximal same-PHYSICAL-queue runs
-    //    (aliased logical queues — e.g. MoltenVK compute==graphics — collapse
-    //    into one submission). Timeline signal values come from PERSISTENT
+    // 1. Partition the scheduled order into same-PHYSICAL-queue runs, maximal up
+    //    to a pass that ends its submission (aliased logical queues — e.g.
+    //    MoltenVK compute==graphics — collapse into one submission). Timeline signal values come from PERSISTENT
     //    per-queue counters (m_QueueTimelineNext) — frames overlap in flight, so
     //    restarting values per frame would collide with frame N-1's still-pending
     //    signals.
@@ -74,10 +82,13 @@ void RGGraph::BuildSubmissionPlan(const uint8_t physicalQueueOfLogical[3])
         while (i < n && physOf(m_ScheduledOrder[i]) == phys)
         {
             subOfSched[i] = subIdx;
+            m_Passes[m_ScheduledOrder[i]].Submission = subIdx;
             ++i;
+            if (m_Passes[m_ScheduledOrder[i - 1]].EndsSubmission)
+                break; // PlaceQueues ends the submission here, beside a kept compute run
         }
         RGSubmission s;
-        s.Queue = m_Passes[m_ScheduledOrder[first]].Desc.Queue;
+        s.Queue = m_Passes[m_ScheduledOrder[first]].ExecutionQueue;
         s.PhysicalQueue = phys;
         s.ScheduledFirst = first;
         s.ScheduledCount = i - first;

@@ -1,9 +1,7 @@
 <uielement id="hud-root" class="hud-root">
     <uielement id="health-panel" class="panel panel-tl">
         <label class="panel-title" text="HEALTH" />
-        <uielement class="bar-track">
-            <uielement class="bar-fill" />
-        </uielement>
+        <progress class="health-bar" value="78" max="100" />
         <label class="panel-sub" text="78 / 100" />
     </uielement>
 

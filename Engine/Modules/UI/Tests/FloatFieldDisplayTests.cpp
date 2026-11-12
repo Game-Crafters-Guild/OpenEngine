@@ -92,7 +92,7 @@ TEST(FloatFieldDisplayTests, LargeFiniteValuesStillShowANumber)
 TEST(FloatFieldDisplayTests, ClearingTheTextCommitsTheNoneValue)
 {
     FloatField field;
-    field.SetNoneValue(kLowest);
+    field.SetNoneValue(kLowest, FloatField::kNoneText);
     field.SetValue(3.0f);
     field.OnFocusChanged(true);
     TextInput* editor = FindEditor(field);
@@ -107,7 +107,7 @@ TEST(FloatFieldDisplayTests, ClearingTheTextCommitsTheNoneValue)
 TEST(FloatFieldDisplayTests, TypingTheWordNoneCommitsTheNoneValue)
 {
     FloatField field;
-    field.SetNoneValue(kLowest);
+    field.SetNoneValue(kLowest, FloatField::kNoneText);
     field.SetValue(3.0f);
     field.OnFocusChanged(true);
     TextInput* editor = FindEditor(field);
@@ -122,7 +122,7 @@ TEST(FloatFieldDisplayTests, TypingTheWordNoneCommitsTheNoneValue)
 TEST(FloatFieldDisplayTests, EditingANoneValueStartsFromEmptyText)
 {
     FloatField field;
-    field.SetNoneValue(kLowest);
+    field.SetNoneValue(kLowest, FloatField::kNoneText);
     field.SetValueWithoutNotify(kLowest);
     field.OnFocusChanged(true);
     EXPECT_EQ(ShownText(field), "");
@@ -131,6 +131,25 @@ TEST(FloatFieldDisplayTests, EditingANoneValueStartsFromEmptyText)
     Type(*editor, "5");
     editor->OnKey(Input::kKeyCode_Enter, 0, nullptr);
     EXPECT_EQ(field.GetValue(), 5.0f);
+}
+
+// A None value inside the range shows its own text, and clearing the text commits it.
+TEST(FloatFieldDisplayTests, ANoneValueShowsItsOwnText)
+{
+    FloatField field;
+    field.SetNoneValue(0.0f, "Auto (3 cm)");
+    field.SetValueWithoutNotify(0.0f);
+    EXPECT_EQ(ShownText(field), "Auto (3 cm)");
+    field.SetValueWithoutNotify(0.5f);
+    EXPECT_EQ(ShownText(field), "0.5");
+    field.OnFocusChanged(true);
+    TextInput* editor = FindEditor(field);
+    ASSERT_NE(editor, nullptr);
+    ClearText(*editor);
+    editor->OnKey(Input::kKeyCode_Enter, 0, nullptr);
+    EXPECT_EQ(field.GetValue(), 0.0f);
+    field.OnFocusChanged(false);
+    EXPECT_EQ(ShownText(field), "Auto (3 cm)");
 }
 
 // A field with no None value keeps its value when the person types the word.

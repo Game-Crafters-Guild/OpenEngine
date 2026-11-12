@@ -35,6 +35,12 @@ MPL v2 applies to exactly these two files, which carry the SPDX identifier:
 - `Engine/Modules/TerrainECS/Include/TerrainECS/Erosion/ErosionFilter.h`
 - `Engine/Modules/TerrainECS/Source/Erosion/ErosionFilter.cpp`
 
+Every notice set carries a copy of these two files, as built: `ErosionFilter.h`
+and `ErosionFilter.cpp` in this folder, and the same text under their own
+headings in the combined `THIRD_PARTY_NOTICES.md`. The engine's public
+repository, https://github.com/Game-Crafters-Guild/OpenEngine, holds them too,
+at the two paths above.
+
 Every modification to the technique stays inside them; callers include the
 header freely and are unaffected by the licence. A GLSL twin
 (`erosion_filter.glsl`) will join this list when the GPU bake path gains the

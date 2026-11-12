@@ -87,8 +87,7 @@ std::filesystem::path ResolveScriptsAssemblyDirectory()
     return ApplicationPaths::GetScriptsAssemblyDirectory();
 }
 
-std::filesystem::path ResolveNativeLibraryDirectoryFrom(const std::filesystem::path& exeDir,
-                                                        const std::filesystem::path& currentDir)
+std::filesystem::path ResolveNativeLibraryDirectoryFrom(const std::filesystem::path& exeDir)
 {
     using std::filesystem::path;
 
@@ -115,35 +114,26 @@ std::filesystem::path ResolveNativeLibraryDirectoryFrom(const std::filesystem::p
             return parent;
     }
 
-    // 3) During local development some hosts may copy the native shim next to the
-    //    working directory; respect that when present.
-    if (DirectoryHasNativeLibrary(currentDir))
-        return currentDir;
-
-    // 4) Conservative fallback: prefer the executable directory, even if the
-    //    library is currently missing. This keeps the result stable and
-    //    discoverable in diagnostics.
-    if (!exeDir.empty())
-        return exeDir;
-    return currentDir;
+    // 3) Fallback: the executable directory, even if the library is currently missing.
+    //    This keeps the result stable and discoverable in diagnostics.
+    return exeDir;
 }
 
 std::filesystem::path ResolveNativeLibraryDirectory()
 {
-    return ResolveNativeLibraryDirectoryFrom(ApplicationPaths::GetExecutableDirectory(), std::filesystem::current_path());
+    return ResolveNativeLibraryDirectoryFrom(ApplicationPaths::GetExecutableDirectory());
 }
 
 std::filesystem::path ResolveNativeLibraryPath()
 {
-    return ResolveNativeLibraryPathFrom(ApplicationPaths::GetExecutableDirectory(), std::filesystem::current_path());
+    return ResolveNativeLibraryPathFrom(ApplicationPaths::GetExecutableDirectory());
 }
 
-std::filesystem::path ResolveNativeLibraryPathFrom(const std::filesystem::path& exeDir,
-                                                   const std::filesystem::path& currentDir)
+std::filesystem::path ResolveNativeLibraryPathFrom(const std::filesystem::path& exeDir)
 {
     using std::filesystem::path;
 
-    path dir = ResolveNativeLibraryDirectoryFrom(exeDir, currentDir);
+    path dir = ResolveNativeLibraryDirectoryFrom(exeDir);
     if (dir.empty())
     {
         return {};

@@ -21,7 +21,7 @@ bool CubeLutAsset::Load()
     return ParseText(text);
 }
 
-bool CubeLutAsset::LoadFromData(const Vector<uint8>& data)
+bool CubeLutAsset::LoadFromData(std::span<const uint8> data)
 {
     return ParseText(std::string_view(reinterpret_cast<const char*>(data.data()), data.size()));
 }

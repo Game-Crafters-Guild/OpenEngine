@@ -28,7 +28,7 @@ layout(set = 0, binding = 2, std430) writeonly buffer SunGlareCasters
 
 layout(push_constant) uniform CastersPC
 {
-    // xyz = camera world position, w unused.
+    // xyz = the eye relative to the view's render origin, the frame of ge_shadowVP; w unused.
     vec4 eye;
     // xyz = world-space direction TOWARD the sun (unit), w = angular radius (rad) of the disc
     // sampled: the screen probe's own.

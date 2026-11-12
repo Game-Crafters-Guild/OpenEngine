@@ -54,7 +54,8 @@ std::vector<std::string> InputsBoundBlack(const std::string& shader)
         if (pass.value("shaderPkg", std::string()) != package) continue;
         for (const auto& name : pass.value("optionalInputs", nlohmann::json::array()))
             names.push_back(name.get<std::string>());
-        for (const auto& gate : pass.value("inputGates", nlohmann::json::object()).items())
+        const nlohmann::json gates = pass.value("inputGates", nlohmann::json::object());
+        for (const auto& gate : gates.items())
             names.push_back(gate.key());
     }
     return names;

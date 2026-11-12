@@ -11,6 +11,7 @@
 #include "UI/UITextureRegistry.h"
 
 #include "Logger/Logger.h"
+#include "Memory/ScratchScope.h"
 #include "Platform/SystemFonts.h"
 
 #include "UI/Controls/DockspaceElement.h"
@@ -53,7 +54,6 @@
 #include <cstring>
 #include <iomanip>
 #include <limits>
-// <memory_resource> removed: all PMR containers replaced with static thread_local vectors
 
 #include <chrono>
 #include <deque>
@@ -719,11 +719,8 @@ void UIManager::Update(float deltaTime, bool interactive)
         ((dirtyNow & (UIElement::LayoutDirty | UIElement::ChildrenDirty)) != 0u);
 
     // Build Yoga tree and collect nodes for layout and event dispatch.
-    // NOTE: all containers in this hot path are static thread_local to retain
-    // capacity across frames and avoid per-frame heap allocations entirely.
-    // The PMR scratch allocator was removed because MSVC's monotonic_buffer_resource
-    // consistently routes through the upstream (operator new) regardless of available
-    // buffer space, negating the benefit of the pre-allocated arena.
+    // The stylesheet tables below are static thread_local: they keep their capacity
+    // across frames.
     // Flat-table layout for effective stylesheet sets (sheets + aligned rule indices).
     // All sheet and index pointers live in two contiguous flat buffers; each unique
     // set is a {offset, count} range into them.  Elements share sets by index,
@@ -762,10 +759,6 @@ void UIManager::Update(float deltaTime, bool interactive)
     // Setters in prior frames (ResetRetainedYogaTree, RequestFullRebuild)
     // need the flag to survive across the frame boundary.
     m_ForceFullRebuildNextFrame = false;
-
-    // Debug: track pixel sizes used across all text runs this frame (when typing)
-    static thread_local std::vector<unsigned> dbgPixelSizes;
-    dbgPixelSizes.clear();
 
     // Track the set of stylesheets currently attached/active so we can
     // (a) cache dynamic pseudo-state analysis and
@@ -860,11 +853,10 @@ void UIManager::Update(float deltaTime, bool interactive)
     GetTextMeasureCtxUsed() = 0;
     TrimTextMeasureCtxPool();
 
-    // Hover chain scratch vectors: thread_local retains capacity across frames.
-    static thread_local std::vector<UIElement*> s_HoverLeft;
-    static thread_local std::vector<UIElement*> s_HoverEntered;
-    s_HoverLeft.clear();
-    s_HoverEntered.clear();
+    // The hover chains live until Update returns. Only they use this scope.
+    Memory::ScratchScope hoverScratch;
+    std::pmr::vector<UIElement*> hoverLeft{&hoverScratch.Resource()};
+    std::pmr::vector<UIElement*> hoverEntered{&hoverScratch.Resource()};
 
     // Construct UpdateContext for methods extracted from Update().
     // Must be after stylesheet setup (rootSheetSetIdx, forceGlobalStyle, etc. are set).
@@ -880,7 +872,7 @@ void UIManager::Update(float deltaTime, bool interactive)
         (uint32_t)std::lround((float)viewportH / contentScale),
         contentScale,
         GetTextMeasureCtxUsed(),
-        {}, false, nullptr, s_HoverLeft, s_HoverEntered, 0, false, false, runInteractive,
+        {}, false, nullptr, hoverLeft, hoverEntered, 0, false, false, runInteractive,
         profEnabled, &prof
     };
 
@@ -1956,6 +1948,8 @@ void UIManager::UpdateTooltipAndCursor(bool interactive)
             if (UIElement* root = GetRootElement())
                 m_TooltipOverlay->Update(root, m_MouseDown ? nullptr : m_Hovered, m_MouseX, m_MouseY, m_Time);
         }
+        if (m_TooltipOverlay->ConsumeArrowChange())
+            MarkPrimitivesNeedRegen(PrimitiveRegenCause::TooltipArrow);
     }
     else if (m_TooltipOverlay)
     {

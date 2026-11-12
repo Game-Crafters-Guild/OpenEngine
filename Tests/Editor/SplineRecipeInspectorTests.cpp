@@ -802,7 +802,9 @@ TEST_F(SplineRecipeInspectorTest, TheFencePreviewDrawsThePartBelowTheGroundAsAnO
         {
             const float ground = GroundLineY(count.GroundLines, end.x);
             if (ground != std::numeric_limits<float>::max())
+            {
                 EXPECT_GE(end.y, ground - 0.5f) << "a buried line above the ground at x " << end.x;
+            }
         }
     }
     EXPECT_GT(count.FirstGroundLine, count.LastBuriedLine) << "the ground line is not drawn over the buried outline";
@@ -1155,7 +1157,9 @@ TEST_F(SplineRecipeInspectorTest, TheScaleBarIsARoundLengthAtLeastFortyPixelsTal
         ASSERT_NE(step, std::end(steps)) << "the bar is " << barMeters << " m";
         EXPECT_GE(barPixels, 40.0f - 0.5f);
         if (step != std::begin(steps))
+        {
             EXPECT_LT(*(step - 1) * pixelsPerMeter, 40.0f) << "a shorter step is 40 px tall";
+        }
         const std::string label = std::to_string(static_cast<int>(*step)) + " m";
         EXPECT_TRUE(FindText(count.Glyphs, label, *font, textures)) << label;
     }

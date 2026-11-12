@@ -505,7 +505,7 @@ TEST_F(MarkupEditorBridgeTest, AnEditAfterAnUndoIsReadAgainstTheRestoredState)
     Notifications.NotifyWorldStructureChanged({&World, EditorChangeNotifications::ChangeKind::Commit});
     const std::vector<std::uint8_t> before = World.SerializeWorld();
     Components::Transform moved;
-    moved.matrix[12] = 5.0f;
+    moved.Position.X = 5.0;
     World.AddComponentImmediate(docks, moved);
     Notify<Components::Transform>(docks, EditorChangeNotifications::ChangeKind::Commit);
     const auto& entries = MarkupService::Get().FindNotes(World, docks)->Entries;
@@ -939,8 +939,8 @@ TEST_F(MarkupEditorBridgeTest, ACommittedMoveRenameOrColorIsRecordedInTheThread)
     ASSERT_EQ(entries.size(), 1u);
 
     Components::Transform moved;
-    moved.matrix[12] = 5.0f;
-    moved.matrix[0] = 2.0f;
+    moved.Position.X = 5.0;
+    moved.Basis[0].x = 2.0f;
     World.AddComponentImmediate(docks, moved);
     m_Now = 1010;
     Notify<Components::Transform>(docks, EditorChangeNotifications::ChangeKind::Preview);
@@ -1059,7 +1059,7 @@ TEST_F(MarkupEditorBridgeTest, AMarkupAddedAgainRecordsNoEditAgainstItsOldState)
     World.RemoveComponentImmediate<Markup>(docks);
     Notifications.NotifyWorldStructureChanged(structure);
     Components::Transform moved;
-    moved.matrix[12] = 9.0f;
+    moved.Position.X = 9.0;
     World.AddComponentImmediate(docks, moved);
     World.AddComponentImmediate(docks, Markup{});
     const std::size_t before = MarkupService::Get().FindNotes(World, docks)->Entries.size();

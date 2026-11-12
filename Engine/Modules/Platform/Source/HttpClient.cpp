@@ -138,6 +138,14 @@ int CancellationProgressCallback(void* clientData, curl_off_t, curl_off_t, curl_
     return IsCancelled(static_cast<const std::atomic<bool>*>(clientData)) ? 1 : 0;
 }
 
+// The most redirects one request follows, by curl or by Get's own loop.
+constexpr long kMaxRedirects = 5;
+
+bool IsCredentialEntry(const std::pair<const std::string, std::string>& header)
+{
+    return GameEngine::IsCredentialHeader(header.first);
+}
+
 // Shared transport hardening: URLs come from manifests and user input, so
 // never let curl talk anything but http(s) (directly or via redirect), never
 // rely on signals for timeouts (worker threads), and bound the connect phase.
@@ -146,7 +154,7 @@ void ApplyCommonTransportOptions(CURL* curl)
     curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "http,https");
     curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 5L);
+    curl_easy_setopt(curl, CURLOPT_MAXREDIRS, kMaxRedirects);
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 30L);
 }
@@ -390,6 +398,9 @@ HttpClient::HttpResponse HttpClient::PostForm(
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headerList);
 
     ApplyCommonTransportOptions(curl);
+    // curl replays custom headers to a redirect target on any origin: a credential stays put.
+    if (std::ranges::any_of(headers, IsCredentialEntry))
+        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 120L);
 
     CURLcode res = curl_easy_perform(curl);
@@ -441,7 +452,7 @@ HttpClient::HttpResponse HttpClient::PostJsonStream(
 HttpClient::HttpResponse HttpClient::Get(
     const std::string& url,
     const std::unordered_map<std::string, std::string>& headers,
-    size_t maxBodyBytes)
+    const GetOptions& options)
 {
     InitializeCurl();
 
@@ -450,58 +461,120 @@ HttpClient::HttpResponse HttpClient::Get(
     if (!response.error.empty())
         return response;
 
-    CURL* curl = curl_easy_init();
+    std::unique_ptr<CURL, CurlEasyDeleter> curl(curl_easy_init());
     if (!curl)
     {
         response.error = "Failed to initialize curl";
         return response;
     }
 
-    WriteState writeState(response.body, maxBodyBytes);
-
-    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &writeState);
-    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, HeaderCallback);
-    curl_easy_setopt(curl, CURLOPT_HEADERDATA, &response.headers);
-
-    struct curl_slist* headerList = nullptr;
-    for (const auto& [key, value] : headers)
-    {
-        std::string header = key + ": " + value;
-        headerList = curl_slist_append(headerList, header.c_str());
-    }
-    if (headerList)
-        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headerList);
-
-    ApplyCommonTransportOptions(curl);
+    WriteState writeState(response.body, options.MaxResponseBytes);
+    curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, WriteCallback);
+    curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &writeState);
+    curl_easy_setopt(curl.get(), CURLOPT_HEADERFUNCTION, HeaderCallback);
+    curl_easy_setopt(curl.get(), CURLOPT_HEADERDATA, &response.headers);
+    ApplyCommonTransportOptions(curl.get());
+    // Get follows redirects itself, so each hop sends only the headers its origin may read.
+    curl_easy_setopt(curl.get(), CURLOPT_FOLLOWLOCATION, 0L);
     // No CURLOPT_TIMEOUT: GET fetches project archives whose duration scales
     // with size and bandwidth. A stall abort bounds dead transfers instead.
-    curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1024L);
-    curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 30L);
-
-    CURLcode res = curl_easy_perform(curl);
-
-    if (res == CURLE_OK)
+    curl_easy_setopt(curl.get(), CURLOPT_LOW_SPEED_LIMIT, 1024L);
+    curl_easy_setopt(curl.get(), CURLOPT_LOW_SPEED_TIME, 30L);
+    if (options.Cancellation)
     {
+        curl_easy_setopt(curl.get(), CURLOPT_NOPROGRESS, 0L);
+        curl_easy_setopt(curl.get(), CURLOPT_XFERINFOFUNCTION, CancellationProgressCallback);
+        curl_easy_setopt(curl.get(), CURLOPT_XFERINFODATA, options.Cancellation);
+    }
+
+    const bool timed = options.Timeout.count() > 0;
+    const auto deadline = std::chrono::steady_clock::now() + options.Timeout;
+    std::string hopUrl = url;
+    auto hopHeaders = headers;
+    for (long redirects = 0;; ++redirects)
+    {
+        response.body.clear();
+        response.headers.clear();
+        if (IsCancelled(options.Cancellation))
+        {
+            response.cancelled = true;
+            response.error = "Request cancelled";
+            return response;
+        }
+        if (timed)
+        {
+            // Each hop gets what is left of the whole request's limit; curl reads 0 as no limit.
+            const long long leftMs = std::max<long long>(
+                1, std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now())
+                       .count());
+            curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT_MS,
+                             static_cast<long>(std::min<long long>(leftMs, std::numeric_limits<long>::max())));
+        }
+        curl_slist* hopHeaderList = nullptr;
+        for (const auto& [key, value] : hopHeaders)
+        {
+            const std::string header = key + ": " + value;
+            hopHeaderList = curl_slist_append(hopHeaderList, header.c_str());
+        }
+        const std::unique_ptr<curl_slist, CurlHeaderListDeleter> headerList(hopHeaderList);
+        curl_easy_setopt(curl.get(), CURLOPT_URL, hopUrl.c_str());
+        curl_easy_setopt(curl.get(), CURLOPT_HTTPHEADER, headerList.get());
+
+        const CURLcode result = curl_easy_perform(curl.get());
+        if (result != CURLE_OK)
+        {
+            response.success = false;
+            if (IsCancelled(options.Cancellation))
+            {
+                response.body.clear();
+                response.cancelled = true;
+                response.error = "Request cancelled";
+            }
+            else if (writeState.Overflowed)
+            {
+                response.overflowed = true;
+                response.error = "Response exceeded the size limit (" + std::to_string(options.MaxResponseBytes) + " bytes)";
+            }
+            else if (result == CURLE_OPERATION_TIMEDOUT && timed)
+            {
+                response.error = "Request timed out after " + std::to_string(options.Timeout.count()) + " ms";
+            }
+            else
+            {
+                response.error = curl_easy_strerror(result);
+            }
+            return response;
+        }
+
         long httpCode = 0;
-        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
-        response.statusCode = static_cast<int>(httpCode);
-        response.success = (httpCode >= 200 && httpCode < 300);
-    }
-    else
-    {
-        response.overflowed = writeState.Overflowed;
-        response.error = writeState.Overflowed
-            ? "Response exceeded the size limit (" + std::to_string(maxBodyBytes) + " bytes)"
-            : curl_easy_strerror(res);
-        response.success = false;
-    }
+        curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &httpCode);
+        char* location = nullptr;
+        curl_easy_getinfo(curl.get(), CURLINFO_REDIRECT_URL, &location);
+        if (location == nullptr || httpCode < 300 || httpCode >= 400)
+        {
+            response.statusCode = static_cast<int>(httpCode);
+            response.success = (httpCode >= 200 && httpCode < 300);
+            return response;
+        }
+        if (redirects == kMaxRedirects)
+        {
+            response.body.clear();
+            response.error = curl_easy_strerror(CURLE_TOO_MANY_REDIRECTS);
+            return response;
+        }
 
-    curl_slist_free_all(headerList);
-    curl_easy_cleanup(curl);
-
-    return response;
+        std::string nextUrl = location;
+        // A browser drops Authorization on a redirect to another origin; every credential header goes.
+        if (!GameEngine::IsSameOrigin(hopUrl, nextUrl))
+            std::erase_if(hopHeaders, IsCredentialEntry);
+        response.error = ValidateHeaders(nextUrl, hopHeaders);
+        if (!response.error.empty())
+        {
+            response.body.clear();
+            return response;
+        }
+        hopUrl = std::move(nextUrl);
+    }
 }
 
 bool HttpClient::IsAvailable()

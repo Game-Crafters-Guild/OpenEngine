@@ -1839,9 +1839,10 @@ void RegisterBuiltInPostProcessEffectDescriptors()
                 out.Settings.VolumetricFogVolumeShape = out.Shape;
                 out.Settings.VolumetricFogVolumeValid = (!out.IsGlobal && out.ValidSpatial) ? 1 : 0;
                 out.Settings.VolumetricFogVolumeBlendDistance = std::max(out.BlendDistance, 0.0f);
-                out.Settings.VolumetricFogVolumeCenterX = out.Center[0];
-                out.Settings.VolumetricFogVolumeCenterY = out.Center[1];
-                out.Settings.VolumetricFogVolumeCenterZ = out.Center[2];
+                const Mathematics::Vector3 center = out.Center - Mathematics::WorldPosition{};
+                out.Settings.VolumetricFogVolumeCenterX = center.x;
+                out.Settings.VolumetricFogVolumeCenterY = center.y;
+                out.Settings.VolumetricFogVolumeCenterZ = center.z;
                 out.Settings.VolumetricFogVolumeAxisXX = out.AxisX[0];
                 out.Settings.VolumetricFogVolumeAxisXY = out.AxisX[1];
                 out.Settings.VolumetricFogVolumeAxisXZ = out.AxisX[2];
@@ -1922,7 +1923,10 @@ void RegisterBuiltInPostProcessEffectDescriptors()
                 out.LocalFogVolume.weight = std::max(fog->Intensity, 0.0f) * std::max(out.BaseWeight, 0.0f);
                 out.LocalFogVolume.density = std::max(fog->Density, 0.0f);
                 out.LocalFogVolume.blendDistance = std::max(out.BlendDistance, 0.0f);
-                std::memcpy(out.LocalFogVolume.center, out.Center, sizeof(out.Center));
+                const Mathematics::Vector3 localCenter = out.Center - Mathematics::WorldPosition{};
+                out.LocalFogVolume.center[0] = localCenter.x;
+                out.LocalFogVolume.center[1] = localCenter.y;
+                out.LocalFogVolume.center[2] = localCenter.z;
                 std::memcpy(out.LocalFogVolume.axisX, out.AxisX, sizeof(out.AxisX));
                 std::memcpy(out.LocalFogVolume.axisY, out.AxisY, sizeof(out.AxisY));
                 std::memcpy(out.LocalFogVolume.axisZ, out.AxisZ, sizeof(out.AxisZ));

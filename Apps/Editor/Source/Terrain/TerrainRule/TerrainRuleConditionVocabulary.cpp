@@ -1,6 +1,8 @@
 #include "Terrain/TerrainRule/TerrainRuleConditionVocabulary.h"
 
 #include "Mathematics/Interpolation.h"
+#include "Components/Terrain/Terrain.h"
+#include "TerrainECS/TerrainDefaultSurfaceRules.h"
 
 #include <algorithm>
 #include <cmath>
@@ -13,11 +15,19 @@ namespace
 
 // Slope in degrees spans the full quarter turn; a vertical face is 90.
 constexpr float32 kSlopeDegreesMax = 90.0f;
+// Latitude spans the equator (0) to either pole (90).
+constexpr float32 kLatitudeDegreesMax = 90.0f;
+// A Latitude band from at least this angle to a pole heads its rule "Polar".
+constexpr float32 kPolarLatitudeMinDegrees = 60.0f;
 
-// Metres domain when the terrain's HeightScale is unreadable (no terrain bound
-// to the inspector yet). The component default is 256 m, so a band authored
-// against this one keeps its meaning once a terrain appears.
-constexpr float32 kFallbackHeightMetres = 256.0f;
+// The Measures entries, in list order. The kind numbers are not contiguous: 3 is not a kind.
+constexpr Kind kPlanarKinds[] = {Kind::SlopeDegrees, Kind::SlopeNormalized, Kind::HeightMeters, Kind::Noise};
+constexpr Kind kPlanetKinds[] = {Kind::SlopeDegrees, Kind::SlopeNormalized, Kind::HeightMeters, Kind::Noise,
+                                 Kind::LatitudeDegrees};
+
+// Meters domain when the terrain's range is empty (no terrain bound to the
+// inspector yet): the component's default Height Scale.
+constexpr float32 kFallbackHeightMeters = 256.0f;
 
 // Ceiling on the digits added to keep a small non-zero value from rendering as
 // zero. Three covers a millimetre of terrain; past that the number is noise.
@@ -36,11 +46,33 @@ bool ReadsAsZero(const std::string& text)
     return text.find_first_not_of("-+0.") == std::string::npos;
 }
 
+// A height band whose high edge is at the domain sentinel has no upper edge.
+bool HasNoUpperLimit(const Components::TerrainRuleCondition& condition)
+{
+    return condition.Kind == Kind::HeightMeters && condition.Max >= TerrainECS::kDefaultHeightDomainMaxMeters;
+}
+
+bool ReachesThePole(const Components::TerrainRuleCondition& condition)
+{
+    return condition.Kind == Kind::LatitudeDegrees && condition.Max >= kLatitudeDegreesMax;
+}
+
+// "an" before a number spoken with a vowel sound (8, 11, 18, 80, 11,000), else "a".
+const char* ArticleBeforeNumber(const std::string& number)
+{
+    const size_t integerDigits = number.find_first_not_of("0123456789");
+    const size_t digitCount = integerDigits == std::string::npos ? number.size() : integerDigits;
+    if (number.starts_with('8'))
+        return "an";
+    const bool elevenOrEighteen = number.starts_with("11") || number.starts_with("18");
+    return elevenOrEighteen && digitCount % 3 == 2 ? "an" : "a";
+}
+
 } // namespace
 
 int ConditionDecimals(Kind kind)
 {
-    // Degrees and metres carry one decimal; a [0, 1] band needs two before its
+    // Degrees and meters carry one decimal; a [0, 1] band needs two before its
     // handles read as having moved at all. NOT magnitude-dependent: a threshold
     // made 4.8 print "5" and 3.2 print "3", and it made a caption say "34" next
     // to a field saying "34.4". Trailing zeros come off afterwards, so a whole
@@ -48,10 +80,10 @@ int ConditionDecimals(Kind kind)
     switch (kind)
     {
     case Kind::SlopeDegrees:
-    case Kind::HeightMetres:
+    case Kind::HeightMeters:
+    case Kind::LatitudeDegrees:
         return 1;
     case Kind::SlopeNormalized:
-    case Kind::HeightNormalized:
     case Kind::Noise:
         break;
     }
@@ -66,12 +98,12 @@ std::string_view ConditionKindLabel(Kind kind)
         return "Slope (degrees)";
     case Kind::SlopeNormalized:
         return "Slope (0-1 raw)";
-    case Kind::HeightMetres:
-        return "Height (metres)";
-    case Kind::HeightNormalized:
-        return "Height (0-1 of range)";
+    case Kind::HeightMeters:
+        return "Height (meters)";
     case Kind::Noise:
         return "Noise";
+    case Kind::LatitudeDegrees:
+        return "Latitude (degrees)";
     }
     return "Slope (degrees)";
 }
@@ -81,61 +113,87 @@ std::string_view ConditionUnitSuffix(Kind kind)
     switch (kind)
     {
     case Kind::SlopeDegrees:
+    case Kind::LatitudeDegrees:
         return "\xC2\xB0"; // U+00B0 DEGREE SIGN
-    case Kind::HeightMetres:
+    case Kind::HeightMeters:
         return " m";
     case Kind::SlopeNormalized:
-    case Kind::HeightNormalized:
     case Kind::Noise:
         break;
     }
     return "";
 }
 
-std::string_view ConditionKindHelp(Kind kind)
+std::span<const Kind> ConditionKinds(Components::TerrainDomain domain)
 {
+    if (domain == Components::TerrainDomain::Spherical)
+        return kPlanetKinds;
+    return kPlanarKinds;
+}
+
+std::string_view ConditionKindHelp(Kind kind, Components::TerrainDomain domain)
+{
+    const bool planet = domain == Components::TerrainDomain::Spherical;
     switch (kind)
     {
     case Kind::SlopeDegrees:
         return "Surface angle from horizontal, 0 flat to 90 vertical - the unit to author slope in.";
     case Kind::SlopeNormalized:
+        if (planet)
+            return "0 on flat ground and 1 on a vertical face, rising faster as the ground steepens - "
+                   "NOT an angle. Author slope in degrees instead.";
         return "The raw 1 - normal.Y, flattened by the terrain's Height Scale - NOT an angle, so "
                "the same number means a different steepness on every terrain. Author slope in "
                "degrees instead.";
-    case Kind::HeightMetres:
-        return "Metres above the terrain's base, not world Y - so the band holds still when the "
+    case Kind::HeightMeters:
+        if (planet)
+            return "Meters above the planet's radius: below 0 in the lowlands, above 0 on high ground. "
+                   "Moving the planet does not move the band.";
+        return "Meters above the terrain's base, not world Y - so the band holds still when the "
                "terrain entity moves, and a snow line at 400 m stays at 400 m when the "
                "mountain grows under it.";
-    case Kind::HeightNormalized:
-        return "Fraction of the terrain's live height range, 0 at its lowest point and 1 at its "
-               "highest - so the band CHASES the heightfield, raising a snow line as the "
-               "mountain under it grows, and reads correctly at any Height Scale.";
     case Kind::Noise:
+        if (planet)
+            return "Value noise over the planet's surface from 0 to 1, with its own frequency and seed, "
+                   "to break up the banding the slope and height kinds produce on their own.";
         return "Value noise over world XZ from 0 to 1, with its own frequency and seed, to break "
                "up the banding the slope and height kinds produce on their own.";
+    case Kind::LatitudeDegrees:
+        if (planet)
+            return "Degrees from the equator: 0 at the equator, 90 at either pole.";
+        return "Degrees from the equator: 0 at the equator, 90 at either pole. A flat terrain has no "
+               "latitude and reads 0.";
     }
     return "";
 }
 
-ConditionDomain ConditionAuthoringDomain(Kind kind, float32 terrainHeightMetres)
+ConditionDomain ConditionAuthoringDomain(Kind kind, ConditionDomain heightRangeMeters)
 {
     switch (kind)
     {
     case Kind::SlopeDegrees:
         return {0.0f, kSlopeDegreesMax};
-    case Kind::HeightMetres:
-        return {0.0f, terrainHeightMetres > 0.0f ? terrainHeightMetres : kFallbackHeightMetres};
+    case Kind::LatitudeDegrees:
+        return {0.0f, kLatitudeDegreesMax};
+    case Kind::HeightMeters:
+        if (heightRangeMeters.Max > heightRangeMeters.Min)
+            return heightRangeMeters;
+        return {0.0f, kFallbackHeightMeters};
     case Kind::SlopeNormalized:
-    case Kind::HeightNormalized:
     case Kind::Noise:
         break;
     }
     return {0.0f, 1.0f};
 }
 
-std::string FormatConditionValue(Kind kind, float32 value)
+namespace
 {
-    const int decimals = ConditionDecimals(kind);
+
+// A refused condition's band has no unit; it reads at the precision of the [0, 1] kinds.
+constexpr int kRefusedBandDecimals = 2;
+
+std::string FormatTrimmed(float32 value, int decimals)
+{
     std::string text = FormatFixed(value, decimals);
 
     // Trailing zeros come off: a caption reading "34.0" beside a field reading
@@ -166,8 +224,14 @@ std::string FormatConditionValue(Kind kind, float32 value)
             }
         }
     }
+    return text;
+}
 
-    return text + std::string(ConditionUnitSuffix(kind));
+} // namespace
+
+std::string FormatConditionValue(Kind kind, float32 value)
+{
+    return FormatTrimmed(value, ConditionDecimals(kind)) + std::string(ConditionUnitSuffix(kind));
 }
 
 namespace
@@ -206,6 +270,12 @@ std::string RuleOutcomeSentence(const Components::TerrainSurfaceRule& rule)
 std::string ConditionBandSummary(const Components::TerrainRuleCondition& condition,
                                  const Components::TerrainSurfaceRule& owningRule)
 {
+    // A refused row keeps the default kind as a placeholder; its numbers are not in that unit.
+    if (condition.RefusedKind != 0)
+        return "Refused kind: this band (" + FormatTrimmed(condition.Min, kRefusedBandDecimals) + " to "
+             + FormatTrimmed(condition.Max, kRefusedBandDecimals) + ") has no unit and applies as "
+             "slope in degrees until a kind is picked under Measures.";
+
     const Kind kind = condition.Kind;
     const std::string low = FormatConditionValue(kind, condition.Min);
     const std::string high = FormatConditionValue(kind, condition.Max);
@@ -233,15 +303,31 @@ std::string ConditionBandSummary(const Components::TerrainRuleCondition& conditi
         if (!feathered)
             return "Peaks at " + low + " with a hard edge, so only an exact match counts. "
                    "Widen the band or add a feather." + outcome;
-        return "Peaks at " + low + ", falling to nothing over a " + reach + " " + shape
-             + " feather on each side." + outcome;
+        return "Peaks at " + low + ", falling to nothing over " + ArticleBeforeNumber(reach) + " " + reach
+             + " " + shape + " feather on each side." + outcome;
+    }
+
+    if (HasNoUpperLimit(condition))
+    {
+        if (!feathered)
+            return "Full weight from " + low + " up, with a hard edge below it." + outcome;
+        return "Full weight from " + low + " up, falling to nothing over " + ArticleBeforeNumber(reach) + " "
+             + reach + " " + shape + " feather below it." + outcome;
+    }
+
+    if (ReachesThePole(condition))
+    {
+        if (!feathered)
+            return "Full weight from " + low + " to the pole, with a hard edge below it." + outcome;
+        return "Full weight from " + low + " to the pole, falling to nothing over " + ArticleBeforeNumber(reach)
+             + " " + reach + " " + shape + " feather below it." + outcome;
     }
 
     if (!feathered)
         return "Full weight from " + low + " to " + high + ", hard edges - nothing outside."
              + outcome;
-    return "Full weight from " + low + " to " + high + ", falling to nothing over a " + reach
-         + " " + shape + " feather past each edge." + outcome;
+    return "Full weight from " + low + " to " + high + ", falling to nothing over " + ArticleBeforeNumber(reach)
+         + " " + reach + " " + shape + " feather past each edge." + outcome;
 }
 
 std::string RuleInertReason(const Components::TerrainSurfaceRule& rule)
@@ -269,13 +355,50 @@ std::string RuleInertReason(const Components::TerrainSurfaceRule& rule)
 
 std::string ConditionBandRangeText(const Components::TerrainRuleCondition& condition)
 {
-    return FormatConditionValue(condition.Kind, condition.Min) + " - "
-         + FormatConditionValue(condition.Kind, condition.Max);
+    if (condition.RefusedKind != 0)
+        return FormatTrimmed(condition.Min, kRefusedBandDecimals) + " - "
+             + FormatTrimmed(condition.Max, kRefusedBandDecimals);
+    const std::string high = HasNoUpperLimit(condition) ? std::string(kNoUpperLimitText)
+                                                        : FormatConditionValue(condition.Kind, condition.Max);
+    return FormatConditionValue(condition.Kind, condition.Min) + " - " + high;
 }
 
-Components::TerrainRuleCondition MakeDefaultCondition(Kind kind, float32 terrainHeightMetres)
+std::string RefusedKindLabel(uint8 refusedKind)
 {
-    const ConditionDomain domain = ConditionAuthoringDomain(kind, terrainHeightMetres);
+    return "Refused (kind " + std::to_string(refusedKind) + ")";
+}
+
+std::string FormatHeightRange(ConditionDomain heightRangeMeters)
+{
+    return FormatConditionValue(Kind::HeightMeters, heightRangeMeters.Min) + " to "
+         + FormatConditionValue(Kind::HeightMeters, heightRangeMeters.Max);
+}
+
+std::string HeightRangeNote(ConditionDomain heightRangeMeters, Components::TerrainDomain domain)
+{
+    if (heightRangeMeters.Max <= heightRangeMeters.Min)
+        return {};
+    if (domain == Components::TerrainDomain::Spherical)
+        return "Height conditions are meters above the planet's radius: " + FormatHeightRange(heightRangeMeters)
+             + ".";
+    return "Height conditions are meters above this terrain's base: " + FormatHeightRange(heightRangeMeters) + ".";
+}
+
+std::string_view RuleHeadingQualifier(const Components::TerrainSurfaceRule& rule)
+{
+    const uint32 conditionCount = std::min<uint32>(rule.ConditionCount, Components::kMaxTerrainRuleConditions);
+    for (uint32 i = 0; i < conditionCount; ++i)
+    {
+        const Components::TerrainRuleCondition& condition = rule.Conditions[i];
+        if (ReachesThePole(condition) && condition.Min >= kPolarLatitudeMinDegrees)
+            return "Polar ";
+    }
+    return "";
+}
+
+Components::TerrainRuleCondition MakeDefaultCondition(Kind kind, ConditionDomain heightRangeMeters)
+{
+    const ConditionDomain domain = ConditionAuthoringDomain(kind, heightRangeMeters);
     Components::TerrainRuleCondition condition{};
     condition.Kind = kind;
     condition.Min = domain.Min;

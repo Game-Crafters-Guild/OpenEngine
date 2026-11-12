@@ -47,7 +47,8 @@ struct GrassIndirectBlockGPU
     // the two draw records. Written by the plan kernel, which also writes those records, so the
     // count and the draw it describes cannot disagree.
     uint32 CandidatesConsidered = 0;
-    uint32 CellsVisible = 0; // cells that passed the frustum and stand on a grass terrain
+    // Cells the range fit counts: in range, on a grass terrain, and in view on the height band.
+    uint32 CellsCounted = 0;
     // Of those reserved slots, how many produced a blade. The gap is what the splat mask and the
     // growth floor rejected, standing in the pool as zero-size instances — so
     // AcceptedBlades / CandidatesConsidered is the pool efficiency on this content.
@@ -56,7 +57,8 @@ struct GrassIndirectBlockGPU
     // no range; below 1.0 the field ends that much closer than the CPU fit planned.
     uint32 FittedRangeScaleBits = 0;
     uint32 Capacity = 0;
-    uint32 _Pad[3] = {};
+    uint32 CellsPlaced = 0; // counted cells whose own box is in view and that get slots
+    uint32 _Pad[2] = {};
 };
 static_assert(sizeof(GrassIndirectBlockGPU) == 20 * kGrassLodCount + 32);
 
@@ -88,7 +90,8 @@ class TerrainGrassPlacementStats
         // re-fit. Bounded by Capacity by construction, so it measures how much of the pool this
         // view spends rather than how much it wanted.
         uint32 CandidatesConsidered = 0;
-        uint32 CellsVisible = 0;
+        uint32 CellsCounted = 0; // cells the range fit counts
+        uint32 CellsPlaced = 0;  // of those, the cells that get slots
         // Of the reserved slots, how many produced a blade; the rest are zero-size instances the
         // splat mask or the growth floor rejected. AcceptedBlades / PlacedInstances is the pool
         // efficiency, and it is the number that says what dead slots cost on real content.

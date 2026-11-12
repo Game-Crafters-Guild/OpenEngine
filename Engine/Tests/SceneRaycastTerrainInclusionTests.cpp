@@ -28,6 +28,7 @@ using GameEngine::ApplicationConfig;
 using GameEngine::ECS::World;
 using GameEngine::Mathematics::Ray3D;
 using GameEngine::Mathematics::Vector3;
+using GameEngine::Mathematics::WorldPosition;
 using GameEngine::TerrainECS::TerrainService;
 using GameEngine::TerrainECS::Test::CreatePagedTiledTerrain;
 using GameEngine::TerrainECS::Test::PagedTiledTerrain;
@@ -103,12 +104,10 @@ class SceneRaycastTerrainInclusionTests : public ::testing::Test
         renderer.modelAssetGuid.Set(GameEngine::Engine::Renderer::PrimitiveGenerator::CubeGuid());
         m_World.AddComponentImmediate(cube, renderer);
         Components::WorldTransform transform{};
-        transform.matrix[0] = scale.x;
-        transform.matrix[5] = scale.y;
-        transform.matrix[10] = scale.z;
-        transform.matrix[12] = center.x;
-        transform.matrix[13] = center.y;
-        transform.matrix[14] = center.z;
+        transform.Basis[0].x = scale.x;
+        transform.Basis[1].y = scale.y;
+        transform.Basis[2].z = scale.z;
+        transform.Position = WorldPosition::FromVector3(center);
         m_World.AddComponentImmediate(cube, transform);
         Components::LocalBounds bounds{};
         bounds.Box.halfExtents = Vector3(0.5f, 0.5f, 0.5f);
@@ -136,7 +135,7 @@ TEST_F(SceneRaycastTerrainInclusionTests, RaycastSceneHitsTheTerrain)
     ASSERT_TRUE(result.Hit);
     EXPECT_EQ(result.Best.Kind, PickableKind::Terrain);
     EXPECT_EQ(result.Best.Entity.id, m_Terrain.id);
-    EXPECT_NEAR(result.Best.WorldPosition.y, 0.0f, 0.1f);
+    EXPECT_NEAR(result.Best.Point.y, 0.0f, 0.1f);
 }
 
 // The selection path's entry point hits the terrain.
@@ -148,7 +147,7 @@ TEST_F(SceneRaycastTerrainInclusionTests, RaycastSceneAllHitsTheTerrain)
     ASSERT_EQ(hits.size(), 1u);
     EXPECT_EQ(hits[0].Kind, PickableKind::Terrain);
     EXPECT_EQ(hits[0].Entity.id, m_Terrain.id);
-    EXPECT_NEAR(hits[0].WorldPosition.y, 0.0f, 0.1f);
+    EXPECT_NEAR(hits[0].Point.y, 0.0f, 0.1f);
     EXPECT_NEAR(hits[0].Distance, 100.0f, 0.2f);
 }
 
@@ -235,8 +234,8 @@ TEST_F(SceneRaycastTerrainInclusionTests, RaycastSceneMissesATiledTerrainWhoseHe
     terrain.TiledTerrainHandle = handle.Index;
     terrain.TiledTerrainGeneration = handle.Generation;
     Components::WorldTransform transform{};
-    transform.matrix[12] = config.WorldSizeX * 0.5f;
-    transform.matrix[14] = config.WorldSizeZ * 0.5f;
+    transform.Position.X = config.WorldSizeX * 0.5f;
+    transform.Position.Z = config.WorldSizeZ * 0.5f;
     const auto entity = m_World.CreateEntity();
     m_World.AddComponentImmediate(entity, terrain);
     m_World.AddComponentImmediate(entity, transform);
@@ -260,8 +259,8 @@ namespace
 Components::WorldTransform TerrainTransform(const Components::Terrain& terrain)
 {
     Components::WorldTransform transform{};
-    transform.matrix[12] = terrain.SizeX * 0.5f;
-    transform.matrix[14] = terrain.SizeZ * 0.5f;
+    transform.Position.X = terrain.SizeX * 0.5f;
+    transform.Position.Z = terrain.SizeZ * 0.5f;
     return transform;
 }
 
@@ -315,7 +314,7 @@ TEST_F(SceneRaycastTerrainInclusionTests, RaycastSceneHitsAPagedTiledTerrainWher
     const auto result = RaycastScene(DownAt(kProbeX, kProbeZ), m_World, PickOptions{});
     ASSERT_TRUE(result.Hit) << "the pick misses a paged terrain whose tile is not resident";
     EXPECT_EQ(result.Best.Entity.id, entity.id);
-    EXPECT_NEAR(result.Best.WorldPosition.y, expected, 0.1f);
+    EXPECT_NEAR(result.Best.Point.y, expected, 0.1f);
 }
 
 // Past the CPU window, a paged terrain is picked at its finest height, not on the coarser pinned
@@ -343,11 +342,37 @@ TEST_F(SceneRaycastTerrainInclusionTests, RaycastSceneHitsAPagedTiledTerrainAtIt
     const auto result = RaycastScene(DownAt(kProbeX, kProbeZ), m_World, PickOptions{});
     ASSERT_TRUE(result.Hit);
     EXPECT_EQ(result.Best.Entity.id, entity.id);
-    EXPECT_NEAR(result.Best.WorldPosition.y, expected, 0.1f) << "the coarse page answered: " << coarse.Height;
+    EXPECT_NEAR(result.Best.Point.y, expected, 0.1f) << "the coarse page answered: " << coarse.Height;
+    EXPECT_FALSE(result.Best.CoarseHeight) << "the hit read the finest page and still reports a coarse height";
     SurfaceHeightSample finest;
     EXPECT_TRUE(service.SurfaceQuery(paged.Component, TerrainTransform(paged.Component))
                     .SampleHeight(Vector3(kProbeX, 0.0f, kProbeZ), SurfaceHeightPolicy::RequireFinest, finest))
         << "the pick fetched the finest page under its hit";
+}
+
+// A placement outside the CPU window reads the finest height: the fetch of the level-0 page under a
+// coarse answer makes the answer there Finest before the next Update.
+TEST_F(SceneRaycastTerrainInclusionTests, AFetchUnderACoarseAnswerMakesTheHeightQueryAnswerFinestThere)
+{
+    using namespace GameEngine::TerrainECS;
+    TerrainService& service = TerrainService::Get();
+    PagedTiledTerrain paged = CreatePagedTiledTerrain(service, 2048.0f, 1024.0f, kHeightScale);
+    paged.Request.GpuPages = false; // only the CPU windows want level 0: the GPU fetches none there
+    const Vector3 probe(1501.5f, 0.0f, 301.5f);
+    const float expected = SampleLoadedTile(service, paged, 1, probe.x, probe.z);
+    ASSERT_TRUE(StreamPagesUntilTheCameraPageLands(service, paged, Vector3(probe.x - 400.0f, 50.0f, probe.z)));
+    AddTerrainEntity(m_World, paged.Component);
+    SurfaceHeightSample coarse;
+    ASSERT_TRUE(ResolveSurfaceHeightQuery(m_World, probe).SampleHeight(probe, SurfaceHeightPolicy::AcceptCoarse, coarse));
+    ASSERT_EQ(coarse.Detail, SurfaceHeightDetail::Coarse) << "the probe is outside every CPU window";
+    ASSERT_GT(coarse.Level, 0u);
+
+    ASSERT_TRUE(FetchFinestSurfaceHeightPage(m_World, probe));
+    SurfaceHeightSample finest;
+    ASSERT_TRUE(ResolveSurfaceHeightQuery(m_World, probe).SampleHeight(probe, SurfaceHeightPolicy::AcceptCoarse, finest));
+    EXPECT_EQ(finest.Detail, SurfaceHeightDetail::Finest);
+    EXPECT_EQ(finest.Level, 0u);
+    EXPECT_NEAR(finest.Height, expected, 0.1f) << "the coarse page answered: " << coarse.Height;
 }
 
 // A cube whose top lies flush with the terrain at y = 0: both entry points answer with the cube,
@@ -384,12 +409,12 @@ TEST_F(SceneRaycastTerrainInclusionTests, AFaceNormalUnderNonUniformScaleIsPerpe
     renderer.modelAssetGuid.Set(GameEngine::Engine::Renderer::PrimitiveGenerator::CubeGuid());
     m_World.AddComponentImmediate(cube, renderer);
     Components::WorldTransform transform{};
-    transform.matrix[0] = axisX.x;
-    transform.matrix[2] = axisX.z;
-    transform.matrix[5] = axisY.y;
-    transform.matrix[8] = axisZ.x;
-    transform.matrix[10] = axisZ.z;
-    transform.matrix[13] = 10.0f; // above the terrain
+    transform.Basis[0].x = axisX.x;
+    transform.Basis[0].z = axisX.z;
+    transform.Basis[1].y = axisY.y;
+    transform.Basis[2].x = axisZ.x;
+    transform.Basis[2].z = axisZ.z;
+    transform.Position.Y = 10.0; // above the terrain
     m_World.AddComponentImmediate(cube, transform);
     Components::LocalBounds bounds{};
     bounds.Box.halfExtents = Vector3(0.5f, 0.5f, 0.5f);

@@ -534,7 +534,7 @@ void SceneViewController::DeclareOverlaysRG(RenderGraph::RGFrame& frame, RenderG
                     hasActiveCamera = true;
                 }
             }
-            m_CameraFrameGizmo.SetCamera(hasActiveCamera, activeCamera.params, activeCamera.worldTransform);
+            m_CameraFrameGizmo.SetCamera(hasActiveCamera, activeCamera.params, activeCamera.WorldTransform());
             collector.AddGizmo(&m_CameraFrameGizmo);
         }
         collector.AddGizmo(&m_SplineSceneGizmo);
@@ -1043,8 +1043,7 @@ void SceneViewController::DeclareSelectionOutlineRG(RenderGraph::RGFrame& frame,
             }
         }
 
-        glm::mat4 model;
-        std::memcpy(&model[0][0], xf.matrix, sizeof(float) * 16);
+        const glm::mat4 model = xf.ToMatrix4x4(xf.GetPosition() - Mathematics::WorldPosition{}).GetGLM();
         const glm::mat4 vpm = viewProj * model;
         std::memcpy(d.vpm, &vpm[0][0], sizeof(d.vpm));
 
@@ -1142,7 +1141,7 @@ void SceneViewController::DeclareSelectionOutlineRG(RenderGraph::RGFrame& frame,
     {
         foldU64(static_cast<uint64_t>(ECS::EntityHandleHash{}(e)));
         if (const auto* xf = world->GetComponent<Components::WorldTransform>(e))
-            foldBytes(xf->matrix, sizeof(float) * 16);
+            foldBytes(xf, Components::kTransformPoseBytes);
         else
             foldU64(0);
         uint64_t contentWord = 0;

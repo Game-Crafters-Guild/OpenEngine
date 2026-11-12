@@ -57,6 +57,15 @@ void Bake(RGGraph& g)
     g.GenerateBarriers(RGGraph::kIdentityQueueMap);
     g.BuildSubmissionPlan();
 }
+// Bake with the queue placement step the frame runs.
+void BakePlaced(RGGraph& g)
+{
+    g.Compile();
+    g.Schedule();
+    g.PlaceQueues(RGGraph::kIdentityQueueMap);
+    g.GenerateBarriers(RGGraph::kIdentityQueueMap);
+    g.BuildSubmissionPlan();
+}
 // The frame's export/normalize sentinel batch (Pass == kInvalidId), or nullptr.
 const RGBarrierBatch* ExportBatch(const RGGraph& g)
 {
@@ -728,6 +737,359 @@ TEST(RGSubmission, RelocationCountersSeparateNoCrossingsFromNoDeclines)
     }
 }
 
+// Graphics A -> compute B -> graphics C, B reading A and C reading B: no graphics work can run
+// beside B, so B runs on the graphics queue and the frame is one submission with no wait.
+TEST(RGSubmission, ComputePassWithNoGraphicsBesideItRunsOnTheGraphicsQueue)
+{
+    RGGraph g;
+    g.BeginFrame();
+    RGResourceId depth = Tex(g, "Depth");
+    RGResourceId resolved = Buf(g, "Resolved");
+    RGResourceId color = Tex(g, "Color");
+    g.MarkExternal(color);
+    RGPassId a = g.AddPass({"DepthPrepass", 0, RGQueue::Graphics});
+    g.Write(a, depth, RGAccess::DepthWrite);
+    RGPassId b = g.AddPass({"DepthResolve", 0, RGQueue::Compute});
+    g.Read(b, depth, RGAccess::Sampled);
+    g.Write(b, resolved, RGAccess::StorageWrite);
+    RGPassId c = g.AddPass({"World", 0, RGQueue::Graphics});
+    g.Read(c, resolved, RGAccess::StorageRead);
+    g.Write(c, color, RGAccess::ColorAttachment);
+    BakePlaced(g);
+
+    ASSERT_EQ(g.Submissions().size(), 1u);
+    EXPECT_EQ(g.Submissions()[0].Queue, RGQueue::Graphics);
+    EXPECT_EQ(g.Submissions()[0].PhysicalQueue, 0u);
+    EXPECT_EQ(g.Submissions()[0].ScheduledCount, 3u);
+    EXPECT_EQ(TotalWaits(g), 0u);
+}
+
+// A graphics pass after the compute pass that does not consume it runs beside it: the compute
+// pass keeps its queue and only its consumer waits on it. World reads Normals, not Depth: a later
+// read of the texture a compute pass transitioned waits on that pass.
+TEST(RGSubmission, ComputePassBesideTheNextGraphicsPassKeepsItsQueue)
+{
+    RGGraph g;
+    g.BeginFrame();
+    RGResourceId depth = Tex(g, "Depth");
+    RGResourceId normals = Tex(g, "Normals");
+    RGResourceId hzb = Buf(g, "HZB");
+    RGResourceId color = Tex(g, "Color");
+    RGResourceId out = Tex(g, "Out");
+    g.MarkExternal(color);
+    g.MarkExternal(out);
+    RGPassId pre = g.AddPass({"DepthPrepass", 0, RGQueue::Graphics});
+    g.Write(pre, depth, RGAccess::DepthWrite);
+    g.Write(pre, normals, RGAccess::ColorAttachment);
+    RGPassId build = g.AddPass({"HZBBuild", 0, RGQueue::Compute});
+    g.Read(build, depth, RGAccess::Sampled);
+    g.Write(build, hzb, RGAccess::StorageWrite);
+    RGPassId world = g.AddPass({"World", 0, RGQueue::Graphics});
+    g.Read(world, normals, RGAccess::Sampled);
+    g.Write(world, color, RGAccess::ColorAttachment);
+    RGPassId cull = g.AddPass({"OcclusionCull", 0, RGQueue::Graphics});
+    g.Read(cull, hzb, RGAccess::StorageRead);
+    g.Write(cull, out, RGAccess::ColorAttachment);
+    BakePlaced(g);
+
+    ASSERT_EQ(g.ScheduledOrder(), (std::vector<RGPassId>{pre, build, world, cull}));
+    ASSERT_EQ(g.Submissions().size(), 4u);
+    EXPECT_EQ(g.Submissions()[1].Queue, RGQueue::Compute);
+    EXPECT_EQ(g.Submissions()[1].PhysicalQueue, 1u);
+    EXPECT_EQ(g.Submissions()[2].ScheduledCount, 1u) << "World ends its run before OcclusionCull";
+    EXPECT_EQ(FindWait(g.Submissions()[2], RGQueue::Compute), nullptr) << "World does not wait on HZBBuild";
+    const RGSemaphoreWait* w = FindWait(g.Submissions()[3], RGQueue::Compute);
+    ASSERT_NE(w, nullptr);
+    EXPECT_EQ(w->Value, g.Submissions()[1].SignalValue);
+}
+
+// World reads Depth as a depth attachment after HZBBuild samples it: the layout change waits on
+// HZBBuild, so no graphics work runs beside it and it runs on the graphics queue.
+TEST(RGSubmission, ComputePassBeforeALayoutChangeOfItsInputRunsOnTheGraphicsQueue)
+{
+    RGGraph g;
+    g.BeginFrame();
+    RGResourceId depth = Tex(g, "Depth");
+    RGResourceId hzb = Buf(g, "HZB");
+    RGResourceId color = Tex(g, "Color");
+    RGResourceId out = Tex(g, "Out");
+    g.MarkExternal(color);
+    g.MarkExternal(out);
+    RGPassId pre = g.AddPass({"DepthPrepass", 0, RGQueue::Graphics});
+    g.Write(pre, depth, RGAccess::DepthWrite);
+    RGPassId build = g.AddPass({"HZBBuild", 0, RGQueue::Compute});
+    g.Read(build, depth, RGAccess::Sampled);
+    g.Write(build, hzb, RGAccess::StorageWrite);
+    RGPassId world = g.AddPass({"World", 0, RGQueue::Graphics});
+    g.Read(world, depth, RGAccess::DepthRead);
+    g.Write(world, color, RGAccess::ColorAttachment);
+    RGPassId cull = g.AddPass({"OcclusionCull", 0, RGQueue::Graphics});
+    g.Read(cull, hzb, RGAccess::StorageRead);
+    g.Write(cull, out, RGAccess::ColorAttachment);
+    BakePlaced(g);
+
+    ASSERT_EQ(g.ScheduledOrder(), (std::vector<RGPassId>{pre, build, world, cull}));
+    EXPECT_EQ(g.PassExecutionQueue(build), RGQueue::Graphics);
+    EXPECT_EQ(g.Submissions().size(), 1u) << "no submission that saves nothing";
+    EXPECT_EQ(TotalWaits(g), 0u);
+}
+
+// Each scheduled pass reports the queue it runs on beside its declared queue, and the submission that records it.
+TEST(RGSubmission, PlacedPassesReportTheirExecutionQueueAndSubmission)
+{
+    RGGraph g;
+    g.BeginFrame();
+    RGResourceId depth = Tex(g, "Depth");
+    RGResourceId normals = Tex(g, "Normals");
+    RGResourceId minMax = Buf(g, "MinMax");
+    RGResourceId hzb = Buf(g, "HZB");
+    RGResourceId color = Tex(g, "Color");
+    RGResourceId out = Tex(g, "Out");
+    g.MarkExternal(color);
+    g.MarkExternal(out);
+    RGPassId pre = g.AddPass({"DepthPrepass", 0, RGQueue::Graphics});
+    g.Write(pre, depth, RGAccess::DepthWrite);
+    g.Write(pre, normals, RGAccess::ColorAttachment);
+    RGPassId reduce = g.AddPass({"DepthMinMax", 0, RGQueue::Compute});
+    g.Read(reduce, depth, RGAccess::Sampled);
+    g.Write(reduce, minMax, RGAccess::StorageWrite);
+    RGPassId build = g.AddPass({"HZBBuild", 0, RGQueue::Compute});
+    g.Read(build, depth, RGAccess::Sampled);
+    g.Write(build, hzb, RGAccess::StorageWrite);
+    RGPassId world = g.AddPass({"World", 0, RGQueue::Graphics});
+    g.Read(world, normals, RGAccess::Sampled);
+    g.Write(world, color, RGAccess::ColorAttachment);
+    RGPassId cull = g.AddPass({"OcclusionCull", 0, RGQueue::Graphics});
+    g.Read(cull, minMax, RGAccess::StorageRead);
+    g.Read(cull, hzb, RGAccess::StorageRead);
+    g.Write(cull, out, RGAccess::ColorAttachment);
+    EXPECT_EQ(g.PassSubmission(pre), kInvalidId) << "no plan yet";
+    BakePlaced(g);
+
+    ASSERT_EQ(g.ScheduledOrder(), (std::vector<RGPassId>{pre, reduce, build, world, cull}));
+    ASSERT_EQ(g.Submissions().size(), 4u);
+    EXPECT_EQ(g.PassQueue(reduce), RGQueue::Compute);
+    EXPECT_EQ(g.PassExecutionQueue(reduce), RGQueue::Compute) << "World runs beside the compute passes";
+    EXPECT_EQ(g.PassExecutionQueue(build), RGQueue::Compute);
+    EXPECT_EQ(g.PassExecutionQueue(world), RGQueue::Graphics);
+    EXPECT_EQ(g.PassSubmission(pre), 0u);
+    EXPECT_EQ(g.PassSubmission(reduce), 1u);
+    EXPECT_EQ(g.PassSubmission(build), 1u);
+    EXPECT_EQ(g.PassSubmission(world), 2u);
+    EXPECT_EQ(g.PassSubmission(cull), 3u) << "the first consumer of the compute run starts a submission";
+
+    RGGraph moved;
+    moved.BeginFrame();
+    RGResourceId movedDepth = Tex(moved, "Depth");
+    RGResourceId resolved = Buf(moved, "Resolved");
+    RGResourceId movedColor = Tex(moved, "Color");
+    moved.MarkExternal(movedColor);
+    RGPassId a = moved.AddPass({"DepthPrepass", 0, RGQueue::Graphics});
+    moved.Write(a, movedDepth, RGAccess::DepthWrite);
+    RGPassId b = moved.AddPass({"DepthResolve", 0, RGQueue::Compute});
+    moved.Read(b, movedDepth, RGAccess::Sampled);
+    moved.Write(b, resolved, RGAccess::StorageWrite);
+    RGPassId c = moved.AddPass({"World", 0, RGQueue::Graphics});
+    moved.Read(c, resolved, RGAccess::StorageRead);
+    moved.Write(c, movedColor, RGAccess::ColorAttachment);
+    BakePlaced(moved);
+
+    EXPECT_EQ(moved.PassQueue(b), RGQueue::Compute);
+    EXPECT_EQ(moved.PassExecutionQueue(b), RGQueue::Graphics) << "nothing runs beside DepthResolve";
+    EXPECT_EQ(moved.PassSubmission(b), 0u);
+    EXPECT_EQ(moved.PassSubmission(c), 0u);
+}
+
+// A run of compute passes whose next graphics pass reads one member: no graphics work runs beside
+// the run as a whole, so every member runs on the graphics queue and the frame is one submission.
+TEST(RGSubmission, ComputeRunReadByTheNextGraphicsPassMovesAsAWhole)
+{
+    RGGraph g;
+    g.BeginFrame();
+    RGResourceId depth = Tex(g, "Depth");
+    RGResourceId minMax = Buf(g, "MinMax");
+    RGResourceId resolved = Buf(g, "Resolved");
+    RGResourceId color = Tex(g, "Color");
+    RGResourceId out = Tex(g, "Out");
+    g.MarkExternal(color);
+    g.MarkExternal(out);
+    RGPassId pre = g.AddPass({"DepthPrepass", 0, RGQueue::Graphics});
+    g.Write(pre, depth, RGAccess::DepthWrite);
+    RGPassId reduce = g.AddPass({"DepthMinMax", 0, RGQueue::Compute});
+    g.Read(reduce, depth, RGAccess::Sampled);
+    g.Write(reduce, minMax, RGAccess::StorageWrite);
+    RGPassId resolve = g.AddPass({"DepthResolve", 0, RGQueue::Compute});
+    g.Read(resolve, depth, RGAccess::Sampled);
+    g.Write(resolve, resolved, RGAccess::StorageWrite);
+    RGPassId world = g.AddPass({"World", 0, RGQueue::Graphics});
+    g.Read(world, resolved, RGAccess::StorageRead);
+    g.Write(world, color, RGAccess::ColorAttachment);
+    RGPassId cull = g.AddPass({"OcclusionCull", 0, RGQueue::Graphics});
+    g.Read(cull, minMax, RGAccess::StorageRead);
+    g.Write(cull, out, RGAccess::ColorAttachment);
+    BakePlaced(g);
+
+    ASSERT_EQ(g.ScheduledOrder(), (std::vector<RGPassId>{pre, reduce, resolve, world, cull}));
+    EXPECT_EQ(g.PassExecutionQueue(reduce), RGQueue::Graphics) << "World does not read it, but reads its run";
+    EXPECT_EQ(g.PassExecutionQueue(resolve), RGQueue::Graphics);
+    ASSERT_EQ(g.Submissions().size(), 1u);
+    EXPECT_EQ(TotalWaits(g), 0u);
+}
+
+// A kept compute run whose members read different passes of the graphics run before it: that run
+// ends once, after the last pass any member reads, and the rest of it runs beside the compute run.
+TEST(RGSubmission, KeptComputeRunEndsThePreviousRunAfterTheLastFeederOfAnyMember)
+{
+    RGGraph g;
+    g.BeginFrame();
+    RGResourceId first = Buf(g, "First");
+    RGResourceId second = Buf(g, "Second");
+    RGResourceId color = Tex(g, "Color");
+    RGResourceId firstOut = Buf(g, "FirstOut");
+    RGResourceId secondOut = Buf(g, "SecondOut");
+    RGResourceId out = Tex(g, "Out");
+    g.MarkExternal(color);
+    g.MarkExternal(out);
+    RGPassId writeFirst = g.AddPass({"WriteFirst", 0, RGQueue::Graphics});
+    g.Write(writeFirst, first, RGAccess::StorageWrite);
+    RGPassId writeSecond = g.AddPass({"WriteSecond", 0, RGQueue::Graphics});
+    g.Write(writeSecond, second, RGAccess::StorageWrite);
+    RGPassId world = g.AddPass({"World", 0, RGQueue::Graphics});
+    g.Read(world, first, RGAccess::StorageRead);
+    g.Write(world, color, RGAccess::ColorAttachment);
+    RGPassId readFirst = g.AddPass({"ReadFirst", 0, RGQueue::Compute});
+    g.Read(readFirst, first, RGAccess::StorageRead);
+    g.Write(readFirst, firstOut, RGAccess::StorageWrite);
+    RGPassId readSecond = g.AddPass({"ReadSecond", 0, RGQueue::Compute});
+    g.Read(readSecond, second, RGAccess::StorageRead);
+    g.Write(readSecond, secondOut, RGAccess::StorageWrite);
+    RGPassId compose = g.AddPass({"Compose", 0, RGQueue::Graphics});
+    g.Read(compose, firstOut, RGAccess::StorageRead);
+    g.Read(compose, secondOut, RGAccess::StorageRead);
+    g.Write(compose, out, RGAccess::ColorAttachment);
+    BakePlaced(g);
+
+    ASSERT_EQ(g.ScheduledOrder(), (std::vector<RGPassId>{writeFirst, writeSecond, world, readFirst, readSecond, compose}));
+    EXPECT_EQ(g.PassExecutionQueue(readFirst), RGQueue::Compute);
+    EXPECT_EQ(g.PassExecutionQueue(readSecond), RGQueue::Compute);
+    ASSERT_EQ(g.Submissions().size(), 4u);
+    EXPECT_EQ(g.Submissions()[0].ScheduledCount, 2u) << "the run ends after WriteSecond, not after WriteFirst";
+    EXPECT_EQ(g.Submissions()[1].ScheduledCount, 1u) << "World runs beside the compute run";
+    EXPECT_EQ(g.Submissions()[2].ScheduledCount, 2u);
+    const RGSemaphoreWait* w = FindWait(g.Submissions()[2], RGQueue::Graphics);
+    ASSERT_NE(w, nullptr);
+    EXPECT_EQ(w->Value, g.Submissions()[0].SignalValue) << "waits on WriteSecond, not on World";
+}
+
+// A compute pass reading an early pass of the graphics run before it: the run ends right after
+// that pass, so the compute pass waits on it alone and runs beside the rest of the run.
+// The input is a buffer: an image input changes layout at its first reader in the run, and the
+// compute pass then waits on that reader's submission.
+TEST(RGSubmission, ComputePassBesideTheRestOfTheRunEndsTheRunAfterItsInput)
+{
+    RGGraph g;
+    g.BeginFrame();
+    RGResourceId depth = Tex(g, "Depth");
+    RGResourceId visible = Buf(g, "Visible");
+    RGResourceId color = Tex(g, "Color");
+    RGResourceId hzb = Buf(g, "HZB");
+    RGResourceId out = Tex(g, "Out");
+    g.MarkExternal(color);
+    g.MarkExternal(out);
+    RGPassId pre = g.AddPass({"DepthPrepass", 0, RGQueue::Graphics});
+    g.Write(pre, depth, RGAccess::DepthWrite);
+    g.Write(pre, visible, RGAccess::StorageWrite);
+    RGPassId world = g.AddPass({"World", 0, RGQueue::Graphics});
+    g.Read(world, depth, RGAccess::DepthRead);
+    g.Write(world, color, RGAccess::ColorAttachment);
+    RGPassId build = g.AddPass({"HZBBuild", 0, RGQueue::Compute});
+    g.Read(build, visible, RGAccess::StorageRead);
+    g.Write(build, hzb, RGAccess::StorageWrite);
+    RGPassId cull = g.AddPass({"OcclusionCull", 0, RGQueue::Graphics});
+    g.Read(cull, hzb, RGAccess::StorageRead);
+    g.Write(cull, out, RGAccess::ColorAttachment);
+    BakePlaced(g);
+
+    ASSERT_EQ(g.ScheduledOrder(), (std::vector<RGPassId>{pre, world, build, cull}));
+    ASSERT_EQ(g.Submissions().size(), 4u);
+    EXPECT_EQ(g.Submissions()[0].ScheduledCount, 1u) << "the run ends after DepthPrepass";
+    EXPECT_EQ(g.Submissions()[1].ScheduledCount, 1u) << "World runs beside HZBBuild";
+    EXPECT_EQ(g.Submissions()[2].Queue, RGQueue::Compute);
+    const RGSemaphoreWait* w = FindWait(g.Submissions()[2], RGQueue::Graphics);
+    ASSERT_NE(w, nullptr);
+    EXPECT_EQ(w->Value, g.Submissions()[0].SignalValue) << "waits on DepthPrepass, not on World";
+}
+
+// A kept compute run whose first graphics consumer comes late in the next run: that run ends right
+// before the consumer, so the graphics passes before it do not wait on the compute run.
+TEST(RGSubmission, KeptComputeRunEndsTheNextRunBeforeItsFirstConsumer)
+{
+    RGGraph g;
+    g.BeginFrame();
+    RGResourceId depth = Tex(g, "Depth");
+    RGResourceId visible = Buf(g, "Visible");
+    RGResourceId color = Tex(g, "Color");
+    RGResourceId resolved = Buf(g, "Resolved");
+    RGResourceId graded = Tex(g, "Graded");
+    RGResourceId out = Tex(g, "Out");
+    g.MarkExternal(out);
+    RGPassId pre = g.AddPass({"DepthPrepass", 0, RGQueue::Graphics});
+    g.Write(pre, depth, RGAccess::DepthWrite);
+    g.Write(pre, visible, RGAccess::StorageWrite);
+    RGPassId world = g.AddPass({"World", 0, RGQueue::Graphics});
+    g.Read(world, depth, RGAccess::DepthRead);
+    g.Write(world, color, RGAccess::ColorAttachment);
+    RGPassId resolve = g.AddPass({"DepthResolve", 0, RGQueue::Compute});
+    g.Read(resolve, visible, RGAccess::StorageRead);
+    g.Write(resolve, resolved, RGAccess::StorageWrite);
+    RGPassId grade = g.AddPass({"Grade", 0, RGQueue::Graphics});
+    g.Read(grade, color, RGAccess::Sampled);
+    g.Write(grade, graded, RGAccess::ColorAttachment);
+    RGPassId fog = g.AddPass({"Fog", 0, RGQueue::Graphics});
+    g.Read(fog, graded, RGAccess::Sampled);
+    g.Read(fog, resolved, RGAccess::StorageRead);
+    g.Write(fog, out, RGAccess::ColorAttachment);
+    BakePlaced(g);
+
+    ASSERT_EQ(g.ScheduledOrder(), (std::vector<RGPassId>{pre, world, resolve, grade, fog}));
+    EXPECT_EQ(g.PassExecutionQueue(resolve), RGQueue::Compute);
+    ASSERT_EQ(g.Submissions().size(), 5u);
+    EXPECT_EQ(g.Submissions()[3].ScheduledCount, 1u) << "the run ends before Fog, the first consumer";
+    EXPECT_EQ(FindWait(g.Submissions()[3], RGQueue::Compute), nullptr) << "Grade does not wait on DepthResolve";
+    const RGSemaphoreWait* w = FindWait(g.Submissions()[4], RGQueue::Compute);
+    ASSERT_NE(w, nullptr);
+    EXPECT_EQ(w->Value, g.Submissions()[2].SignalValue) << "Fog waits on DepthResolve";
+    EXPECT_EQ(g.WaitedSubmission(*w), 2u) << "the wait names the submission that signals it";
+}
+
+// Under the collapsed map placement changes nothing: every pass keeps its declared queue label.
+TEST(RGSubmission, CollapsedQueueMapPlacesNothing)
+{
+    RGGraph g;
+    g.BeginFrame();
+    RGResourceId depth = Tex(g, "Depth");
+    RGResourceId resolved = Buf(g, "Resolved");
+    RGResourceId color = Tex(g, "Color");
+    g.MarkExternal(color);
+    RGPassId b = g.AddPass({"DepthResolve", 0, RGQueue::Compute});
+    g.Write(b, resolved, RGAccess::StorageWrite);
+    RGPassId a = g.AddPass({"DepthPrepass", 0, RGQueue::Graphics});
+    g.Read(a, resolved, RGAccess::StorageRead);
+    g.Write(a, depth, RGAccess::DepthWrite);
+    RGPassId c = g.AddPass({"World", 0, RGQueue::Graphics});
+    g.Read(c, depth, RGAccess::Sampled);
+    g.Write(c, color, RGAccess::ColorAttachment);
+    static constexpr uint8_t kCollapsed[kQueueCount] = {0, 0, 0};
+    g.Compile();
+    g.Schedule();
+    g.PlaceQueues(kCollapsed);
+    g.GenerateBarriers(kCollapsed);
+    g.BuildSubmissionPlan(kCollapsed);
+
+    ASSERT_EQ(g.Submissions().size(), 1u);
+    EXPECT_EQ(g.Submissions()[0].Queue, RGQueue::Compute) << "the label of the first declared pass";
+}
+
 // A same-physical transition is untouched — no placement, so the recording path
 // is byte-identical to a frame with no crossings at all.
 TEST(RGSubmission, SamePhysicalTransitionIsNeverRelocated)
@@ -1035,6 +1397,7 @@ TEST(RGSubmissionCrossFrame, ComputeRewriteWaitsForThePreviousFramesGraphicsRead
     const RGSemaphoreWait* wait = FindWait(SubmissionOn(g, RGQueue::Compute), RGQueue::Graphics);
     ASSERT_NE(wait, nullptr) << "the snapshot may overwrite the buffer the previous frame's tonemap reads";
     EXPECT_EQ(wait->Value, previousTonemap);
+    EXPECT_EQ(g.WaitedSubmission(*wait), kInvalidId) << "the previous frame signals it";
 }
 
 TEST(RGSubmissionCrossFrame, GraphicsReadWaitsForThePreviousFramesComputeWrite)

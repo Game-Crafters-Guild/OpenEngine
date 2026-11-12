@@ -11,8 +11,8 @@ set(ASSETRUNTIME_SOURCES
     Source/Material/MaterialXImport.cpp
     Source/TextureAlphaProbe.cpp
     Source/RenderPipelineAsset.cpp
-    Source/ShaderProgramAsset.cpp
-    Source/ShaderSourceAsset.cpp
+    Source/Shader/ShaderProgramAsset.cpp
+    Source/Shader/ShaderSourceAsset.cpp
     Source/ScriptAsset.cpp
     Source/XmlAsset.cpp
     Source/BinaryAsset.cpp
@@ -28,6 +28,7 @@ set(ASSETRUNTIME_SOURCES
     Source/AnimationAssetParser.cpp
     Source/UILayoutAssetParser.cpp
     Source/UIStyleAssetParser.cpp
+    Source/Shader/ShaderSourceAssetParser.cpp
     Source/FlareAtlasAsset.cpp
     Source/LensFlare/LensFlareDefinitionAsset.cpp
     Source/LensFlare/LensFlareImporter.cpp
@@ -61,6 +62,8 @@ target_include_directories(AssetRuntime
 	        ${CMAKE_SOURCE_DIR}/Engine/Modules/Scheduler/Include
 	        ${CMAKE_SOURCE_DIR}/Engine/Modules/Pathfinding/Include
 	        ${CMAKE_SOURCE_DIR}/Engine/Modules/Particles/Include
+	        # UI/ControlAssetPaths.h: the UIStyle parser gives a control sheet its origin.
+	        ${CMAKE_BINARY_DIR}/generated
 	)
 
 # Link dependencies

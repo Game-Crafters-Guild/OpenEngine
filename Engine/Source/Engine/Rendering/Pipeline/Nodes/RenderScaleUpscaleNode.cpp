@@ -239,9 +239,11 @@ void RenderScaleUpscaleNode::DeclareForView(ViewDeclare& d)
     d.PublishTexture(Names::View::Resolve, d.ViewOutputColor);
 
     // Reconstitute the caller's display-res depth: the editor's overlay and
-    // gizmo passes attach it for depth testing at the display extent.
-    m_DepthUpsample.Declare(d.Frame, d.ViewDepth, d.ViewOutputDepth, outW, outH,
-                            d.PassName("RenderScaleDepthUpsample"));
+    // gizmo passes attach it for depth testing at the display extent. The
+    // source is single-sample: under MSAA it is the resolved internal depth.
+    const bool multisampledRaster = d.Frame.Graph().ResourceDesc(d.ViewDepth.Id).SampleCount > 1;
+    m_DepthUpsample.Declare(d.Frame, multisampledRaster ? d.ViewDepthResolved : d.ViewDepth, d.ViewOutputDepth,
+                            outW, outH, d.PassName("RenderScaleDepthUpsample"));
 }
 
 } // namespace GameEngine::Engine::Renderer::Pipeline::Nodes

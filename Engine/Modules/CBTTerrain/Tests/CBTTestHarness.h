@@ -3,6 +3,9 @@
 // Shared helpers for the CBTTerrain real-device tests. Mirrors the headless
 // Vulkan device bring-up used by the Rendering module's DeviceDiagnosticsTests.
 
+#include <algorithm>
+#include <array>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -13,6 +16,7 @@
 
 #include "CBTTerrain/CBTDeepDecode.h"
 #include "CBTTerrain/CBTLayout.h"
+#include "Mathematics/WorldPosition.h"
 #include "Rendering/Core/Device.h"
 
 namespace GameEngine::CBTTerrain::Test
@@ -76,15 +80,16 @@ inline void CornerWorld(const CBTVertexData& vertex, uint32_t corner, double out
     const uint32_t* words = sectors[corner];
     const int32_t sector[3] = {UnpackSectorLo(words[0]), UnpackSectorHi(words[0]), UnpackSectorLo(words[1])};
     for (uint32_t axis = 0; axis < 3u; ++axis)
-        out[axis] = double(DeepDecode::kSectorSizeMeters) * sector[axis] + double(local[axis]);
+        out[axis] = Mathematics::kWorldSectorSize * sector[axis] + double(local[axis]);
 }
 
 // CornerWorld for one slot of a CurrentVertex buffer read back as words.
 inline void ReadCornerWorld(const std::vector<uint32_t>& vertexWords, uint32_t slot, uint32_t corner,
                             double out[3])
 {
-    CBTVertexData vertex;
-    std::memcpy(&vertex, &vertexWords[size_t(slot) * (sizeof(CBTVertexData) / 4u)], sizeof(vertex));
+    std::array<uint32_t, sizeof(CBTVertexData) / sizeof(uint32_t)> recordWords;
+    std::copy_n(vertexWords.data() + size_t(slot) * recordWords.size(), recordWords.size(), recordWords.data());
+    const CBTVertexData vertex = std::bit_cast<CBTVertexData>(recordWords);
     CornerWorld(vertex, corner, out);
 }
 

@@ -72,13 +72,14 @@ namespace Rendering {
         uint32_t WriteTimestampRaw(VkCommandBuffer cmd, const std::string& name = "");
         uint32_t BeginOcclusionQuery(CommandList* commandList, const std::string& name = "") override;
         void EndOcclusionQuery(CommandList* commandList, uint32_t queryIndex) override;
+        bool SupportsPipelineStatistics() const override { return m_PipelineStatsSupported; }
         uint32_t BeginPipelineStats(CommandList* commandList, const std::string& name = "") override;
         void EndPipelineStats(CommandList* commandList, uint32_t queryIndex) override;
 
         // Result retrieval
         bool GetTimestampResult(uint32_t queryIndex, QueryResult& outResult) override;
         bool GetOcclusionResult(uint32_t queryIndex, QueryResult& outResult) override;
-        bool GetPipelineStatsResult(uint32_t queryIndex, QueryResult& outResult) override;
+        bool GetPipelineStatsResult(uint32_t queryIndex, PipelineStatistics& outStatistics) const override;
 
         // Statistics and utilities
         const ProfilingStats& GetProfilingStats() const override;
@@ -122,6 +123,11 @@ namespace Rendering {
         std::vector<std::vector<uint64_t>> m_CachedTimestampValues; // Per frame
         std::vector<bool> m_CachedTimestampValuesValid;             // Per frame
 
+        // The counters of each slot's queries as of that slot's last collection,
+        // kPipelineStatsResultWords words per query: the seven counters, then availability.
+        static constexpr uint32_t kPipelineStatsResultWords = 8;
+        std::vector<std::vector<uint64_t>> m_CachedPipelineStatsValues; // Per frame
+
         // Current frame query counters
         uint32_t m_CurrentTimestampQuery = 0;
         uint32_t m_CurrentOcclusionQuery = 0;
@@ -141,6 +147,7 @@ namespace Rendering {
         void DestroyQueryPools();
         bool CheckQuerySupport();
         void CollectResults(uint32_t frameIndex);
+        void CollectPipelineStatsResults(uint32_t frameIndex);
         void ResetTimestampPoolSlice(uint32_t frameIndex);
         uint32_t GetFrameQueryIndex(uint32_t baseIndex, uint32_t perFrameMax) const;
 

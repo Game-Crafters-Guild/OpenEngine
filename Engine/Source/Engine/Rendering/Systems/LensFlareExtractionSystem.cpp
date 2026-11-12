@@ -16,6 +16,7 @@
 #include "Core/Engine.h"
 
 #include "ECS/World.h"
+#include "Mathematics/MatrixOps.h"
 
 #include <cmath>
 #include <vector>
@@ -29,21 +30,6 @@ namespace GameEngine::Engine::Renderer
 
 namespace
 {
-void MultiplyColumnMajor4x4(const float32* a, const float32* b, float32* out)
-{
-    for (int col = 0; col < 4; ++col)
-    {
-        for (int row = 0; row < 4; ++row)
-        {
-            out[col * 4 + row] =
-                a[0 * 4 + row] * b[col * 4 + 0] +
-                a[1 * 4 + row] * b[col * 4 + 1] +
-                a[2 * 4 + row] * b[col * 4 + 2] +
-                a[3 * 4 + row] * b[col * 4 + 3];
-        }
-    }
-}
-
 // A transform-tool preview updates the edited light's WorldTransform immediately,
 // while TransformHierarchySystem updates its children's cached WorldTransforms on
 // the next hierarchy pass. Compose an attached flare from the light's current
@@ -69,7 +55,7 @@ const Components::WorldTransform& ResolveSourceWorldTransform(
         return cachedWorld;
 
     attachedWorld = cachedWorld;
-    MultiplyColumnMajor4x4(parentWorld->matrix, local->matrix, attachedWorld.matrix);
+    Components::ComposeWorldPose(*parentWorld, *local, attachedWorld);
     return attachedWorld;
 }
 
@@ -99,9 +85,9 @@ void ApplyDirectionalLightDirection(ResolvedFlare& flare,
 {
     // Toward-sun = -shine = -col2. SunMode projects this as an infinite source
     // so the flare sits on the sun disk, not along the shine vector.
-    const float fx = -lightWorld.matrix[8];
-    const float fy = -lightWorld.matrix[9];
-    const float fz = -lightWorld.matrix[10];
+    const float fx = -lightWorld.Basis[2].x;
+    const float fy = -lightWorld.Basis[2].y;
+    const float fz = -lightWorld.Basis[2].z;
     const float length = std::sqrt(fx * fx + fy * fy + fz * fz);
     if (length <= 1e-6f)
         return;
@@ -154,15 +140,16 @@ ResolvedFlareElement MakeFallbackElement(float scale, float position, float brig
 void ApplySourceTransform(ResolvedFlare& rf, const Components::LensFlareSource& src,
                           const Components::WorldTransform& wt)
 {
-    rf.WorldPos[0] = wt.matrix[12];
-    rf.WorldPos[1] = wt.matrix[13];
-    rf.WorldPos[2] = wt.matrix[14];
+    const Mathematics::Vector3 position = wt.GetPosition() - Mathematics::WorldPosition{};
+    rf.WorldPos[0] = position.x;
+    rf.WorldPos[1] = position.y;
+    rf.WorldPos[2] = position.z;
 
     // World forward = Z basis column (LH, Z+ forward), normalized; its length
     // (uniform-scale assumption) doubles as the entity's transform scale.
-    const float fx = wt.matrix[8];
-    const float fy = wt.matrix[9];
-    const float fz = wt.matrix[10];
+    const float fx = wt.Basis[2].x;
+    const float fy = wt.Basis[2].y;
+    const float fz = wt.Basis[2].z;
     const float fLen = std::sqrt(fx * fx + fy * fy + fz * fz);
     if (fLen > 1e-6f)
     {
@@ -170,9 +157,9 @@ void ApplySourceTransform(ResolvedFlare& rf, const Components::LensFlareSource& 
         rf.Forward[1] = fy / fLen;
         rf.Forward[2] = fz / fLen;
     }
-    const float sx = wt.matrix[0];
-    const float sy = wt.matrix[1];
-    const float sz = wt.matrix[2];
+    const float sx = wt.Basis[0].x;
+    const float sy = wt.Basis[0].y;
+    const float sz = wt.Basis[0].z;
     rf.TransformScale = std::sqrt(sx * sx + sy * sy + sz * sz);
 
     rf.Intensity = src.Intensity;

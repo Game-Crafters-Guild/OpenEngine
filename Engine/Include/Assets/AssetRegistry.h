@@ -501,7 +501,9 @@ class AssetRegistry
     void SetParserRegistry(ParserRegistry* parserRegistry);
 
     /**
-     * @brief Register an asset
+     * @brief Register an asset.
+     * A path that reaches a source root through a symbolic link registers under its
+     * resolved spelling. The path lookups and the meta value calls accept both spellings.
      */
     bool RegisterAsset(const std::filesystem::path& path);
 
@@ -974,6 +976,12 @@ class AssetRegistry
                       const std::string& value);
 
     /**
+     * @brief Remove a key from the authoritative asset database (kv map), under the same
+     * writability rule as SetMetaValue. True when the key is gone, also when it was not set.
+     */
+    bool RemoveMetaValue(const std::filesystem::path& assetPath, const std::string& key);
+
+    /**
      * @brief Journal a container's subasset derive keys (kSubassetDeriveKeysKvKey
      * kv row) so a container rename can cascade redirects for the identities
      * derived from its GUID, and clear any redirect that shadows one of THIS
@@ -1235,10 +1243,18 @@ class AssetRegistry
     // Persist durable identity-ish fields to the authoritative store (not a sidecar file).
     bool SaveAssetMetadata(const AssetMetadata& metadata);
 
+    // SetMetaValue with `value`, RemoveMetaValue with null.
+    bool WriteMetaValue(const std::filesystem::path& assetPath, const std::string& key, const std::string* value);
+
     // Find the source whose root contains the given absolute path.
     // Returns nullptr if no source matches. Iterates by priority (descending).
     SourceEntry* FindSourceForPath(const std::filesystem::path& absPath);
     const SourceEntry* FindSourceForPath(const std::filesystem::path& absPath) const;
+
+    // The absolute path with its symbolic links resolved, when its spelling is under no
+    // source root and the resolved path is under one. A path spelled under a source root
+    // gives nullopt with no filesystem access. Takes the registry lock: do not hold it.
+    std::optional<std::filesystem::path> TryResolveIntoSource(const std::filesystem::path& path) const;
 
     // Find source entry by alias. Returns nullptr if not found.
     SourceEntry* FindSourceByAlias(std::string_view alias);
@@ -1682,6 +1698,16 @@ class AssetRegistry
     // runs outside m_RegistryMutex and must not contend with registry reads.
     mutable std::mutex m_MissingAssetLogMutex;
     FastHashSet<std::string> m_MissingAssetLogEpisodes;
+
+    // Folders that an ignore rule skips and RegisterAsset has warned about, one Warning
+    // per folder per project. Guarded by m_MissingAssetLogMutex.
+    FastHashSet<std::string> m_IgnoredFolderWarnings;
+    // FindIgnoredFolder's answer per parent folder of a project file, so a folder's marker files
+    // are read once. ScanDirectory and RebindSource clear it. Guarded by m_MissingAssetLogMutex.
+    FastHashMap<std::string, std::optional<AssetIgnoreRules::IgnoredFolder>> m_IgnoredFolderByParent;
+    std::optional<AssetIgnoreRules::IgnoredFolder> FindIgnoredFolderCached(const AssetIgnoreRules& rules,
+                                                                          std::string_view canonicalRel,
+                                                                          const std::filesystem::path& projectRoot);
 
     // E5: guarded by m_RegistryMutex; copied out before invocation so the
     // callback runs lock-free.

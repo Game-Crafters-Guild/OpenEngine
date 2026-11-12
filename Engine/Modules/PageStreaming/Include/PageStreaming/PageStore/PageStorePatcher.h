@@ -23,9 +23,9 @@ class PageCodec;
 class PageStoreWriter;
 struct EncodedPage;
 
-/// Writes the pages of a byte-format or Bc5 store one at a time, and makes the coarser pages over a
-/// changed rect again with the filter of PagePyramidBuilder: the result is the bytes of a full build.
-/// WritePage runs on many threads at once; RefilterAncestors runs with no WritePage in flight.
+/// Writes the pages of a byte-format or Bc5 store and refilters the coarser pages over a changed rect: a
+/// coarser sample is the filter of the level below when every finer page its taps read is written, else
+/// it keeps its stored value. WritePage runs on many threads; RefilterAncestors with no WritePage in flight.
 class PageStorePatcher
 {
 public:
@@ -44,10 +44,11 @@ public:
     /// already holds is not written. False on another format, a wrong sample count or a write error.
     bool WritePage(const PageAddress& address, std::span<const uint8> samples);
 
-    /// Remakes, level by level, each coarser page that reads `level0Rect` or a page written at the level below.
-    /// A page whose inputs are not all written stays as it is until the call after its last input.
+    /// Remakes, level by level, each coarser page that reads `level0Rect` (none: no level-0 change), a page
+    /// written at its level or a page written at the level below. A sample whose taps read a finer page not yet
+    /// written keeps its stored value; a page with such a sample that is not written yet stays unwritten.
     /// False on a write error.
-    bool RefilterAncestors(const PageSampleRect& level0Rect);
+    bool RefilterAncestors(const std::optional<PageSampleRect>& level0Rect);
 
     /// Pages written with new bytes, and pages whose bytes were already stored.
     uint64 PagesWritten() const { return m_PagesWritten.load(); }
@@ -60,6 +61,9 @@ private:
     /// Encodes one page's stride samples for the store and, with an unencoded store, for it too.
     void EncodePage(uint32 level, std::span<const uint8> samples, EncodedPage& outEncoded,
                     EncodedPage& outUnencoded) const;
+    /// The decoded stride samples the store holds for `address`; for a Bc5 store, the exact samples
+    /// of its unencoded store where it has them. False when the page is not written.
+    bool ReadStoredSamples(const PageAddress& address, std::vector<uint8>& outSamples) const;
     /// True when the store holds these bytes for `address`.
     bool HoldsPage(const PageAddress& address, const EncodedPage& encoded, const EncodedPage& unencoded) const;
     /// Remakes the pages of `level` that hold a sample of `changed`, a rect of that level, and the

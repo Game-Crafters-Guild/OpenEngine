@@ -20,6 +20,7 @@
 #include "Rendering/Core/GPUScene.h"
 #include "JobSystem/JobCounter.h"
 #include "JobSystem/WorkStealingThreadPool.h"
+#include "TestCameraEye.h"
 
 using namespace GameEngine;
 using namespace GameEngine::Rendering;
@@ -497,7 +498,7 @@ TEST(RenderServicesWorldDrawBuilderTests, CpuDrawStream_ListsOneBatchAsOneDrawWh
     ASSERT_EQ(idx[4], idx[0] + 4u) << "GPUScene handed out non-consecutive indices";
 
     const CameraId camId = rs.Views().AllocateCamera("cam");
-    rs.Views().SetCameraData(camId, MakeIdentityFrustumCamera());
+    rs.Views().SetCameraData(camId, ::GameEngine::Tests::TestCameraWithEye(MakeIdentityFrustumCamera()), {0.1f, 1000.0f});
     const ViewId viewId = rs.Views().AllocateView("view", camId);
 
     // Submitted deliberately out of order, with a hole at idx[2] and idx[0]
@@ -565,7 +566,7 @@ TEST(RenderServicesWorldDrawBuilderTests, CpuDrawStream_CullsCameraSetButKeepsOf
     const uint32_t inFrustumShadowsOnly = AddPointInstance(*scene, -0.5f, 0.0f, 0.5f);
 
     const CameraId camId = rs.Views().AllocateCamera("cam");
-    rs.Views().SetCameraData(camId, MakeIdentityFrustumCamera());
+    rs.Views().SetCameraData(camId, ::GameEngine::Tests::TestCameraWithEye(MakeIdentityFrustumCamera()), {0.1f, 1000.0f});
     const ViewId viewId = rs.Views().AllocateView("view", camId);
 
     const WorldSubmissionRecord recs[] = {
@@ -636,7 +637,7 @@ TEST(RenderServicesWorldDrawBuilderTests, CpuDrawStream_TheSceneViewLeavesOutWha
     const uint32_t hidden = AddPointInstance(*scene, 0.5f, 0.0f, 0.5f);
 
     const CameraId camId = rs.Views().AllocateCamera("cam");
-    rs.Views().SetCameraData(camId, MakeIdentityFrustumCamera());
+    rs.Views().SetCameraData(camId, ::GameEngine::Tests::TestCameraWithEye(MakeIdentityFrustumCamera()), {0.1f, 1000.0f});
     const ViewId sceneView = rs.Views().AllocateView("scene", camId, Rendering::ViewPurpose::EditorScene);
     const ViewId gameView = rs.Views().AllocateView("game", camId, Rendering::ViewPurpose::Game);
 
@@ -702,7 +703,7 @@ TEST(RenderServicesWorldDrawBuilderTests, CpuDrawStream_KeysPerMaterialAndClears
     ASSERT_EQ(instB, instA + 1u);
 
     const CameraId camId = rs.Views().AllocateCamera("cam");
-    rs.Views().SetCameraData(camId, MakeIdentityFrustumCamera());
+    rs.Views().SetCameraData(camId, ::GameEngine::Tests::TestCameraWithEye(MakeIdentityFrustumCamera()), {0.1f, 1000.0f});
     const ViewId viewId = rs.Views().AllocateView("view", camId);
 
     const WorldSubmissionRecord recs[] = {
@@ -775,7 +776,7 @@ TEST(RenderServicesWorldDrawBuilderTests, CpuDrawStream_PooledCullMatchesSerial)
     Material unready = Material::TestFactory::Create(GUID::Generate(), "Unready", 32u);
 
     const CameraId camId = rs.Views().AllocateCamera("cam");
-    rs.Views().SetCameraData(camId, MakeIdentityFrustumCamera());
+    rs.Views().SetCameraData(camId, ::GameEngine::Tests::TestCameraWithEye(MakeIdentityFrustumCamera()), {0.1f, 1000.0f});
     const ViewId viewId = rs.Views().AllocateView("view", camId);
 
     // Points spread across x in [-2, 2): about half inside the identity

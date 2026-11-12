@@ -37,6 +37,8 @@ struct PavingCapUV
 // A road's strip mapping laid over a paved region it enters, so the lid continues the road's grid.
 struct PavingRoadUV
 {
+    // The road's entity id.
+    uint32 Entity = 0;
     // In rising arc length: the centerline on the ground plane (x, z), the road's arc length at each
     // point in world meters, and the top's half-widths left and right of rising travel.
     std::vector<Mathematics::Vector2> Points;

@@ -104,9 +104,8 @@ static Rendering::GPUDrawStreamBuilder::ViewLODParams MakeViewLODParams(
     float lodHysteresisBand)
 {
     Rendering::GPUDrawStreamBuilder::ViewLODParams p{};
-    p.cameraPos.x = cam.cameraPos.x;
-    p.cameraPos.y = cam.cameraPos.y;
-    p.cameraPos.z = cam.cameraPos.z;
+    p.cameraPos = CameraEyeRelativeToOrigin(cam);
+    p.originSector = CameraRenderOriginSector(cam);
     const bool is2DOrtho = cam.cameraPos.w == 1.0f;
     p.projScaleY    = is2DOrtho ? 0.0f : std::abs(cam.proj[1][1]);
     p.lodBiasGlobal = globalBias;
@@ -666,6 +665,8 @@ uint32_t RenderServices::ScheduleWorldBucketerCommon()
                     s.lod.cameraPos.x = fd->LodCameraPos[cascadeIdx].x;
                     s.lod.cameraPos.y = fd->LodCameraPos[cascadeIdx].y;
                     s.lod.cameraPos.z = fd->LodCameraPos[cascadeIdx].z;
+                    // The frozen eye is a world position: the scatter composes centers against sector (0,0,0).
+                    s.lod.originSector = Mathematics::Vector3Int{0, 0, 0};
                     const bool is2DOrtho = fd->LodCameraPos[cascadeIdx].w == 1.0f;
                     s.lod.projScaleY = is2DOrtho ? 0.0f : fd->LodProjScaleY[cascadeIdx];
                 }
@@ -729,7 +730,7 @@ uint32_t RenderServices::ScheduleWorldBucketerCommon()
                 // Light-relative selection: all six faces of a slot share one
                 // params block (same light, same tile), so build it per slot.
                 const Rendering::GPUDrawStreamBuilder::ViewLODParams faceLod =
-                    MakePointFaceLodParams(fi.position, fi.tileResolution, lodKnobs);
+                    MakePointFaceLodParams(fi.position - Mathematics::WorldPosition{}, fi.tileResolution, lodKnobs);
                 for (uint32_t face = 0; face < kPointShadowFaceCount; ++face)
                 {
                     if ((fi.faceMask & (1u << face)) == 0u)
@@ -1033,6 +1034,24 @@ void RenderServices::EnsureAnimComputePass()
     }
 }
 
+// Palettes written before an in-frame growth sit in the replaced rings; copy them into the
+// atlas at their offsets before skinning and every vertex reader. The CPU never reads them back.
+static void AddPaletteGrowthCopyPass(Rendering::RenderGraph::RGFrame& frame, Rendering::RenderGraph::RGBuffer atlas,
+                                     std::vector<Rendering::FrameBufferAllocator::FrameCopy> copies)
+{
+    if (copies.empty())
+        return;
+    frame.AddPass(
+        "SkinPaletteGrowthCopy", static_cast<int32_t>(Rendering::PassPhase::kEarlySetup),
+        [atlas](Rendering::RenderGraph::RGPassBuilder& p) { p.Write(atlas, Rendering::RenderGraph::RGBufferWrite::CopyDst); },
+        [atlas, copies = std::move(copies)](Rendering::RenderGraph::RGContext& ctx)
+        {
+            const Rendering::BufferHandle destination = ctx.GetBuffer(atlas);
+            for (const auto& copy : copies)
+                ctx.Cmd->CopyBuffer(copy.Source, destination, copy.Bytes, copy.Offset, copy.Offset);
+        });
+}
+
 void RenderServices::ScheduleGpuSkinningAndRetarget(Rendering::RenderGraph::RGFrame& frame)
 {
     if (m_FrameRG.For.Frame && !m_FrameRG.For.IsFor(frame))
@@ -1053,6 +1072,8 @@ void RenderServices::ScheduleGpuSkinningAndRetarget(Rendering::RenderGraph::RGFr
     // descriptor-direct, so only that declared read orders skinning→VS (the
     // first-ever real compute→vertex barrier; the old graph had phase order).
     m_FrameRG.SkinPaletteAtlas = frame.ImportExternalBuffer("SkinPaletteAtlas", atlasBuf);
+    AddPaletteGrowthCopyPass(frame, m_FrameRG.SkinPaletteAtlas,
+                             m_PerFrameWritePool.TakeFrameCopies(FrameWriteUsage::BonePalette));
 
     if (m_AnimComputePass && !m_GPUAnimDataStore.IsDispatchScheduledThisFrame())
     {
@@ -1159,32 +1180,20 @@ void RenderServices::ScheduleViewCullingDispatches(Rendering::RenderGraph::RGFra
         if (camData == nullptr)
             continue;
 
-        const Rendering::CameraDerivedData camera = Rendering::DeriveCameraData(*camData);
+        const Rendering::CameraDerivedData camera =
+            Rendering::DeriveCameraData(*camData, m_ViewRegistry.FindCameraRanges(view.cameraId));
 
         Rendering::ViewCullingContext ctx{};
         ctx.Id = view.id;
         ctx.CascadeIndex = Rendering::kCullingCascadeIndexNone;
-        ctx.ViewMatrix = camera.ViewMatrix;
+        // The culling frame is the render origin the world pass draws with: the rebased view and
+        // planes take points relative to it, and the kernel composes each center against it.
+        ctx.ViewMatrix = camData->viewRel;
         ctx.ProjMatrix = camera.ProjMatrix;
-        ctx.ViewProjMatrix = camera.ViewProjMatrix;
-        Rendering::ExtractFrustumPlanes(camera.ViewProjMatrix, ctx.FrustumPlanes);
-        ctx.CameraPosition = camera.Position;
+        ctx.ViewProjMatrix = camData->viewProjRel;
+        Rendering::ExtractFrustumPlanes(camData->viewProjRel, ctx.FrustumPlanes);
         ctx.CameraForward = camera.Forward;
-        // Camera-relative culling origin (Earth-scale precision): the SAME render
-        // origin ViewRegistry rebases the world pass against. Derive it from the
-        // camera position exactly as ResolveCameraData does — the stored
-        // CameraData::renderOriginSector is filled only on-read by ResolveCameraData
-        // and is zero here, so we must recompute, not read it. The frustum test
-        // differences boundingCenter against this so a planetary center stays
-        // small-magnitude. Inactive (sector 0) => origin (0,0,0) => the GPU test is
-        // byte-identical to the world-space one (dark-ship).
-        {
-            const auto originSector = ComputeRenderOriginSector(
-                camData->cameraPos.x, camData->cameraPos.y, camData->cameraPos.z);
-            float ox, oy, oz;
-            SectorToWorld(originSector, ox, oy, oz);
-            ctx.CameraRelativeOrigin = Mathematics::Vector3{ox, oy, oz};
-        }
+        ctx.OriginSector = CameraRenderOriginSector(*camData);
         ctx.NearPlane = camera.NearPlane;
         ctx.FarPlane = camera.FarPlane;
         ctx.FirstInstance = 0;
@@ -1220,7 +1229,7 @@ void RenderServices::ScheduleViewCullingDispatches(Rendering::RenderGraph::RGFra
         {
             s_DefaultFrustum.ScheduleCulling(MakeShadowSliceCullingContext(
                 ctx, {kAreaShadowCullingIndex, areaShadow.lightView, areaShadow.lightProj, areaShadow.lightVP,
-                      areaShadow.position, areaShadow.direction, areaShadow.nearPlane, areaShadow.farPlane}));
+                      areaShadow.position - Mathematics::WorldPosition{}, areaShadow.direction, areaShadow.nearPlane, areaShadow.farPlane}));
         }
 
         const auto spotShadow = BuildSpotShadowFrameInfo(GetWorldLights(view.worldId));
@@ -1228,7 +1237,7 @@ void RenderServices::ScheduleViewCullingDispatches(Rendering::RenderGraph::RGFra
         {
             s_DefaultFrustum.ScheduleCulling(MakeShadowSliceCullingContext(
                 ctx, {kSpotShadowCullingIndex, spotShadow.lightView, spotShadow.lightProj, spotShadow.lightVP,
-                      spotShadow.position, spotShadow.direction, spotShadow.nearPlane, spotShadow.farPlane}));
+                      spotShadow.position - Mathematics::WorldPosition{}, spotShadow.direction, spotShadow.nearPlane, spotShadow.farPlane}));
         }
 
         // M1: schedule one cull context per (slot, face) of the SHARED atlas
@@ -1259,7 +1268,7 @@ void RenderServices::ScheduleViewCullingDispatches(Rendering::RenderGraph::RGFra
                         continue; // camera-culled face: no GPU cull context, no draws
                     s_DefaultFrustum.ScheduleCulling(MakeShadowSliceCullingContext(
                         ctx, {PointShadowCullingIndex(PointShadowSlotFaceLayer(slot, face)), fi.lightView[face],
-                              fi.lightProj, fi.lightVP[face], fi.position, fi.direction[face], fi.nearPlane,
+                              fi.lightProj, fi.lightVP[face], fi.position - Mathematics::WorldPosition{}, fi.direction[face], fi.nearPlane,
                               fi.farPlane}));
                 }
             }

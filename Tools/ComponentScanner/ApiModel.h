@@ -43,6 +43,7 @@ enum class ApiKind : std::uint8_t
     Vec4,
     Quat,
     Mat4,
+    WorldPosition,
     ColorLinear,
     Entity,
     RenderLayerMask,

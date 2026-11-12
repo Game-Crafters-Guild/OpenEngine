@@ -77,8 +77,6 @@ class FramePhaseHistory
         float TerminalPassesMs = 0.0f;
         float RgCompileMs = 0.0f;
         float RgExecuteMs = 0.0f;
-        float VariantCompileMs = 0.0f;
-        float PrewarmMs = 0.0f;
         float PresentMs = 0.0f;
 
         // RenderServices' render timeline and extraction (last app frame).

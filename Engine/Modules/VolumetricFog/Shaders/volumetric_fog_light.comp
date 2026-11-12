@@ -31,6 +31,12 @@ struct FogLocalLightPacked
 #include "Includes/light_packed_fields.glsl"
 };
 
+// The view parameters at binding 21: the light buffer and the sun's cascade matrices take positions relative to
+// the view's render origin, and the fog works in world space (view_origin.glsl).
+#define GE_VIEW_PARAMS_BINDING 21
+#include "Includes/view_params.glsl"
+#include "Includes/view_origin.glsl"
+
 #include "volumetric_fog_local_shadows.glsl"
 
 // Shadow visibility is averaged over the froxel's ray segment. One lookup per
@@ -135,7 +141,7 @@ vec3 FogEvaluateAreaSample(vec3 samplePos, vec3 emitterNormal, bool oneSided, ve
 
 vec3 FogEvaluateAreaLight(FogLocalLightPacked light, vec3 worldPos, vec3 viewRay, float froxelFootprint)
 {
-    vec3 center = light.posRange.xyz;
+    vec3 center = GE_ViewAbsolutePoint(light.posRange.xyz);
     float range = max(light.posRange.w, 0.001);
     vec3 normal = normalize(light.dirIntensity.xyz);
     vec3 right = FogSafeAreaRight(normal, light.areaRight.xyz);
@@ -210,7 +216,7 @@ vec3 FogEvaluateLocalLight(FogLocalLightPacked light, uint lightIndex, vec3 worl
     if (lightType != 1u && lightType != 2u)
         return vec3(0.0);
 
-    vec3 lightToFog = worldPos - light.posRange.xyz;
+    vec3 lightToFog = worldPos - GE_ViewAbsolutePoint(light.posRange.xyz);
     float dist = length(lightToFog);
     float range = max(light.posRange.w, 0.001);
     if (dist > range)
@@ -304,7 +310,8 @@ float FogSampleShadow(vec3 worldPos, vec3 lightDir)
 
     vec3 normalBiasDir = -lightDir;
     vec3 biasedPos = worldPos + normalBiasDir * (ge_shadowParams.y * 0.15 + fog.uFogExtraParams.y);
-    vec4 shadowClip = ge_shadowVP[cascadeIdx] * vec4(biasedPos, 1.0);
+    // The cascade matrices take positions relative to the view's render origin.
+    vec4 shadowClip = ge_shadowVP[cascadeIdx] * vec4(biasedPos - GE_ViewOrigin(), 1.0);
     vec3 shadowNDC = shadowClip.xyz / max(shadowClip.w, 1.0e-6);
     vec2 shadowUV = shadowNDC.xy * 0.5 + 0.5;
     shadowUV.y = 1.0 - shadowUV.y;

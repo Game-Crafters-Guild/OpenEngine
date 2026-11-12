@@ -13,9 +13,15 @@
 #include "Engine/Rendering/ModelMaterialBridge.h"
 #include "Types/Types.h"
 
+#include <memory>
 #include <optional>
 #include <unordered_map>
 #include <vector>
+
+namespace JobSystem
+{
+class TaskHandle;
+}
 
 // Explicit imports from the Rendering module (CodingStyle: no namespace-scope using-directives in headers).
 namespace GameEngine::Engine::Renderer
@@ -42,7 +48,9 @@ struct ModelRenderResources
     GUID modelGuid;
     const ModelAsset* modelAsset = nullptr;
     std::vector<Rendering::MeshGPUHandle> meshHandles;
-    std::vector<ConvertedModelMaterial> materials;
+    // Read-only and shared: a spawn of a resident model shares the list the mesh
+    // registry keeps for it. Every load sets it; the list is empty for a model with no material.
+    std::shared_ptr<const std::vector<ConvertedModelMaterial>> materials;
 };
 
 // Load a model asset by GUID, register its GPU meshes and converted materials.
@@ -56,6 +64,15 @@ std::optional<ModelRenderResources> RegisterModelRenderResources(
 // ModelAsset. The runtime resolve's form.
 std::optional<ModelRenderResources> RegisterLoadedModelRenderResources(
     RenderServices& rs, const GUID& modelGuid, Asset& loadedAsset);
+
+// Starts a job that parses the surfaces the loaded model's materials compose with, so
+// RegisterLoadedModelRenderResources reads no shader file on this thread. Returns the job's handle:
+// invalid when nothing needs it (MaterialSystem::ParseSurfacesOffThread).
+JobSystem::TaskHandle ParseModelSurfacesOffThread(RenderServices& rs, const Asset& loadedAsset);
+
+// The same job for a loaded standalone material asset, so RegisterLoadedStandaloneMaterial reads no shader
+// file on this thread. Invalid for an asset that is not a MaterialAsset (a model-derived material).
+JobSystem::TaskHandle ParseMaterialSurfacesOffThread(RenderServices& rs, const Asset& loadedAsset);
 
 // Same as `RegisterModelRenderResources` but only registers (and uploads
 // textures for) the material slot that `submeshIndex` references. Use when

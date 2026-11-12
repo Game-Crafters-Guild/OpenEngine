@@ -677,10 +677,9 @@ SurfaceOutput EvaluateSurface(SurfaceInput sIn)
     // too keeps the per-pixel fallback (no foam sim) foaming the shoreline.
     // Gated to zero when the depth cascade is inactive (huge depth).
     float shoreline = max(shoreFoam, smoothstep(uShorelineFoamMaxDepth, 0.0, seabedDepth) * uShorelineFoamStrength);
-    // Intersection foam: a Wicked-style waterline from scene-depth proximity.
-    // Absolute eye-depth difference keeps the contact stable at silhouettes and
-    // slightly interpenetrating geometry; layered foam noise breaks the line into
-    // bubbles/streaks instead of drawing a hard contour.
+    // Intersection foam: a waterline from the absolute eye-depth difference to the scene, stable at
+    // silhouettes and at slightly interpenetrating geometry. Layered foam noise breaks the line into
+    // bubbles and streaks. The approach follows Wicked Engine's waterline foam.
     float intersection = 0.0;
     if (uIntersectionFoamStrength > 0.0)
     {

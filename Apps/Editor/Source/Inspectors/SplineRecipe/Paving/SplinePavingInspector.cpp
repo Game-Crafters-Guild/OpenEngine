@@ -102,7 +102,8 @@ SplineShape ReadShape(const ECS::World& world, ECS::EntityHandle entity)
     shape.Closed = data->IsEffectivelyClosed();
     const auto* member = world.GetComponent<Components::SplineNetworkMember>(entity);
     shape.Road = member && member->Kind == Components::SplineNetworkMemberKind::Road;
-    const Mathematics::Matrix4x4 worldMatrix = Mathematics::Matrix4x4::FromColumnMajor(transform->matrix);
+    const Mathematics::Matrix4x4 worldMatrix =
+        transform->ToMatrix4x4(transform->GetPosition() - Mathematics::WorldPosition{});
     for (const Spline::SplineControlPoint& point : data->Points)
     {
         const Mathematics::Vector3 position = worldMatrix.TransformPoint(point.Position);
@@ -339,6 +340,9 @@ void AddMemberList(const InspectorContext& context, const SplinePaving& recipe, 
         section, std::make_unique<EditorUI::EntityMemberList>(CollectMemberRows(context, recipe, status), handlers));
 }
 
+// A junction whose Blend seam draws as a hard cut names the seam it gets.
+constexpr const char* kHardCutSeamWords = " \xC2\xB7 Hard Cut: the road's paving ends on the seam";
+
 std::string_view PlaceWords(SplineECS::SplineNodeKind kind)
 {
     switch (kind)
@@ -362,6 +366,8 @@ EditorUI::SplineJunctionList::Row JunctionRow(const ECS::World& world, const Pav
     row.Other = junction.Road;
     row.Title = Editor::EntityDisplayName(world, junction.Road) + " \xC2\xB7 " + std::string(PlaceWords(junction.Kind));
     row.State = PavingJunctionStateWords(world, junction);
+    if (junction.SeamDrawsHardCut)
+        row.State += kHardCutSeamWords;
     switch (junction.State)
     {
     case PavingJunctionState::HeightsDiffer:
@@ -479,9 +485,17 @@ void AddSeedCaption(const InspectorContext& context)
                               "inspector-field-caption");
 }
 
+// The caption under an area's Seam rows: a road with no paving of its own takes the area's Seam settings.
+void AddAreaSeamCaption(const InspectorContext& context)
+{
+    InspectorUI::AddTextBlock(InspectorUI::AddActionRow(context.Parent, "inspector-caption-row"),
+                              "These Seam settings apply to each road that enters this paving and has no Spline Paving of its own.",
+                              "inspector-field-caption");
+}
+
 // The settings in the order a user dresses a square: the surface, the curb, where roads enter, and
-// what the paving lies on. The lists and the shadows follow them.
-void AddSettingSections(const InspectorContext& context, const SplinePaving& shown)
+// what the paving lies on. The lists and the shadows follow them. `status` is null before the first rebuild.
+void AddSettingSections(const InspectorContext& context, const SplinePaving& shown, const PavingStatus* status)
 {
     const ECS::ComponentTypeId typeId = ECS::GetComponentTypeId<SplinePaving>();
     const InspectorContext surface = InSection(context, "SplinePaving/Surface", "Surface");
@@ -497,6 +511,10 @@ void AddSettingSections(const InspectorContext& context, const SplinePaving& sho
     const InspectorContext mouths = InSection(context, "SplinePaving/RoadMouths", "Road Mouths");
     AddPavingMouthRow(mouths, shown);
     AddPavingMouthRadiusRow(mouths, shown);
+    const bool area = IsArea(*context.World, context.Entity);
+    AddPavingSeamRows(mouths, shown, status, area);
+    if (area)
+        AddAreaSeamCaption(mouths);
 
     const InspectorContext placement = InSection(context, "SplinePaving/Placement", "Placement");
     if (IsArea(*context.World, context.Entity))
@@ -604,7 +622,7 @@ void AddSplinePavingRows(const InspectorContext& context, const PavingStatus* st
     AddBuildStateNotice(context, SplineRecipes::StateOf(*context.World, context.Entity).State,
                         SplineRecipes::ReasonOf(*context.World, context.Entity), notices);
     ShowRoadsNotPaved(context, status);
-    AddSettingSections(context, shown);
+    AddSettingSections(context, shown, status);
     AddMemberList(context, shown, status);
     AddJunctionList(context, status);
     AddShadowSection(context);

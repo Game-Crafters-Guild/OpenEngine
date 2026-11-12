@@ -1,0 +1,189 @@
+{
+  "format": 1,
+  "name": "SceneLoader",
+  "hash": "0x74971fb8ae2a2b78",
+  "constants": [],
+  "enums": [
+    {
+      "id": "SceneLoader.SceneRevealPolicy",
+      "name": "SceneRevealPolicy",
+      "cpp": "GameEngine::Loading::Script::SceneRevealPolicy",
+      "header": "SceneLoadTracker/SceneLoaderScriptApi.h",
+      "line": 16,
+      "doc": "When a load that is ready to show is revealed: the new scene shows and its game starts.",
+      "underlying": "UInt8",
+      "values": [
+        {
+          "name": "AtReady",
+          "value": 0
+        },
+        {
+          "name": "WhenGameReleases",
+          "value": 1
+        }
+      ]
+    }
+  ],
+  "events": [],
+  "functions": [
+    {
+      "id": "SceneLoader.EstimatedSecondsRemaining",
+      "name": "EstimatedSecondsRemaining",
+      "cpp": "GameEngine::Loading::Script::EstimatedSecondsRemaining",
+      "header": "SceneLoadTracker/SceneLoaderScriptApi.h",
+      "line": 58,
+      "doc": "The estimate of the seconds until the new scene is ready to show, at the last frame the load ran. 0 once it is ready, and from the frame a pauseWorldDrawing load resumes the world.",
+      "thread": "main",
+      "returns": {
+        "kind": "Double"
+      },
+      "params": [
+        {
+          "name": "load",
+          "kind": "Record",
+          "type": "SceneLoader.SceneLoadOperation"
+        }
+      ]
+    },
+    {
+      "id": "SceneLoader.IsLoading",
+      "name": "IsLoading",
+      "cpp": "GameEngine::Loading::Script::IsLoading",
+      "header": "SceneLoadTracker/SceneLoaderScriptApi.h",
+      "line": 43,
+      "doc": "True from Load until the newest load is revealed, fails or is cancelled. A load that native code started counts too.",
+      "thread": "main",
+      "returns": {
+        "kind": "Bool"
+      },
+      "params": []
+    },
+    {
+      "id": "SceneLoader.IsProgressShown",
+      "name": "IsProgressShown",
+      "cpp": "GameEngine::Loading::Script::IsProgressShown",
+      "header": "SceneLoadTracker/SceneLoaderScriptApi.h",
+      "line": 53,
+      "doc": "True from the frame the load has run 1 s with an estimated total of 2.5 s or more, and it stays true. A shorter load stays false: a game can skip the bar for it.",
+      "thread": "main",
+      "returns": {
+        "kind": "Bool"
+      },
+      "params": [
+        {
+          "name": "load",
+          "kind": "Record",
+          "type": "SceneLoader.SceneLoadOperation"
+        }
+      ]
+    },
+    {
+      "id": "SceneLoader.IsReadyToShow",
+      "name": "IsReadyToShow",
+      "cpp": "GameEngine::Loading::Script::IsReadyToShow",
+      "header": "SceneLoadTracker/SceneLoaderScriptApi.h",
+      "line": 63,
+      "doc": "True from the frame the new scene is ready to show: it is in the world, the work it needs is done, and Progress is 1.",
+      "thread": "main",
+      "returns": {
+        "kind": "Bool"
+      },
+      "params": [
+        {
+          "name": "load",
+          "kind": "Record",
+          "type": "SceneLoader.SceneLoadOperation"
+        }
+      ]
+    },
+    {
+      "id": "SceneLoader.Load",
+      "name": "Load",
+      "cpp": "GameEngine::Loading::Script::Load",
+      "header": "SceneLoadTracker/SceneLoaderScriptApi.h",
+      "line": 37,
+      "doc": "Replaces the shown scene with `scene`, a .scene file relative to the project's asset root. The load starts at the next frame boundary, never inside a system. A newer Load cancels this one, and the functions then refuse this operation. `pauseWorldDrawing` pauses the world until the scene has drawn complete frames, or until the load fails or a newer Load without `pauseWorldDrawing` cancels it (SceneLoadRequest::PauseWorldDrawing).",
+      "thread": "main",
+      "returns": {
+        "kind": "Record",
+        "type": "SceneLoader.SceneLoadOperation"
+      },
+      "params": [
+        {
+          "name": "scene",
+          "kind": "String"
+        },
+        {
+          "name": "reveal",
+          "kind": "Enum",
+          "type": "SceneLoader.SceneRevealPolicy",
+          "default": "AtReady"
+        },
+        {
+          "name": "pauseWorldDrawing",
+          "kind": "Bool",
+          "default": "false"
+        }
+      ]
+    },
+    {
+      "id": "SceneLoader.Progress",
+      "name": "Progress",
+      "cpp": "GameEngine::Loading::Script::Progress",
+      "header": "SceneLoadTracker/SceneLoaderScriptApi.h",
+      "line": 48,
+      "doc": "The bar of a loading screen, 0 to 1. It never goes down, rises at most 0.1 in any 250 ms before the load is ready to show, and is 1 from then on.",
+      "thread": "main",
+      "returns": {
+        "kind": "Float"
+      },
+      "params": [
+        {
+          "name": "load",
+          "kind": "Record",
+          "type": "SceneLoader.SceneLoadOperation"
+        }
+      ]
+    },
+    {
+      "id": "SceneLoader.Reveal",
+      "name": "Reveal",
+      "cpp": "GameEngine::Loading::Script::Reveal",
+      "header": "SceneLoadTracker/SceneLoaderScriptApi.h",
+      "line": 69,
+      "doc": "Reveals a WhenGameReleases load: in the frame it is ready when the call comes before that, else at the next frame boundary. It does nothing for an AtReady load and for a load that was revealed, failed or was cancelled.",
+      "thread": "main",
+      "returns": {
+        "kind": "Void"
+      },
+      "params": [
+        {
+          "name": "load",
+          "kind": "Record",
+          "type": "SceneLoader.SceneLoadOperation"
+        }
+      ]
+    }
+  ],
+  "handles": [],
+  "records": [
+    {
+      "id": "SceneLoader.SceneLoadOperation",
+      "name": "SceneLoadOperation",
+      "cpp": "GameEngine::Loading::Script::SceneLoadOperation",
+      "header": "SceneLoadTracker/SceneLoaderScriptApi.h",
+      "line": 26,
+      "doc": "One scene load that a script started. Load returns it, and the other functions read it.",
+      "size": 8,
+      "align": 8,
+      "fields": [
+        {
+          "name": "Id",
+          "kind": "UInt64",
+          "offset": 0,
+          "default": "0"
+        }
+      ]
+    }
+  ]
+}

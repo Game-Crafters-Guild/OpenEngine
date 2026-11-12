@@ -20,6 +20,8 @@
 namespace InspectorLayoutTesting
 {
 
+// A relative path is under the editor's source tree. An absolute path, such as a UI module control's
+// sheet under GE_UI_MODULE_SOURCE_DIR, reads as is.
 inline std::string ReadEditorFile(const std::string& relativePath)
 {
     const std::filesystem::path path = std::filesystem::path(GE_EDITOR_SOURCE_DIR) / relativePath;
@@ -29,6 +31,13 @@ inline std::string ReadEditorFile(const std::string& relativePath)
     std::ostringstream ss;
     ss << in.rdbuf();
     return ss.str();
+}
+
+// A UI module control's sheet has the Control origin, as the UIStyle asset parser gives it in the
+// editor: a host sheet wins its equal-specificity ties.
+inline GameEngine::StyleOrigin SheetOrigin(const std::string& path)
+{
+    return path.starts_with(GE_UI_MODULE_SOURCE_DIR) ? GameEngine::StyleOrigin::Control : GameEngine::StyleOrigin::Author;
 }
 
 inline GameEngine::UIElement* FindByClass(GameEngine::UIElement* root, const std::string& className)
@@ -53,9 +62,11 @@ struct InspectorLayoutFixture
     uint32_t ViewportH = 600;
 
     // Editor sheets loaded after tokens.css (which carries the tokens the rules resolve, such as
-    // --inspector-header-height) and inspector.css. In the editor a control attaches its own sheet
-    // below the global theme, so a control's sheet a test depends on goes here, in that order.
+    // --inspector-header-height) and inspector.css. A UI module control's sheet a test depends on
+    // goes here too; it gets the Control origin (SheetOrigin).
     std::vector<std::string> ExtraSheets;
+    // The asset manager of the UI manager, for a panel that binds its layout file; null for none.
+    GameEngine::AssetManager* Assets = nullptr;
 
     std::unique_ptr<GameEngine::Rendering::IDevice> Device;
     std::unique_ptr<GameEngine::UIManager> Ui;
@@ -69,7 +80,7 @@ struct InspectorLayoutFixture
             Diagnostic = "no Vulkan device";
             return false;
         }
-        Ui = std::make_unique<GameEngine::UIManager>(Device.get());
+        Ui = std::make_unique<GameEngine::UIManager>(Device.get(), Assets);
         Ui->SetLayoutSizeOverride(ViewportW, ViewportH);
 
         std::vector<std::string> sheets{"Assets/UI/theme/tokens.css", "Assets/UI/theme/core.css", "Assets/UI/theme/inspector.css"};
@@ -89,6 +100,7 @@ struct InspectorLayoutFixture
                 return false;
             }
             sheet.SourceName = sheetPath;
+            sheet.Origin = SheetOrigin(sheetPath);
             Ui->AddStylesheet(std::make_shared<const GameEngine::Stylesheet>(std::move(sheet)));
         }
 

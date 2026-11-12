@@ -105,7 +105,9 @@ std::string ReadEditorMainCpp()
     return buffer.str();
 }
 
-// A latch the test opens; jobs park on it until then.
+// A latch the test opens; jobs park on it until then. Declare it before the
+// pool: a job can still be inside Wait() after the gate opens, and only the
+// pool's destructor joins that job's thread.
 class Gate
 {
   public:
@@ -302,9 +304,9 @@ TEST(MainThreadHangWatchdogTest, StallReportNamesWhatEachJobSystemThreadRuns)
     SetEnvVar("GE_HANG_WATCHDOG_SHUTDOWN_MS", "");
     SetEnvVar("GE_HANG_WATCHDOG_SHUTDOWN_STACKS", "");
 
+    Gate gate;
     JobSystem::WorkStealingThreadPool pool(2);
     JobSystem::JobChannel channel(pool, {.Name = "Watchdog test builds", .MaxRunning = 1});
-    Gate gate;
     GateOpener opener{gate};
     std::atomic<int> parked{0};
     pool.EnqueueWork(

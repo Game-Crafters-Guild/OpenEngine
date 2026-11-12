@@ -18,6 +18,7 @@ namespace
 constexpr const char* kLayoutAssetPath = "UI/controls/PictureChoiceField/PictureChoiceField.uxml";
 constexpr const char* kStyleAssetPath = "UI/controls/PictureChoiceField/PictureChoiceField.css";
 constexpr const char* kPictureClass = "picture-choice-picture";
+constexpr const char* kNoPictureClass = "picture-choice-picture-none";
 constexpr const char* kTextClass = "picture-choice-text";
 constexpr const char* kNameClass = "picture-choice-name";
 constexpr const char* kDescriptionClass = "picture-choice-description";
@@ -53,8 +54,7 @@ void PictureChoiceField::AddTile(const Choice& choice, size_t index)
                            kLayoutAssetPath, kPictureClass, kNameClass, kDescriptionClass, kTextClass);
         return;
     }
-    if (!choice.PictureClass.empty())
-        picture->AddClass(choice.PictureClass);
+    picture->AddClass(choice.PictureClass.empty() ? kNoPictureClass : choice.PictureClass);
     name->SetText(choice.Label);
     description->SetText(choice.Description);
     for (UIElement* part : {tile.get(), picture, text, static_cast<UIElement*>(name), static_cast<UIElement*>(description)})

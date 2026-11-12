@@ -17,6 +17,7 @@
 #include <gtest/gtest.h>
 
 #include "Rendering/Core/CommandList.h"
+#include "Rendering/Core/CullingStrategy.h"
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/GPUCulling.h"
 #include "Rendering/Core/GPUInstanceDepthClass.h"
@@ -24,15 +25,20 @@
 #include "Rendering/Core/Pipeline/PipelineTypes.h"
 #include "Rendering/ShaderCache/ShaderPackageIO.h"
 
+#include "Mathematics/Geometry.h"
 #include "Mathematics/MatrixOps.h"
 #include "Mathematics/VectorOps.h"
+#include "Mathematics/WorldPosition.h"
 #include "Assets/MeshLODGeometry.h"
 #include "Assets/ModelAsset.h"
+#include "Engine/Rendering/RenderOrigin.h"
 
 #include "TestDeviceHelper.h"
 
 #include <cmath>
 #include <cstring>
+#include <numbers>
+#include <optional>
 #include <vector>
 
 using namespace GameEngine;
@@ -84,6 +90,73 @@ struct CullResult
     std::vector<uint32_t> prevVisible;
     OcclusionStats stats{};
 };
+
+// A culled view other than the identity view: matrices relative to the origin of its sector.
+struct CullView
+{
+    Mathematics::Matrix4x4 View;
+    Mathematics::Matrix4x4 Proj;
+    Mathematics::Matrix4x4 ViewProj;
+    Vector3 Forward;
+};
+
+// The 300 km edge row of the large-world window (scene S3b300): the eye at (300000, h, -299016) looks
+// along +Z, pitched 10 degrees down, vertical field of view 60 degrees, aspect 955/524. Sphere i is
+// 5 cm wide, 8 + 0.25 i m ahead at the eye height; its signed distance to the right plane is
+// -0.025 + (i - 20) * 0.002 m.
+constexpr double kEdgeRowEyeX = 300000.0;
+constexpr double kEdgeRowEyeZ = -299016.0;
+constexpr double kEdgeRowHeight = 3.5;
+constexpr double kEdgeRowPitchRadians = 10.0 * std::numbers::pi / 180.0;
+constexpr double kEdgeRowTanHalfFovY = 0.57735026918962576; // tan(30 degrees)
+constexpr double kEdgeRowAspect = 955.0 / 524.0;
+constexpr uint32_t kEdgeRowCount = 41u;
+constexpr float kEdgeRowScale = 0.05f;
+
+CullView MakeEdgeRowView(double eyeHeight, Mathematics::Vector3Int& outOriginSector)
+{
+    const Vector3 forward(0.0f, static_cast<float>(-std::sin(kEdgeRowPitchRadians)),
+                          static_cast<float>(std::cos(kEdgeRowPitchRadians)));
+    const float fovY = static_cast<float>(2.0 * std::atan(kEdgeRowTanHalfFovY));
+    const Mathematics::Matrix4x4 view =
+        Mathematics::MakeLookAtLH(Vector3(0.0f, 0.0f, 0.0f), forward, Vector3(0.0f, 1.0f, 0.0f));
+    const Mathematics::Matrix4x4 proj = Mathematics::MakePerspectiveLH_ZO_ReverseZ(
+        fovY, static_cast<float>(kEdgeRowAspect), 0.1f, 1000.0f);
+    const Mathematics::WorldPosition eye{kEdgeRowEyeX, eyeHeight, kEdgeRowEyeZ};
+    CullView out{};
+    out.Proj = proj;
+    out.Forward = forward;
+    int32 sector[4]{};
+    Engine::Renderer::ComputeRebasedView(view, proj, proj * view, eye, out.View, out.ViewProj, sector);
+    outOriginSector = Mathematics::Vector3Int{sector[0], sector[1], sector[2]};
+    return out;
+}
+
+// Each center is split from its double world position into a sector and a local point, as extraction
+// splits a WorldTransform (SectorLocalMatrix). The radius is the primitive sphere's box radius times
+// the scale, as extraction sets it.
+std::vector<GPUInstance> MakeEdgeRowAt300Km()
+{
+    const double tanHalfFovX = kEdgeRowTanHalfFovY * kEdgeRowAspect;
+    const double planeNormalLength = std::sqrt(1.0 + tanHalfFovX * tanHalfFovX);
+    const double sphereRadius = 0.5 * kEdgeRowScale;
+    std::vector<GPUInstance> row;
+    for (uint32_t i = 0; i < kEdgeRowCount; ++i)
+    {
+        const double ahead = 8.0 + 0.25 * i;
+        const double signedDistance = -sphereRadius + (static_cast<double>(i) - 20.0) * 0.002;
+        const double viewDepth = ahead * std::cos(kEdgeRowPitchRadians);
+        const double right = tanHalfFovX * viewDepth - signedDistance * planeNormalLength;
+        const Mathematics::WorldPosition center{kEdgeRowEyeX + right, kEdgeRowHeight, kEdgeRowEyeZ + ahead};
+        Mathematics::Vector3Int sector;
+        GPUInstance inst{};
+        center.ToSector(sector, inst.boundingCenter);
+        PackSector(sector.x, sector.y, sector.z, inst.sectorPacked[0], inst.sectorPacked[1]);
+        inst.boundingRadius = Mathematics::BoundingBox{}.Radius() * kEdgeRowScale;
+        row.push_back(inst);
+    }
+    return row;
+}
 
 class HzbCullingComputeTest : public ::testing::Test
 {
@@ -276,7 +349,7 @@ class HzbCullingComputeTest : public ::testing::Test
         cd.projMatrix = Mathematics::MakePerspectiveLH_ZO_ReverseZ(1.0472f /*60°*/, 1.0f, kNear, kFar);
         cd.viewProjMatrix = cd.projMatrix; // view is identity
         GPUCullingUtils::ExtractFrustumPlanes(cd.viewProjMatrix, &cd.frustumPlanes[0][0]);
-        cd.cameraPosition = Vector3(0.0f, 0.0f, 0.0f);
+        cd.originSector = Mathematics::Vector3Int{0, 0, 0};
         cd.cameraForward = Vector3(0.0f, 0.0f, 1.0f);
         cd.nearPlane = kNear;
         cd.farPlane = kFar;
@@ -313,6 +386,15 @@ class HzbCullingComputeTest : public ::testing::Test
         }
         cd.renderLayerMask = layerMask;
         cd.passFlags = passFlags;
+        cd.originSector = m_OriginSector;
+        if (m_View)
+        {
+            cd.viewMatrix = m_View->View;
+            cd.projMatrix = m_View->Proj;
+            cd.viewProjMatrix = m_View->ViewProj;
+            GPUCullingUtils::ExtractFrustumPlanes(cd.viewProjMatrix, &cd.frustumPlanes[0][0]);
+            cd.cameraForward = m_View->Forward;
+        }
         BufferHandle cullingBuf = MakeHostBuffer(sizeof(GPUCullingData), "HzbCull.CullingData");
         WriteOne(cullingBuf, cd);
 
@@ -370,6 +452,10 @@ class HzbCullingComputeTest : public ::testing::Test
     SamplerHandle m_Sampler{};
     std::vector<TextureHandle> m_Textures;
     std::vector<BufferHandle> m_Buffers;
+    // The render origin sector of the culled view. The kernel composes each center against it.
+    Mathematics::Vector3Int m_OriginSector{0, 0, 0};
+    // The culled view; unset is the identity view of MakeCullingData.
+    std::optional<CullView> m_View;
 };
 
 // Phase B (mode 2): the full §5-A2 rule end to end.
@@ -536,6 +622,54 @@ TEST_F(HzbCullingComputeTest, LowerGeometryRemainsVisibleAcrossFormerFrustumBoun
     ASSERT_EQ(result.visibility.size(), 2u);
     EXPECT_EQ(result.visibility[0], 0u);
     EXPECT_EQ(result.visibility[1], 1u);
+}
+
+// Phase A (mode 1) with the view about 125 km from the world origin on X and Z. Each center is local
+// to its own sector: the kernel subtracts the view sector before the frustum test.
+TEST_F(HzbCullingComputeTest, CentersComposeAgainstTheViewOriginSector)
+{
+    const Mathematics::Vector3Int origin{122, -3, -123};
+    m_OriginSector = origin;
+    GPUInstance sameSector = MakeInstance(/*viewZ=*/3.0f, /*radius=*/0.5f);
+    PackSector(origin.x, origin.y, origin.z, sameSector.sectorPacked[0], sameSector.sectorPacked[1]);
+    GPUInstance nextSector = MakeInstance(3.0f - static_cast<float>(Mathematics::kWorldSectorSize), 0.5f);
+    PackSector(origin.x, origin.y, origin.z + 1, nextSector.sectorPacked[0], nextSector.sectorPacked[1]);
+    GPUInstance previousSector = MakeInstance(3.0f, 0.5f);
+    PackSector(origin.x, origin.y, origin.z - 1, previousSector.sectorPacked[0], previousSector.sectorPacked[1]);
+
+    const CullResult r =
+        RunCull(kHzbModePhaseA, {sameSector, nextSector, previousSector}, {1u, 1u, 1u}, MakeHzb(0.0f));
+
+    // 3 m in front of the eye, 3 m in front through the next sector, 1021 m behind.
+    EXPECT_EQ(r.visibility, (std::vector<uint32_t>{1u, 1u, 0u}));
+}
+
+// With the 1.5 cull margin, sphere 0 of the edge row is 0.048 mm outside the right plane at the eye
+// height 3.5 m and 0.078 mm inside 1 mm higher; every other sphere is 2 mm or more from the edge.
+// A center composed in world fp32 has a spacing of 31 mm at 300 km and cannot place these spheres.
+TEST_F(HzbCullingComputeTest, EdgeRowAt300KmPassesExactlyTheSpheresInsideTheFrustum)
+{
+    const std::vector<GPUInstance> row = MakeEdgeRowAt300Km();
+    const std::vector<uint32_t> noneVisible(kEdgeRowCount, 0u);
+    TextureHandle hzb = MakeHzb(0.0f);
+
+    m_View = MakeEdgeRowView(3.5, m_OriginSector);
+    const CullResult atEyeHeight = RunCull(kHzbModePhaseB, row, noneVisible, hzb, kCullMarginConservative);
+    m_View = MakeEdgeRowView(3.501, m_OriginSector);
+    const CullResult raised = RunCull(kHzbModePhaseB, row, noneVisible, hzb, kCullMarginConservative);
+
+    EXPECT_EQ(atEyeHeight.stats.frustumPassed, kEdgeRowCount - 1u);
+    EXPECT_EQ(atEyeHeight.visibility[0], 0u) << "sphere 0 is outside the right plane by 0.048 mm";
+    EXPECT_EQ(raised.stats.frustumPassed, kEdgeRowCount);
+}
+
+// Both culling strategies submit the origin sector of the view: without it the kernels compose
+// every center against sector (0,0,0).
+TEST(ViewCullingInput, CarriesTheOriginSectorOfTheView)
+{
+    ViewCullingContext context{};
+    context.OriginSector = Mathematics::Vector3Int{122, -3, -123};
+    EXPECT_EQ(MakeViewCullingInput(context).originSector, context.OriginSector);
 }
 
 TEST_F(HzbCullingComputeTest, PhaseAGatesOnPrevVisible)

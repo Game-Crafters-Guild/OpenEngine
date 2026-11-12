@@ -7,6 +7,7 @@ project(SplineRecipes LANGUAGES CXX)
 # the chunk commit, the rebuild gate, the sweep stations and the surface
 # conform. Linked into Engine, so the editor, the Player and a game run one builder.
 add_library(SplineRecipes OBJECT
+    Source/ConformGroundWatch.cpp
     Source/FenceEmission.cpp
     Source/FenceMiterVariants.cpp
     Source/FencePieceReuse.cpp
@@ -14,11 +15,13 @@ add_library(SplineRecipes OBJECT
     Source/FenceSpanOverrides.cpp
     Source/Paving/PavingApproach.cpp
     Source/Paving/PavingApproachGround.cpp
+    Source/Paving/PavingLidPieces.cpp
     Source/Paving/PavingMesh.cpp
     Source/Paving/PavingPlan.cpp
     Source/Paving/PavingSources.cpp
     Source/Paving/PavingRoadTrim.cpp
     Source/Paving/PavingRoadUV.cpp
+    Source/Paving/PavingSeam.cpp
     Source/Paving/SplinePavingController.cpp
     Source/Paving/SplinePavingSanitize.cpp
     Source/PlacementGroundGap.cpp
@@ -189,8 +192,10 @@ if(BUILD_TESTING)
         # The paving recipe: the sanitizer, and the geometry key a look edit leaves alone.
         Tests/Paving/SplinePavingRecipeTests.cpp
         # The paving's lid: on a sloped rim it follows the ground with no crease; the seed and the
-        # owner's turn move its pattern.
+        # owner's turn move its pattern; a seam's band and course lie on the yielding road's side.
         Tests/Paving/PavingMeshTests.cpp
+        # The seam's validity rule: the move a pattern's symmetry allows between two UV fields.
+        Tests/Paving/PavingSeamTests.cpp
         # A road's strip around the paved regions on it: the skipped arc length, the Open-edge cap,
         # a closed road's seam.
         Tests/Paving/PavingRoadTrimTests.cpp

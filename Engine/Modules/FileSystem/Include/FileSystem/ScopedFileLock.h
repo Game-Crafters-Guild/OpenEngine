@@ -45,7 +45,7 @@ class ScopedFileLock
     std::string m_FailureReason;
 #if defined(_WIN32)
     HANDLE m_Handle = INVALID_HANDLE_VALUE;
-#else
+#elif !defined(__EMSCRIPTEN__)
     int m_Fd = -1;
 #endif
 };

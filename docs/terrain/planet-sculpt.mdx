@@ -1,0 +1,55 @@
+---
+title: Planet sculpt
+description: How the brush sculpts a planet, where the sculpt is saved, why a saved sculpt can fail to show, and how high the planet's atmosphere reaches.
+---
+
+The terrain brush raises and lowers the ground of a planet (a Terrain with **Domain** set to Spherical). Each dab adds a smooth cone to the planet's sculpt: its height at the center is the brush **Strength** in meters, and its width is the brush **Radius**. The planet brush does not paint.
+
+## Where the sculpt is saved
+
+The sculpt is a planet height layer: a page store file with the `.gepage` extension. The first save of the scene writes it into the folder `<scene name>_Zones` next to the scene file, and each later save writes the same file again. The Terrain's **Height Layer** row, in Terrain Settings, shows the file. The scene stores a reference to it, so keep the file with the scene in version control.
+
+A planet that has no sculpt has no file. When you remove every change with undo and save, the save deletes the file.
+
+## Planet Radius
+
+The sculpt's samples sit on a grid on each cube face of the planet, and **Planet Radius** sets the spacing of that grid. A saved sculpt fits a range of radii. Outside that range, the planet draws without the sculpt, the brush does not edit it, and a save does not write over the file. The Inspector shows a warning that states the range: set Planet Radius to a value in that range, and the sculpt shows again.
+
+## Atmosphere Height
+
+The **Atmosphere Height** row chooses how the height of the planet's atmosphere is set. It has three modes:
+
+- **Auto** (the default): the engine sets the height from the planet's highest ground. The highest point the relief can reach sits as deep in the air as Mount Everest sits in Earth's air (8.8 km of 100 km), so the air is about 11 times as tall as the highest peak. The height is never less than Earth's ratio (0.0157: 100 km of air on a 6360 km radius) times the planet's radius. The height is at most the radius. The Inspector shows the height in meters, with its share of the radius beside it, and you cannot edit it.
+- **Share of Radius**: you set the height as a share of **Planet Radius**, above 0 and at most 1. The Inspector shows the height in meters beside the value. A change of Planet Radius does not change the sky's look.
+- **Height in Meters**: you set the height in meters, above 0. The sky reads a height above **Planet Radius** as the radius. The Inspector shows the share of the radius beside the value.
+
+When you change to Share of Radius or Height in Meters, the new mode starts from the current height, so the sky does not change. When you change to Auto, the engine sets the height from the relief again, and the sky can change.
+
+The sky uses Earth's air, scaled to this height: a planet of any radius with the same share has the same sky. Keep the top of the atmosphere well above the terrain's highest point: near the top the air is thin, and a hilltop there stands in a dark sky. Auto keeps the relief's highest point in thick air. A sculpt that raises the ground above the relief can need a larger height.
+
+The scene file stores the mode and the value of that mode on the planet's terrain. A planet without a mode line uses Auto. The scene reader refuses a mode other than 0, 1 or 2 and a value out of range, with a message that states the range. Scripts read and write `Terrain.AtmosphereMode`, `Terrain.AtmosphereShare` and `Terrain.AtmosphereHeight`.
+
+```text title="A planet of radius 600 km with 100 km of air in the scene file"
+Terrain.domain = 1
+Terrain.planetRadius = 600000
+Terrain.atmosphereMode = 1
+Terrain.atmosphereShare = 0.1666667
+```
+
+```text title="The same planet with its height in meters"
+Terrain.domain = 1
+Terrain.planetRadius = 600000
+Terrain.atmosphereMode = 2
+Terrain.atmosphereHeight = 100000
+```
+
+## A sculpt file that does not load
+
+The planet then draws without its sculpt, the brush does not edit the planet, and a save does not write over the file. The Inspector shows a warning with the reason:
+
+- The file is of another height layer format: open the scene with the engine version that wrote it.
+- The file is damaged, or it is not a planet's sculpt: restore the file from version control.
+
+## A GPU without 64-bit shader integers
+
+A GPU that does not support 64-bit shader integers draws a planet without its sculpt and modifiers. The Inspector of the planet's Planet Relief shows a notice. Your edits are kept and saved; open the project on a GPU with 64-bit shader integers to see them.

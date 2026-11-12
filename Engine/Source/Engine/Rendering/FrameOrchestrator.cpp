@@ -732,7 +732,8 @@ void FrameOrchestrator::EnsureActiveRenderPipelineBlueprint(PipelineRefreshMode 
                             bp = m_PipelineCompiler->Compile(*rp, *m_PipelineNodeRegistry,
                                 m_Services->GetDevice()->PreferredShaderSource(),
                                 waitForScripts ? Pipeline::UnknownPassTypes::PendingScripts
-                                               : Pipeline::UnknownPassTypes::Refused);
+                                               : Pipeline::UnknownPassTypes::Refused,
+                                std::bind_front(&FrameOrchestrator::CopyPreLoadedShaderMeta, this));
                             ++m_LastCompileReport.Compiles;
 
                             // Record the source hash even on failure so we don't try again every frame.
@@ -888,6 +889,10 @@ void FrameOrchestrator::EnsureActiveRenderPipelineBlueprint(PipelineRefreshMode 
         (m_ActiveRenderPipelineHash == 0 || m_ActiveRenderPipelineIsFallback ||
          (m_ActiveBlueprintIsPartial && m_ActiveRenderPipelineLastCompileHadErrors)))
     {
+        // A refused request never takes its preloaded packages, so the store closes and a fix reads the disk.
+        if (!m_RequestedFailureReason.empty() && !m_WaitingForNativeModules &&
+            !m_ShaderPkgCacheClosed.load(std::memory_order_relaxed))
+            ClosePreLoadedShaderPackages();
         std::string standInFailure;
         const StandInCompile standIn = CompileEngineStandIn(bp, standInFailure);
         if (standIn == StandInCompile::AlreadyApplied)
@@ -1032,7 +1037,9 @@ FrameOrchestrator::StandInCompile FrameOrchestrator::CompileEngineStandIn(Pipeli
         m_StandInAsset = pipeline;
         m_StandInSourceHash = pipeline->GetSourceHash();
         out = m_PipelineCompiler->Compile(*pipeline, *m_PipelineNodeRegistry,
-                                          m_Services->GetDevice()->PreferredShaderSource());
+                                          m_Services->GetDevice()->PreferredShaderSource(),
+                                          Pipeline::UnknownPassTypes::Refused,
+                                          std::bind_front(&FrameOrchestrator::CopyPreLoadedShaderMeta, this));
         ++m_LastCompileReport.Compiles;
         if (out.HasErrors())
         {
@@ -1345,6 +1352,10 @@ void FrameOrchestrator::BuildFrameGraph(Rendering::RenderGraph::RGFrame& frame,
             slot->Instance->Declare(frame, params.ViewTargets,
                                     std::span<const Rendering::ViewDesc>(views.data(), views.size()),
                                     params.DeltaTime);
+            // Nodes take their preloaded packages at their first declare; the store drops the rest.
+            if (!m_ActiveRenderPipelineIsFallback && !params.ViewTargets.empty() &&
+                !m_ShaderPkgCacheClosed.load(std::memory_order_relaxed))
+                ClosePreLoadedShaderPackages();
         }
     }
 
@@ -1384,7 +1395,7 @@ void FrameOrchestrator::BuildFrameGraph(Rendering::RenderGraph::RGFrame& frame,
             const Rendering::ViewDesc* view = m_Services->Views().FindViewDesc(vt.View);
             // The pipeline's own rule (it declares every participating view, one on no layer
             // included), so the output of a view drawing only its clear and sky is kept too.
-            if (!view || !view->activeRenderPipeline || !view->Participates())
+            if (!view || !view->RenderedByPipeline())
                 continue;
             if (auto out = slot->Instance->GetOutputRG(vt.View, "FinalColor");
                 out.IsValid() && !frame.IsBackbuffer(out))
@@ -1521,25 +1532,48 @@ std::size_t FrameOrchestrator::CountSupersededModulePipelineNodes(std::string_vi
                : 0;
 }
 
-void FrameOrchestrator::PreLoadShaderPackage(const std::string& name, Rendering::ShaderSourceKind kind)
+void FrameOrchestrator::PreLoadRenderPipelineShaderPackages(const RenderPipelineAsset& pipeline,
+                                                            Rendering::ShaderSourceKind kind)
 {
-    Rendering::ShaderPackage pkg{};
-    std::string err;
-    if (Rendering::LoadShaderPkg(name, kind, pkg, &err))
+    for (const std::string& name : Pipeline::RenderPipelineCompiler::ShaderPackagesOf(pipeline, kind))
     {
+        Rendering::ShaderPackage pkg{};
+        std::string err;
+        if (!Rendering::LoadShaderPkg(name, kind, pkg, &err))
+            continue;
         std::lock_guard<std::mutex> lock(m_ShaderPkgCacheMutex);
-        m_ShaderPkgCache.emplace(name, std::move(pkg));
+        if (m_ShaderPkgCacheClosed.load(std::memory_order_relaxed))
+            return;
+        if (!m_ShaderPkgCache.Contains(name))
+            m_ShaderPkgCache.InsertOrAssign(name, std::move(pkg));
     }
+}
+
+bool FrameOrchestrator::CopyPreLoadedShaderMeta(const std::string& name, Rendering::ShaderMeta& out)
+{
+    std::lock_guard<std::mutex> lock(m_ShaderPkgCacheMutex);
+    const Rendering::ShaderPackage* stored = m_ShaderPkgCache.Find(name);
+    if (!stored)
+        return false;
+    out = stored->meta;
+    return true;
+}
+
+void FrameOrchestrator::ClosePreLoadedShaderPackages()
+{
+    std::lock_guard<std::mutex> lock(m_ShaderPkgCacheMutex);
+    m_ShaderPkgCache.Clear();
+    m_ShaderPkgCacheClosed.store(true, std::memory_order_relaxed);
 }
 
 bool FrameOrchestrator::TryConsumePreLoadedShaderPackage(const std::string& name, Rendering::ShaderPackage& out)
 {
     std::lock_guard<std::mutex> lock(m_ShaderPkgCacheMutex);
-    auto it = m_ShaderPkgCache.find(name);
-    if (it == m_ShaderPkgCache.end())
+    Rendering::ShaderPackage* stored = m_ShaderPkgCache.Find(name);
+    if (!stored)
         return false;
-    out = std::move(it->second);
-    m_ShaderPkgCache.erase(it);
+    out = std::move(*stored);
+    m_ShaderPkgCache.Erase(name);
     return true;
 }
 

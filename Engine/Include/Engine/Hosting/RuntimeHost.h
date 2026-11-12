@@ -18,11 +18,11 @@
 namespace GameEngine {
 
 namespace Platform { class Window; }
+namespace ECS { class World; }
 namespace Engine::Renderer {
 class RenderDeviceContext;
 class RenderServices;
 enum class PipelineResolveFailure : uint8_t;
-enum class SceneResolveBatch : uint32_t;
 } // namespace Engine::Renderer
 class Application;
 class GameUIHost;
@@ -76,16 +76,17 @@ struct RuntimeHostHooks
 
 /// The runtime's window and render frame: one window with the game's HUD as its play surface,
 /// the render device context and the engine-managed rendering loop on it, the render pipeline,
-/// the scene opened into the primary world, and the render-graph frame that draws the primary
-/// world's active camera, composites the HUD and presents.
+/// and the render-graph frame that draws the primary world's active camera, composites the HUD
+/// and presents.
 ///
-/// The owner brings it up in order (InitWindow, InitRendering, LoadRenderPipeline, OpenScene),
-/// mounting assets and loading native modules between the steps as it needs, calls Render once
-/// per application frame, and Shutdown before the engine shuts down.
+/// The owner brings it up in order (InitWindow, InitRendering, LoadRenderPipeline), mounting
+/// assets and loading native modules between the steps as it needs, loads its scene through
+/// EngineCore's SceneLoader, calls Render once per application frame, and Shutdown before the
+/// engine shuts down.
 ///
 /// Under a headless application (ApplicationConfig::Headless) the same order brings up no
-/// window, no render device and no pipeline: the scene opens into the primary world, the
-/// engine's system schedule runs every frame without render services, and Render does nothing.
+/// window, no render device and no pipeline: the engine's system schedule runs every frame
+/// without render services, and Render does nothing.
 class RuntimeHost
 {
 public:
@@ -109,16 +110,9 @@ public:
     /// the reason, logged with the resolver's message, for the owner to state its own fix.
     /// Headless: None, with no pipeline.
     Engine::Renderer::PipelineResolveFailure LoadRenderPipeline();
-    /// Replaces the primary world's content with the scene at `scenePath`, relative to the
-    /// resolved asset root, hands its models and standalone materials to the rendering loop's
-    /// resolve service as one batch (GetSceneResolveBatch), and adds a default camera when the
-    /// scene has none. No frame waits for the batch: each entity binds on the frame its model
-    /// has landed, and its skeleton binds after. False, with the reason logged, when it cannot load.
-    bool OpenScene(const std::filesystem::path& scenePath);
-    /// The resolve batch of the scene the last OpenScene loaded, for the owner to ask the
-    /// rendering loop's resolve service when the scene has resolved. None before OpenScene, or
-    /// when it ran before InitRendering or headless.
-    Engine::Renderer::SceneResolveBatch GetSceneResolveBatch() const { return m_SceneResolve; }
+    /// Adds the default camera to `world` when the world has no active camera, so that Render
+    /// has a view. Call it after the scene is in the world.
+    void EnsureCamera(ECS::World& world);
     /// Renders one frame of the primary world's active camera and presents it. `deltaTime` is
     /// the frame time the pipeline's temporal passes advance by, in seconds.
     /// Headless: does nothing.
@@ -157,8 +151,6 @@ private:
 
     std::unique_ptr<Platform::Window> m_Window;
     std::unique_ptr<Engine::Renderer::RenderDeviceContext> m_RenderCtx;
-    // The batch OpenScene handed to the resolve service; zero is SceneResolveBatch::None.
-    Engine::Renderer::SceneResolveBatch m_SceneResolve{};
 
     // Camera / view state
     Rendering::CameraId m_CameraId{0};
@@ -174,6 +166,8 @@ private:
     bool m_RenderGraphDiagnostics = false;
     // The missing-output error is logged once per host.
     bool m_WarnedNoOutput = false;
+    // The missing-camera warning is logged once, and again only after a camera was found.
+    bool m_WarnedNoCamera = false;
 
     // Game UI host: composites UIDocument entities over FinalColor before the
     // terminal encode — the runtime HUD. Lazy-created on first render.

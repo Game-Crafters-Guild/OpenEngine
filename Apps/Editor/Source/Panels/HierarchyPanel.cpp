@@ -44,9 +44,7 @@
 #include "Components/RuntimeOnlyEntity.h"
 #include "Components/SceneEntityTag.h"
 #include "Components/Spline/SplineComponent.h"
-#include "Components/Terrain/Terrain.h"
 #include "Components/Terrain/TerrainGrass.h"
-#include "Components/Terrain/TerrainPlanetRelief.h"
 #include "Components/Transform.h"
 #include "Core/Engine.h"
 #include "ECS/Components.h"   // Disabled marker component
@@ -91,8 +89,6 @@
 #include "Scripting/EditorScriptMenuRegistry.h"
 #include "CBTTerrainECS/TerrainProvisioning.h"
 #include "Terrain/TerrainEntityProvisioning.h"
-#include "TerrainECS/TerrainFactory.h"
-#include "TerrainECS/TerrainService.h"
 #include "Thumbnails/IThumbnailProvider.h"
 #include "Thumbnails/ModelThumbnail/ModelThumbnailHandler.h"
 #include "UI/Controls/Label.h"
@@ -1037,7 +1033,7 @@ HierarchyPanel::HierarchyPanel()
                     const auto* phPlaceholder = m_World->GetComponent<Components::PolyhavenPlaceholder>(handle);
                     if (phPlaceholder && phPlaceholder->slug[0] != '\0')
                     {
-                        std::filesystem::path thumbPath = PolyhavenService::GetCacheDir() / (std::string(phPlaceholder->Slug()) + ".png");
+                        std::filesystem::path thumbPath = PolyhavenService::GetThumbnailPath(std::string(phPlaceholder->Slug()));
                         std::error_code ec;
                         if (std::filesystem::exists(thumbPath, ec))
                         {
@@ -1891,7 +1887,7 @@ void HierarchyPanel::HandleTreeDrop(const UI::Interaction::DropRequest& req)
             if (const auto* wt = m_World->GetComponent<Components::WorldTransform>(parent))
             {
                 Components::Transform tmp;
-                std::memcpy(tmp.matrix, wt->matrix, sizeof(tmp.matrix));
+                tmp.Basis = wt->Basis;
                 auto ps = tmp.GetScale();
                 if (ps.x > 0.0f) parentInvScale.x = 1.0f / ps.x;
                 if (ps.y > 0.0f) parentInvScale.y = 1.0f / ps.y;
@@ -2088,12 +2084,17 @@ void HierarchyPanel::HandleTreeDrop(const UI::Interaction::DropRequest& req)
                 dropParent = Editor::GetEffectiveParent(*m_World, target);
         }
 
-        // Compute inverse parent world matrix for proper reparenting.
+        // The inverse parent world matrix is relative to the parent's position, so a child's
+        // pose relative to the parent stays exact far from the origin.
         glm::mat4 parentWorldInv(1.0f);
+        Mathematics::WorldPosition parentWorldPos{};
         if (dropParent.IsValid())
         {
             if (const auto* wt = m_World->GetComponent<Components::WorldTransform>(dropParent))
-                parentWorldInv = glm::inverse(glm::make_mat4(wt->matrix));
+            {
+                parentWorldInv = glm::inverse(wt->ToMatrix4x4(Mathematics::Vector3{}).GetGLM());
+                parentWorldPos = wt->GetPosition();
+            }
         }
 
         const std::filesystem::path assetsRoot = m_Context->AssetsRoot;
@@ -2151,9 +2152,10 @@ void HierarchyPanel::HandleTreeDrop(const UI::Interaction::DropRequest& req)
                                     m_World->AddComponentImmediate(createdEntity, p);
                                     if (auto* lt = m_World->GetComponentForWrite<Components::Transform>(createdEntity))
                                     {
-                                        glm::mat4 childLocal = glm::make_mat4(lt->matrix);
-                                        glm::mat4 newLocal = parentWorldInv * childLocal;
-                                        std::memcpy(lt->matrix, &newLocal[0][0], sizeof(float32) * 16);
+                                        const glm::mat4 childLocal =
+                                            lt->ToMatrix4x4(lt->GetPosition() - parentWorldPos).GetGLM();
+                                        const glm::mat4 newLocal = parentWorldInv * childLocal;
+                                        *lt = Components::Transform::FromMatrix4x4(Mathematics::Matrix4x4(newLocal));
                                     }
                                 }
                             }
@@ -2176,7 +2178,7 @@ void HierarchyPanel::HandleTreeDrop(const UI::Interaction::DropRequest& req)
             {
                 Mathematics::Vector3 dropPos{};
                 Mathematics::Vector3 defaultCamPos{0.0f, 0.0f, -5.0f};
-                std::filesystem::path thumbPath = PolyhavenService::GetCacheDir() / (item.slug + ".png");
+                std::filesystem::path thumbPath = PolyhavenService::GetThumbnailPath(item.slug);
                 auto placeholderResult = PolyhavenPlaceholderFactory::Create(
                     *m_World, *m_Context->RenderServices, m_Context->Assets,
                     item.slug, onlinePayload->type, dropPos, defaultCamPos, thumbPath, dropParent);
@@ -2675,7 +2677,7 @@ bool HierarchyPanel::HandleCommand(std::uint32_t cmd)
         if (withLight && lightType == Components::LightType::Directional)
         {
             xf = Transform::FromTRS(
-                Mathematics::Vector3{},
+                Mathematics::WorldPosition{},
                 Components::QuaternionFromEulerXYZDegrees(
                     Components::kDefaultDirectionalLightEulerXDeg,
                     Components::kDefaultDirectionalLightEulerYDeg,
@@ -3028,7 +3030,7 @@ bool HierarchyPanel::HandleCommand(std::uint32_t cmd)
             return;
 
         Transform xf = Transform::FromTRS(
-            Mathematics::Vector3{0.0f, 0.0f, 0.0f},
+            Mathematics::WorldPosition{},
             Mathematics::Quaternion{},
             Mathematics::Vector3{100.0f, 100.0f, 100.0f});
         Name nm = MakeName("Reflection Probe");
@@ -3146,12 +3148,7 @@ bool HierarchyPanel::HandleCommand(std::uint32_t cmd)
     case kCmdCreatePlanet5km:
     case kCmdCreatePlanet50km:
     {
-        ECS::World* world = m_World;
-        if (!world)
-            return true;
-
-        ECS::EntityHandle h = world->CreateEntity();
-        if (!h.IsValid())
+        if (!m_World)
             return true;
 
         const CBTTerrainECS::TerrainPreset preset =
@@ -3159,34 +3156,9 @@ bool HierarchyPanel::HandleCommand(std::uint32_t cmd)
             (cmd == kCmdCreatePlanet5km)    ? CBTTerrainECS::TerrainPreset::Planet5km :
             (cmd == kCmdCreatePlanet50km)   ? CBTTerrainECS::TerrainPreset::Planet50km :
                                               CBTTerrainECS::TerrainPreset::SmallPlanar;
-        const Components::Terrain terrainComp = CBTTerrainECS::MakeTerrainPreset(preset);
-        const Components::TerrainPlanetRelief reliefComp =
-            CBTTerrainECS::MakePlanetReliefPreset(preset);
-        const bool spherical = terrainComp.Domain == Components::TerrainDomain::Spherical;
-
-        world->AddComponentImmediate(h, MakeIdentityTransform());
-        world->AddComponentImmediate(h, MakeName(spherical ? "Planet" : "Terrain"));
-        world->AddComponentImmediate(h, Editor::NextHierarchyOrderAtBottom(world));
-
-        // Shared with the create_terrain / create_entity IPC: adds Terrain + grass,
-        // provisions single-tile noise data, gates the heightfield collider to planar
-        // single-tile terrains, attaches the base relief to a planet and spawns the
-        // scene's default surface rules. The presets are inside every limit it checks.
-        if (const std::string refusal = Editor::ProvisionTerrainEntity(*world, h, terrainComp, reliefComp);
-            !refusal.empty())
-            Logger::Log::Error("HierarchyPanel: the terrain preset was refused: {}", refusal);
-
-        // Select the new terrain entity in the hierarchy.
-        if (m_Selection)
-            m_Selection->SetSingle(HierarchyDataProvider::Encode(h));
-
-        NotifyWorldStructure(m_ChangeNotifications, world);
-
-        if (m_OnSelectEntity)
-            m_OnSelectEntity(h);
-        if (m_OnEntityCreated)
-            m_OnEntityCreated(h);
-
+        const ECS::EntityHandle h = Editor::CreateTerrainEntity(*m_World, m_Undo, m_ChangeNotifications, preset);
+        NotifyWorldStructure(m_ChangeNotifications, m_World);
+        scheduleSelectCreatedEntity(h);
         return true;
     }
     case kCmdCreateDDGIVolume:
@@ -3206,7 +3178,7 @@ bool HierarchyPanel::HandleCommand(std::uint32_t cmd)
         // it from there.
         constexpr float kDefaultVolumeSize = 10.0f;
         world->AddComponentImmediate(
-            h, Transform::FromTRS(Vector3{0.0f, 0.0f, 0.0f}, Quaternion{},
+            h, Transform::FromTRS(Mathematics::WorldPosition{}, Quaternion{},
                                   Vector3{kDefaultVolumeSize, kDefaultVolumeSize, kDefaultVolumeSize}));
         world->AddComponentImmediate(h, MakeName("DDGI Volume"));
         world->AddComponentImmediate(h, Components::DDGIVolume{});
@@ -4411,7 +4383,7 @@ void HierarchyPanel::RestoreHierarchyUiFromSceneAfterSceneCommit()
     if (!m_Tree || !m_Provider || !m_World || !m_Selection)
         return;
 
-    std::optional<Scene::SceneHierarchyUiFromFile> pending;
+    std::optional<Editor::SceneHierarchyUiFromFile> pending;
     if (m_PendingHierarchyUiProvider)
         pending = m_PendingHierarchyUiProvider();
 
@@ -4420,9 +4392,9 @@ void HierarchyPanel::RestoreHierarchyUiFromSceneAfterSceneCommit()
 
     m_Tree->ClearExpansionState();
 
-    if (pending->hadSection)
+    if (pending->Ui)
     {
-        for (const std::string& tag : pending->ui.expandedSceneEntityTags)
+        for (const std::string& tag : pending->Ui->expandedSceneEntityTags)
         {
             if (tag.empty())
                 continue;
@@ -4438,9 +4410,9 @@ void HierarchyPanel::RestoreHierarchyUiFromSceneAfterSceneCommit()
 
     m_Tree->RefreshFromProvider();
 
-    if (pending->hadSection)
+    if (pending->Ui)
     {
-        const auto& ordered = pending->ui.selectionSceneEntityTagsOrdered;
+        const auto& ordered = pending->Ui->selectionSceneEntityTagsOrdered;
         if (!ordered.empty())
         {
             std::vector<UI::Interaction::ItemId> ids;
@@ -5061,7 +5033,7 @@ void HierarchyPanel::PerformDrop(const UI::Interaction::DropRequest& request)
                 Logger::Log::Info("HierarchyPanel: creating placeholder for '{}' (panel)", item.slug);
                 Mathematics::Vector3 dropPos{};
                 Mathematics::Vector3 defaultCamPos{0.0f, 0.0f, -5.0f};
-                std::filesystem::path thumbPath = PolyhavenService::GetCacheDir() / (item.slug + ".png");
+                std::filesystem::path thumbPath = PolyhavenService::GetThumbnailPath(item.slug);
                 auto placeholderResult = PolyhavenPlaceholderFactory::Create(
                     *m_World, *m_Context->RenderServices, m_Context->Assets,
                     item.slug, onlinePayload->type, dropPos, defaultCamPos, thumbPath);
@@ -5270,6 +5242,14 @@ void HierarchyPanel::SelectEntity(ECS::EntityHandle entity)
 {
     if (!m_Provider || !m_Tree || !m_World || !m_World->IsValid(entity))
         return;
+
+    // A structure change posts its refresh to the next UI drain. Until then the rows are those of the
+    // old world, so rebuild them here: a select of an entity made in the same action finds its row.
+    if (m_RefreshQueued)
+    {
+        m_Provider->Rebuild();
+        m_Tree->RefreshFromProvider();
+    }
 
     // Find the TreeId for this entity by traversing the tree
     TreeId targetTid = HierarchyDataProvider::Encode(entity);

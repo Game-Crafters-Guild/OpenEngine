@@ -402,6 +402,8 @@ private:
     // Replaces the header's name field with the pending asset's name and state labels
     // (MakePendingAssetHeaderLabels).
     void ShowPendingAssetHeaderTitle(const std::string& name);
+    // Adds the registered asset selection rows (InspectorRegistry) for `paths` above the selection's view.
+    void AddAssetSelectionRows(const std::vector<std::filesystem::path>& paths);
 
     SharedPtr<Asset> m_SelectedAsset;
     // The load of a selected asset that was not loaded when it was selected: the inspector

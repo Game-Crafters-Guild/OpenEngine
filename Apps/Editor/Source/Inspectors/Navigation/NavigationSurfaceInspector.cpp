@@ -223,9 +223,8 @@ void AddBoundsRows(const InspectorContext& ctx, ECS::ComponentTypeId typeId, con
     {
         // The fitted box in the fields' own terms: Center from the entity's position, Extent half the size.
         const auto* transform = ctx.World->GetComponent<Components::WorldTransform>(ctx.Entity);
-        const Mathematics::Vector3 position = transform ? Mathematics::Vector3(transform->matrix[12], transform->matrix[13],
-                                                                               transform->matrix[14])
-                                                        : Mathematics::Vector3();
+        const Mathematics::Vector3 position =
+            transform ? transform->GetPosition() - Mathematics::WorldPosition{} : Mathematics::Vector3();
         center = box.Known ? (box.Min + box.Max) * 0.5f - position : Mathematics::Vector3();
         extent = box.Known ? (box.Max - box.Min) * 0.5f : Mathematics::Vector3();
     }

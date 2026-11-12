@@ -11,6 +11,7 @@
 #include <unordered_map>
 #include <vector>
 #include <string>
+#include <span>
 
 namespace GameEngine {
 
@@ -98,8 +99,17 @@ namespace GameEngine {
         /// and the plan through CurrentAssetDecodePlan (Assets/AssetDecodeInputFiles.h): a path
         /// not named here reads as absent inside the decode. Runs on a reader thread.
         virtual AssetDecodeInputs ResolveDecodeInputs(
-            [[maybe_unused]] const AssetMetadata& metadata, [[maybe_unused]] const Vector<uint8>& bytes,
+            [[maybe_unused]] const AssetMetadata& metadata, [[maybe_unused]] std::span<const uint8> bytes,
             [[maybe_unused]] AssetManager& assetManager) const
+        {
+            return {};
+        }
+
+        /// The files that let a decode run without the read path's contents (a texture's cooked
+        /// artifact), named before the read. When the AssetIOService reads every file named, it does
+        /// not read the path, and the decode gets no bytes. Runs on a reader thread.
+        virtual AssetDecodeInputs ResolveDecodeInputsWithoutBytes([[maybe_unused]] const AssetMetadata& metadata,
+                                                                  [[maybe_unused]] AssetManager& assetManager) const
         {
             return {};
         }
@@ -246,8 +256,12 @@ namespace GameEngine {
         std::filesystem::path ResolveReadPath(const AssetMetadata& metadata, const AssetManager& assetManager) const;
 
         /// The decode inputs the parser for `metadata` names (AssetParser::ResolveDecodeInputs).
-        AssetDecodeInputs ResolveDecodeInputs(const AssetMetadata& metadata, const Vector<uint8>& bytes,
+        AssetDecodeInputs ResolveDecodeInputs(const AssetMetadata& metadata, std::span<const uint8> bytes,
                                               AssetManager& assetManager) const;
+
+        /// The files the parser for `metadata` names before the read (AssetParser::ResolveDecodeInputsWithoutBytes).
+        AssetDecodeInputs ResolveDecodeInputsWithoutBytes(const AssetMetadata& metadata,
+                                                          AssetManager& assetManager) const;
 
         /**
          * @brief Find all parsers for a file extension

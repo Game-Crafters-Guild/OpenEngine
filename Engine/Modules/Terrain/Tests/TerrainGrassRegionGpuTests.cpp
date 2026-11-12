@@ -38,6 +38,16 @@ using namespace GameEngine::Rendering;
 using namespace GameEngine::TerrainECS;
 using namespace GameEngine::TerrainGrass;
 
+// Writes a resident row as AtlasResidencyController does. Claim stamps the row with the key of
+// the tile, and the uploader reads a row only for the tile whose key it holds.
+void ClaimRow(AtlasIndirectionTable& table, int32 tx, int32 tz, uint32 slot, uint32 generation)
+{
+    TileAtlasSlot* row = table.Claim(tx, tz);
+    ASSERT_NE(row, nullptr);
+    row->Slot = slot;
+    row->Generation = generation;
+}
+
 class GrassUploadDevice : public VulkanDevice
 {
 public:
@@ -322,26 +332,27 @@ TEST_F(TerrainGrassRegionGpu, AtlasReadinessWaitsForCoarseAndEveryReassignedSlot
     tile->LodState = TileLodState::Full; tile->GrassField = Field(20,30);
     tiled.Tiles.emplace(TileCoord{0,0}, std::move(tile));
     const auto geometry = MakeAtlasGeometry(5,1,2,1);
-    std::array<TileAtlasSlot,2> rows{}; rows[0].Slot=0; rows[0].Generation=1;
-    rows[1].Slot=kAtlasNoSlot;
+    AtlasIndirectionTable table; table.Resize(geometry);
+    ClaimRow(table,0,0,0,1);
+    const auto& rows = table.Rows;
     Device->RefuseGrassStaging = true;
-    EXPECT_FALSE(Uploader.UpdateAtlas(*Feature,Handle,tiled,geometry,rows));
+    EXPECT_FALSE(Uploader.UpdateAtlas(*Feature,Handle,tiled,geometry,rows,nullptr));
     Device->RefuseGrassStaging = false;
-    ASSERT_TRUE(Uploader.UpdateAtlas(*Feature,Handle,tiled,geometry,rows));
+    ASSERT_TRUE(Uploader.UpdateAtlas(*Feature,Handle,tiled,geometry,rows,nullptr));
     const auto first = ReadMap(TerrainFieldMap::Atlas,7,7);
     EXPECT_EQ(first.front(),20);
     const auto version = Feature->GetGrassPlacementContentEpoch();
-    ASSERT_TRUE(Uploader.UpdateAtlas(*Feature,Handle,tiled,geometry,rows));
+    ASSERT_TRUE(Uploader.UpdateAtlas(*Feature,Handle,tiled,geometry,rows,nullptr));
     EXPECT_EQ(Feature->GetGrassPlacementContentEpoch(),version);
     tiled.Tiles.clear();
     tile=std::make_unique<TerrainTileData>();
     tile->LodState=TileLodState::Full; tile->GrassField=Field(150,170);
     tiled.Tiles.emplace(TileCoord{1,0},std::move(tile));
-    rows[0].Slot=kAtlasNoSlot; rows[1].Slot=0; rows[1].Generation=2;
+    table.Clear(); ClaimRow(table,1,0,0,2);
     Device->RefuseGrassStaging=true;
-    EXPECT_FALSE(Uploader.UpdateAtlas(*Feature,Handle,tiled,geometry,rows));
+    EXPECT_FALSE(Uploader.UpdateAtlas(*Feature,Handle,tiled,geometry,rows,nullptr));
     Device->RefuseGrassStaging=false;
-    ASSERT_TRUE(Uploader.UpdateAtlas(*Feature,Handle,tiled,geometry,rows));
+    ASSERT_TRUE(Uploader.UpdateAtlas(*Feature,Handle,tiled,geometry,rows,nullptr));
     const auto replacement=ReadMap(TerrainFieldMap::Atlas,7,7);
     EXPECT_EQ(replacement.front(),150);
     EXPECT_EQ(replacement.back(),170);
@@ -349,7 +360,7 @@ TEST_F(TerrainGrassRegionGpu, AtlasReadinessWaitsForCoarseAndEveryReassignedSlot
     // row. A fresh CPU field starts Version at one again, but its full dirty
     // extent must win over the old slot's coincident cached version.
     tiled.Tiles.at(TileCoord{1,0})->GrassField=Field(70,90);
-    ASSERT_TRUE(Uploader.UpdateAtlas(*Feature,Handle,tiled,geometry,rows));
+    ASSERT_TRUE(Uploader.UpdateAtlas(*Feature,Handle,tiled,geometry,rows,nullptr));
     const auto sameRowReplacement=ReadMap(TerrainFieldMap::Atlas,7,7);
     EXPECT_EQ(sameRowReplacement.front(),70);
     EXPECT_EQ(sameRowReplacement.back(),90);
@@ -381,9 +392,10 @@ TEST_F(TerrainGrassRegionGpu, AdjacentComposedFieldsKeepEdgesThroughCoarseArriva
     tiled.Tiles.emplace(TileCoord{0,0},std::move(left));
     tiled.Tiles.emplace(TileCoord{1,0},std::move(right));
     const auto geometry = MakeAtlasGeometry(5,2,2,1);
-    std::array<TileAtlasSlot,2> rows{};
-    rows[0].Slot=0; rows[1].Slot=1;
-    ASSERT_TRUE(Uploader.UpdateAtlas(*Feature,Handle,tiled,geometry,rows));
+    AtlasIndirectionTable table; table.Resize(geometry);
+    ClaimRow(table,0,0,0,0); ClaimRow(table,1,0,1,0);
+    const auto& rows = table.Rows;
+    ASSERT_TRUE(Uploader.UpdateAtlas(*Feature,Handle,tiled,geometry,rows,nullptr));
     auto read = ReadMap(TerrainFieldMap::Atlas,14,14);
     auto checkEdges = [&](const auto& pixels) {
         for (uint32 z=0;z<5;++z)
@@ -395,7 +407,7 @@ TEST_F(TerrainGrassRegionGpu, AdjacentComposedFieldsKeepEdgesThroughCoarseArriva
     auto& arrived=*tiled.Tiles.at(TileCoord{1,0});
     arrived.LodState=TileLodState::Full;
     ComposeTerrainGrassField(arrived.GrassField,5,5,4,4,4,0,modifiers);
-    ASSERT_TRUE(Uploader.UpdateAtlas(*Feature,Handle,tiled,geometry,rows));
+    ASSERT_TRUE(Uploader.UpdateAtlas(*Feature,Handle,tiled,geometry,rows,nullptr));
     read=ReadMap(TerrainFieldMap::Atlas,14,14);
     checkEdges(read);
     // One interior texel edit must leave every other atlas byte intact.
@@ -404,7 +416,7 @@ TEST_F(TerrainGrassRegionGpu, AdjacentComposedFieldsKeepEdgesThroughCoarseArriva
     arrived.GrassField.Dirty=true;
     arrived.GrassField.DirtyMinX=arrived.GrassField.DirtyMinZ=2;
     arrived.GrassField.DirtyMaxX=arrived.GrassField.DirtyMaxZ=3;
-    ASSERT_TRUE(Uploader.UpdateAtlas(*Feature,Handle,tiled,geometry,rows));
+    ASSERT_TRUE(Uploader.UpdateAtlas(*Feature,Handle,tiled,geometry,rows,nullptr));
     const auto changed=ReadMap(TerrainFieldMap::Atlas,14,14);
     read[(3*14+10)*2]=3;
     EXPECT_EQ(changed,read);
@@ -643,11 +655,13 @@ TEST_F(TerrainColorMapGpu, TheAtlasSlotHoldsTheTileMapAndAnUncomposedTileReadsTh
     tiled.Tiles.emplace(TileCoord{0, 0}, std::move(composed));
     tiled.Tiles.emplace(TileCoord{1, 0}, std::move(pending));
     const auto geometry = MakeAtlasGeometry(5, 2, 2, 1);
-    std::array<TileAtlasSlot, 2> rows{};
-    rows[0].Slot = 0;
-    rows[1].Slot = 1;
+    AtlasIndirectionTable table;
+    table.Resize(geometry);
+    ClaimRow(table, 0, 0, 0, 0);
+    ClaimRow(table, 1, 0, 1, 0);
+    const auto& rows = table.Rows;
     TerrainFieldUploader uploader{ColorMapUploadDesc()};
-    ASSERT_TRUE(uploader.UpdateAtlas(*Feature, Handle, tiled, geometry, rows));
+    ASSERT_TRUE(uploader.UpdateAtlas(*Feature, Handle, tiled, geometry, rows, nullptr));
     const auto atlas = ReadColorAtlas(geometry.AtlasDim);
     const auto at = [&](uint32 x, uint32 y)
     { return &atlas[(static_cast<size_t>(y) * geometry.AtlasDim + x) * kTerrainColorMapChannels]; };
@@ -678,11 +692,13 @@ TEST_F(TerrainColorMapGpu, AResampledTileMapBlendsItsColorInLinearLight)
     }
     tiled.Tiles.emplace(TileCoord{0, 0}, std::move(tile));
     const auto geometry = MakeAtlasGeometry(5, 2, 2, 1);
-    std::array<TileAtlasSlot, 2> rows{};
-    rows[0].Slot = 0;
-    rows[1].Slot = 1;
+    AtlasIndirectionTable table;
+    table.Resize(geometry);
+    ClaimRow(table, 0, 0, 0, 0);
+    ClaimRow(table, 1, 0, 1, 0);
+    const auto& rows = table.Rows;
     TerrainFieldUploader uploader{ColorMapUploadDesc()};
-    ASSERT_TRUE(uploader.UpdateAtlas(*Feature, Handle, tiled, geometry, rows));
+    ASSERT_TRUE(uploader.UpdateAtlas(*Feature, Handle, tiled, geometry, rows, nullptr));
     const auto atlas = ReadColorAtlas(geometry.AtlasDim);
     // Tile texel (2, 2) of 5 sits half way between the 2 x 2 map's columns.
     const uint8* mid = &atlas[(static_cast<size_t>(3) * geometry.AtlasDim + 3) * kTerrainColorMapChannels];

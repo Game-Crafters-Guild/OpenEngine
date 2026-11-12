@@ -14,14 +14,12 @@ bool IsBackgroundDepth(float rawDepth)
     return rawDepth <= kReverseZClearFar;
 }
 
-// Raw reverse-Z perspective depth -> positive view-space distance in meters.
-// nearFar is the view's (near, far) pair: pass ge_nearFar.xy from the ViewParams block the shader
-// declares, named or anonymous.
-float LinearizeReverseZ(float rawDepth, vec2 nearFar)
+// Raw reverse-Z depth -> positive view-space distance in meters, exact for a perspective
+// (finite or infinite) and an orthographic projection. depthTerms is ge_depthTerms, the
+// projection's (m22, m32, m23, m33). Branch on IsBackgroundDepth first where the sky needs a value.
+float LinearizeReverseZ(float rawDepth, vec4 depthTerms)
 {
-    float zNear = max(nearFar.x, 1e-5);
-    float zFar = max(nearFar.y, zNear + 1.0);
-    return (zNear * zFar) / max(rawDepth * (zFar - zNear) + zNear, 1e-6);
+    return (depthTerms.y - rawDepth * depthTerms.w) / (rawDepth * depthTerms.z - depthTerms.x);
 }
 
 #endif

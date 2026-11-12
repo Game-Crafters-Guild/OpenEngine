@@ -1,5 +1,5 @@
-// The frame path never waits for an asset load. Each test drives the engine's
-// own per-frame work (EngineCore::StepRenderingLoop, what the Player runs every
+// The frame path never waits for an asset load. Each SceneResolveFrameTest drives the
+// engine's own per-frame work (EngineCore::StepRenderingLoop, what the Player runs every
 // frame) or the editor's scene-open build, with model and material imports held
 // at a gate the test releases. A frame that waited for an import lasts until the
 // gate's watchdog releases it, so a frame over kAFrameThatWaited is a wait.
@@ -22,6 +22,7 @@
 #include "Logger/Logger.h"
 #include "SceneLoadTracker/SceneLoadTracker.h"
 #include "SceneLoadTrackerTestAccess.h"
+#include "TemporaryWorkspaceEngineFixture.h"
 
 #include <algorithm>
 #include <chrono>
@@ -64,7 +65,7 @@ class SceneResolveFrameTest : public Testing::HeldAssetImportFixture
         return done();
     }
 
-    bool MaterialRegistered(const GUID& materialGuid) { return m_Services.Materials().Registry().Find(materialGuid) != nullptr; }
+    bool MaterialRegistered(const GUID& materialGuid) { return m_Services->Materials().Registry().Find(materialGuid) != nullptr; }
 
     // Ticks `tracker`; true while its scene.resolve row holds the ready query.
     static bool ResolveRowHolds(SceneLoadTracker& tracker)
@@ -76,6 +77,13 @@ class SceneResolveFrameTest : public Testing::HeldAssetImportFixture
         ADD_FAILURE() << "the engine's resolve service reports no scene.resolve row";
         return false;
     }
+};
+
+// A RenderServices that has no device: Initialize was not called.
+class RenderServicesWithoutDeviceTest : public Testing::TemporaryWorkspaceEngineFixture
+{
+  protected:
+    RenderServices m_NoDevice;
 };
 
 } // namespace
@@ -133,6 +141,20 @@ TEST_F(SceneResolveFrameTest, EnablingTheRenderingLoopRegistersTheEnginesLoadCat
     for (const char* id :
          {"scene.resolve", "shader.base-compile", "shader.variant", "gpu.pipeline", "render.texture-upload"})
         EXPECT_NE(std::find(ids.begin(), ids.end(), id), ids.end()) << id << " is not registered";
+}
+
+// A RenderServices with no device enables the loop: the engine logs one error and continues.
+TEST_F(RenderServicesWithoutDeviceTest, EnablingTheRenderingLoopLogsTheMissingDeviceAndContinues)
+{
+    std::vector<std::string> errors;
+    TestLog::ScopedEngineLogCapture capture(&errors, Logger::LogLevel::Error);
+    EngineCore& engine = EngineCore::GetInstance();
+    ASSERT_TRUE(engine.EnableRenderingLoop(&m_NoDevice));
+    Logger::Log::Flush();
+    EXPECT_EQ(engine.GetRenderServices(), &m_NoDevice);
+    EXPECT_NE(engine.GetPrimaryWorld(), nullptr);
+    EXPECT_EQ(errors.size(), 1u);
+    EXPECT_EQ(TestLog::CountLinesContaining(errors, "RenderServices is not initialized"), 1u);
 }
 
 // A spawned model whose load fails is reported, named by GUID and path, and no
@@ -260,7 +282,7 @@ TEST_F(SceneResolveFrameTest, ASpawnResolvesWhetherOrNotAnEditorSceneBuildIsRunn
 
     const ECS::EntityHandle opened = Spawn(*world, modelGuid);
     SceneBuildPump build;
-    build.Begin(*world, m_Services);
+    build.Begin(*world, *m_Services);
     ASSERT_TRUE(IsSceneBuildPumpActive()) << "the build holds the opened entity until its model lands";
     Components::MeshRenderer spawnedMesh{};
     spawnedMesh.modelAssetGuid.Set(modelGuid);
@@ -274,7 +296,7 @@ TEST_F(SceneResolveFrameTest, ASpawnResolvesWhetherOrNotAnEditorSceneBuildIsRunn
     while (build.IsActive() && std::chrono::steady_clock::now() < deadline)
     {
         EngineCore::GetInstance().GetAssetManager().Update();
-        build.StepBudgeted(*world, m_Services, std::chrono::milliseconds(5));
+        build.StepBudgeted(*world, *m_Services, std::chrono::milliseconds(5));
         StepFrame();
     }
     ASSERT_FALSE(IsSceneBuildPumpActive());
@@ -304,9 +326,9 @@ TEST_F(SceneResolveFrameTest, OnlyDrainNowWaitsForStandaloneMaterials)
     }
 
     SceneBuildPump build;
-    build.Begin(world, m_Services);
+    build.Begin(world, *m_Services);
     const auto start = std::chrono::steady_clock::now();
-    build.StepBudgeted(world, m_Services, std::chrono::milliseconds(0));
+    build.StepBudgeted(world, *m_Services, std::chrono::milliseconds(0));
     EXPECT_LT(std::chrono::steady_clock::now() - start, kAFrameThatWaited) << "the step waited for a material";
     EXPECT_TRUE(build.IsActive());
     EXPECT_TRUE(m_Gate.WaitForEntered(3)) << "the materials were not all requested at once: "
@@ -319,7 +341,7 @@ TEST_F(SceneResolveFrameTest, OnlyDrainNowWaitsForStandaloneMaterials)
         m_Gate.Release();
     });
     const auto drainStart = std::chrono::steady_clock::now();
-    build.DrainNow(world, m_Services);
+    build.DrainNow(world, *m_Services);
     const auto drained = std::chrono::steady_clock::now() - drainStart;
     releaser.join();
     EXPECT_GE(drained, kHeldFor / 2) << "DrainNow returned before the held loads landed";

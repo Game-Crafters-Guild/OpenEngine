@@ -49,7 +49,7 @@ namespace
 
     for (const auto& view : rs.Views().GetViews())
     {
-        if (!view.activeRenderPipeline || view.ActiveRenderLayerMask() == Rendering::RenderLayerMask::None())
+        if (!view.RenderedByPipeline() || view.renderLayerMask == Rendering::RenderLayerMask::None())
             continue;
         if (view.purpose == ::GameEngine::Rendering::ViewPurpose::EditorScene &&
             view.cameraId != 0 && rs.Views().FindCameraData(view.cameraId))
@@ -97,6 +97,65 @@ bool IsWaterSurfaceInView(const Engine::Renderer::RenderServices& rs,
                                           params.SeaLevel - displacement,
                                           params.SeaLevel + displacement,
                                           std::max(params.MaxHorizontalDisplacement, 0.0f));
+}
+
+// Whether a view's camera is under the water, and its depth below the displaced surface at its XZ.
+struct ViewSubmersion
+{
+    bool Submerged = false;
+    float Depth = 0.0f;
+};
+
+// Reads the view's own camera, not the shared ocean camera: else one viewport's submersion state tints
+// every other viewport. A view without camera data reads the snap camera. An editor 2D-ortho view is
+// never submerged.
+ViewSubmersion FindViewSubmersion(const Engine::Renderer::RenderServices& rs, const OceanRenderFeature& feature,
+                                  const ::GameEngine::Rendering::ViewDesc& view)
+{
+    const auto* camera = rs.Views().FindCameraData(view.cameraId);
+    // cameraPos.w == 1 is the editor 2D-ortho marker (CameraTypes.h).
+    if (camera && camera->cameraPos.w == 1.0f)
+        return {};
+    if (!camera)
+        camera = rs.Views().FindCameraData(ResolveOceanSnapCamera(rs, view));
+    if (!camera)
+        return {};
+    const float x = camera->cameraPos.x;
+    const float y = camera->cameraPos.y;
+    const float z = camera->cameraPos.z;
+    ViewSubmersion submersion{};
+    if (feature.IsUnderwaterExcluded(x, y, z))
+        return submersion;
+    if (feature.HasUnderwaterVolumes())
+    {
+        // Volume / fly-through mode: submerged only when the camera sits inside
+        // an authored water volume; the overlay fog depth is measured down from
+        // that box's top. Confines the underwater look to a bounded body.
+        submersion.Submerged = feature.TestUnderwaterVolume(x, y, z, submersion.Depth);
+        return submersion;
+    }
+    // Infinite SeaLevel plane. Enable the overlay + two-sided surface across
+    // the whole near-surface zone using the FLAT sea level plus a wave-crest
+    // headroom, NOT the per-XZ wave height: comparing the camera to the wavy
+    // surface at its exact XZ flickers in troughs (the surface dips a metre+
+    // below the camera), which briefly disables the overlay and exposes the
+    // un-fogged, back-face-culled surface underside as a grey void at the
+    // waterline. The fullscreen frag masks above/below per pixel, so activating
+    // a couple of metres above the surface is a no-op above the line.
+    // The depth keeps the true (wavy) depth so the overlay fog strength
+    // still tracks how deep the camera actually is.
+    constexpr float kOverlayActivationHeadroom = 2.0f; // metres above flat sea level
+    submersion.Depth = feature.SampleSurfaceForRendering(x, z).Height - y;
+    submersion.Submerged = y < feature.GetParams().SeaLevel + kOverlayActivationHeadroom;
+    return submersion;
+}
+
+// The wave simulation runs for a view that sees water and, with no water in view, while gameplay
+// queries the waves: a recent surface query or a pending GPU query.
+bool SimulatesWaves(OceanRenderFeature& feature, bool waterInView)
+{
+    return waterInView || feature.HasRecentSurfaceQueries() ||
+           (feature.IsGPUQueryReady() && feature.GetGPUQuery().HasPending());
 }
 
 // The reflected-caustics surface bound for this frame. The height-field
@@ -158,6 +217,53 @@ void OceanRenderNode::Declare(Engine::Renderer::Pipeline::RenderPipelineInstance
         m_PostOceanDepthResolve.Declare(instance, ctx);
 }
 
+void OceanRenderNode::RequestPausedViewPipelines(const Engine::Renderer::Pipeline::PausedViewPrewarm& prewarm)
+{
+    // The gates of DeclareForView: a device and an initialized feature with an ocean. A view sees
+    // water when it is submerged or the surface is in its frustum. A view that sees no water runs no
+    // view simulation and draws no surface; gameplay queries can still run the wave simulation.
+    auto& rs = prewarm.Services;
+    auto* device = rs.GetDevice();
+    if (!device)
+        return;
+    auto& feature = rs.EnsureFeature<OceanRenderFeature>();
+    if (!feature.HasOcean() || (!feature.IsInitialized() && !feature.Initialize(device)))
+        return;
+    if (!m_UnderwaterMode)
+    {
+        // As in the live pre-world step, the submersion is recorded for the post-world step and the
+        // surface's two-sided choice to read.
+        const ViewSubmersion submersion = FindViewSubmersion(rs, feature, prewarm.View);
+        feature.SetUnderwaterActive(prewarm.View.id, submersion.Submerged, submersion.Depth);
+        const bool waterInView =
+            submersion.Submerged || IsWaterSurfaceInView(rs, feature, prewarm.View, feature.GetParams());
+        if (waterInView)
+            feature.RequestViewSimulationPipelines();
+        feature.FoldSurfaceQueries();
+        if (SimulatesWaves(feature, waterInView))
+            feature.RequestWaveSimulationPipelines();
+        return;
+    }
+    const OceanParamsGPU viewParams = feature.GetParamsForView(prewarm.View.id);
+    if (viewParams.Underwater == 0u && !IsWaterSurfaceInView(rs, feature, prewarm.View, viewParams))
+        return;
+    // The scene grab reads the view colour, and the surface refracts it.
+    if (const std::optional<::GameEngine::Rendering::PipelineFormatKey> grabSource =
+            prewarm.SingleColorTargetKey(Engine::Renderer::Pipeline::Names::View::Color))
+        feature.GetSceneGrab().RequestPipeline(*device, *grabSource);
+    // The surface pass draws with the world pass's keywords, less the reflection slices it adds itself.
+    const std::optional<::GameEngine::Rendering::PipelineFormatKey> formats = prewarm.WorldColorTargetsKey();
+    if (!formats)
+        return;
+    const ::GameEngine::Rendering::MaterialKeyword passKeywords =
+        rs.Views().GetViewDeclaredWorldPassKeywords(prewarm.View.id).value_or(::GameEngine::Rendering::MaterialKeyword::None) &
+        ~::GameEngine::Rendering::MaterialKeyword::SSSRNormalRoughness;
+    // The post-ocean depth copy runs after each surface draw into a view with a depth target.
+    if (feature.RequestSurfacePipeline(rs, prewarm.View.id, passKeywords, *formats) &&
+        formats->DepthFormat != ::GameEngine::Rendering::TextureFormat{})
+        m_PostOceanDepthResolve.RequestPipeline(*device, formats->RasterizationSamples);
+}
+
 void OceanRenderNode::DeclareForView(Engine::Renderer::Pipeline::ViewDeclare& d)
 {
     namespace RenderGraph = ::GameEngine::Rendering::RenderGraph;
@@ -166,180 +272,178 @@ void OceanRenderNode::DeclareForView(Engine::Renderer::Pipeline::ViewDeclare& d)
     if (!device)
         return;
 
+    // Initialize creates the FFT, the simulation cascades and the caustics texture. A world
+    // with no ocean declares nothing here, so the feature initializes when the first ocean appears.
     auto& feature = rs.EnsureFeature<OceanRenderFeature>();
-    if (!feature.IsInitialized())
-    {
-        if (!feature.Initialize(device))
-            return;
-    }
+    if (!feature.HasOcean())
+        return;
+    if (!feature.IsInitialized() && !feature.Initialize(device))
+        return;
     const uint32 frameIndex = device->GetFrameIndex();
 
     // Post-world overlay instance: schedule ONLY the submerged fullscreen overlay,
-    // using the submersion state the pre-world instance stamped this frame. It must
+    // using the submersion state the pre-world instance recorded this frame. It must
     // be a separate node placed after World so it reads the fully-drawn scene colour
     // (the pre-world instance would tint sky-only colour that World then overwrites).
     if (m_UnderwaterMode)
     {
-        if (feature.HasOcean())
+        const OceanParamsGPU viewParams = feature.GetParamsForView(d.View.id);
+        feature.GetShadows().DeclareForView(d, viewParams);
+        // The surface and the scene grab it refracts only when this view can
+        // see water: from below (the overlay is active) or within the frustum.
+        const bool waterInView =
+            viewParams.Underwater != 0u || IsWaterSurfaceInView(rs, feature, d.View, viewParams);
+        if (waterInView)
         {
-            const OceanParamsGPU viewParams = feature.GetParamsForView(d.View.id);
-            feature.GetShadows().DeclareForView(d, viewParams);
-            // The surface and the scene grab it refracts only when this view can
-            // see water: from below (the overlay is active) or within the frustum.
-            const bool waterInView =
-                viewParams.Underwater != 0u || IsWaterSurfaceInView(rs, feature, d.View, viewParams);
-            if (waterInView)
+            feature.NoteWaterInView();
+            feature.GetSceneGrab().DeclareForView(d, frameIndex);
+        }
+
+        // The surface draws into the view's targets with the world pass's keywords this frame,
+        // the height fog among them: the surface takes the fog by its own distance. The water
+        // keeps writing the screen-space reflection slices the world pass started, so the
+        // reflections replace the water's own reflection; it takes that keyword only with the
+        // slices attached to this pass. The compatibility profile's surface has no environment
+        // term and no cooked reflection variant, so it keeps the world pass's slices as they are.
+        Engine::Renderer::RenderServices::WorldPassTargetsRG targets{};
+        targets.Color = d.ViewColor;
+        targets.Depth = d.ViewDepth;
+        targets.Resolve = d.ViewResolve;
+        targets.BloomSampleDelta = d.ViewBloomSampleDelta;
+        targets.DepthResolved = d.ViewDepthResolved;
+        targets.SkyBackdrop = d.ResolveTexture(Engine::Renderer::Pipeline::Names::Res::SkyBackdrop);
+        targets.ResolveFromPipeline = d.ResolveFromPipeline;
+        auto passKeywords = ::GameEngine::Rendering::MaterialKeyword::None;
+        if (auto kw = rs.GetWorldPassKeywords(d.View.id))
+            passKeywords = *kw;
+        passKeywords = passKeywords & ~::GameEngine::Rendering::MaterialKeyword::SSSRNormalRoughness;
+
+        Engine::Renderer::DrawCommand surfaceCommand{};
+        std::span<const RenderGraph::RGTexture> sampledCascades{};
+        if (waterInView && !::GameEngine::Rendering::IsCompatShaderProfile())
+            passKeywords = passKeywords |
+                           Engine::Renderer::Pipeline::ReflectionsProvider::ContributeLateForwardPassTargets(
+                               d, targets);
+        if (waterInView &&
+            feature.BuildSurfaceCommandForView(rs, d.Frame, d.View.id, frameIndex, passKeywords,
+                                               surfaceCommand, &sampledCascades))
+        {
+            // Declared sampled reads for every dynamic texture the surface
+            // draw binds descriptor-direct (grab, planar reflection, and all
+            // sim cascades — collected by BuildForwardCommand at the bind
+            // sites, so a texture is declared iff it is bound). The declared
+            // reads are what order this pass after the producers and land
+            // the layout transitions; the bind alone forms no edge.
+            std::array<Engine::Renderer::DrawCommand, 1> commands{surfaceCommand};
+            rs.AddForwardCommandPassForView(d.Frame, d.View.id, targets, passKeywords,
+                                            commands, sampledCascades, "OceanSurface");
+            m_PostOceanDepthResolve.DeclareForView(d);
+
+        }
+
+        feature.GetSprayGPU().DeclareForView(d, feature);
+
+        const OceanParamsGPU uwParams = feature.GetParamsForView(d.View.id);
+        const OceanUnderwaterSettings uwSettings = feature.GetUnderwaterSettings();
+        // The wave-shape inputs the fullscreen passes sample: raw handles for
+        // the binds + RG imports for the declared reads (which order those
+        // passes after the sims even when the surface pass declined).
+        OceanShapeSampleInputs shape{};
+        shape.Displacement = feature.GetDisplacementTexture();
+        shape.DisplacementSampler = feature.GetDisplacementSampler();
+        shape.DisplacementRG = feature.GetFFT().ImportDisplacementRG(d.Frame);
+        if (feature.IsWaveMaskReady() && feature.GetWaveMask().HasSources())
+        {
+            shape.LocalFFTReadyMask = feature.GetLocalFFTReadyMaskForFrame(frameIndex);
+            for (uint32 stream = 0u; stream < kMaxOceanLocalFFTStreams; ++stream)
             {
-                feature.NoteWaterInView();
-                feature.GetSceneGrab().DeclareForView(d, frameIndex);
+                if ((shape.LocalFFTReadyMask & (1u << stream)) == 0u)
+                    continue;
+                shape.LocalDisplacements[stream] = feature.GetLocalDisplacementTexture(stream);
+                shape.LocalDisplacementSamplers[stream] =
+                    feature.GetLocalDisplacementSampler(stream);
+                shape.LocalDisplacementsRG[stream] =
+                    feature.GetLocalFFT(stream).ImportDisplacementRG(d.Frame);
             }
-
-            // The surface draws into the view's targets with the world pass's keywords this frame,
-            // the height fog among them: the surface takes the fog by its own distance. The water
-            // keeps writing the screen-space reflection slices the world pass started, so the
-            // reflections replace the water's own reflection; it takes that keyword only with the
-            // slices attached to this pass. The compatibility profile's surface has no environment
-            // term and no cooked reflection variant, so it keeps the world pass's slices as they are.
-            Engine::Renderer::RenderServices::WorldPassTargetsRG targets{};
-            targets.Color = d.ViewColor;
-            targets.Depth = d.ViewDepth;
-            targets.Resolve = d.ViewResolve;
-            targets.BloomSampleDelta = d.ViewBloomSampleDelta;
-            targets.DepthResolved = d.ViewDepthResolved;
-            targets.SkyBackdrop = d.ResolveTexture(Engine::Renderer::Pipeline::Names::Res::SkyBackdrop);
-            targets.ResolveFromPipeline = d.ResolveFromPipeline;
-            auto passKeywords = ::GameEngine::Rendering::MaterialKeyword::None;
-            if (auto kw = rs.GetWorldPassKeywords(d.View.id))
-                passKeywords = *kw;
-            passKeywords = passKeywords & ~::GameEngine::Rendering::MaterialKeyword::SSSRNormalRoughness;
-
-            Engine::Renderer::DrawCommand surfaceCommand{};
-            std::span<const RenderGraph::RGTexture> sampledCascades{};
-            if (waterInView && !::GameEngine::Rendering::IsCompatShaderProfile())
-                passKeywords = passKeywords |
-                               Engine::Renderer::Pipeline::ReflectionsProvider::ContributeLateForwardPassTargets(
-                                   d, targets);
-            if (waterInView &&
-                feature.BuildSurfaceCommandForView(rs, d.Frame, d.View.id, frameIndex, passKeywords,
-                                                   surfaceCommand, &sampledCascades))
+            for (uint32 page = 0u; page < kOceanLocalFFTMaskPages; ++page)
             {
-                // Declared sampled reads for every dynamic texture the surface
-                // draw binds descriptor-direct (grab, planar reflection, and all
-                // sim cascades — collected by BuildForwardCommand at the bind
-                // sites, so a texture is declared iff it is bound). The declared
-                // reads are what order this pass after the producers and land
-                // the layout transitions; the bind alone forms no edge.
-                std::array<Engine::Renderer::DrawCommand, 1> commands{surfaceCommand};
-                rs.AddForwardCommandPassForView(d.Frame, d.View.id, targets, passKeywords,
-                                                commands, sampledCascades, "OceanSurface");
-                m_PostOceanDepthResolve.DeclareForView(d);
-
+                shape.LocalFFTMasks[page] = feature.GetWaveMask().GetLocalFFTMaskTexture(page);
+                shape.LocalFFTMaskSamplers[page] = feature.GetWaveMaskSampler();
+                shape.LocalFFTMasksRG[page] =
+                    feature.GetWaveMask().ImportLocalFFTMaskRG(d.Frame, page);
             }
+            shape.LocalFFTMaskLayout = &feature.GetWaveMask().GetLayout();
+        }
+        const float submergedDepth = feature.GetSubmergedDepthForView(d.View.id);
+        const bool overlayActive = uwParams.Underwater != 0u;
+        const bool cameraIsBelowSurface = submergedDepth > 0.0f;
 
-            feature.GetSprayGPU().DeclareForView(d, feature);
-
-            const OceanParamsGPU uwParams = feature.GetParamsForView(d.View.id);
-            const OceanUnderwaterSettings uwSettings = feature.GetUnderwaterSettings();
-            // The wave-shape inputs the fullscreen passes sample: raw handles for
-            // the binds + RG imports for the declared reads (which order those
-            // passes after the sims even when the surface pass declined).
-            OceanShapeSampleInputs shape{};
-            shape.Displacement = feature.GetDisplacementTexture();
-            shape.DisplacementSampler = feature.GetDisplacementSampler();
-            shape.DisplacementRG = feature.GetFFT().ImportDisplacementRG(d.Frame);
-            if (feature.IsWaveMaskReady() && feature.GetWaveMask().HasSources())
+        // The underwater overlay can be activated slightly above sea level to
+        // keep the wavy waterline stable at grazing views. That headroom must
+        // not suppress above-water reflected caustics while the camera is
+        // still actually above the displaced surface.
+        if (!cameraIsBelowSurface)
+        {
+            const bool reflectedCausticsEnabled =
+                uwSettings.CausticsOnGeometry &&
+                uwSettings.ReflectedCaustics_Strength > 0.0f &&
+                uwSettings.ReflectedCaustics_Height > 0.0f &&
+                (feature.HasUserCausticsTexture() || feature.IsCausticsReady());
+            const float causticsDisplacement =
+                reflectedCausticsEnabled
+                    ? ResolveReflectedCausticsDisplacement(feature, uwParams,
+                                                           shape.LocalFFTReadyMask)
+                    : 0.0f;
+            if (reflectedCausticsEnabled &&
+                IsReflectedCausticsBandInView(rs, feature, d.View, uwParams,
+                                              uwSettings.ReflectedCaustics_Height,
+                                              causticsDisplacement))
             {
-                shape.LocalFFTReadyMask = feature.GetLocalFFTReadyMaskForFrame(frameIndex);
-                for (uint32 stream = 0u; stream < kMaxOceanLocalFFTStreams; ++stream)
-                {
-                    if ((shape.LocalFFTReadyMask & (1u << stream)) == 0u)
-                        continue;
-                    shape.LocalDisplacements[stream] = feature.GetLocalDisplacementTexture(stream);
-                    shape.LocalDisplacementSamplers[stream] =
-                        feature.GetLocalDisplacementSampler(stream);
-                    shape.LocalDisplacementsRG[stream] =
-                        feature.GetLocalFFT(stream).ImportDisplacementRG(d.Frame);
-                }
-                for (uint32 page = 0u; page < kOceanLocalFFTMaskPages; ++page)
-                {
-                    shape.LocalFFTMasks[page] = feature.GetWaveMask().GetLocalFFTMaskTexture(page);
-                    shape.LocalFFTMaskSamplers[page] = feature.GetWaveMaskSampler();
-                    shape.LocalFFTMasksRG[page] =
-                        feature.GetWaveMask().ImportLocalFFTMaskRG(d.Frame, page);
-                }
-                shape.LocalFFTMaskLayout = &feature.GetWaveMask().GetLayout();
+                const auto userCaustics = feature.GetUserCausticsTexture();
+                const auto causticsTex =
+                    userCaustics.IsValid() ? userCaustics : feature.GetCausticsTexture();
+                const auto causticsSampler = userCaustics.IsValid()
+                    ? feature.GetUserCausticsSampler()
+                    : feature.GetCausticsSampler();
+                // Above water: reflected caustics from the water.
+                feature.GetReflectedCaustics().DeclareForView(d, uwParams, uwSettings, shape,
+                                                              causticsTex, causticsSampler,
+                                                              causticsDisplacement);
             }
-            const float submergedDepth = feature.GetSubmergedDepthForView(d.View.id);
-            const bool overlayActive = uwParams.Underwater != 0u;
-            const bool cameraIsBelowSurface = submergedDepth > 0.0f;
+        }
 
-            // The underwater overlay can be activated slightly above sea level to
-            // keep the wavy waterline stable at grazing views. That headroom must
-            // not suppress above-water reflected caustics while the camera is
-            // still actually above the displaced surface.
-            if (!cameraIsBelowSurface)
-            {
-                const bool reflectedCausticsEnabled =
-                    uwSettings.CausticsOnGeometry &&
-                    uwSettings.ReflectedCaustics_Strength > 0.0f &&
-                    uwSettings.ReflectedCaustics_Height > 0.0f &&
-                    (feature.HasUserCausticsTexture() || feature.IsCausticsReady());
-                const float causticsDisplacement =
-                    reflectedCausticsEnabled
-                        ? ResolveReflectedCausticsDisplacement(feature, uwParams,
-                                                               shape.LocalFFTReadyMask)
-                        : 0.0f;
-                if (reflectedCausticsEnabled &&
-                    IsReflectedCausticsBandInView(rs, feature, d.View, uwParams,
-                                                  uwSettings.ReflectedCaustics_Height,
-                                                  causticsDisplacement))
-                {
-                    const auto userCaustics = feature.GetUserCausticsTexture();
-                    const auto causticsTex =
-                        userCaustics.IsValid() ? userCaustics : feature.GetCausticsTexture();
-                    const auto causticsSampler = userCaustics.IsValid()
-                        ? feature.GetUserCausticsSampler()
-                        : feature.GetCausticsSampler();
-                    // Above water: reflected caustics from the water.
-                    feature.GetReflectedCaustics().DeclareForView(d, uwParams, uwSettings, shape,
-                                                                  causticsTex, causticsSampler,
-                                                                  causticsDisplacement);
-                }
-            }
+        feature.FillUnderwaterPortalData(m_PortalData, kMaxOceanUnderwaterPortalVolumes,
+                                         kMaxOceanUnderwaterPortalExclusions,
+                                         kMaxOceanUnderwaterPortalPolygons,
+                                         kMaxOceanUnderwaterPortalOccluders);
+        const OceanUnderwaterPortalData &portalData = m_PortalData;
+        const OceanUnderwaterPortalData *portalDataPtr =
+            (portalData.Enabled || !portalData.Materials.empty()) ? &portalData : nullptr;
 
-            feature.FillUnderwaterPortalData(m_PortalData, kMaxOceanUnderwaterPortalVolumes,
-                                             kMaxOceanUnderwaterPortalExclusions,
-                                             kMaxOceanUnderwaterPortalPolygons,
-                                             kMaxOceanUnderwaterPortalOccluders);
-            const OceanUnderwaterPortalData &portalData = m_PortalData;
-            const OceanUnderwaterPortalData *portalDataPtr =
-                (portalData.Enabled || !portalData.Materials.empty()) ? &portalData : nullptr;
+        const auto underwaterCaustics = feature.HasUserCausticsTexture()
+            ? feature.GetUserCausticsTexture() : feature.GetCausticsTexture();
+        const auto underwaterCausticsSampler = feature.HasUserCausticsTexture()
+            ? feature.GetUserCausticsSampler() : feature.GetCausticsSampler();
 
-            const auto underwaterCaustics = feature.HasUserCausticsTexture()
-                ? feature.GetUserCausticsTexture() : feature.GetCausticsTexture();
-            const auto underwaterCausticsSampler = feature.HasUserCausticsTexture()
-                ? feature.GetUserCausticsSampler() : feature.GetCausticsSampler();
-
-            if (overlayActive)
-            {
-                feature.GetUnderwater().DeclareForView(d, uwParams, submergedDepth, shape,
+        if (overlayActive)
+        {
+            feature.GetUnderwater().DeclareForView(d, uwParams, submergedDepth, shape,
+                                                   underwaterCaustics,
+                                                   underwaterCausticsSampler, uwSettings,
+                                                   portalDataPtr);
+        }
+        else
+        {
+            // Dry camera: the composite serves only the portal volumes, so
+            // a frame that cannot see one declares no pass at all.
+            const auto* viewCamera = rs.Views().FindCameraData(d.View.cameraId);
+            if (portalData.Enabled && viewCamera &&
+                IsUnderwaterPortalInView(portalData,
+                                         viewCamera->viewProj))
+                feature.GetUnderwater().DeclareForView(d, uwParams, 0.0f, shape,
                                                        underwaterCaustics,
                                                        underwaterCausticsSampler, uwSettings,
-                                                       portalDataPtr);
-            }
-            else
-            {
-                // Dry camera: the composite serves only the portal volumes, so
-                // a frame that cannot see one declares no pass at all.
-                const auto* viewCamera = rs.Views().FindCameraData(d.View.cameraId);
-                if (portalData.Enabled && viewCamera &&
-                    IsUnderwaterPortalInView(portalData,
-                                             viewCamera->viewProj))
-                    feature.GetUnderwater().DeclareForView(d, uwParams, 0.0f, shape,
-                                                           underwaterCaustics,
-                                                           underwaterCausticsSampler, uwSettings,
-                                                           &portalData);
-            }
+                                                       &portalData);
         }
         return;
     }
@@ -347,9 +451,6 @@ void OceanRenderNode::DeclareForView(Engine::Renderer::Pipeline::ViewDeclare& d)
     // Lazily create the surface contributor. The post-world OceanUnderwater node
     // submits the actual surface draw after it can grab the current opaque scene.
     feature.EnsureForwardContributor(rs);
-
-    if (!feature.HasOcean())
-        return;
 
     // The sim cascades (foam/flow/dyn-waves/seabed/clip/albedo) are one shared set
     // dispatched once per frame, so they can only center on one camera. Snap them to
@@ -412,69 +513,10 @@ void OceanRenderNode::DeclareForView(Engine::Renderer::Pipeline::ViewDeclare& d)
         rasterDepthCapture.InvalidateReadback();
     }
 
-    float viewCameraX = cameraX, viewCameraY = cameraY, viewCameraZ = cameraZ;
-    bool haveViewCamera = haveCamera;
-    bool isOrthographicSceneView = false;
-    if (const auto* viewCam = rs.Views().FindCameraData(d.View.cameraId))
-    {
-        viewCameraX = viewCam->cameraPos.x;
-        viewCameraY = viewCam->cameraPos.y;
-        viewCameraZ = viewCam->cameraPos.z;
-        haveViewCamera = true;
-        // cameraPos.w == 1 is the editor 2D-ortho marker (CameraTypes.h) — the
-        // explicit signal the old name+projection sniffing approximated.
-        isOrthographicSceneView = viewCam->cameraPos.w == 1.0f;
-    }
-
-    // Underwater gate: this view's camera is submerged when it sits below the
-    // displaced surface at its XZ (vs flat SeaLevel — robust to waves).
-    // SampleSurfaceForRendering uses the FFT-backed query path, so this tracks the
-    // actual wave height the surface renders. Stamp the result onto the params (ANDed with the authored
-    // toggle) so the surface draw
-    // shades two-sided + flips back-face normals this frame; then schedule the
-    // fullscreen overlay when genuinely below. Degrades gracefully — no camera,
-    // toggle off, or stripped post phase leaves the ocean above-water. This must use
-    // d.View.cameraId, not the shared ocean snap/viewpoint camera, or quad view lets
-    // one viewport's submersion state tint every other viewport.
-    float submergedDepth = 0.0f;
-    bool submerged = false;
-    if (haveViewCamera && !isOrthographicSceneView)
-    {
-        if (feature.IsUnderwaterExcluded(viewCameraX, viewCameraY, viewCameraZ))
-        {
-            submerged = false;
-        }
-        else if (feature.HasUnderwaterVolumes())
-        {
-            // Volume / fly-through mode: submerged only when the camera sits inside
-            // an authored water volume; the overlay fog depth is measured down from
-            // that box's top. Confines the underwater look to a bounded body.
-            submerged = feature.TestUnderwaterVolume(viewCameraX, viewCameraY, viewCameraZ, submergedDepth);
-        }
-        else
-        {
-            // Infinite SeaLevel plane. Enable the overlay + two-sided surface across
-            // the whole near-surface zone using the FLAT sea level plus a wave-crest
-            // headroom, NOT the per-XZ wave height: comparing the camera to the wavy
-            // surface at its exact XZ flickers in troughs (the surface dips a metre+
-            // below the camera), which briefly disables the overlay and exposes the
-            // un-fogged, back-face-culled surface underside as a grey void at the
-            // waterline. The fullscreen frag masks above/below per pixel, so activating
-            // a couple of metres above the surface is a no-op above the line.
-            // submergedDepth keeps the true (wavy) depth so the overlay fog strength
-            // still tracks how deep the camera actually is.
-            constexpr float kOverlayActivationHeadroom = 2.0f; // metres above flat sea level
-            const OceanParamsGPU params = feature.GetParams();
-            const float surfaceY = feature.SampleSurfaceForRendering(viewCameraX, viewCameraZ).Height;
-            submergedDepth = surfaceY - viewCameraY;
-            submerged = viewCameraY < params.SeaLevel + kOverlayActivationHeadroom;
-        }
-    }
-    // Stamp the submersion state + depth: the surface draw (this same world pass)
-    // reads the Underwater flag to shade two-sided / flip back-face normals, and
-    // the post-world OceanUnderwater node reads GetSubmergedDepth() to schedule the
-    // fullscreen overlay AFTER the scene is drawn.
-    feature.SetUnderwaterActive(d.View.id, submerged, submergedDepth);
+    // Record the submersion state and depth: the surface draw in this world pass reads them
+    // for culling and underside shading; the post-world underwater node reads the depth.
+    const ViewSubmersion submersion = FindViewSubmersion(rs, feature, d.View);
+    feature.SetUnderwaterActive(d.View.id, submersion.Submerged, submersion.Depth);
 
     // The sims below serve only what a view can see, except the wave simulation,
     // which gameplay queries also read. A view that sees no water declares none of
@@ -483,15 +525,13 @@ void OceanRenderNode::DeclareForView(Engine::Renderer::Pipeline::ViewDeclare& d)
     // where an uninterrupted run would be.
     feature.BeginSimulationFrame();
     const bool waterInView =
-        submerged || IsWaterSurfaceInView(rs, feature, d.View, feature.GetParams());
+        submersion.Submerged || IsWaterSurfaceInView(rs, feature, d.View, feature.GetParams());
     if (!waterInView)
         feature.ForgetSimulationClaimsBefore(frameIndex);
     // The surface changes this view's depth only while the view sees the water.
     if (waterInView && feature.SurfaceDepthInputsChanged())
         rs.NotifyUnversionedMotion(d.View.id);
-    const bool simulateWaves =
-        waterInView || feature.HasRecentSurfaceQueries() ||
-        (feature.IsGPUQueryReady() && feature.GetGPUQuery().HasPending());
+    const bool simulateWaves = SimulatesWaves(feature, waterInView);
 
     // Planar reflection capture: re-render the opaque world mirrored across the
     // sea plane into a scaled target the surface samples for mirror reflections.

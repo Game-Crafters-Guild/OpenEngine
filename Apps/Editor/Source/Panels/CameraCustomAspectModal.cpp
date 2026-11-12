@@ -76,12 +76,13 @@ void CameraCustomAspectModal::Show(float initialWidth, float initialHeight)
 
     if (m_WidthField)
     {
-        if (auto* mgr = GetOwnerManager())
+        if (GetOwnerManager())
         {
             FloatField* field = m_WidthField;
-            mgr->PostToUI([mgr, field]()
+            field->PostSafeAction([field]()
             {
-                mgr->FocusElement(field);
+                if (UIManager* manager = field->GetOwnerManager())
+                    manager->FocusElement(field);
                 field->SelectAll();
             });
         }

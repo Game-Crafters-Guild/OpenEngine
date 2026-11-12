@@ -24,9 +24,9 @@ function quoteCliValue(value: unknown): string {
 
 /**
  * `node mcp/ge.mjs get_log --since 57 --pattern 'shader|pipeline' --port 9850`:
- * the CLI's last line. The port and host are named whenever they are not the
- * defaults, so a pasted line reaches the editor that answered, whatever the
- * environment of the next shell holds.
+ * the line the CLI prints on stderr. The port and host are named whenever they
+ * are not the defaults, so a pasted line reaches the editor that answered,
+ * whatever the environment of the next shell holds.
  */
 export function cliNextCall(tool: string, args: Record<string, unknown>): string {
   const parts = Object.entries(args).map(([key, value]) => `--${camelToKebab(key)} ${quoteCliValue(value)}`);

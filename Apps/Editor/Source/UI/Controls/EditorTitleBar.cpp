@@ -16,6 +16,7 @@
 #include "UI/ElementBuilder.h"
 #include "UI/Registration/ElementRegistration.h"
 #include "UI/StyleProperties.h"
+#include "UI/StyleUtil.h"
 #include "UI/UIManager.h"
 
 #include <algorithm>
@@ -41,16 +42,6 @@ constexpr const char* kRestoreGlyph = "\xEE\xA4\xA3";
 constexpr const char* kCloseGlyph = "\xEE\xA2\xBB";
 constexpr const char* kAccessKeysClass = "access-keys";
 constexpr const char* kOpenClass = "open";
-
-void SetClassPresent(UIElement* element, const char* className, bool present)
-{
-    if (!element || element->HasClass(className) == present)
-        return;
-    if (present)
-        element->AddClass(className);
-    else
-        element->RemoveClass(className);
-}
 
 int Pixels(float logical, float scale)
 {
@@ -135,7 +126,7 @@ void EditorTitleBar::UpdateState(const std::string& caption)
     // The access-key underlines show only while Alt is held.
     const UIManager* ui = GetOwnerManager();
     const bool accessKeysShown = ui && (ui->GetModifierKeys() & Input::kModAlt) != 0;
-    SetClassPresent(this, kAccessKeysClass, accessKeysShown);
+    UIUtil::SetClassPresent(*this, kAccessKeysClass, accessKeysShown);
     if (auto* title = m_Title.Get())
     {
         if (title->GetText() != caption)
@@ -146,8 +137,12 @@ void EditorTitleBar::UpdateState(const std::string& caption)
         RebuildMenus();
     // The heading of the open dropdown keeps its plate until the dropdown closes.
     for (const auto& heading : m_MenuHeadings)
-        SetClassPresent(heading.Control.Get(), kOpenClass, openMenu == heading.Id);
-    SetClassPresent(m_Overflow.Get(), kOpenClass, openMenu == 0u);
+    {
+        if (auto* control = heading.Control.Get())
+            UIUtil::SetClassPresent(*control, kOpenClass, openMenu == heading.Id);
+    }
+    if (auto* overflow = m_Overflow.Get())
+        UIUtil::SetClassPresent(*overflow, kOpenClass, openMenu == 0u);
     // Update even without a layout solve: DPI and native caption metrics can
     // change while the CSS geometry and the scene title stay the same.
     OnPostLayout();

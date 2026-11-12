@@ -6,7 +6,6 @@ namespace GameEngine
 {
 
 class SceneViewController;
-class SceneViewPanel;
 
 // Overlay drawn on top of the Scene View viewport. Active only in 2D mode:
 //   - Horizontal ruler band along the top edge with adaptive tick spacing
@@ -17,8 +16,8 @@ class SceneViewPanel;
 //     is active)
 //
 // The element fills the viewport (position:absolute; inset:0) but has
-// pointer-events:none so it does not steal pan/orbit input. The owning
-// SceneViewPanel pushes the cursor position via SetCursor() each frame.
+// pointer-events:none so it does not steal pan/orbit input. The pane that
+// owns it pushes the cursor position via SetCursor() on each pointer move.
 class SceneViewRulerOverlay final : public UIElement
 {
 public:
@@ -26,9 +25,8 @@ public:
     ~SceneViewRulerOverlay() override = default;
 
     void SetSceneController(SceneViewController* controller) { m_Controller = controller; }
-    void SetPanel(SceneViewPanel* panel) { m_Panel = panel; }
 
-    // Called every frame from SceneViewPanel so the overlay reacts to
+    // Called every frame by the owning pane so the overlay reacts to
     // camera/zoom/mode changes and re-emits primitives when needed.
     void Tick();
 
@@ -44,7 +42,6 @@ public:
 
 private:
     SceneViewController* m_Controller = nullptr; // not owned
-    SceneViewPanel*      m_Panel      = nullptr; // not owned
 
     // Last camera state seen during Tick(); used for dirty tracking so we
     // only re-emit primitives when something visible actually changed.

@@ -8,6 +8,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace GameEngine
 {
@@ -21,31 +22,62 @@ struct SettingsCategoryDescriptor;
 /// answered each), the two CLI executables, the Node.js executable that runs the
 /// editor's MCP server and the mode new conversations start in, kept in the editor
 /// preferences under `aiAssistant.*`; and each local session's last session and its
-/// mode per project, kept in the per-user settings of that project. There is no key setting: the Claude (API) connection reads
-/// its key from the environment when a turn starts (ClaudeApiProvider).
+/// mode per project, kept in the per-user settings of that project. The Claude API key is not a
+/// setting: it is kept in the system's credential store (ApiKeyStore).
 class AiAssistantSettings
 {
 public:
     /// The settings page id and the prefix of every preference key.
     static constexpr std::string_view kCategoryId = "aiAssistant";
 
-    /// A value the user can choose: a connection, a model or an effort.
+    /// A value the user can choose: a model or an effort.
     struct Choice
     {
-        /// The stored value: the provider's IAgentProvider::Id(), a model as the
-        /// connection names it, an effort level.
+        /// The stored value: a model as the connection names it, an effort level.
         std::string_view Id;
         /// What the settings page and the panel show.
         std::string_view Label;
     };
-    /// Every connection, in the order the settings page and the panel list them.
-    static std::span<const Choice> ProviderChoices();
+    /// An assistant the setup page offers as its first step.
+    struct AssistantChoice
+    {
+        std::string_view Name;
+        /// One line under the name: who makes it and what it can do in the editor.
+        std::string_view Line;
+    };
+    /// A connection: an assistant and the way it signs in, the setup page's second step.
+    struct ProviderChoice
+    {
+        /// The stored value: the provider's IAgentProvider::Id().
+        std::string_view Id;
+        /// "Assistant (Method)", the name the settings page and the panel show.
+        std::string_view Label;
+        /// An AssistantChoice::Name.
+        std::string_view Assistant;
+        /// How the assistant signs in: "Subscription", "API key".
+        std::string_view Method;
+        /// One line under the method: whose account or key it uses.
+        std::string_view MethodLine;
+        /// What the method needs and what the assistant can do with it.
+        std::string_view MethodNeeds;
+    };
+    /// Every assistant that has a connection, in the order the setup page shows them.
+    static std::span<const AssistantChoice> AssistantChoices();
+    /// Every connection, grouped by assistant, in the order the settings page and the panel list them.
+    static std::span<const ProviderChoice> ProviderChoices();
+    /// The connections of `assistant`, its first method first; empty for an unknown assistant.
+    static std::vector<ProviderChoice> MethodChoices(std::string_view assistant);
+    /// The connection of `providerId`; the Claude session's for an unknown id.
+    static const ProviderChoice& ProviderChoiceOf(std::string_view providerId);
 
     /// The connection id the panel uses (an IAgentProvider::Id()); the Claude
     /// session when none was chosen or the stored one is unknown.
     static std::string Provider();
     /// Stores the connection id; an unknown id is ignored.
     static void SetProvider(const std::string& providerId);
+    /// Chooses `assistant` with its first method, unless the stored connection is already one of
+    /// its methods; an assistant without a connection is ignored.
+    static void SetAssistant(std::string_view assistant);
     /// Counts the SetProvider() calls that changed the stored connection in this
     /// process, so an open panel can follow a choice made on the settings page.
     static uint64_t ProviderGeneration();
@@ -58,7 +90,8 @@ public:
     /// first one when none is stored or the stored one is no longer offered (said once
     /// in the log); Codex's free text, empty for its own default.
     static std::string Model(std::string_view providerId);
-    /// Stores `modelId` for `providerId`; an id outside ModelChoices() is ignored.
+    /// Stores `modelId` for `providerId`: Codex's free text as typed (empty for its own default), else
+    /// a ModelChoices() id; an id outside ModelChoices() is ignored.
     static void SetModel(std::string_view providerId, std::string_view modelId);
     /// What the panel and the settings page call `modelId` of `providerId`: the model
     /// that last answered a turn asking for it ("Opus 5.5", AnsweredModel()), else its
@@ -86,15 +119,26 @@ public:
     /// and names the model that answered.
     static uint64_t ModelGeneration();
 
-    /// The `claude` executable: a program name searched for on PATH or a full path.
+    /// The `claude` executable: a program name searched for on PATH or a full path;
+    /// `claude` when the setting is empty.
     static std::string ClaudeExecutable();
-    /// The `codex` executable; empty until the user sets it, because Codex is not
-    /// normally on PATH.
+    /// The `codex` executable: a program name searched for on PATH or a full path;
+    /// `codex` when the setting is empty.
     static std::string CodexExecutable();
 
     /// The Node.js executable that runs the editor's MCP server for a conversation
     /// that acts in the editor: a program name searched for on PATH or a full path.
     static std::string NodeExecutable();
+    /// Each stores its executable as the user typed or picked it; a change moves SetupGeneration().
+    static void SetClaudeExecutable(const std::string& executable);
+    static void SetCodexExecutable(const std::string& executable);
+    static void SetNodeExecutable(const std::string& executable);
+    /// Moves whenever the connection or the Claude, Codex or Node executable changes, so the
+    /// setup page checks the new setup at once.
+    static uint64_t SetupGeneration();
+    /// Moves SetupGeneration() with no setting changed (Check again): the page, the panel and
+    /// the providers' cached answers check again, so a program installed since is found.
+    static void CheckSetupAgain();
 
     /// The conversation's text size in px, the size slider's value (its body text; the
     /// smaller tiers scale with it): kDefaultTextSizePx until the user changes it, never
@@ -143,9 +187,7 @@ public:
     static void SetLastSession(std::string_view providerId, const std::filesystem::path& projectRoot,
                                const std::string& sessionId);
 
-    /// The settings page: Provider, the three Model rows, the Claude session effort,
-    /// the mode new conversations start in, the two executables, the Node executable
-    /// and the Login status row.
+    /// The settings page: AiAssistantSetupPage, which owns its rows, and their names as search words.
     static Editor::SettingsCategoryDescriptor BuildCategory();
     /// Registers BuildCategory() with the editor's settings registry.
     static void Register();

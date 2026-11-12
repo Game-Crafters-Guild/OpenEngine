@@ -13,14 +13,19 @@ const kUsage = `Usage: ge <tool> [--flag value ...]
        ge batch                       ndjson {"method","params"} per stdin line
        ge list [--json]               every tool name, one per line`;
 
-function globalFlags(): string {
+// `ge batch` writes raw protocol lines and sends each line as it reads it, so it reads
+// neither --json nor --dry-run.
+function globalFlags(command: "tool" | "batch" = "tool"): string {
   const cfg = ipcConfig();
+  const toolOnly = command === "tool"
+    ? `
+  --json            machine-readable envelope on stdout
+  --dry-run         print the resolved parameters and exit without calling`
+    : "";
   return `Global flags:
   --port <n>        editor debug port (default ${cfg.port})
   --host <h>        editor debug host (default ${cfg.host})
-  --timeout <ms>    per-request watchdog (default ${cfg.timeoutMs})
-  --json            machine-readable envelope on stdout
-  --dry-run         print the resolved parameters and exit without calling
+  --timeout <ms>    per-request watchdog (default ${cfg.timeoutMs})${toolOnly}
   --quiet           suppress progress notes on stderr
 
 Environment:
@@ -111,6 +116,21 @@ export function toolHelp(tool: ToolDef): string {
     lines.push("", `Debug-server method: ${tool.ipcMethod}`);
   }
   return lines.join("\n");
+}
+
+export function batchHelp(): string {
+  return [
+    "Usage: ge batch < requests.ndjson",
+    "       <command> | ge batch",
+    "",
+    "Sends one debug-server request per stdin line, {\"method\":\"...\",\"params\":{...}},",
+    "over one connection, and prints one response line per request on stdout.",
+    "Requests are numbered 1 to N in stdin order. Pair responses by id, not by line",
+    "order: deferred captures answer frames later. The editor endpoint goes to stderr.",
+    "Exits when stdin ends and every request has an answer.",
+    "",
+    globalFlags("batch"),
+  ].join("\n");
 }
 
 export function overviewHelp(): string {

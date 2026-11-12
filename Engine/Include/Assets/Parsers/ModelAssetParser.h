@@ -57,7 +57,7 @@ class ModelAssetParser final : public AssetParser
 
     // A glTF's external buffers and the external images it copies (ModelAsset::ResolveDecodeInputs);
     // none for the other formats.
-    AssetDecodeInputs ResolveDecodeInputs(const AssetMetadata& metadata, const Vector<uint8>& bytes,
+    AssetDecodeInputs ResolveDecodeInputs(const AssetMetadata& metadata, std::span<const uint8> bytes,
                                           AssetManager& assetManager) const override;
 };
 

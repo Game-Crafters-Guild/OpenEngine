@@ -62,13 +62,13 @@ TEST_F(SceneRaycastPendingBvhTests, APickAnswersWithTheBoundsUntilTheBvhIsPublis
     const auto whilePending = RaycastScene(ray, m_World, options);
     ASSERT_TRUE(whilePending.Hit);
     EXPECT_EQ(whilePending.Best.Kind, PickableKind::Bounds);
-    EXPECT_NEAR(whilePending.Best.WorldPosition.y, 0.5f, 1e-4f) << "not on the top of the bounds";
+    EXPECT_NEAR(whilePending.Best.Point.y, 0.5f, 1e-4f) << "not on the top of the bounds";
 
     ASSERT_NE(MeshBvhCache::Instance().GetOrBuild(m_Guid, 0, Grid()), nullptr);
     const auto published = RaycastScene(ray, m_World, options);
     ASSERT_TRUE(published.Hit);
     EXPECT_EQ(published.Best.Kind, PickableKind::Mesh);
-    EXPECT_NEAR(published.Best.WorldPosition.y, SurfaceHeight(3.1f, -2.7f), 0.01f);
+    EXPECT_NEAR(published.Best.Point.y, SurfaceHeight(3.1f, -2.7f), 0.01f);
 }
 
 // A renderer with no CPU mesh data has always answered with its bounds; that answer is final.
@@ -200,7 +200,7 @@ TEST_F(SceneRaycastPendingBvhTests, WithoutTheBoundsFallbackAPendingMeshIsNoHitM
     ASSERT_TRUE(published.Hit);
     EXPECT_FALSE(published.MeshBvhPending);
     EXPECT_EQ(published.Best.Kind, PickableKind::Mesh);
-    EXPECT_NEAR(published.Best.WorldPosition.y, SurfaceHeight(3.1f, -2.7f), 0.01f);
+    EXPECT_NEAR(published.Best.Point.y, SurfaceHeight(3.1f, -2.7f), 0.01f);
 }
 
 // RaycastSceneAll returns true while a mesh on the ray is pending, so a caller that walks the
@@ -219,5 +219,5 @@ TEST_F(SceneRaycastPendingBvhTests, RaycastSceneAllReturnsPendingWithNoHitUntilT
     EXPECT_FALSE(RaycastSceneAll(ray, m_World, hits, options));
     ASSERT_EQ(hits.size(), 1u);
     EXPECT_EQ(hits[0].Kind, PickableKind::Mesh);
-    EXPECT_NEAR(hits[0].WorldPosition.y, SurfaceHeight(3.1f, -2.7f), 0.01f);
+    EXPECT_NEAR(hits[0].Point.y, SurfaceHeight(3.1f, -2.7f), 0.01f);
 }

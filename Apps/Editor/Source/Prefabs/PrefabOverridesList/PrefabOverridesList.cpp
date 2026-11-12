@@ -20,6 +20,7 @@
 #include "UI/UIEvents.h"
 #include "UI/UIManager.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <format>
@@ -38,8 +39,8 @@ constexpr const char* kGroupLayoutAssetPath = "UI/controls/PrefabOverridesList/P
 constexpr const char* kRowLayoutAssetPath = "UI/controls/PrefabOverridesList/PrefabOverrideRow.uxml";
 constexpr const char* kStyleAssetPath = "UI/controls/PrefabOverridesList/PrefabOverridesList.css";
 constexpr std::array<std::string_view, 8> kRequiredIds = {
-    "prefab-overrides-title",  "prefab-overrides-against", "prefab-overrides-scroll",     "prefab-overrides-empty",
-    "prefab-overrides-footer", "prefab-overrides-note",    "prefab-overrides-revert-all", "prefab-overrides-apply-all"};
+    "prefab-overrides-title", "prefab-overrides-prefab", "prefab-overrides-scroll", "prefab-overrides-empty",
+    "prefab-overrides-footer", "prefab-overrides-note", "prefab-overrides-revert-all", "prefab-overrides-apply-all"};
 constexpr std::array<std::string_view, 3> kGroupRequiredIds = {
     "prefab-override-group-glyph", "prefab-override-group-name", "prefab-override-group-pill"};
 // Each action has a fixed slot in the row, in the order Revert, Apply, Discard.
@@ -142,13 +143,13 @@ PrefabOverridesList::PrefabOverridesList(ECS::World& world, UndoRedoService* und
     if (!panel)
         return;
     m_Title = dynamic_cast<Label*>(panel->FindById("prefab-overrides-title"_sid));
-    m_Against = dynamic_cast<Label*>(panel->FindById("prefab-overrides-against"_sid));
+    m_PrefabLabel = dynamic_cast<Label*>(panel->FindById("prefab-overrides-prefab"_sid));
     m_Scroll = dynamic_cast<ScrollView*>(panel->FindById("prefab-overrides-scroll"_sid));
     m_Empty = dynamic_cast<Label*>(panel->FindById("prefab-overrides-empty"_sid));
     m_Note = dynamic_cast<Label*>(panel->FindById("prefab-overrides-note"_sid));
     m_RevertAll = dynamic_cast<Button*>(panel->FindById("prefab-overrides-revert-all"_sid));
     m_ApplyAll = dynamic_cast<Button*>(panel->FindById("prefab-overrides-apply-all"_sid));
-    if (!m_Title || !m_Against || !m_Scroll || !m_Empty || !m_Note || !m_RevertAll || !m_ApplyAll)
+    if (!m_Title || !m_PrefabLabel || !m_Scroll || !m_Empty || !m_Note || !m_RevertAll || !m_ApplyAll)
         return;
     m_RevertAll->SetTooltip("Set every override back to the prefab value. One undo step.");
     m_RevertAll->SetOnClick([this](UIEvent&) { RevertTargets(m_Targets, "Revert all overrides"); });
@@ -169,6 +170,7 @@ void PrefabOverridesList::Open(const UIElement& anchor, ECS::EntityHandle entity
     m_PlacedX = -1.0f;
     m_PlacedY = -1.0f;
     m_Side.reset();
+    FitWidthToBar();
     BuildRows();
     m_Scroll->SetScrollY(0.0f);
     RemoveClass(kHiddenClass);
@@ -201,6 +203,7 @@ void PrefabOverridesList::OnPostLayout()
         return;
     if (m_RowsStale)
         BuildRows();
+    FitWidthToBar();
     Place();
 }
 
@@ -223,7 +226,7 @@ void PrefabOverridesList::BuildRows()
     const bool readOnly = m_Context.IsInPlayMode && m_Context.IsInPlayMode();
     m_Title->SetText(std::format("Overrides on '{}'", model.InstanceName));
     m_Title->SetTooltip(m_Title->GetText());
-    m_Against->SetText("against " + prefabName);
+    m_PrefabLabel->SetText("Prefab: " + prefabName);
     bool hasEntityRows = false;
     for (const PrefabOverrideGroup& group : model.Groups)
     {
@@ -298,7 +301,12 @@ void PrefabOverridesList::AppendRow(ECS::EntityHandle entity, const PrefabOverri
     label->SetTooltip(row.Label);
     SetShownText(*pill, KindPill(row.Kind));
     const bool showsValue = !row.PrefabValue.empty() || row.PrefabColor.has_value();
-    SetShownText(*value, showsValue ? "prefab: " + row.PrefabValue : std::string());
+    if (!showsValue)
+        SetShownText(*value, std::string());
+    else if (row.SameAsPrefab)
+        SetShownText(*value, row.PrefabValue + ", same as the prefab");
+    else
+        SetShownText(*value, "prefab: " + row.PrefabValue);
     value->SetTooltip(row.PrefabValue);
     if (row.PrefabColor)
     {
@@ -364,6 +372,23 @@ void PrefabOverridesList::Discard(std::size_t skipIndex)
     else
         command->Do();
     Refresh();
+}
+
+// The list is as wide as its longest row, up to the width of the bar that holds it. The style sheet's
+// min-width is the floor: a bar narrower than the floor caps the list at the floor.
+void PrefabOverridesList::FitWidthToBar()
+{
+    const UIElement* bar = GetParent();
+    const float barWidth = bar ? bar->GetLayoutWidth() : 0.0f;
+    if (barWidth <= 0.0f)
+        return;
+    const StyleLength& floor = m_Panel->GetResolvedStyle().Layout.MinWidth;
+    const float cap = floor.IsPx() ? std::max(barWidth, floor.Value) : barWidth;
+    if (std::fabs(cap - m_MaxWidth) < kPlacementEpsilon)
+        return;
+    m_MaxWidth = cap;
+    m_Panel->Style().Set(Style::MaxWidth, StyleLength::Px(cap));
+    MarkDirty(UIElement::LayoutDirty);
 }
 
 void PrefabOverridesList::Place()

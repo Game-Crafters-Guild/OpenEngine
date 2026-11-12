@@ -8,6 +8,7 @@
   <MarkdownText id="AgentRowReply" class="agent-row-reply hidden" />
   <UIElement id="AgentRowMarkups" class="agent-row-markups hidden" />
   <UIElement id="AgentRowCalls" class="agent-row-calls hidden" />
+  <UIElement id="AgentRowSetupRefusal" class="agent-row-setup-refusal hidden" />
   <UIElement class="agent-row-footer">
     <UIElement id="AgentRowStatus" class="agent-row-status" />
     <UIElement id="AgentRowActions" class="agent-row-actions">

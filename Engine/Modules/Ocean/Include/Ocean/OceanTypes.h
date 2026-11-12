@@ -71,37 +71,28 @@ inline constexpr uint32 kOceanLocalFFTMaskPages =
 // the reference OceanWaveSpectrum octave count (per-octave power curve length).
 inline constexpr uint32 kOceanSpectrumOctaves = 14;
 
-// Surface geometry budget retained for scene compatibility. The renderer maps
-// this value to the per-tile density of its camera-following concentric LOD rings.
-// Runtime authoring can raise it for more near-field geometry or lower it for
-// performance; keep a hard cap because vertex and triangle counts grow with it.
-inline constexpr uint32 kDefaultOceanGridSize = 256;
-inline constexpr uint32 kMinOceanGridSize = 8;
-inline constexpr uint32 kMaxOceanGridSize = 1024;
-inline constexpr uint32 kDefaultOceanGeometryUpSampleFactor = 2;
+// Cells per side of one camera-following ring tile, for each unit of
+// GeometryUpSampleFactor / GeometryDownSampleFactor. The count is kept even so
+// the 2x snap and the morph onto the coarser grid stay exact.
+inline constexpr uint32 kOceanRingCellsPerTileUnit = 8;
+inline constexpr uint32 kMinOceanRingCellsPerTile = 8;
+inline constexpr uint32 kMaxOceanRingCellsPerTile = 64;
+inline constexpr uint32 kDefaultOceanGeometryUpSampleFactor = 3;
 
-inline constexpr uint32 ClampOceanGeometryGridSize(uint32 gridSize)
-{
-    return gridSize < kMinOceanGridSize
-        ? kMinOceanGridSize
-        : (gridSize > kMaxOceanGridSize ? kMaxOceanGridSize : gridSize);
-}
-
-inline constexpr uint32 ResolveOceanGeometryGridSize(uint32 upSample, uint32 downSample)
+/// Cells per ring tile side for the authored density factors (0 selects the default).
+inline constexpr uint32 ResolveOceanRingCellsPerTile(uint32 upSample, uint32 downSample)
 {
     const uint64 up = upSample == 0u
         ? static_cast<uint64>(kDefaultOceanGeometryUpSampleFactor)
         : static_cast<uint64>(upSample);
     const uint64 down = downSample == 0u ? 1u : static_cast<uint64>(downSample);
-    const uint64 desired =
-        (static_cast<uint64>(kDefaultOceanGridSize) * up + down - 1u) / down;
-    return ClampOceanGeometryGridSize(static_cast<uint32>(
-        desired > static_cast<uint64>(kMaxOceanGridSize)
-            ? static_cast<uint64>(kMaxOceanGridSize)
-            : desired));
+    const uint64 desired = (static_cast<uint64>(kOceanRingCellsPerTileUnit) * up) / down;
+    const uint64 clamped = desired < kMinOceanRingCellsPerTile
+        ? kMinOceanRingCellsPerTile
+        : (desired > kMaxOceanRingCellsPerTile ? kMaxOceanRingCellsPerTile : desired);
+    return static_cast<uint32>(clamped) & ~1u;
 }
-inline constexpr uint32 kDefaultOceanGeometryGridSize =
-    ResolveOceanGeometryGridSize(0u, 1u);
+inline constexpr uint32 kDefaultOceanRingCellsPerTile = ResolveOceanRingCellsPerTile(0u, 1u);
 
 // Base world-space extent used to size the concentric ring mesh. The outer
 // horizon skirt extends beyond this reach and the whole layout scales with
@@ -451,11 +442,10 @@ struct OceanParamsGPU
     float32 RespectShallowAttenuation = 1.0f;
 
     // --- Surface grid geometry controls ---
-    // One std430 16-byte lane. GeometryGridSize is the compatible surface budget
-    // that determines each LOD tile's cell count. The vertex shader uses the
-    // resulting cell width to estimate per-vertex footprint, so raising geometry
-    // density also lets smaller displacement survive the anti-aliasing filter.
-    float32 GeometryGridSize = static_cast<float32>(kDefaultOceanGeometryGridSize);
+    // One std430 16-byte lane. RingCellsPerTile is the cell count per ring tile
+    // side; the vertex shader derives the cell width and the displacement
+    // footprint filter from it (ocean_ring_layout.glsl).
+    float32 RingCellsPerTile = static_cast<float32>(kDefaultOceanRingCellsPerTile);
     // Accumulated floating-origin shift added only for wave phase evaluation.
     float32 WaveOriginOffsetX = 0.0f;
     float32 WaveOriginOffsetZ = 0.0f;

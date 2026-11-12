@@ -151,11 +151,10 @@ class SplineSceneSerialization : public testing::Test
 
     bool Load(ECS::World& world, const std::filesystem::path& path)
     {
-        Scene::SceneDegradation degradation;
         Scene::SceneReadOptions options;
-        options.outDegradation = &degradation;
-        const bool loaded = Scene::ReadSceneInto(world, path, options);
-        EXPECT_TRUE(loaded) << Scene::GetLastSceneIOError().message;
+        const Scene::SceneInstantiateResult loaded = Scene::ReadSceneInto(world, path, options);
+        const Scene::SceneDegradation& degradation = loaded.Degradation;
+        EXPECT_TRUE(loaded) << loaded.Error->message;
         EXPECT_FALSE(degradation.IsDegraded());
         SplineECS::SplineExtractionSystem{}.Update(world, 0);
         return loaded && !degradation.IsDegraded();
@@ -416,6 +415,10 @@ TEST_F(SplineSceneSerialization, PavingRoundTripsItsFieldsAndMembers)
     paved.BorderCorner = Components::SplineWallCorner::Round;
     paved.Mouth = Components::SplinePavingMouth::Straight;
     paved.MouthRadius = 2.5f;
+    paved.Seam = Components::SplinePavingSeam::StoneCourse;
+    paved.SeamBandTiles = 3.5f;
+    paved.SeamCourseWidth = 0.4f;
+    paved.SeamCourseMaterial.Set(GUID::Derive(GUID::Null(), "test/seam-course"));
     paved.ConformTarget = Components::SplineConformTarget::Scene;
     paved.GroundAuthority = Components::SplineGroundAuthority::None;
     paved.CastShadows = false;
@@ -447,6 +450,10 @@ TEST_F(SplineSceneSerialization, PavingRoundTripsItsFieldsAndMembers)
     EXPECT_EQ(reloaded->BorderCorner, expected.BorderCorner);
     EXPECT_EQ(reloaded->Mouth, expected.Mouth);
     EXPECT_EQ(reloaded->MouthRadius, expected.MouthRadius);
+    EXPECT_EQ(reloaded->Seam, expected.Seam);
+    EXPECT_EQ(reloaded->SeamBandTiles, expected.SeamBandTiles);
+    EXPECT_EQ(reloaded->SeamCourseWidth, expected.SeamCourseWidth);
+    EXPECT_EQ(reloaded->SeamCourseMaterial, expected.SeamCourseMaterial);
     EXPECT_EQ(reloaded->ConformTarget, expected.ConformTarget);
     EXPECT_EQ(reloaded->GroundAuthority, expected.GroundAuthority);
     EXPECT_EQ(reloaded->CastShadows, expected.CastShadows);

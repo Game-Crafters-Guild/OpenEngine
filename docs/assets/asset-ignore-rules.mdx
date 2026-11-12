@@ -1,0 +1,47 @@
+---
+title: Asset ignore rules
+description: Which folders and files the asset registry skips, and how a project adds its own rules in an .assetignore file.
+---
+
+The asset registry skips tool output, caches and build files, so they never become assets. The same folder rules decide which C++ files compile into a script module. When the registry skips a file that you can see in a folder, the log shows one warning for that folder. The warning names the folder and the rule.
+
+## The default rules
+
+The rules apply under each asset root: the project's `Assets` folder and the folder of each package.
+
+| Rule | Folders or files |
+|---|---|
+| Skipped at any depth, by name | `node_modules`, `CMakeFiles`, `__pycache__`, `site-packages`, `venv`, `__MACOSX`, and every folder whose name starts with `.` (`.git`, `.vs`, `.Cache`, `.venv`) |
+| Skipped at any depth, by name prefix | `cmake-build-` (`cmake-build-debug`, `cmake-build-release`) |
+| Tool output folders | `Generated`, `Library`, `build`, `out`, `bin`, `obj` |
+| Skipped files | `AssetDatabase.assetdb`, `.assetmanifest`, `.assetignore`, `CMakeLists.txt`, `pyvenv.cfg`, `.DS_Store`, `Thumbs.db`, `desktop.ini`, and every file whose name starts with `.` |
+| Skipped extensions | `.meta`, `.tmp`, `.pyc`, `.pyo`, `.pyd`, `.csproj`, `.sln`, `.slnx`, `.vcxproj` |
+
+A game can use a tool output name for its own content, for example `World/Generated` for generated world data. So the registry skips a tool output folder only in two cases:
+
+- The folder is directly under the asset root, for example `Assets/build`.
+- The folder holds a marker file at any depth: `CMakeCache.txt` (a CMake build tree) or `pyvenv.cfg` (a Python environment).
+
+`Assets/World/Generated` with no marker file is content and registers.
+
+## Add rules with .assetignore
+
+Put a file named `.assetignore` in the asset root. Each line is one rule. Matches ignore case. A line that starts with `#` is a comment, and blank lines are ignored.
+
+| Line | Effect |
+|---|---|
+| `Scratch/` | Skips every folder named `Scratch`, at any depth. |
+| `build/` | Skips every folder named `build`, at any depth, with or without a marker file. |
+| `ThirdParty/Tests/` | Skips the folder `ThirdParty/Tests` under the asset root. |
+| `ThirdParty/Tests/**` | The same as the line above. |
+| `*.psd` or `.psd` | Skips every file with the extension `.psd`. |
+| `Drafts` | Skips everything under `Drafts` in the asset root. |
+
+```text title="Assets/.assetignore"
+# Source art and a vendored test suite are not assets.
+*.psd
+ThirdParty/Tests/**
+Scratch/
+```
+
+The registry reads `.assetignore` when the project opens. Reopen the project after you change the file.

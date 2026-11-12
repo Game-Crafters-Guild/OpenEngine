@@ -52,11 +52,8 @@ inline constexpr double kCBTNearCapacityOccupancy = 0.85;
 // tree standing at nonzero merge demand with ZERO occupancy pressure:
 //
 //   - PrepareSimplify needs the pair ACROSS the split edge at matching depth, not just the sibling.
-//     A depth-graded tree does not always have one, and the parent-level merge metric (planar) makes
-//     siblings agree without supplying that neighbour.
-//   - The spherical domain still decides per facet, on that facet's own projected AREA. Diamond
-//     members measure different parts of the parent, so under perspective one can ask while the
-//     other does not.
+//     A depth-graded tree does not always have one: the parent-level merge test makes siblings and
+//     diamonds agree, but a twin child that is split further refuses the merge.
 //
 // Reading unserved merge demand alone as a deadlock therefore reports healthy terrain as broken.
 // The stall flag requires the condition that makes an unserved merge actually cost something: the

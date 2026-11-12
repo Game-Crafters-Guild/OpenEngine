@@ -248,10 +248,11 @@ TEST_F(OpenSceneResolutionTests, MissingRelativePathFailsCleanlyAnchoredToProjec
 
     // The failure must report the project-anchored candidate, proving the
     // lookup went through mount resolution rather than the CWD.
-    const Scene::SceneIOError& err = Scene::GetLastSceneIOError();
-    ASSERT_FALSE(err.file.empty());
-    EXPECT_TRUE(err.file.is_absolute());
-    const std::string errFile = Canon(err.file);
+    ASSERT_TRUE(controller.GetDocument()->GetLastLoadFailure().has_value());
+    const std::filesystem::path& failedFile = controller.GetDocument()->GetLastLoadFailure()->ErrorFile;
+    ASSERT_FALSE(failedFile.empty());
+    EXPECT_TRUE(failedFile.is_absolute());
+    const std::string errFile = Canon(failedFile);
     const std::string rootPrefix = Canon(m_AssetRoot);
     EXPECT_EQ(errFile.rfind(rootPrefix, 0), 0u)
         << "error path '" << errFile << "' should be anchored under '" << rootPrefix << "'";

@@ -26,7 +26,7 @@ class UIElement;
 struct UIEvent;
 
 // Live GPU visual profiler. When armed, pulls per-pass CPU + GPU timings
-// from Rendering::RenderGraph::RGFrame::LastFrameTimings() and rolls them
+// from Rendering::RenderGraph::RGFrame::LastFrameProfiling().Passes and rolls them
 // into frame-time charts locally. GPU timestamps need a query pool; browser
 // WebGPU has none (no encoder writeTimestamp), so those series stay at 0
 // while CPU charts and the pass table still populate.

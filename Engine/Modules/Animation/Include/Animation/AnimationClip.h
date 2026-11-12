@@ -2,6 +2,7 @@
 
 #include "Animation/AnimationEvent.h"
 #include "AssetCore/Asset.h"
+#include "Types/ByteBuffer.h"
 #include "Types/Types.h"
 #include "Types/StringId.h"
 #include <algorithm>
@@ -124,7 +125,7 @@ class AnimationClip : public ::GameEngine::Asset
         : ::GameEngine::Asset(guid, ::GameEngine::AssetType::Animation, path) {}
 
     bool Load() override; // parse clip from file/container (gltf/fbx)
-    bool LoadFromData(const Vector<uint8>& data) override;
+    bool LoadFromData(std::span<const uint8> data) override;
     void Unload() override;
 
     float32 GetDuration() const
@@ -138,6 +139,13 @@ class AnimationClip : public ::GameEngine::Asset
     const std::vector<AnimChannel>& GetChannels() const
     {
         return m_Channels;
+    }
+    /// True when the clip has no length and no key: it has nothing to play.
+    /// A clip of length 0 with keys is a pose: it holds its keys at every time.
+    bool IsEmpty() const
+    {
+        return m_Duration <= 0.0f && std::none_of(m_Channels.begin(), m_Channels.end(),
+                                                  [](const AnimChannel& channel) { return !channel.keys.empty(); });
     }
     uint32 GetSelectedAnimationIndex() const
     {
@@ -202,7 +210,7 @@ class AnimationClip : public ::GameEngine::Asset
     std::vector<std::string> EnumerateAnimationNames() const;
 
   private:
-    bool LoadEditableData(const Vector<uint8>& data);
+    bool LoadEditableData(std::span<const uint8> data);
     // Logs that the .anim file is not loaded and why, and clears the channels; returns false.
     bool RefuseEditableData(std::string_view reason);
     void RecomputeDuration();
@@ -221,7 +229,7 @@ class AnimationClip : public ::GameEngine::Asset
     // Intentionally retained across Unload() and freed with the clip. Only Load()
     // fills it: a clip parsed from bytes its caller holds (LoadFromData) keeps no
     // copy of the file.
-    Vector<uint8> m_CachedFileData;
+    ByteBuffer m_CachedFileData;
 };
 
 } // namespace Animation

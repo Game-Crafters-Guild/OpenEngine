@@ -5,6 +5,7 @@ project(JobSystem LANGUAGES CXX)
 
 # Core Job System source files
 set(JOBSYSTEM_SOURCES
+    Source/AvailableProcessors.cpp
     Source/WorkStealingThreadPool.cpp
     Source/BlockingThreads.cpp
     Source/ParallelForCore.cpp
@@ -18,6 +19,7 @@ set(JOBSYSTEM_SOURCES
 
 # Core Job System header files
 set(JOBSYSTEM_HEADERS
+    Include/JobSystem/AvailableProcessors.h
     Include/JobSystem/WorkStealingThreadPool.h
     Include/JobSystem/ConcurrentQueue.h
     Include/JobSystem/ParallelForOptions.h

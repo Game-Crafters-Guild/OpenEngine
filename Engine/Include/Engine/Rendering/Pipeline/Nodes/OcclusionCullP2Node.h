@@ -35,6 +35,7 @@ class OcclusionCullP2Node final : public IRenderPipelineNode
 
     bool Initialize(std::string nodeId, std::string nodeJson, std::string* outError) override;
     void DeclareForView(ViewDeclare& d) override;
+    void RequestPausedViewPipelines(const PausedViewPrewarm& prewarm) override;
 
   private:
     std::string m_Id;

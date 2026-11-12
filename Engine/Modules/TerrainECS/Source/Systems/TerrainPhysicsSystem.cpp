@@ -2,115 +2,194 @@
 #include "TerrainECS/TerrainService.h"
 #include "TerrainECS/TerrainRenderPublication.h"
 #include "TerrainECS/SurfaceHeightQuery.h"
-#include "TerrainECS/PlanetFaceCollider.h"
+#include "TerrainECS/TerrainPages.h"
+#include "TerrainECS/Planet/PlanetChart.h"
+#include "Planet/PlanetPageBodyFill.h"
 #include "TerrainECS/Components/TerrainPageCollider.h"
-#include "TerrainECS/Components/TerrainPlanetFaceCollider.h"
+#include "TerrainECS/Components/TerrainPlanetPageCollider.h"
 #include "Components/Terrain/Terrain.h"
-#include "Components/Terrain/TerrainPlanetRelief.h"
 #include "Components/RuntimeOnlyEntity.h"
 #include "Components/Transform.h"
+#include "Core/CpuProfiler.h"
+#include "Mathematics/Geometry.h"
 #include "ECS/ECS.h"
 #include "ECS/WorldTemplateImplementations.inl"
 #include "ECS/ECSTemplates.h"
+#include "JobSystem/WorkStealingThreadPool.h"
 #include "Logger/Logger.h"
+#include "PhysicsECS/HeightFieldDataProvider.h"
 #include "PhysicsECS/PhysicsWorldService.h"
 #include "PhysicsECS/Components/PhysicsBody.h"
 #include "PhysicsECS/Components/PhysicsCollider.h"
 #include "PhysicsECS/Components/HeightFieldColliderShape.h"
 
 #include <algorithm>
-#include <array>
-#include <cstring>
+#include <atomic>
+#include <memory>
 #include <span>
 #include <vector>
 
 namespace GameEngine::TerrainECS
 {
+
+// One planet page body fill on the job pool: what it was started for, its input and its samples. The
+// job writes Samples and Filled, then releases Done; the main thread reads them after it acquires Done.
+struct PlanetPageFill
+{
+    ECS::EntityHandle Planet;
+    uint64 Epoch = 0;
+    PageStreaming::PageAddress Page;
+    uint64 LayerVersion = 0;
+    // The body the samples refill; an invalid entity makes a new body.
+    ECS::EntityHandle Body;
+    TerrainService::PagePhysicsHandle Slot;
+
+    PlanetPageBodyInput Input;
+    std::vector<float32> Samples;
+    bool Filled = false;
+    std::atomic<bool> Done{false};
+
+    // The job body. It frees the page copies once the samples are written.
+    void Run()
+    {
+        GE_CPU_PROFILE_SCOPE("Terrain.PlanetBodyFill");
+        Filled = FillPlanetPageBody(Input, Samples);
+        Input.Pages = {};
+        Done.store(true, std::memory_order_release);
+    }
+};
+
+// The page colliders the sweep tears down, with the page slots to release after their bodies.
+struct PageColliderOrphans
+{
+    std::vector<ECS::EntityHandle> Entities;
+    /// Per entity: the built body that takes over its ground, or an invalid entity.
+    std::vector<ECS::EntityHandle> Grounds;
+    std::vector<TerrainService::PagePhysicsHandle> Slots;
+};
+
+// A planet page body the sweep keeps, sorted by its page key.
+struct PlanetBodyRecord
+{
+    uint64 Key = 0;
+    ECS::EntityHandle Entity;
+    Components::TerrainPlanetPageCollider Tag;
+};
+
+// The planet page bodies the sweep found: the ones it keeps, and the ones it tears down with their slots.
+struct PlanetBodySweep
+{
+    std::vector<PlanetBodyRecord> Current;
+    std::vector<PlanetBodyRecord> Previous; ///< from an older stream, on a window page
+    std::vector<PlanetBodyRecord> BuiltCurrent; ///< the current bodies with a built backend body
+    PageColliderOrphans Orphans;
+
+    void Clear()
+    {
+        Current.clear();
+        Previous.clear();
+        BuiltCurrent.clear();
+        Orphans.Entities.clear();
+        Orphans.Grounds.clear();
+        Orphans.Slots.clear();
+    }
+};
+
+// The planet pass's containers, kept across frames and cleared at each use, so a steady frame
+// allocates nothing.
+struct PlanetColliderScratch
+{
+    std::vector<uint64> WindowKeys;
+    PlanetBodySweep Sweep;
+    std::vector<PageStreaming::PageAddress> Reads;
+};
+
 namespace
 {
 
-// Identity transform (column-major) translated to (x, y, z).
-Components::Transform MakeTranslation(float32 x, float32 y, float32 z)
+// Fills started in one frame, and fills in flight at once: bounds the page copies a camera jump makes.
+constexpr size_t kPlanetFillsStartedPerFrame = 4;
+constexpr size_t kPlanetFillsInFlight = 16;
+
+// Identity transform translated to `position`.
+Components::Transform MakeTranslation(const Mathematics::WorldPosition& position)
 {
     Components::Transform t{}; // defaults to identity
-    t.matrix[12] = x;
-    t.matrix[13] = y;
-    t.matrix[14] = z;
+    t.Position = position;
     return t;
 }
 
-Components::WorldTransform MakeWorldTranslation(float32 x, float32 y, float32 z)
+Components::WorldTransform MakeWorldTranslation(const Mathematics::WorldPosition& position)
 {
     Components::WorldTransform t{}; // defaults to identity
-    t.matrix[12] = x;
-    t.matrix[13] = y;
-    t.matrix[14] = z;
+    t.Position = position;
     return t;
 }
 
-// Column-major TRS matrix whose upper-left 3x3 columns are the planet face body frame
-// (Ta, N, Tb) and whose translation is the planet centre. Local X runs along Ta, local Z
-// along Tb, and local Y (the heightfield height axis) along the face outward normal N.
-void FillFaceMatrix(float32 out[16], const std::array<float32, 3>& ta,
-                    const std::array<float32, 3>& n, const std::array<float32, 3>& tb,
-                    float32 cx, float32 cy, float32 cz)
+// Basis whose columns are a planet chart's frame (TangentX, Up, TangentZ). Local X runs along
+// TangentX, local Z along TangentZ and local Y (the heightfield's height axis) along Up.
+Mathematics::Matrix3x3 ChartBasis(const PlanetChart& chart)
 {
-    out[0] = ta[0]; out[1] = ta[1]; out[2] = ta[2]; out[3] = 0.0f;
-    out[4] = n[0];  out[5] = n[1];  out[6] = n[2];  out[7] = 0.0f;
-    out[8] = tb[0]; out[9] = tb[1]; out[10] = tb[2]; out[11] = 0.0f;
-    out[12] = cx;   out[13] = cy;   out[14] = cz;   out[15] = 1.0f;
+    Mathematics::Matrix3x3 basis;
+    basis[0] = glm::vec3(chart.TangentX.x, chart.TangentX.y, chart.TangentX.z);
+    basis[1] = glm::vec3(chart.Up.x, chart.Up.y, chart.Up.z);
+    basis[2] = glm::vec3(chart.TangentZ.x, chart.TangentZ.y, chart.TangentZ.z);
+    return basis;
 }
 
-Components::Transform MakeFaceTransform(uint32 face, float32 cx, float32 cy, float32 cz)
+// A planet level-0 page as one sortable value.
+uint64 PlanetPageKey(const PageStreaming::PageAddress& page)
 {
-    std::array<float32, 3> ta, n, tb;
-    ComputePlanetFaceFrame(face, ta, n, tb);
-    Components::Transform t{};
-    FillFaceMatrix(t.matrix, ta, n, tb, cx, cy, cz);
-    return t;
+    return (static_cast<uint64>(page.Face) << 56u) | (static_cast<uint64>(page.Z) << 28u) | page.X;
 }
 
-Components::WorldTransform MakeFaceWorldTransform(uint32 face, float32 cx, float32 cy, float32 cz)
+uint64 PlanetPageKey(const Components::TerrainPlanetPageCollider& tag)
 {
-    std::array<float32, 3> ta, n, tb;
-    ComputePlanetFaceFrame(face, ta, n, tb);
-    Components::WorldTransform t{};
-    FillFaceMatrix(t.matrix, ta, n, tb, cx, cy, cz);
-    return t;
+    return PlanetPageKey(PageStreaming::PageAddress{static_cast<uint8>(tag.Face), 0, tag.PageX, tag.PageZ});
 }
 
-// The planet-shape inputs every face patch is derived from, as one comparable value.
-// Bit-exact on the float payloads: any change to the shape must be visible, including one
-// too small to matter geometrically, since a missed change leaves physics on the old surface.
-uint64 HashPlanetShape(const PlanetColliderParams& params)
+bool ContainsKey(const std::vector<uint64>& sortedKeys, uint64 key)
 {
-    auto foldFloat = [](uint64 h, float32 f) {
-        uint32 bits;
-        std::memcpy(&bits, &f, sizeof(bits));
-        return h * 1099511628211ull ^ static_cast<uint64>(bits);
-    };
-    uint64 hash = 1469598103934665603ull; // FNV-1a offset basis
-    hash = foldFloat(hash, params.Radius);
-    hash = foldFloat(hash, params.ReliefAmplitude);
-    hash = foldFloat(hash, params.ReliefFrequency);
-    hash = hash * 1099511628211ull ^ static_cast<uint64>(params.ReliefOctaves);
-    return hash;
+    return std::binary_search(sortedKeys.begin(), sortedKeys.end(), key);
 }
 
-// Frees the entity's backend body now. Entity destruction and component removal
-// are deferred to the next frame's flush, so the entity stays live for the rest
-// of THIS frame with a freed Jolt body; clearing the runtime state keeps anything
-// from dereferencing the freed handle before the removal lands (PhysicsInit's
-// initialized/valid early-out is incidental, not a guarantee), and the
-// OnRemove<PhysicsBody> hook then finds the handles already cleared.
-void ReleaseColliderBody(ECS::World& world, ECS::EntityHandle entity)
+// Wakes the dynamic bodies over the built footprint of the released heightfield `entity`. A body asleep
+// on the ground does not wake when the ground's body goes, so it would stay above the ground that
+// replaces it. With a `ground` heightfield, a body that the ground's surface buries moves on top of it.
+void SettleBodiesOverReleasedHeightField(const ECS::World& world, Physics::PhysicsWorld& physicsWorld,
+                                         ECS::EntityHandle entity, ECS::EntityHandle ground)
+{
+    const auto* shape = world.GetComponent<Components::HeightFieldColliderShape>(entity);
+    const auto* worldTransform = world.GetComponent<Components::WorldTransform>(entity);
+    if (!shape || !worldTransform || shape->builtSampleCount < 2u)
+        return;
+    const int32 last = static_cast<int32>(shape->builtSampleCount - 1u);
+    const Mathematics::AABB box = PhysicsECS::HeightFieldRegionWorldBox(
+        *worldTransform, *shape, shape->builtSampleCount, 0,
+        0, last, last, shape->builtMinHeight, shape->builtMaxHeight);
+    const auto* groundShape =
+        ground.IsValid() ? world.GetComponent<Components::HeightFieldColliderShape>(ground) : nullptr;
+    const auto* groundTransform = ground.IsValid() ? world.GetComponent<Components::WorldTransform>(ground) : nullptr;
+    if (groundShape && groundTransform)
+        PhysicsECS::SettleBodiesOnHeightField(physicsWorld, *groundTransform, *groundShape, box);
+    else
+        physicsWorld.ActivateBodiesInAABB(box);
+}
+
+// Frees the entity's backend body now and settles the bodies over it on `ground` (an invalid entity only
+// wakes them). The entity stays live until the next flush, so its runtime handles are cleared here: nothing
+// reads the freed body before the removal, and the OnRemove<PhysicsBody> hook finds them cleared.
+void ReleaseColliderBody(ECS::World& world, ECS::EntityHandle entity, ECS::EntityHandle ground = {})
 {
     auto* pw = PhysicsECS::PhysicsWorldService::TryGet();
     auto* body = world.GetComponentForWrite<Components::PhysicsBody>(entity);
     if (!pw || !body || !body->initialized)
         return;
     if (body->body.IsValid())
+    {
         pw->DestroyBody(body->body);
+        SettleBodiesOverReleasedHeightField(world, *pw, entity, ground);
+    }
     if (body->shape.IsValid())
         pw->DestroyShape(body->shape);
     for (uint16 i = 0; i < body->childShapeCount; ++i)
@@ -147,19 +226,20 @@ void ResyncTerrainCollider(ECS::World& world, ECS::EntityHandle entity)
                       entity.id);
 }
 
-// A static heightfield collider entity centred at (x, y, z) over `sizeX` x `sizeZ` meters, its samples
+// A static heightfield collider entity placed by `transform` (its center) over `sizeX` x `sizeZ` meters, its samples
 // resolved through `dataHandle`. CreateEntity allocates the handle immediately; the AddComponent calls
 // are deferred. The engine's per-frame ProcessCommands flush runs at the START of the next frame, before
 // any system (Engine.cpp), so PhysicsInit sees the fully-formed collider entity on frame N+1, one frame
 // after provisioning. (Tests flush explicitly via world.ProcessCommands().) Engine-created runtime
 // state, rebuilt from the terrain on load: RuntimeOnlyEntity keeps it out of every scene file, or a
 // save during Play would write a ghost collider entity per body.
-ECS::EntityHandle CreateTerrainColliderEntity(ECS::World& world, float32 x, float32 y, float32 z, uint32 dataHandle,
+ECS::EntityHandle CreateTerrainColliderEntity(ECS::World& world, const Components::Transform& transform,
+                                              const Components::WorldTransform& worldTransform, uint32 dataHandle,
                                               uint32 dataGeneration, float32 sizeX, float32 sizeZ, float32 heightScale)
 {
     ECS::EntityHandle e = world.CreateEntity();
-    world.AddComponent(e, MakeTranslation(x, y, z));
-    world.AddComponent(e, MakeWorldTranslation(x, y, z));
+    world.AddComponent(e, transform);
+    world.AddComponent(e, worldTransform);
 
     Components::PhysicsBody body{};
     body.motionType = Physics::MotionType::Static;
@@ -227,13 +307,6 @@ PagedTerrain* FindPagedTerrain(std::vector<PagedTerrain>& terrains, uint32 index
     return nullptr;
 }
 
-// The page colliders the sweep tears down, with the page slots to release after their bodies.
-struct PageColliderOrphans
-{
-    std::vector<ECS::EntityHandle> Entities;
-    std::vector<TerrainService::PagePhysicsHandle> Slots;
-};
-
 // Keeps a collider whose page is still in its terrain's window and whose samples come from the
 // stream it reads now: it leaves the window list (not provisioned again) and takes the edits to its
 // page as a region of its body. Any other collider is an orphan.
@@ -253,10 +326,252 @@ void SweepPageCollider(TerrainService& service, std::vector<PagedTerrain>& terra
         return;
     }
     orphans.Entities.push_back(entity);
+    orphans.Grounds.push_back({});
     orphans.Slots.push_back({tag.PhysicsHandleIndex, tag.PhysicsHandleGeneration});
 }
 
+// The active planet: the enabled spherical terrain with the smallest DrawOrderKey. Only one planet gets
+// page bodies, as only one terrain draws. `planetCount` counts every enabled spherical terrain.
+ECS::EntityHandle FindActivePlanet(ECS::World& world, uint32& planetCount)
+{
+    ECS::EntityHandle activePlanet{};
+    uint64 activePlanetKey = 0;
+    planetCount = 0;
+    world.Query<ECS::Read<Components::Terrain>, ECS::Read<Components::WorldTransform>>().Each(
+        [&](ECS::EntityHandle entity, const Components::Terrain& terrain, const Components::WorldTransform&) {
+            if (terrain.Domain != Components::TerrainDomain::Spherical)
+                return;
+            ++planetCount;
+            const uint64 key = DrawOrderKey(terrain, entity);
+            if (!activePlanet.IsValid() || key < activePlanetKey)
+            {
+                activePlanet = entity;
+                activePlanetKey = key;
+            }
+        });
+    return activePlanet;
+}
+
+// A terrain switched from Planar to Spherical keeps the planar heightfield collider the single-terrain
+// branch put on the entity itself; shed it and its body, so a planet carries no stray planar body.
+void ShedPlanarCollider(ECS::World& world, ECS::EntityHandle planet)
+{
+    if (!world.HasComponent<Components::HeightFieldColliderShape>(planet))
+        return;
+    ReleaseColliderBody(world, planet);
+    world.RemoveComponent<Components::HeightFieldColliderShape>(planet);
+    world.RemoveComponent<Components::PhysicsBody>(planet);
+    world.RemoveComponent<Components::PhysicsCollider>(planet);
+}
+
+bool RecordKeyLess(const PlanetBodyRecord& a, const PlanetBodyRecord& b)
+{
+    return a.Key < b.Key;
+}
+
+bool RecordKeyEqual(const PlanetBodyRecord& a, const PlanetBodyRecord& b)
+{
+    return a.Key == b.Key;
+}
+
+bool RecordKeyBelow(const PlanetBodyRecord& record, uint64 key)
+{
+    return record.Key < key;
+}
+
+const PlanetBodyRecord* FindBody(const std::vector<PlanetBodyRecord>& sortedBodies, uint64 key)
+{
+    const auto it = std::lower_bound(sortedBodies.begin(), sortedBodies.end(), key, RecordKeyBelow);
+    return it != sortedBodies.end() && it->Key == key ? &*it : nullptr;
+}
+
+bool HasBuiltBody(ECS::World& world, ECS::EntityHandle entity)
+{
+    const auto* body = world.GetComponent<Components::PhysicsBody>(entity);
+    return body && body->body.IsValid();
+}
+
+// Adds `record`'s body to the teardown. `ground` is the built body that takes over its ground, if any.
+void AddOrphan(PageColliderOrphans& orphans, const PlanetBodyRecord& record, ECS::EntityHandle ground = {})
+{
+    orphans.Entities.push_back(record.Entity);
+    orphans.Grounds.push_back(ground);
+    orphans.Slots.push_back({record.Tag.PhysicsHandleIndex, record.Tag.PhysicsHandleGeneration});
+}
+
+// Sorts a body into the sweep. A body is an orphan when its planet is not the active planet with a CPU
+// view, its slot is stale, or its page left every window. A body from an older stream is held for the
+// hand-over (PlanetBodySweep::Previous).
+void SweepPlanetBody(ECS::World& world, const TerrainService& service, ECS::EntityHandle planet,
+                     const PlanetCpuView* view, const std::vector<uint64>& windowKeys, PlanetBodySweep& sweep,
+                     ECS::EntityHandle entity, const Components::TerrainPlanetPageCollider& tag)
+{
+    const PlanetBodyRecord record{PlanetPageKey(tag), entity, tag};
+    const bool owned = view && tag.TerrainEntityIndex == planet.index && tag.TerrainEntityVersion == planet.version;
+    const bool slot = service.ResolvePageCollider(tag.PhysicsHandleIndex, tag.PhysicsHandleGeneration) != nullptr;
+    if (!owned || !slot || !ContainsKey(windowKeys, record.Key))
+    {
+        AddOrphan(sweep.Orphans, record);
+        return;
+    }
+    if (tag.Epoch != view->Epoch)
+    {
+        sweep.Previous.push_back(record);
+        return;
+    }
+    sweep.Current.push_back(record);
+    if (HasBuiltBody(world, entity))
+        sweep.BuiltCurrent.push_back(record);
+}
+
+// The hand-over: an older stream's body goes once the current stream's body for its page is built (no
+// frame without ground), and the bodies over it settle on the new surface. A second current body for one
+// page goes too.
+void HandOverPlanetBodies(PlanetBodySweep& sweep)
+{
+    std::sort(sweep.BuiltCurrent.begin(), sweep.BuiltCurrent.end(), RecordKeyLess);
+    for (const PlanetBodyRecord& record : sweep.Previous)
+        if (const PlanetBodyRecord* ground = FindBody(sweep.BuiltCurrent, record.Key))
+            AddOrphan(sweep.Orphans, record, ground->Entity);
+    std::sort(sweep.Current.begin(), sweep.Current.end(), RecordKeyLess);
+    const auto firstDuplicate = std::unique(sweep.Current.begin(), sweep.Current.end(), RecordKeyEqual);
+    for (auto it = firstDuplicate; it != sweep.Current.end(); ++it)
+        AddOrphan(sweep.Orphans, *it);
+    sweep.Current.erase(firstDuplicate, sweep.Current.end());
+}
+
+// Frees the orphans' bodies now and releases their slots; the entities are destroyed at the next flush.
+void TearDownOrphans(ECS::World& world, TerrainService& service, const PageColliderOrphans& orphans)
+{
+    for (size_t i = 0; i < orphans.Entities.size(); ++i)
+    {
+        ReleaseColliderBody(world, orphans.Entities[i], orphans.Grounds[i]);
+        world.DestroyEntity(orphans.Entities[i]);
+    }
+    for (const TerrainService::PagePhysicsHandle& slot : orphans.Slots)
+        service.ReleasePagePhysicsHandle(slot.Index, slot.Generation);
+}
+
+// One world axis of a body's center: the planet center plus R Up plus the rectangle's center on the
+// chart's tangents, in float64.
+float64 BodyCenterAxis(float32 planetCenter, float64 radius, float64 rectX, float64 rectZ, float32 up,
+                       float32 tangentX, float32 tangentZ)
+{
+    return static_cast<float64>(planetCenter) + radius * up + rectX * tangentX + rectZ * tangentZ;
+}
+
+// Creates the body entity of `fill`'s page on `slot`: a heightfield in the page's chart frame, centered
+// on its plane rectangle. The samples are meters along the chart's Up, so the height scale is 1.
+ECS::EntityHandle CreatePlanetPageBody(ECS::World& world, const Mathematics::Vector3& planetCenter,
+                                       const PlanetCpuView& view, const PlanetPageFill& fill,
+                                       TerrainService::PagePhysicsHandle slot)
+{
+    const PageStreaming::PageAddress& page = fill.Page;
+    const PlanetChart chart = MakePlanetChartOfPage(view.Layout, view.ReferenceRadius, page.Face, page.X, page.Z);
+    const PlanetPageBodyRect rect = PlanetPageBodyRectOf(view.Layout, view.ReferenceRadius, chart, page.X, page.Z);
+    const float64 rectX = rect.MinX + 0.5 * rect.SizeX;
+    const float64 rectZ = rect.MinZ + 0.5 * rect.SizeZ;
+    const float64 radius = view.ReferenceRadius;
+    const Mathematics::WorldPosition center{
+        BodyCenterAxis(planetCenter.x, radius, rectX, rectZ, chart.Up.x, chart.TangentX.x, chart.TangentZ.x),
+        BodyCenterAxis(planetCenter.y, radius, rectX, rectZ, chart.Up.y, chart.TangentX.y, chart.TangentZ.y),
+        BodyCenterAxis(planetCenter.z, radius, rectX, rectZ, chart.Up.z, chart.TangentX.z, chart.TangentZ.z)};
+    Components::Transform transform{};
+    transform.Basis = ChartBasis(chart);
+    transform.Position = center;
+    Components::WorldTransform worldTransform{};
+    worldTransform.Basis = transform.Basis;
+    worldTransform.Position = transform.Position;
+    const ECS::EntityHandle entity =
+        CreateTerrainColliderEntity(world, transform, worldTransform, slot.Index, slot.Generation,
+                                    static_cast<float32>(rect.SizeX), static_cast<float32>(rect.SizeZ), 1.0f);
+    Components::TerrainPlanetPageCollider tag{};
+    tag.TerrainEntityIndex = fill.Planet.index;
+    tag.TerrainEntityVersion = fill.Planet.version;
+    tag.Face = page.Face;
+    tag.PageX = page.X;
+    tag.PageZ = page.Z;
+    tag.PhysicsHandleIndex = slot.Index;
+    tag.PhysicsHandleGeneration = slot.Generation;
+    tag.Epoch = fill.Epoch;
+    tag.LayerVersion = fill.LayerVersion;
+    world.AddComponent(entity, tag);
+    return entity;
+}
+
+// Lands a done fill: its samples refill its body, or make a new body for its page. A fill whose planet,
+// stream or window moved on since it started, or that found a page missing, is dropped. Returns the new
+// body's record; its Entity is invalid when the fill made no body.
+PlanetBodyRecord LandPlanetFill(ECS::World& world, TerrainService& service, ECS::EntityHandle planet,
+                                const Mathematics::Vector3& planetCenter, const PlanetCpuView& view,
+                                const std::vector<uint64>& windowKeys, PlanetPageFill& fill)
+{
+    const uint64 key = PlanetPageKey(fill.Page);
+    if (!fill.Filled || fill.Planet != planet || fill.Epoch != view.Epoch || !ContainsKey(windowKeys, key))
+        return {};
+    if (fill.Body.IsValid())
+    {
+        auto* tag = world.GetComponentForWrite<Components::TerrainPlanetPageCollider>(fill.Body);
+        if (!tag || tag->PhysicsHandleIndex != fill.Slot.Index || tag->PhysicsHandleGeneration != fill.Slot.Generation)
+            return {};
+        service.RefillPlanetPagePhysicsHandle(fill.Slot, fill.Samples);
+        tag->LayerVersion = fill.LayerVersion;
+        return {};
+    }
+    const TerrainService::PagePhysicsHandle slot = service.AcquirePlanetPagePhysicsHandle(std::move(fill.Samples));
+    if (slot.Index == 0)
+        return {};
+    PlanetBodyRecord record{key, {}, {}};
+    record.Entity = CreatePlanetPageBody(world, planetCenter, view, fill, slot);
+    record.Tag.PhysicsHandleIndex = slot.Index;
+    record.Tag.PhysicsHandleGeneration = slot.Generation;
+    record.Tag.LayerVersion = fill.LayerVersion;
+    return record;
+}
+
+// Starts the fill of `page`'s body: copies the pages it reads (with the planet's page layer) and submits
+// it on the job pool, or runs it here without a pool. `body` is the body it refills (null: a new body).
+// Null when a page it reads is not on the CPU yet.
+std::shared_ptr<PlanetPageFill> StartPlanetFill(ECS::World& world, const TerrainPages& pages, ECS::EntityHandle planet,
+                                                const PlanetCpuView& view, const PageStreaming::PageAddress& page,
+                                                const PlanetBodyRecord* body,
+                                                std::vector<PageStreaming::PageAddress>& reads)
+{
+    reads.clear();
+    AppendPlanetPageBodyReads(view.Layout, view.ReferenceRadius, page.Face, page.X, page.Z, reads);
+    auto fill = std::make_shared<PlanetPageFill>();
+    fill->Input.Pages.resize(reads.size());
+    for (size_t i = 0; i < reads.size(); ++i)
+    {
+        fill->Input.Pages[i].Address = reads[i];
+        if (!pages.PlanetPageHeights(planet.id, reads[i], fill->Input.Pages[i].Heights))
+            return nullptr;
+    }
+    fill->Planet = planet;
+    fill->Epoch = view.Epoch;
+    fill->Page = page;
+    fill->LayerVersion = view.LayerVersion;
+    if (body)
+    {
+        fill->Body = body->Entity;
+        fill->Slot = {body->Tag.PhysicsHandleIndex, body->Tag.PhysicsHandleGeneration};
+    }
+    fill->Input.Layout = view.Layout;
+    fill->Input.ReferenceRadius = view.ReferenceRadius;
+    fill->Input.Page = page;
+    fill->Samples.resize(static_cast<size_t>(kFinestPageGridSamples) * kFinestPageGridSamples);
+    if (JobSystem::WorkStealingThreadPool* pool = world.GetJobSystem())
+        pool->Submit([fill]() { fill->Run(); });
+    else
+        fill->Run();
+    return fill;
+}
+
 } // namespace
+
+TerrainPhysicsSystem::TerrainPhysicsSystem() : m_PlanetScratch(std::make_unique<PlanetColliderScratch>()) {}
+
+TerrainPhysicsSystem::~TerrainPhysicsSystem() = default;
 
 bool ColliderMatchesTerrain(const Components::HeightFieldColliderShape& shape, const Components::Terrain& terrain)
 {
@@ -277,6 +592,7 @@ void TerrainPhysicsSystem::Update(ECS::World& world, float32 /*deltaTime*/)
     if (m_TrackedWorld != world.GetWorldId() || m_TrackedReset != world.GetLifecycleResetGeneration())
     {
         m_PlanarColliders.clear();
+        m_PlanetFills.clear();
         m_TrackedWorld = world.GetWorldId();
         m_TrackedReset = world.GetLifecycleResetGeneration();
     }
@@ -291,8 +607,8 @@ void TerrainPhysicsSystem::Update(ECS::World& world, float32 /*deltaTime*/)
                   const Components::Terrain& terrain,
                   const Components::WorldTransform& /*wt*/)
         {
-            // Spherical (planet) terrains get six per-face colliders (below), not a planar
-            // heightfield collider off the SizeX/SizeZ heightfield extraction still builds.
+            // A spherical (planet) terrain gets page bodies (below), not a planar heightfield
+            // collider off the SizeX/SizeZ heightfield extraction still builds.
             if (terrain.Domain == Components::TerrainDomain::Spherical)
                 return;
 
@@ -348,8 +664,8 @@ void TerrainPhysicsSystem::Update(ECS::World& world, float32 /*deltaTime*/)
     // ---- Paged terrain provisioning (design page-streaming D3): one collider entity per window page ----
     UpdatePageColliders(world, *terrainService);
 
-    // ---- Spherical (planet) provisioning + sculpt-edit refresh ----
-    UpdatePlanetColliders(world);
+    // ---- Streamed planet page bodies ----
+    UpdatePlanetColliders(world, *terrainService);
 }
 
 void TerrainPhysicsSystem::UpdatePageColliders(ECS::World& world, TerrainService& service)
@@ -371,13 +687,7 @@ void TerrainPhysicsSystem::UpdatePageColliders(ECS::World& world, TerrainService
         });
     // The body is freed now, in the window PhysicsInit mutates bodies in and before the step; the
     // entity's destruction is deferred to the next flush (ReleaseColliderBody).
-    for (ECS::EntityHandle entity : orphans.Entities)
-    {
-        ReleaseColliderBody(world, entity);
-        world.DestroyEntity(entity);
-    }
-    for (const TerrainService::PagePhysicsHandle& slot : orphans.Slots)
-        service.ReleasePagePhysicsHandle(slot.Index, slot.Generation);
+    TearDownOrphans(world, service, orphans);
 
     // A window page without a collider gets one once it is on the CPU at level 0; the residency's
     // window fetch brings it (design D3), so a page still on its way is provisioned a later frame.
@@ -394,11 +704,12 @@ void TerrainPhysicsSystem::UpdatePageColliders(ECS::World& world, TerrainService
             const SurfaceHeightQuery& query = paged.Query;
             const float32 sizeX = kOwned * query.LatticeSpacingX();
             const float32 sizeZ = kOwned * query.LatticeSpacingZ();
-            const float32 centerX = query.FootprintOriginX() + (static_cast<float32>(page.X) + 0.5f) * sizeX;
-            const float32 centerZ = query.FootprintOriginZ() + (static_cast<float32>(page.Z) + 0.5f) * sizeZ;
+            const Mathematics::WorldPosition center{
+                query.FootprintOriginX() + (static_cast<float64>(page.X) + 0.5) * sizeX, query.OriginY(),
+                query.FootprintOriginZ() + (static_cast<float64>(page.Z) + 0.5) * sizeZ};
             const ECS::EntityHandle entity =
-                CreateTerrainColliderEntity(world, centerX, query.OriginY(), centerZ, handle.Index, handle.Generation,
-                                            sizeX, sizeZ, query.HeightScale());
+                CreateTerrainColliderEntity(world, MakeTranslation(center), MakeWorldTranslation(center), handle.Index,
+                                            handle.Generation, sizeX, sizeZ, query.HeightScale());
             Components::TerrainPageCollider tag{};
             tag.TiledIndex = paged.Tiled.Index;
             tag.TiledGeneration = paged.Tiled.Generation;
@@ -434,339 +745,87 @@ void TerrainPhysicsSystem::RemoveOrphanedPlanarColliders(ECS::World& world)
     });
 }
 
-void TerrainPhysicsSystem::UpdatePlanetColliders(ECS::World& world)
+void TerrainPhysicsSystem::UpdatePlanetColliders(ECS::World& world, TerrainService& service)
 {
-    auto* terrainService = TerrainService::TryGet();
-    if (!terrainService)
-        return;
-
-    const uint32 dim = kPlanetFaceColliderDim;
-
-    // 1. Walk existing planet-face collider entities. Keep those whose owner is still a
-    //    live enabled spherical terrain; tear down (destroy + free body + release handle)
-    //    the orphans (terrain destroyed, disabled, or switched back to Planar — the
-    //    world-seam audit class). Collect the live faces per owner so provisioning skips
-    //    them and the refresh can find each face's physics handle.
-    struct LiveFace
-    {
-        uint32 EntityIndex, EntityVersion, Face, HandleIndex, HandleGeneration;
-        ECS::EntityHandle ColliderEntity; // the face collider entity, NOT the owner terrain
-    };
-    std::vector<LiveFace> liveFaces;
-    std::vector<ECS::EntityHandle> orphanEntities;
-    std::vector<Components::TerrainPlanetFaceCollider> orphanTags;
-
-    auto ownerIsLivePlanet = [&](const Components::TerrainPlanetFaceCollider& tag) {
-        ECS::EntityHandle owner(static_cast<ECS::EntityIndex>(tag.TerrainEntityIndex),
-                                static_cast<ECS::EntityVersion>(tag.TerrainEntityVersion));
-        if (!world.IsValid(owner))
-            return false;
-        const ECS::Entity ownerEntity(&world, owner);
-        const auto* t = world.GetComponent<Components::Terrain>(owner);
-        return t && ownerEntity.IsEnabledInHierarchy() && ownerEntity.IsEnabled<Components::Terrain>() &&
-               t->Domain == Components::TerrainDomain::Spherical;
-    };
-
-    // Every face collider this system owns is walked whatever its enable state, so
-    // one whose planet is gone or switched off is torn down either way.
-    world.Query<ECS::Read<Components::TerrainPlanetFaceCollider>>()
-        .IncludeDisabled()
-        .Each([&](ECS::EntityHandle e, const Components::TerrainPlanetFaceCollider& tag)
-        {
-            if (ownerIsLivePlanet(tag))
-                liveFaces.push_back(LiveFace{tag.TerrainEntityIndex, tag.TerrainEntityVersion,
-                                             tag.Face, tag.PhysicsHandleIndex,
-                                             tag.PhysicsHandleGeneration, e});
-            else
-            {
-                orphanEntities.push_back(e);
-                orphanTags.push_back(tag);
-            }
-        });
-
-    auto* pw = PhysicsECS::PhysicsWorldService::TryGet();
-    for (size_t i = 0; i < orphanEntities.size(); ++i)
-    {
-        ECS::EntityHandle e = orphanEntities[i];
-        if (pw)
-        {
-            if (auto* body = world.GetComponentForWrite<Components::PhysicsBody>(e);
-                body && body->initialized)
-            {
-                // The OnRemove<PhysicsBody> hook frees the body, but DestroyEntity is
-                // deferred to the next frame's flush — free it here (same window
-                // PhysicsInit mutates bodies in, before the step) and clear the runtime
-                // handles so nothing dereferences the freed body meanwhile.
-                if (body->body.IsValid())
-                    pw->DestroyBody(body->body);
-                if (body->shape.IsValid())
-                    pw->DestroyShape(body->shape);
-                body->body = {};
-                body->shape = {};
-                body->initialized = false;
-            }
-        }
-        world.DestroyEntity(e);
-        terrainService->ReleasePlanetFacePhysicsHandle(orphanTags[i].PhysicsHandleIndex,
-                                                       orphanTags[i].PhysicsHandleGeneration);
-    }
-
-    // 2. Find the active planet: the enabled spherical terrain with the smallest DrawOrderKey.
-    //    Only one planet gets face colliders, as only one terrain draws; a second is warned once.
-    ECS::EntityHandle activePlanet{};
-    uint64 activePlanetKey = 0;
+    GE_CPU_PROFILE_SCOPE("Terrain.PlanetColliders");
     uint32 planetCount = 0;
-    world.Query<ECS::Read<Components::Terrain>, ECS::Read<Components::WorldTransform>>()
-        .Each([&](ECS::EntityHandle entity, const Components::Terrain& terrain, const Components::WorldTransform&)
-        {
-            if (terrain.Domain != Components::TerrainDomain::Spherical)
-                return;
-            ++planetCount;
-            const uint64 key = DrawOrderKey(terrain, entity);
-            if (!activePlanet.IsValid() || key < activePlanetKey)
-            {
-                activePlanet = entity;
-                activePlanetKey = key;
-            }
-        });
+    const ECS::EntityHandle planet = FindActivePlanet(world, planetCount);
     if (planetCount > 1 && !m_WarnedDuplicatePlanetClaim)
     {
-        Logger::Log::Warning("TerrainPhysicsSystem: multiple spherical terrains — provisioning "
-                             "planet colliders for the one added first only");
+        Logger::Log::Warning("TerrainPhysicsSystem: multiple spherical terrains; only the one that draws first "
+                             "gets planet colliders");
         m_WarnedDuplicatePlanetClaim = true;
     }
-    const bool foundPlanet = activePlanet.IsValid();
-    PlanetColliderParams params{};
-    float32 centerX = 0.0f, centerY = 0.0f, centerZ = 0.0f;
-    if (foundPlanet)
+    if (planet.IsValid())
+        ShedPlanarCollider(world, planet);
+
+    // The planet's CPU windows as its stream left them. With none, every planet page body is an orphan.
+    const TerrainPages* pages = service.FindTerrainPages();
+    PlanetCpuView view;
+    const bool hasView = planet.IsValid() && pages && pages->FindPlanetCpuView(planet.id, view);
+    std::vector<uint64>& windowKeys = m_PlanetScratch->WindowKeys;
+    windowKeys.clear();
+    if (hasView)
     {
-        const auto& terrain = *world.GetComponent<Components::Terrain>(activePlanet);
-        const auto& wt = *world.GetComponent<Components::WorldTransform>(activePlanet);
-        params.Radius = terrain.PlanetRadius;
-        // Base relief is the companion TerrainPlanetRelief component (default when
-        // absent) — the same values CBTUpdateSystem feeds the renderer. Reading them is
-        // not sufficient on its own: these params only reach a face patch when something
-        // re-cooks it, so an edit to them must cross the shape baseline below.
-        Components::TerrainPlanetRelief relief{};
-        if (const auto* r = world.GetComponent<Components::TerrainPlanetRelief>(activePlanet))
-            relief = *r;
-        params.ReliefAmplitude = relief.Amplitude;
-        params.ReliefFrequency = relief.Frequency;
-        params.ReliefOctaves = relief.Octaves;
-        centerX = wt.matrix[12];
-        centerY = wt.matrix[13];
-        centerZ = wt.matrix[14];
+        for (const PageStreaming::PageAddress& page : view.BodyPages)
+            windowKeys.push_back(PlanetPageKey(page));
+        std::sort(windowKeys.begin(), windowKeys.end());
     }
 
-    if (!foundPlanet)
-        return; // no planet — nothing to provision or refresh (orphans already torn down)
-
-    // A terrain switched from Planar to Spherical keeps the planar heightfield collider the
-    // single-terrain branch put on the entity itself; shed it (and its Jolt body) so a
-    // planet never carries a stray planar body under its six face colliders.
-    if (world.HasComponent<Components::HeightFieldColliderShape>(activePlanet))
+    // Every planet page body, whatever its enable state: one switched off still claims its page.
+    PlanetBodySweep& sweep = m_PlanetScratch->Sweep;
+    sweep.Clear();
+    const PlanetCpuView* viewOrNull = hasView ? &view : nullptr;
+    world.Query<ECS::Read<Components::TerrainPlanetPageCollider>>().IncludeDisabled().Each(
+        [&](ECS::EntityHandle entity, const Components::TerrainPlanetPageCollider& tag) {
+            SweepPlanetBody(world, service, planet, viewOrNull, windowKeys, sweep, entity, tag);
+        });
+    HandOverPlanetBodies(sweep);
+    TearDownOrphans(world, service, sweep.Orphans);
+    if (!hasView)
     {
-        if (pw)
-            if (auto* body = world.GetComponentForWrite<Components::PhysicsBody>(activePlanet);
-                body && body->initialized)
-            {
-                if (body->body.IsValid())
-                    pw->DestroyBody(body->body);
-                if (body->shape.IsValid())
-                    pw->DestroyShape(body->shape);
-                body->body = {};
-                body->shape = {};
-                body->initialized = false;
-            }
-        world.RemoveComponent<Components::HeightFieldColliderShape>(activePlanet);
-        world.RemoveComponent<Components::PhysicsBody>(activePlanet);
-        world.RemoveComponent<Components::PhysicsCollider>(activePlanet);
-    }
-
-    auto faceIsLive = [&](uint32 face) {
-        for (const LiveFace& lf : liveFaces)
-            if (lf.EntityIndex == activePlanet.index && lf.EntityVersion == activePlanet.version &&
-                lf.Face == face)
-                return true;
-        return false;
-    };
-
-    const float32 sizeMeters = params.Radius * 2.0f; // patch spans the tangent square [-R, R]
-
-    // Did the planet's shape (radius or base relief) change since the last cook? Seeding the
-    // baseline on the first sighting must not count as a change: the faces provisioned below
-    // are generated at the current shape anyway.
-    const uint64 planetShapeHash = HashPlanetShape(params);
-    const bool shapeChanged = m_HasPlanetShapeBaseline && planetShapeHash != m_LastPlanetShapeHash;
-    m_LastPlanetShapeHash = planetShapeHash;
-    m_HasPlanetShapeBaseline = true;
-
-    // Faces already cooked before this frame. Anything provisioned below is appended after
-    // this mark and is born at the current shape, so the re-cook must skip it.
-    const size_t preExistingFaceCount = liveFaces.size();
-
-    // 3. Provision any missing faces (0-5) for the active planet. Deferred component adds,
-    //    like the page path; PhysicsInit builds the bodies on the next flush.
-    for (uint32 face = 0; face < kPlanetFaceCount; ++face)
-    {
-        if (faceIsLive(face))
-            continue;
-
-        const auto physHandle = terrainService->AcquirePlanetFacePhysicsHandle();
-
-        // Generate the full face patch from the base + relief height field (no sculpt yet
-        // when the planet has no edits — the mirror atlas is null then).
-        const auto mirror = terrainService->GetPlanetSculptMirror();
-        if (auto* data = terrainService->ResolvePlanetFaceColliderForWrite(
-                physHandle.Index, physHandle.Generation, dim))
-        {
-            float32 minH = 0.0f, maxH = 0.0f;
-            const CBTTerrain::SphereAnalyticModifierSet analytic{
-                mirror.Analytic.data(), mirror.AnalyticCount, mirror.TransientDabs.data(),
-                mirror.TransientDabCount};
-            GeneratePlanetFacePatch(face, params, dim, mirror.Sampler, analytic, 0, 0,
-                                    static_cast<int32>(dim) - 1, static_cast<int32>(dim) - 1,
-                                    data->Samples, minH, maxH);
-            terrainService->CommitPlanetFaceFull(physHandle.Index, physHandle.Generation);
-        }
-
-        ECS::EntityHandle e = world.CreateEntity();
-        world.AddComponent(e, MakeFaceTransform(face, centerX, centerY, centerZ));
-        world.AddComponent(e, MakeFaceWorldTransform(face, centerX, centerY, centerZ));
-
-        Components::PhysicsBody body{};
-        body.motionType = Physics::MotionType::Static;
-        body.mass = 0.0f;
-        body.gravityScale = 0.0f;
-        body.allowSleep = true;
-        world.AddComponent(e, body);
-
-        Components::PhysicsCollider collider{};
-        collider.layer = Physics::Layers::Static;
-        world.AddComponent(e, collider);
-
-        Components::HeightFieldColliderShape shape{};
-        shape.dataHandle = physHandle.Index;         // includes kPlanetFacePhysicsHandleBit
-        shape.dataGeneration = physHandle.Generation;
-        shape.sizeX = sizeMeters;
-        shape.sizeZ = sizeMeters;
-        shape.heightScale = 1.0f;                    // samples are already metres
-        world.AddComponent(e, shape);
-
-        Components::TerrainPlanetFaceCollider tag{};
-        tag.TerrainEntityIndex = activePlanet.index;
-        tag.TerrainEntityVersion = activePlanet.version;
-        tag.Face = face;
-        tag.PhysicsHandleIndex = physHandle.Index;
-        tag.PhysicsHandleGeneration = physHandle.Generation;
-        world.AddComponent(e, tag);
-
-        world.AddComponent(e, Components::RuntimeOnlyEntity{});
-
-        // Provisioned this frame — track so a duplicate query pass can't re-enqueue it, and
-        // so the refresh below can address its handle without waiting for the flush.
-        liveFaces.push_back(LiveFace{activePlanet.index, activePlanet.version, face,
-                                     physHandle.Index, physHandle.Generation, e});
-
-        Logger::Log::Info("Planet.Collider face={} provisioned dim={}", face, dim);
-    }
-
-    // 4. Shape-edit re-cook: a radius or base-relief edit displaces the surface at EVERY
-    //    direction, so no dirty rect can scope it — the sculpt mirror's per-face rects
-    //    describe sculpt strokes and would refresh nothing here. Regenerate all six patches
-    //    whole, ahead of the sculpt-version gate below (which returns early on the frames a
-    //    shape edit lands, since relief feeds neither of that version's terms), and re-declare
-    //    each shape's grid extent alongside the samples it describes. Runs only on the frame
-    //    the shape actually moves; idle planets never enter this loop.
-    if (shapeChanged)
-    {
-        const auto shapeMirror = terrainService->GetPlanetSculptMirror();
-        const CBTTerrain::SphereAnalyticModifierSet shapeAnalytic{
-            shapeMirror.Analytic.data(), shapeMirror.AnalyticCount,
-            shapeMirror.TransientDabs.data(), shapeMirror.TransientDabCount};
-        const int32 lastCell = static_cast<int32>(dim) - 1;
-        for (size_t i = 0; i < preExistingFaceCount; ++i)
-        {
-            const LiveFace& lf = liveFaces[i];
-            if (lf.EntityIndex != activePlanet.index || lf.EntityVersion != activePlanet.version)
-                continue; // a second planet's face — only the active planet is provisioned
-            auto* data = terrainService->ResolvePlanetFaceColliderForWrite(lf.HandleIndex,
-                                                                          lf.HandleGeneration, dim);
-            if (!data)
-                continue;
-            float32 minH = 0.0f, maxH = 0.0f;
-            GeneratePlanetFacePatch(lf.Face, params, dim, shapeMirror.Sampler, shapeAnalytic, 0, 0,
-                                    lastCell, lastCell, data->Samples, minH, maxH);
-            terrainService->CommitPlanetFaceFull(lf.HandleIndex, lf.HandleGeneration);
-            // The grid is radius-parametrized — cell i sits at local x = R*u for normalized
-            // tangent offset u in [-1, 1], which is exactly the mapping PhysicsInitSystem
-            // rebuilds from sizeX/sizeZ — so the declared extent is half of the cook, not a
-            // provisioning-time constant. Samples at the new radius under the old extent would
-            // stretch the new surface over the old grid, displacing each cell tangentially by
-            // (newRadius - oldRadius) * u.
-            if (auto* shape = world.GetComponentForWrite<Components::HeightFieldColliderShape>(
-                    lf.ColliderEntity))
-            {
-                shape->sizeX = sizeMeters;
-                shape->sizeZ = sizeMeters;
-            }
-            Logger::Log::Info("Planet.Collider face={} re-cooked (planet shape changed)", lf.Face);
-        }
-    }
-
-    // 5. Sculpt-edit refresh: when a dab landed, regenerate the touched face patch regions
-    //    in place (base + relief + the edited sculpt atlas), which the provider reports to
-    //    the E1 two-tier collider path (in-place SetHeights + wake). EVERY touched face is
-    //    refreshed, not just the last dab's primary face — an edge-straddling dab writes two
-    //    faces' atlas bands, so both colliders must update (the #488 crack-free contract).
-    //    Idle planets never enter this loop.
-    const auto mirror = terrainService->GetPlanetSculptMirror();
-    if (mirror.Version <= m_LastConsumedSculptVersion)
+        m_PlanetFills.clear();
         return;
-    m_LastConsumedSculptVersion = mirror.Version;
+    }
 
-    for (uint32 face = 0; face < kPlanetFaceCount; ++face)
+    // Done fills land on the main thread: a refill writes its body's slot, a new fill makes a body.
+    const Mathematics::Vector3 planetCenter =
+        world.GetComponent<Components::WorldTransform>(planet)->GetPosition() - Mathematics::WorldPosition{};
+    size_t kept = 0;
+    for (std::shared_ptr<PlanetPageFill>& fill : m_PlanetFills)
     {
-        const auto& faceRect = mirror.Faces[face];
-        if (!faceRect.Touched)
-            continue;
-
-        uint32 faceHandleIndex = 0, faceHandleGen = 0;
-        bool haveHandle = false;
-        for (const LiveFace& lf : liveFaces)
-            if (lf.EntityIndex == activePlanet.index &&
-                lf.EntityVersion == activePlanet.version && lf.Face == face)
-            {
-                faceHandleIndex = lf.HandleIndex;
-                faceHandleGen = lf.HandleGeneration;
-                haveHandle = true;
-                break;
-            }
-        if (!haveHandle)
-            continue; // face not provisioned yet — the next full provisioning bakes it in
-
-        int32 minI, minJ, maxI, maxJ;
-        PlanetFaceUVRectToGridRect(face, dim, faceRect.MinU, faceRect.MinV, faceRect.MaxU,
-                                   faceRect.MaxV, minI, minJ, maxI, maxJ);
-        if (minI <= maxI && minJ <= maxJ)
+        if (!fill->Done.load(std::memory_order_acquire))
         {
-            if (auto* data = terrainService->ResolvePlanetFaceColliderForWrite(faceHandleIndex,
-                                                                               faceHandleGen, dim))
-            {
-                float32 regionMinH = 0.0f, regionMaxH = 0.0f;
-                const CBTTerrain::SphereAnalyticModifierSet analytic{
-                    mirror.Analytic.data(), mirror.AnalyticCount, mirror.TransientDabs.data(),
-                    mirror.TransientDabCount};
-                GeneratePlanetFacePatch(face, params, dim, mirror.Sampler, analytic, minI, minJ,
-                                        maxI, maxJ, data->Samples, regionMinH, regionMaxH);
-                // DirtyRegionLog max bounds are exclusive; the grid rect above is inclusive.
-                terrainService->CommitPlanetFaceRegion(faceHandleIndex, faceHandleGen, minI, minJ,
-                                                       maxI + 1, maxJ + 1);
-                Logger::Log::Info("Planet.Collider face={} refresh rect=({},{},{},{})", face, minI,
-                                  minJ, maxI, maxJ);
-            }
+            m_PlanetFills[kept++] = std::move(fill);
+            continue;
         }
-        terrainService->ClearPlanetSculptDirtyFace(face);
+        const PlanetBodyRecord landed = LandPlanetFill(world, service, planet, planetCenter, view, windowKeys, *fill);
+        if (landed.Entity.IsValid())
+            sweep.Current.push_back(landed);
+    }
+    m_PlanetFills.resize(kept);
+    std::sort(sweep.Current.begin(), sweep.Current.end(), RecordKeyLess);
+
+    // A window page with no body on the current stream gets a fill, and so does a body older than the
+    // page layer. Window order puts the pages under the cameras first.
+    std::vector<PageStreaming::PageAddress>& reads = m_PlanetScratch->Reads;
+    size_t started = 0;
+    for (const PageStreaming::PageAddress& page : view.BodyPages)
+    {
+        if (started == kPlanetFillsStartedPerFrame || m_PlanetFills.size() == kPlanetFillsInFlight)
+            break;
+        const uint64 key = PlanetPageKey(page);
+        if (std::any_of(m_PlanetFills.begin(), m_PlanetFills.end(),
+                        [key](const std::shared_ptr<PlanetPageFill>& fill) { return PlanetPageKey(fill->Page) == key; }))
+            continue;
+        const PlanetBodyRecord* body = FindBody(sweep.Current, key);
+        if (body && body->Tag.LayerVersion == view.LayerVersion)
+            continue;
+        std::shared_ptr<PlanetPageFill> fill = StartPlanetFill(world, *pages, planet, view, page, body, reads);
+        if (!fill)
+            continue;
+        m_PlanetFills.push_back(std::move(fill));
+        ++started;
     }
 }
 

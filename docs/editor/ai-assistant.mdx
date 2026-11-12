@@ -7,7 +7,7 @@ The **AI Assistant** panel sends what you type to a language model and shows its
 
 ## Where to start
 
-Open the panel from the **Panels** button at the right end of the top toolbar and choose **AI Assistant**. It opens as a tab beside the Scene View. Pick a provider in the dropdown beside the send button: **Claude (local session)**, the default, needs only Claude Code installed and logged in on this machine. Type a request in the prompt field, for example "Create an empty entity named Lantern at (0, 2, 0)", and press Enter.
+Open the panel from the **Panels** button at the right end of the top toolbar and choose **AI Assistant**. It opens as a tab beside the Scene View. Pick a provider in the dropdown beside the send button: **Claude (Subscription)**, the default, needs only Claude Code installed and logged in on this machine. Type a request in the prompt field, for example "Create an empty entity named Lantern at (0, 2, 0)", and press Enter.
 
 ![The AI Assistant panel before the first prompt](img/ai-assistant-panel.png)
 
@@ -17,17 +17,17 @@ Open the panel from the **Panels** button at the right end of the top toolbar an
 
 | Provider | What it needs | Where it sends your prompt |
 |---|---|---|
-| **Claude (local session)** (the default) | Claude Code installed on this machine and logged in (`claude auth login`). | Your own `claude` program, which talks to the service it is logged in to. |
-| **Codex (local session)** | Codex installed on this machine and logged in (`codex login`), and its full path in the settings. | Your own `codex` program, which talks to the service it is logged in to. |
-| **Claude (API)** | A Claude API key in the `ANTHROPIC_API_KEY` environment variable. | `https://api.anthropic.com/v1/messages`, always. |
+| **Claude (Subscription)** (the default) | Claude Code installed on this machine and logged in (`claude auth login`). | Your own `claude` program, which talks to the service it is logged in to. |
+| **Codex (Subscription)** | Codex installed on this machine and logged in (`codex login`). | Your own `codex` program, which talks to the service it is logged in to. |
+| **Claude (API key)** | A Claude API key, saved in Settings > AI Assistant or set in the `ANTHROPIC_API_KEY` environment variable. | `https://api.anthropic.com/v1/messages`, always. |
 
-![The provider dropdown open, listing the three providers](img/ai-assistant-provider-dropdown.png)
+![The provider dropdown open, listing Claude (Subscription), Claude (API key) and Codex (Subscription)](img/ai-assistant-provider-dropdown.png)
 
-*The provider dropdown, with Claude (local session) chosen.*
+*The provider dropdown, with Claude (Subscription) chosen.*
 
 ## The conversation
 
-Each message is a row: your prompt under **You**, and the reply under the provider and model that wrote it, with the time. A Claude (local session) reply names the exact model that answered (**Opus 5.5** when you chose Opus) and the effort it asked for. The reply streams into its row as the provider writes it. The line under it says where it stands and, once it ends, any note and the provider's own cost estimate and token counts (shown, never added up).
+Each message is a row: your prompt under **You**, and the reply under the provider and model that wrote it, with the time. A Claude (Subscription) reply names the exact model that answered (**Opus 5.5** when you chose Opus) and the effort it asked for. The reply streams into its row as the provider writes it. The line under it says where it stands and, once it ends, any note and the provider's own cost estimate and token counts (shown, never added up).
 
 A reply shows the Markdown the model writes: headings, bold and italic, inline code, code blocks (a long line scrolls sideways rather than wrapping), bulleted and numbered lists, quotes, tables, and links (a web link opens in your browser). Anything else shows as the characters the model wrote. Your prompt is shown as you typed it, and Copy copies a reply's Markdown.
 
@@ -39,19 +39,19 @@ A reply shows the Markdown the model writes: headings, bold and italic, inline c
 | Copy on a finished or stopped reply | Copies the reply's text (without the ellipsis). The status line reads **Reply copied**. |
 | Retry on a failed reply | Sends the same prompt again, to the same provider and model, as a new message at the end of the conversation (queued like any prompt if a reply is being written). The failed reply stays where it was and reads **Retried below** in place of the button. It is never sent to the provider as part of the conversation. If the retry fails too, its own row offers Retry. |
 | Choose another provider | Starts a new conversation: the rows and the queue are cleared. A local session keeps its own conversation, so choosing it again continues it. |
-| The model button beside the provider | Opens a small panel with the **Model** and, for Claude (local session), an **Effort** slider. The button reads your choice: **Opus (latest) · High** until a reply names the version, then **Opus 5.5 · High**. In a narrow panel the button drops "(latest)", then the effort, before it cuts its text, and its tooltip holds the whole choice. A change is kept at once and applies from the next prompt you send, in the same conversation. Prompts already queued keep what they were sent with. Click outside the panel or press Esc to close it. |
+| The model button beside the provider | Opens a small panel with the **Model** and, for Claude (Subscription), an **Effort** slider. The button reads your choice: **Opus (latest) · High** until a reply names the version, then **Opus 5.5 · High**. In a narrow panel the button drops "(latest)", then the effort, before it cuts its text, and its tooltip holds the whole choice. A change is kept at once and applies from the next prompt you send, in the same conversation. Prompts already queued keep what they were sent with. Click outside the panel or press Esc to close it. |
 
 ### Model and effort
 
 | Provider | Models | Effort |
 |---|---|---|
-| Claude (local session) | **Opus** (the first choice), **Fable**, **Sonnet**, **Haiku**: each the latest model of its family, so a new release needs no editor update. Once a reply has named the version, the button and the list show it. | **Low**, **Medium**, **High** (the first choice), **Extra high**, **Max**: how much the model reasons before it answers. Higher levels answer more carefully, take longer, and cost more. |
-| Claude (API) | Opus 5.5, Sonnet 5.5, Haiku 4.5. | None. |
-| Codex (local session) | The button is hidden: Codex names its own models, so the **Codex model** setting takes the name as Codex spells it. | None. |
+| Claude (Subscription) | **Opus** (the first choice), **Fable**, **Sonnet**, **Haiku**: each the latest model of its family, so a new release needs no editor update. Once a reply has named the version, the button and the list show it. | **Low**, **Medium**, **High** (the first choice), **Extra high**, **Max**: how much the model reasons before it answers. Higher levels answer more carefully, take longer, and cost more. |
+| Claude (API key) | Opus 5.5, Sonnet 5.5, Haiku 4.5. | None. |
+| Codex (Subscription) | The button is hidden: Codex names its own models, so the **Model** row of the settings page takes the name as Codex spells it. | None. |
 
 The choice is yours, not the project's: it is kept in your editor settings and applies to every project you open. A model your account cannot use fails the prompt with Claude Code's own message ("There's an issue with the selected model …"). Choose another and send again.
 
-A message holds at most 64 KB of text. A prompt longer than that is not sent: the status line gives its size, and the prompt stays in the field for you to shorten. A reply longer than that keeps its first 64 KB: its text ends with an ellipsis, the line under it reads **Reply truncated at 64 KB**, Copy copies those 64 KB and says so, and later prompts to Claude (API) carry those 64 KB as the reply.
+A message holds at most 64 KB of text. A prompt longer than that is not sent: the status line gives its size, and the prompt stays in the field for you to shorten. A reply longer than that keeps its first 64 KB: its text ends with an ellipsis, the line under it reads **Reply truncated at 64 KB**, Copy copies those 64 KB and says so, and later prompts to Claude (API key) carry those 64 KB as the reply.
 
 A reply runs on a thread of the panel's own, so a reply that takes minutes never holds up the editor's other work. Closing the panel stops it.
 
@@ -64,7 +64,7 @@ A prompt can name [world mark-ups](world-markups.mdx): the places, areas, and pa
 | Type `@` at the start of a word | A list of the scene's mark-ups opens under the prompt: each row is its title (its tag for an untitled one; "Untitled mark-up" for one with neither, which no token can name) with a dot in the color it draws in, over its status, its kind, and its tag. What you type next searches titles and tags. No row is highlighted until you type or press an arrow key, so an Enter right after the `@` closes the list. Choosing a row puts its token where the `@` was. Esc, Enter with nothing highlighted, or a click outside the list closes it and puts what you typed in its search field after the `@`, so a token typed by hand reaches the prompt whole. Choosing a row no token can name says why and what to change, with its entity id: "2 mark-ups are titled Meadow: give this one (entity 1048585) a tag or another title to name it". |
 | **Ask the AI Assistant** on a mark-up (a button in its inspector section, or the right-click menu of its row in the Mark-ups panel) | Opens this panel with the mark-up's token at the end of the prompt. A mark-up no token can name has the button off. Its tooltip reads "Give this mark-up a title or a tag to ask the AI Assistant about it" when it has neither, or what the list says when you choose it: the shared title or tag and the fix. |
 | Send a prompt that names mark-ups | Each mark-up is read as it is when you send: one block per mark-up follows the prompt in what the provider receives. Your row shows the prompt as you typed it, with a chip per mark-up under it, named by the mark-up's title when you sent the prompt. A chip's click selects the mark-up and frames it in the Scene View as a double-click on its Mark-ups panel row does: its whole shape (a region's outline and height, a path's line), along the view's heading, looking down at least 30 degrees. A token that names no mark-up is sent as `[unknown mark-up @markup:…]` and the status line says so. When two mark-ups share a title, a title token names the one changed most recently. In play mode mark-ups are not read: the turn says why for each token. |
-| **Comment on mark-up** on a reply to a prompt that named mark-ups | Adds the reply to the thread of each named mark-up as your comment, introduced as "From the assistant (Claude (local session) · Opus 5.5 · High):" (the reply's own header) and cut after 2,000 characters, so it shows in the Mark-ups panel's Activity tab like any comment. Only on your click, and once: after it the button is off. A reply is never added on its own. |
+| **Comment on mark-up** on a reply to a prompt that named mark-ups | Adds the reply to the thread of each named mark-up as your comment, introduced as "From the assistant (Claude (Subscription) · Opus 5.5 · High):" (the reply's own header) and cut after 2,000 characters, so it shows in the Mark-ups panel's Activity tab like any comment. Only on your click, and once: after it the button is off. A reply is never added on its own. |
 
 ### What the agent receives for a mark-up
 
@@ -99,42 +99,69 @@ A path's block reads `kind="path" points="0,2,0 40,3,10 80,3,30" length="91.2"` 
 
 A local session runs the command-line program you already use, under your own login, on this machine. For each prompt the editor starts the program in the project's folder, hands it the prompt, and shows the reply as the program reports it. The editor never stores, copies, or sends your login anywhere. The program runs with its own tools turned off (Claude Code) or in its read-only sandbox (Codex), so it cannot change your files itself. What it may do in the editor is the editor's decision, set by the mode control (see [Acting in the editor](#acting-in-the-editor)).
 
-### Claude (local session)
+### Claude (Subscription)
 
-- Runs `claude`, found on `PATH`, unless you set a full path in **Claude executable**. Use the native program (`claude.exe` on Windows): the `claude.cmd` script that npm installs is refused, because Windows passes a script's arguments through `cmd.exe`.
-- Needs Claude Code 2.1.259 or later. An older one is refused with "run `claude update`".
+- Install Claude Code, the command-line program, from [claude.com/claude-code](https://claude.com/claude-code). The editor runs its native program: `claude.exe` on Windows, `claude` on macOS and Linux. On Windows it does not run the `claude.cmd` script that npm installs, because Windows passes a script's arguments through `cmd.exe`. It does not run the Claude desktop app, which is a different program.
+- Runs `claude`, found on `PATH`, unless you set a full path in **Claude Code executable**.
+- Needs Claude Code 2.1.259 or later. An older one is refused with the fix: run "claude update".
 - Not logged in: run `claude auth login` in a terminal, then send the prompt again.
 - The model and the effort come from the model button (or **Claude session model** and **Claude session effort** in the settings), and every prompt names both: Opus at High until you choose. Your own Claude Code model and effort settings do not apply to the panel.
 
-### Codex (local session)
+### Codex (Subscription)
 
-- Codex is usually not on `PATH` (an editor extension installs it in its own folder), so **Codex executable** starts empty: set it to the full path of `codex.exe`. Until you do, a prompt fails with "No Codex executable: set its path in Settings > AI Assistant."
+- Install the Codex CLI from [github.com/openai/codex](https://github.com/openai/codex).
+- **Codex executable** is `codex` on `PATH` until you set it. When Codex is not on `PATH` (an editor extension installs it in its own folder), set it to the full path of the native program: `codex.exe` on Windows (not the `codex.cmd` script that npm installs), `codex` on macOS and Linux. An empty value means `codex` on `PATH` again.
 - Not logged in: run `codex login` in a terminal, then send the prompt again.
-- The model comes from **Codex model**, a name as Codex spells it. Empty uses Codex's own default.
+- The model comes from the **Model** row under **Model and options**, a name as Codex spells it. Empty uses Codex's own default.
 - Codex has no option to add the panel's instructions to its own, so a Codex session answers without them.
 
 ### Your login, not a key
 
 Both programs prefer a key in the environment over your login. So that a session always runs on your login, the editor removes `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CODEX_API_KEY`, and `OPENAI_API_KEY` from the environment of every program it starts, the login check included. Everything else in the environment is passed on unchanged.
 
-Other ways of signing Claude Code in are your own configuration and are left alone: an `apiKeyHelper` in your Claude Code settings, `CLAUDE_CODE_OAUTH_TOKEN`, or a cloud-provider switch such as `CLAUDE_CODE_USE_BEDROCK` or `CLAUDE_CODE_USE_VERTEX`. The **Login status** row tells you which one Claude Code is using. The session's turns are billed through it.
+Other ways of signing Claude Code in are your own configuration and are left alone: an `apiKeyHelper` in your Claude Code settings, `CLAUDE_CODE_OAUTH_TOKEN`, or a cloud-provider switch such as `CLAUDE_CODE_USE_BEDROCK` or `CLAUDE_CODE_USE_VERTEX`. The **Logged in** step on the settings page tells you which one Claude Code is using. The session's turns are billed through it.
 
-### Login status
+### Setup
 
-The **Check** button on the **Login status** row asks the chosen local session's program whether it is logged in (it takes a few seconds) and shows the answer in the row. It shows the login method only, never the account's email address, organization, or a key:
+**Settings > AI Assistant** sets up the assistant in three steps on one page:
 
-| The row shows | Meaning |
+1. **Which assistant?** Click **Claude** or **Codex**.
+2. **How do you sign in?** Claude offers **Subscription** (your Claude account, through Claude Code) and **API key** (a key from the Claude Console, billed per use; conversation only). Codex has one method, **Subscription** (your ChatGPT account, through Codex), shown as one line. The pair you choose is the connection the panel uses, named **Claude (Subscription)**, **Claude (API key)** or **Codex (Subscription)**.
+3. **Setup for** the connection: its checks, in order. For a subscription these are the program (it runs `--version`), **Logged in**, and **Editor tools**; for the API key, the **API key** and **Key accepted** steps. The checks run when the page opens, when you change the connection or a program path, and when you click **Check again**. Every step of the connection is listed from the start: the step that runs has a timer mark, and the steps after it wait with what they check. A step after a failed one stays listed and reads "Checked once the *step* step passes.", never a second error for the same cause.
+
+The pill beside **Check again** sums up the steps. The page shows the login method only, never the account's email address, organization, or a key:
+
+| The pill and the line beside it | Meaning |
 |---|---|
-| Logged in (claude.ai) | Claude Code runs on your Claude login. |
-| Logged in (*method*): turns are billed through that credential | Claude Code runs on another credential, for example `api_key_helper`. |
-| Logged in using ChatGPT | Codex's own status line, cut before any key it would show. |
-| Not logged in: run `claude auth login`. / run `codex login`. | Log in from a terminal, then check again. |
-| Could not start ... set its path in Settings > AI Assistant. | The program was not found: set its executable row. |
-| ... did not answer ... within 20 s: check its executable in Settings > AI Assistant. | The program did not exit in time. The row's executable is probably not the right program. |
+| Not checked | No check has run yet. |
+| Checking setup... | A check runs. The AI Assistant panel shows the same words while its first prompt runs the check. |
+| Ready, Logged in (claude.ai). | Claude Code runs on your Claude login. The line also names the connection the panel uses. |
+| Ready, Logged in (*method*): turns are billed through that credential. | Claude Code runs on another credential, for example `api_key_helper`. |
+| Ready, Logged in using ChatGPT. | Codex's own status line, cut before any key it would show. |
+| Ready, limited, *login*. Conversation only: the editor's tools are off. | The assistant answers prompts but cannot act in the editor. The **Editor tools** row says why and how to fix it, for example "set Node executable under Model and options". |
+| Not ready, *N* steps to fix. | A step failed. Its row says what the check found, and the notice under it says how to fix it. |
 
-With Claude (API) chosen, the row explains that the API has no login: it reads its key when a prompt is sent.
+For a subscription, the program's path is the **Claude Code executable** or **Codex executable** row above the pill. A path typed there or picked with **Browse...** is checked at once.
 
-Before the first prompt of each session the editor runs the same checks itself (for Claude Code also its version), so a session that cannot answer is refused with the fix instead of failing halfway.
+A failed step names the program that ran and what it printed. Some examples:
+
+| The step says | Meaning |
+|---|---|
+| This program is not Claude Code: *path* answered nothing when asked for its version. | The executable is another program, for example the Claude desktop app. Click **Browse** and pick Claude Code's `claude.exe`. |
+| The program at *path* did not answer "claude --version" within 20 s. | If it is Claude Code, run `claude --version` in a terminal to see what it waits for, for example a first-run prompt or an update. If not, click **Browse** and pick Claude Code's `claude.exe`. |
+| Claude Code 2.1.200 at *path*. Claude Code 2.1.259 or later is required: run "claude update". | Update Claude Code, then check again. |
+| Not logged in. Run "claude auth login" in a terminal, then click Check again. | Log in from a terminal, then click **Check again**: a login does not start a check by itself. |
+| Could not start Claude Code at *path*. | The program was not found: click **Browse**, or install Claude Code. |
+| *path* is a command script, which the editor does not run. | Windows only: pick the native `claude.exe` instead of the npm `claude.cmd`. |
+| Conversation only: the assistant answers without the editor's tools. | A warning, not a failure: prompts work, and the notice says what the editor's tools need. |
+
+When the program printed nothing, or sits in a folder the Claude desktop app installs to, the notice adds: "The Claude desktop app is a different program: it cannot run the editor's AI Assistant."
+
+With Claude (API key) chosen, the **API key** step shows whether a key is saved or `ANTHROPIC_API_KEY` is set, never its value. The **Key accepted** step sends the key once to the Claude API's model list: it passes when the API accepts the key, fails when the API refuses it (HTTP 401), and warns when the API cannot be reached, because then the key is not checked.
+
+Each check writes one line per step to the editor log ("AI Assistant setup: ..."): the program that ran, its exit code, its first line of output, and what the check found. The log holds no key and no account details, so you can share it when you ask for help.
+
+Before the first prompt of each session the editor runs the same checks itself, so a session that cannot answer is refused with the same finding instead of failing halfway. Until then the panel's status line reads **Not checked**. A refused prompt shows the finding and the fix in an error notice under the prompt, and the status line reads **Not ready**. The panel has no executable field, so its fix says where the field is first, for example: "The Claude Code executable field is in Settings > AI Assistant: pick Claude Code's claude.exe there, or install it from claude.com/claude-code." Fix the setup, then click **Retry**.
 
 ### Conversations
 
@@ -160,7 +187,7 @@ A reply the program stops before finishing (it exits early, for example) fails w
 
 ## Acting in the editor
 
-A Claude (local session) conversation can read and change the editor through the editor's own tools: the program is started with the editor's tool server attached and calls it while it answers. The **mode control** beside **Session…** decides, per conversation, what those calls may do: a call runs, waits on its row for your answer, or is refused.
+A Claude (Subscription) conversation can read and change the editor through the editor's own tools: the program is started with the editor's tool server attached and calls it while it answers. The **mode control** beside **Session…** decides, per conversation, what those calls may do: a call runs, waits on its row for your answer, or is refused.
 
 | Mode | What runs | What asks you first |
 |---|---|---|
@@ -208,45 +235,52 @@ A call that asks waits on its row with **Allow**, **Allow for this turn**, and *
 ### What acting needs
 
 - Node.js 20 or later: `node` on `PATH`, or its full path in **Node executable**. Without it a reply runs without the editor's tools and says why.
-- The tool server staged beside the editor: build the `McpServer` target. Without it the mode control reads **Conversation only** and its tooltip says what to build.
+- The tool server staged beside the editor: build the `McpServer` target. Without it the mode control reads **Conversation only** (**Chat** when the panel is narrow) and its tooltip says what to build; the setup page's **Editor tools** step gives the same answer.
 - The editor's debug server running (it starts with the editor; `--debug-port` picks its port).
 
 :::caution[Codex: conversation only]
-Codex keeps a shell in its read-only sandbox. Before Codex could act, the editor checks whether a command in that sandbox can open the editor's debug port. If it can, the command could reach the editor around the mode's checks, so Codex stays a conversation and its mode control reads **Conversation only** with that reason. Use Claude (local session) for the editor's tools. On Windows with Codex 0.162 the check connects, so Codex answers without the editor's tools.
+Codex keeps a shell in its read-only sandbox. Before Codex could act, the editor checks whether a command in that sandbox can open the editor's debug port. If it can, the command could reach the editor around the mode's checks, so Codex stays a conversation and its mode control reads **Conversation only** with that reason. Use Claude (Subscription) for the editor's tools. On Windows with Codex 0.162 the check connects, so Codex answers without the editor's tools.
 :::
 
 The editor's debug port is reachable by any program on this machine, as before. The modes limit what the panel's assistant does, they do not make the port private.
 
 ## Settings > AI Assistant
 
-| Row | What it sets |
-|---|---|
-| Provider | The connection the panel talks to (the same choice as the panel's dropdown). |
-| Claude session model | The model of a Claude (local session) turn (the same choice as the panel's model button). |
-| Claude session effort | The effort of a Claude (local session) turn (the same choice as the panel's effort slider). |
-| Claude API model | The model of a Claude (API) turn (the same choice as the panel's model button). |
-| Codex model | The model of a Codex (local session) turn; empty for Codex's default. |
-| Mode for new conversations | The mode a new conversation starts in; the panel's mode control changes it. |
-| Claude executable | `claude` on `PATH` by default, or a full path to `claude.exe`. |
-| Codex executable | The full path to `codex.exe`. |
-| Node executable | `node` on `PATH` by default, or a full path to `node.exe` (Node 20 or later), which runs the editor's tools for the assistant. |
-| Login status | The Check button described above. |
+The page's three steps, **Which assistant?**, **How do you sign in?** and **Setup for**, are described in [Setup](#setup). The connection you choose there is the same choice as the panel's dropdown.
 
-There is no key row: the editor never asks for, shows, or stores a key.
+| Row | Shown for | What it sets |
+|---|---|---|
+| Claude Code executable | Claude (Subscription) | `claude` on `PATH` by default, or a full path to `claude.exe` (Windows) or `claude` (macOS, Linux). |
+| Codex executable | Codex (Subscription) | `codex` on `PATH` by default, or a full path to `codex.exe` (Windows) or `codex` (macOS, Linux). |
+
+The other rows sit in the **Model and options** foldout under the checks, closed by default. Its title reads the current choice, for example "Model and options: Opus (latest) · High effort · new conversations: Auto". It holds only the rows of the chosen connection:
+
+| Row | Shown for | What it sets |
+|---|---|---|
+| Model | Claude (Subscription), Claude (API key) | The model of a turn (the same choice as the panel's model button). Claude (API key) defaults to `claude-opus-5-5`. |
+| Effort | Claude (Subscription) | The effort of a turn (the same choice as the panel's effort slider). |
+| Model | Codex (Subscription) | The model name as Codex spells it; empty for Codex's default. |
+| Mode for new conversations | Every connection | The mode a new conversation starts in; the panel's mode control changes it. |
+| Node executable | Claude (Subscription), Codex (Subscription) | `node` on `PATH` by default, or a full path to `node.exe` (Windows) or `node` (macOS, Linux), Node 20 or later, which runs the editor's tools for the assistant. |
+| Hold the microphone to speak, Send when the microphone stops | Every connection, where the system offers speech input | How the panel's microphone button dictates. |
+
+With Claude (API key) chosen, the page shows the **API key** row: see [Claude (API key): supplying the key](#claude-api-key-supplying-the-key). The settings search finds the page by any of its row names.
 
 ![Settings, User Settings, AI Assistant page](img/ai-assistant-settings.png)
 
-*Settings > AI Assistant with the defaults, after Check on the Login status row.*
+*Settings > AI Assistant with Claude (Subscription) chosen, after the checks ran.*
 
-### Claude (API): supplying the key
+### Claude (API key): supplying the key
 
-The editor reads the key from the `ANTHROPIC_API_KEY` environment variable each time you send a prompt, and from nowhere else. There is no key field in the panel or in the settings, and the editor never writes the key to a file. Set the variable before you start the editor, for example in PowerShell, then start the editor from the same window:
+To save a key, open Settings > AI Assistant, choose **Claude** and **API key**, paste the key from the Claude Console (console.anthropic.com) into the **API key** field, and click **Save**. The field shows a dot for each character, and Copy and Cut in it copy nothing. Save stores the key in the system's credential store for your user on this computer: Windows Credential Manager, the Keychain on macOS, or the secret service on Linux. The editor never writes the key to a file or to the project. After Save the field is empty, reads "Paste a new key", and the page checks the key again. **Remove** deletes the saved key from the credential store.
+
+When the `ANTHROPIC_API_KEY` environment variable is set and not empty, the editor uses it instead of a saved key. The editor reads the key each time you send a prompt. A system without a credential store, such as a Linux desktop without a secret service, turns the field off: set the variable before you start the editor, for example in PowerShell, then start the editor from the same window:
 
 ```powershell title="Set the key for this PowerShell window"
 $env:ANTHROPIC_API_KEY = "sk-ant-..."
 ```
 
-Without the variable, a prompt fails with "No Claude API key: set ANTHROPIC_API_KEY in the environment before starting the editor." A key the API rejects fails with the API's message, HTTP 401, and a reminder to check the variable. The **Claude API model** row defaults to `claude-opus-5-5`. A reply is capped at 16,384 tokens. Each prompt is sent with the conversation's earlier prompts and their finished replies. A reply that failed or was stopped is left out, together with its prompt.
+Without a key, a prompt is refused with "No Claude API key is saved, and ANTHROPIC_API_KEY is not set." and the fix "Open Settings > AI Assistant, paste a key from the Claude Console and click Save." A key the API rejects fails with the API's message, HTTP 401, and "Check the key in Settings > AI Assistant, or ANTHROPIC_API_KEY when it is set." The **Model** row under **Model and options** defaults to `claude-opus-5-5`. A reply is capped at 16,384 tokens. Each prompt is sent with the conversation's earlier prompts and their finished replies. A reply that failed or was stopped is left out, together with its prompt.
 
 :::caution[Long replies]
 A reply may take a while to start. The panel waits as long as the server keeps sending and gives up after ten minutes of silence. A reply that reaches the 16,384-token limit, or that the model declines, ends with a note saying so. A reply stream larger than 8 MiB, more than a 16,384-token reply needs, is cut off with a message saying so. The text received until then stays in the panel.
@@ -254,4 +288,4 @@ A reply may take a while to start. The panel waits as long as the server keeps s
 
 ## Connecting an AI client to the editor
 
-An AI client that runs outside the editor, such as Claude Code, Cursor, or Claude Desktop, can read and change the editor through the editor's MCP server, the same server the panel attaches to a Claude (local session) conversation. [MCP Server & CLI Setup](../getting-started/mcp-setup.mdx) covers building and registering the server, configuring each of those clients, and pointing one at your editor's port. It also covers the `ge` command-line interface, which calls the same tools from a terminal.
+An AI client that runs outside the editor, such as Claude Code, Cursor, or Claude Desktop, can read and change the editor through the editor's MCP server, the same server the panel attaches to a Claude (Subscription) conversation. [MCP Server & CLI Setup](../getting-started/mcp-setup.mdx) covers building and registering the server, configuring each of those clients, and pointing one at your editor's port. It also covers the `ge` command-line interface, which calls the same tools from a terminal.

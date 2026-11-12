@@ -10,7 +10,6 @@
 ;   3 km: position (0, 4992.473, 0), rotation (0.25882, 0, 0, 0.96593); yaw 90, pitch -30 (down at the relief)
 ;   orbit: position (0, 0, -4000), rotation (0, 0, 0, 1); yaw 90, pitch 0
 ; An eye pose is 1.7 m above the relief under it. The camera starts at the landing eye, over the +Y pole.
-; The sky is planar (world +Y) until a planet sky lands (#5092): dark over the pole, tilted at the corners.
 
 [entity id="e_cam"]
 Camera.enabled = true

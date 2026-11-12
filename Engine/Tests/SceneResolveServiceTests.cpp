@@ -9,6 +9,7 @@
 
 #include "HeldAssetImportFixture.h"
 
+#include "Assets/ModelAsset.h"
 #include "Components/Animation/AnimatorRef.h"
 #include "Components/Animation/SkeletonRef.h"
 #include "Components/Rendering/MeshRenderer.h"
@@ -16,13 +17,24 @@
 #include "ECS/ECSTemplates.h"
 #include "ECS/World.h"
 #include "ECSModules/Rendering/RenderingLoop.h"
+#include "Engine/Rendering/Material.h"
 #include "Engine/Rendering/MaterialRegistry.h"
+#include "Engine/Rendering/MaterialSystemTesting.h"
 #include "Engine/Rendering/MeshGPURegistry.h"
 #include "Engine/Rendering/ModelRenderSetup.h"
 #include "Engine/Rendering/SceneBuildPump.h"
 #include "Engine/Rendering/SceneResolveService.h"
+#include "JobSystem/TaskHandle.h"
+#include "Rendering/Core/HotReloadIntegration.h"
+#include "Rendering/Materials/MaterialBuildContext.h"
+#include "Rendering/Materials/Shader/ShaderComposer.h"
+#include "Source/Materials/Shader/ShaderSourceCache.h"
+#include "StagedTestPaths.h"
 
+#include <atomic>
 #include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
 #include <thread>
@@ -38,6 +50,14 @@ namespace
 class SceneResolveServiceTest : public Testing::HeldAssetImportFixture
 {
   protected:
+    void TearDown() override
+    {
+        // A throw that no job took must not reach the next test, and no job may stay held.
+        SetNextSurfaceParseJobThrowsForTesting(false);
+        SetSurfaceParseJobsHeldForTesting(false);
+        HeldAssetImportFixture::TearDown();
+    }
+
     ECS::EntityHandle Spawn(ECS::World& world, const GUID& modelGuid, const GUID& materialGuid = GUID::Null())
     {
         Components::MeshRenderer meshRenderer{};
@@ -57,9 +77,64 @@ class SceneResolveServiceTest : public Testing::HeldAssetImportFixture
     {
         return EngineCore::GetInstance().GetRenderingLoop()->GetSceneResolveService();
     }
+
+    // Spawns an entity of `modelGuid`, resolves it as a scene batch and checks it was bound.
+    void SpawnAndResolve(ECS::World& world, const GUID& modelGuid)
+    {
+        const ECS::EntityHandle prop = Spawn(world, modelGuid);
+        const SceneResolveBatch batch = EngineResolves().EnqueueWorld(world, *m_Services);
+        m_Gate.Release();
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+        while (!EngineResolves().IsBatchComplete(batch) && std::chrono::steady_clock::now() < deadline)
+            StepFrame();
+        EXPECT_NE(MeshHandle(world, prop), 0u) << "the model was not bound";
+    }
+
+    // The texture slot names of the registered material derived from the model's first material.
+    std::vector<std::string> DerivedMaterialSlotNames(const GUID& modelGuid)
+    {
+        const GUID materialGuid = ModelMaterialBridge::DeriveMaterialGuid(modelGuid, 0);
+        const Material* material = m_Services->Materials().Registry().Find(materialGuid);
+        std::vector<std::string> names;
+        if (material)
+            for (std::string_view name : material->GetTextureSlotNames())
+                names.emplace_back(name);
+        return names;
+    }
+
+    // Gives the material system a build context whose project shader root is `projectRoot`.
+    void UseProjectShaders(const std::filesystem::path& projectRoot)
+    {
+        Rendering::MaterialBuildContext context{};
+        context.AdapterShaderDir = TestPaths::StagedRenderingShadersDir();
+        context.CacheRoot = m_Root / "ShaderCache";
+        context.IncludeDirs = {context.AdapterShaderDir};
+        context.ProjectRoots = {projectRoot};
+        m_Services->Materials().SetMaterialBuildContext(context);
+    }
 };
 
 constexpr std::size_t kBusyBatchEntities = 5000;
+
+// The held triangle with one material, which the model bridge gives the standard surface.
+constexpr const char* kHeldMaterialTriangleGltf =
+    R"({"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"mesh":0,"name":"Tri"}],)"
+    R"("materials":[{"name":"Plain"}],)"
+    R"("meshes":[{"name":"Tri","primitives":[{"attributes":{"POSITION":0},"indices":1,"material":0}]}],)"
+    R"("accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,0]},)"
+    R"({"bufferView":1,"componentType":5123,"count":3,"type":"SCALAR"}],)"
+    R"("bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":6}],)"
+    R"("buffers":[{"byteLength":44,"uri":"data:application/octet-stream;base64,)"
+    R"(AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAABAAIAAAA="}]})";
+
+// Writes the project surface that stands in for the standard one and announces the edit.
+void WriteStandardSurface(const std::filesystem::path& projectRoot, const char* declarations)
+{
+    std::filesystem::create_directories(projectRoot / "Surfaces");
+    std::ofstream(projectRoot / "Surfaces" / "standard_pbr.glsl", std::ios::binary | std::ios::trunc)
+        << declarations << "SurfaceOutput EvaluateSurface(SurfaceInput sIn) { return DefaultSurfaceOutput(); }\n";
+    Rendering::NotifyShaderSourcesChanged();
+}
 
 } // namespace
 
@@ -77,7 +152,7 @@ TEST_F(SceneResolveServiceTest, ASpawnWhileTheServiceIsBusyReachesItsQueue)
     std::vector<ECS::EntityHandle> scene;
     for (std::size_t i = 0; i < kBusyBatchEntities; ++i)
         scene.push_back(Spawn(*world, modelGuid));
-    const SceneResolveBatch batch = EngineResolves().EnqueueWorld(*world, m_Services);
+    const SceneResolveBatch batch = EngineResolves().EnqueueWorld(*world, *m_Services);
     EXPECT_LT(StepFrame(), kAFrameThatWaited);
     ASSERT_FALSE(EngineResolves().IsBatchComplete(batch)) << "the scene's model is still held at its import";
     EXPECT_FALSE(IsSceneBuildPumpActive()) << "the engine's service set the editor's scene-build flag";
@@ -121,7 +196,7 @@ TEST_F(SceneResolveServiceTest, TheEngineServiceNeverSetsTheSceneBuildFlag)
     ECS::World opened;
     Spawn(opened, modelGuid);
     SceneBuildPump build;
-    build.Begin(opened, m_Services);
+    build.Begin(opened, *m_Services);
     EXPECT_TRUE(IsSceneBuildPumpActive()) << "the editor's build is the flag's setter";
     build.Reset();
     EXPECT_FALSE(IsSceneBuildPumpActive());
@@ -143,7 +218,7 @@ TEST_F(SceneResolveServiceTest, ThePlayersStartupSceneResolvesWithoutBlockingThe
     const ECS::EntityHandle prop = Spawn(*world, modelGuid, materialGuid);
     const ECS::EntityHandle character = Spawn(*world, modelGuid);
     world->AddComponentImmediate(character, Components::SkinnedMeshRenderer{});
-    const SceneResolveBatch startup = EngineResolves().EnqueueWorld(*world, m_Services);
+    const SceneResolveBatch startup = EngineResolves().EnqueueWorld(*world, *m_Services);
 
     EXPECT_LT(StepFrame(), kAFrameThatWaited) << "the first frame waited for the startup scene";
     EXPECT_FALSE(EngineResolves().IsBatchComplete(startup));
@@ -157,7 +232,7 @@ TEST_F(SceneResolveServiceTest, ThePlayersStartupSceneResolvesWithoutBlockingThe
     ASSERT_TRUE(EngineResolves().IsBatchComplete(startup)) << "the startup batch never completed";
     EXPECT_NE(MeshHandle(*world, prop), 0u);
     EXPECT_NE(MeshHandle(*world, character), 0u);
-    EXPECT_NE(m_Services.Materials().Registry().Find(materialGuid), nullptr)
+    EXPECT_NE(m_Services->Materials().Registry().Find(materialGuid), nullptr)
         << "the startup scene's standalone material was not registered";
     const auto* skeleton = world->GetComponent<Components::SkeletonRef>(character);
     ASSERT_NE(skeleton, nullptr) << "the skinned entity was not bound when the batch completed";
@@ -168,6 +243,40 @@ TEST_F(SceneResolveServiceTest, ThePlayersStartupSceneResolvesWithoutBlockingThe
     EXPECT_EQ(counts.MissedEntities, 0u);
     EXPECT_EQ(counts.RegisteredMaterials, 1u);
     EXPECT_EQ(counts.HeldEntities, 0u);
+}
+
+// The model's load hashes its meshes on its worker, so the resolve registers them on the main thread
+// without a hash of its own, and each registered submesh keeps the hash of its mesh.
+TEST_F(SceneResolveServiceTest, TheResolveRegistersAModelWithTheMeshHashesItsLoadMade)
+{
+    const GUID modelGuid = RegisterHeldModel(/*fails=*/false);
+    ASSERT_FALSE(modelGuid.IsNull());
+    ECS::World* world = EnableRenderingLoop();
+    ASSERT_NE(world, nullptr);
+    const ECS::EntityHandle prop = Spawn(*world, modelGuid);
+    const SceneResolveBatch startup = EngineResolves().EnqueueWorld(*world, *m_Services);
+    const Rendering::MeshGPURegistry& meshes = m_Services->GetMeshGPURegistry();
+    const uint64 hashesBefore = meshes.GetComputedContentHashCountForTest();
+
+    m_Gate.Release();
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+    while (!EngineResolves().IsBatchComplete(startup) && std::chrono::steady_clock::now() < deadline)
+        StepFrame();
+    ASSERT_TRUE(EngineResolves().IsBatchComplete(startup)) << "the startup batch never completed";
+    ASSERT_NE(MeshHandle(*world, prop), 0u);
+    EXPECT_EQ(meshes.GetComputedContentHashCountForTest(), hashesBefore)
+        << "the main thread hashed a mesh that its load hashed";
+
+    const SharedPtr<Asset> asset = EngineCore::GetInstance().GetAssetManager().GetAsset(modelGuid);
+    const auto* model = dynamic_cast<const ModelAsset*>(asset.get());
+    ASSERT_NE(model, nullptr);
+    ASSERT_GT(model->GetMeshCount(), 0u);
+    for (uint32 i = 0; i < model->GetMeshCount(); ++i)
+    {
+        const Rendering::MeshGPUEntry* entry = meshes.FindByKey(Rendering::MeshGPUKey{modelGuid, i});
+        ASSERT_NE(entry, nullptr) << "submesh " << i;
+        EXPECT_EQ(entry->contentHash, ComputeMeshContentHash(model->GetMesh(i))) << "submesh " << i;
+    }
 }
 
 // A standalone material that fails to load is a miss the batch counts as done:
@@ -181,7 +290,7 @@ TEST_F(SceneResolveServiceTest, AMissingMaterialCompletesTheBatchAsAMiss)
     Components::MeshRenderer meshRenderer{};
     meshRenderer.materialAssetGuid.Set(materialGuid);
     world->Create<Components::MeshRenderer>(meshRenderer);
-    const SceneResolveBatch batch = EngineResolves().EnqueueWorld(*world, m_Services);
+    const SceneResolveBatch batch = EngineResolves().EnqueueWorld(*world, *m_Services);
     EXPECT_LT(StepFrame(), kAFrameThatWaited);
     m_Gate.Release();
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
@@ -203,7 +312,7 @@ TEST_F(SceneResolveServiceTest, AnEntityDestroyedWhileQueuedIsDropped)
     ASSERT_NE(world, nullptr);
     const ECS::EntityHandle destroyed = Spawn(*world, modelGuid);
     const ECS::EntityHandle kept = Spawn(*world, modelGuid);
-    const SceneResolveBatch batch = EngineResolves().EnqueueWorld(*world, m_Services);
+    const SceneResolveBatch batch = EngineResolves().EnqueueWorld(*world, *m_Services);
     EXPECT_LT(StepFrame(), kAFrameThatWaited);
     ASSERT_EQ(EngineResolves().Counts().HeldEntities, 2u);
 
@@ -235,7 +344,7 @@ TEST_F(SceneResolveServiceTest, TheQueueIsDroppedWhenTheWorldIsCleared)
     ECS::World* world = EnableRenderingLoop();
     ASSERT_NE(world, nullptr);
     const ECS::EntityHandle old = Spawn(*world, modelGuid);
-    const SceneResolveBatch batch = EngineResolves().EnqueueWorld(*world, m_Services);
+    const SceneResolveBatch batch = EngineResolves().EnqueueWorld(*world, *m_Services);
     EXPECT_LT(StepFrame(), kAFrameThatWaited);
     ASSERT_TRUE(EngineResolves().IsResolving(*world, old));
 
@@ -320,6 +429,197 @@ TEST_F(SceneResolveServiceTest, AKeptModelIsEvictedWhenItIsReloadedOrUnloaded)
     ASSERT_NE(handle, 0u) << "the spawn after the unload never bound";
     EXPECT_EQ(EngineResolves().Counts().RegisteredModels, 3u)
         << "the spawn after the unload was bound from the registration made before it";
-    EXPECT_NE(m_Services.GetMeshGPURegistry().Find(static_cast<Rendering::MeshGPUHandle>(handle)), nullptr)
+    EXPECT_NE(m_Services->GetMeshGPURegistry().Find(static_cast<Rendering::MeshGPUHandle>(handle)), nullptr)
         << "the spawn after the unload was bound to a released mesh handle";
+}
+
+// A job parses a landed model's surfaces, so the resolve registers its materials on the main thread
+// without reading a shader file; after an announced edit the next model's job parses the new slots.
+TEST_F(SceneResolveServiceTest, TheResolveRegistersAModelsMaterialsWithSurfacesAJobParsed)
+{
+    const std::filesystem::path projectRoot = m_Root / "ProjectShaders";
+    WriteStandardSurface(projectRoot, "// @texture flowMask linear\n");
+    UseProjectShaders(projectRoot);
+    ASSERT_FALSE(RegisterHeldModel(/*fails=*/false).IsNull());
+    const GUID first = RegisterFile("first_material.gltf", kHeldMaterialTriangleGltf);
+    const GUID second = RegisterFile("second_material.gltf", kHeldMaterialTriangleGltf);
+    ECS::World* world = EnableRenderingLoop();
+    ASSERT_NE(world, nullptr);
+
+    const uint64_t readsBefore = Rendering::ShaderSourceCache::FileReadsOnThisThreadForTest();
+    SpawnAndResolve(*world, first);
+    EXPECT_EQ(Rendering::ShaderSourceCache::FileReadsOnThisThreadForTest(), readsBefore)
+        << "the main thread read a surface to register the model's material";
+    EXPECT_EQ(DerivedMaterialSlotNames(first), std::vector<std::string>{"flowMask"});
+
+    WriteStandardSurface(projectRoot, "// @texture auxMask linear\n");
+    SpawnAndResolve(*world, second);
+    EXPECT_EQ(Rendering::ShaderSourceCache::FileReadsOnThisThreadForTest(), readsBefore)
+        << "the main thread read the edited surface to register the next model's material";
+    EXPECT_EQ(DerivedMaterialSlotNames(second), std::vector<std::string>{"auxMask"}) << "the announced edit was not resolved";
+}
+
+// A surface job that throws gives its model to the main thread: the model binds, its registration
+// parses the surface itself, and a drain returns.
+TEST_F(SceneResolveServiceTest, AModelWhoseSurfaceJobThrowsStillBindsAndTheDrainReturns)
+{
+    const std::filesystem::path projectRoot = m_Root / "ProjectShaders";
+    WriteStandardSurface(projectRoot, "// @texture flowMask linear\n");
+    UseProjectShaders(projectRoot);
+    ASSERT_FALSE(RegisterHeldModel(/*fails=*/false).IsNull());
+    const GUID first = RegisterFile("first_material.gltf", kHeldMaterialTriangleGltf);
+    const GUID second = RegisterFile("second_material.gltf", kHeldMaterialTriangleGltf);
+    ECS::World* world = EnableRenderingLoop();
+    ASSERT_NE(world, nullptr);
+
+    SetNextSurfaceParseJobThrowsForTesting(true);
+    SpawnAndResolve(*world, first);
+    ASSERT_EQ(DerivedMaterialSlotNames(first), std::vector<std::string>{"flowMask"})
+        << "the model whose surface job threw was not registered";
+
+    WriteStandardSurface(projectRoot, "// @texture auxMask linear\n");
+    SetNextSurfaceParseJobThrowsForTesting(true);
+    const ECS::EntityHandle prop = Spawn(*world, second);
+    (void)EngineResolves().EnqueueWorld(*world, *m_Services);
+    (void)EngineResolves().DrainNow(*world, *m_Services);
+    EXPECT_NE(MeshHandle(*world, prop), 0u) << "the drain returned before the model whose surface job threw was bound";
+    EXPECT_EQ(DerivedMaterialSlotNames(second), std::vector<std::string>{"auxMask"});
+}
+
+// The surface job holds the texture slots it parsed for the main thread, and a surface it cannot read
+// does not stop it: the job completes and parses the next surface.
+TEST_F(SceneResolveServiceTest, TheSurfaceJobHoldsTheSlotsItParsedAndCompletesPastAFileItCannotRead)
+{
+    const std::filesystem::path projectRoot = m_Root / "ProjectShaders";
+    WriteStandardSurface(projectRoot, "// @texture flowMask linear\n");
+    // A directory where the surface file should be: the root chain finds it, and no read of it succeeds.
+    std::filesystem::create_directories(projectRoot / "Surfaces" / "standard_pbr_extended.glsl");
+    UseProjectShaders(projectRoot);
+
+    std::vector<MaterialDocument> surfaces(2);
+    surfaces[0].surfaceShader = "Surfaces/standard_pbr_extended.glsl";
+    surfaces[1].surfaceShader = "Surfaces/standard_pbr.glsl";
+    JobSystem::TaskHandle job = m_Services->Materials().ParseSurfacesOffThread(surfaces, {});
+    ASSERT_TRUE(job.IsValid());
+    job.Wait();
+    EXPECT_TRUE(job.IsCompleted()) << "a surface the job cannot read failed the job";
+    EXPECT_TRUE(Rendering::ShaderComposer::HoldsTextureSlotsOfFile(projectRoot / "Surfaces" / "standard_pbr.glsl"))
+        << "the job did not hold the surface's texture slots, so the main thread parses them";
+}
+
+// A job parses a standalone material's surface, so the resolve registers the material on the main thread
+// without reading a shader file.
+TEST_F(SceneResolveServiceTest, TheResolveRegistersAStandaloneMaterialWithSurfacesAJobParsed)
+{
+    UseProjectShaders(m_Root / "ProjectShaders");
+    std::ofstream(m_Root / "Assets" / "flow_surface.glsl", std::ios::binary)
+        << "// @texture flowMask linear\nSurfaceOutput EvaluateSurface(SurfaceInput sIn) { return DefaultSurfaceOutput(); }\n";
+    Rendering::NotifyShaderSourcesChanged();
+    const GUID materialGuid = RegisterFile("flow.material", R"({"schemaVersion": 3, "materialName": "Flow", )"
+                                                            R"("lightingModel": "StandardPBR", "surfaceShader": "flow_surface.glsl"})");
+    ECS::World* world = EnableRenderingLoop();
+    ASSERT_NE(world, nullptr);
+    Components::MeshRenderer meshRenderer{};
+    meshRenderer.materialAssetGuid.Set(materialGuid);
+    world->Create<Components::MeshRenderer>(meshRenderer);
+
+    const uint64_t readsBefore = Rendering::ShaderSourceCache::FileReadsOnThisThreadForTest();
+    const SceneResolveBatch batch = EngineResolves().EnqueueWorld(*world, *m_Services);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+    while (!EngineResolves().IsBatchComplete(batch) && std::chrono::steady_clock::now() < deadline)
+        StepFrame();
+    ASSERT_TRUE(EngineResolves().IsBatchComplete(batch));
+    EXPECT_EQ(Rendering::ShaderSourceCache::FileReadsOnThisThreadForTest(), readsBefore)
+        << "the main thread read a surface to register the standalone material";
+    const Material* material = m_Services->Materials().Registry().Find(materialGuid);
+    ASSERT_NE(material, nullptr) << "the standalone material was not registered";
+    std::vector<std::string> names;
+    for (std::string_view name : material->GetTextureSlotNames())
+        names.emplace_back(name);
+    EXPECT_EQ(names, std::vector<std::string>{"flowMask"});
+}
+
+// The editor draws its scene after a drain. So a drain waits for the surface job of a standalone material,
+// and the material is registered when the drain returns.
+TEST_F(SceneResolveServiceTest, ADrainReturnsAfterItRegistersAStandaloneMaterialWhoseSurfaceAJobParses)
+{
+    UseProjectShaders(m_Root / "ProjectShaders");
+    std::ofstream(m_Root / "Assets" / "drain_surface.glsl", std::ios::binary)
+        << "// @texture flowMask linear\nSurfaceOutput EvaluateSurface(SurfaceInput sIn) { return DefaultSurfaceOutput(); }\n";
+    Rendering::NotifyShaderSourcesChanged();
+    const GUID materialGuid = RegisterFile("drain.material", R"({"schemaVersion": 3, "materialName": "Drain", )"
+                                                             R"("lightingModel": "StandardPBR", "surfaceShader": "drain_surface.glsl"})");
+    ECS::World* world = EnableRenderingLoop();
+    ASSERT_NE(world, nullptr);
+    Components::MeshRenderer meshRenderer{};
+    meshRenderer.materialAssetGuid.Set(materialGuid);
+    world->Create<Components::MeshRenderer>(meshRenderer);
+
+    const SceneResolveBatch batch = EngineResolves().EnqueueWorld(*world, *m_Services);
+    (void)EngineResolves().DrainNow(*world, *m_Services);
+    EXPECT_TRUE(EngineResolves().IsBatchComplete(batch)) << "the drain returned before its batch completed";
+    EXPECT_NE(m_Services->Materials().Registry().Find(materialGuid), nullptr)
+        << "the drain returned before it registered the standalone material";
+}
+
+// While the surface job of a standalone material is held, the resolve steps and does not register the material
+// or read a shader file on the main thread. When the job ends, the material registers with no main-thread read.
+TEST_F(SceneResolveServiceTest, TheResolveRegistersAStandaloneMaterialOnlyAfterItsSurfaceJobEnds)
+{
+    UseProjectShaders(m_Root / "ProjectShaders");
+    std::ofstream(m_Root / "Assets" / "held_surface.glsl", std::ios::binary)
+        << "// @texture flowMask linear\nSurfaceOutput EvaluateSurface(SurfaceInput sIn) { return DefaultSurfaceOutput(); }\n";
+    Rendering::NotifyShaderSourcesChanged();
+    const GUID materialGuid = RegisterFile("held.material", R"({"schemaVersion": 3, "materialName": "Held", )"
+                                                            R"("lightingModel": "StandardPBR", "surfaceShader": "held_surface.glsl"})");
+    ECS::World* world = EnableRenderingLoop();
+    ASSERT_NE(world, nullptr);
+    // Resident, so the resolve starts the material's job when the batch requests it.
+    const SharedPtr<Asset> loaded = EngineCore::GetInstance().GetAssetManager().LoadAssetAsync(materialGuid).get();
+    ASSERT_NE(loaded, nullptr);
+    Components::MeshRenderer meshRenderer{};
+    meshRenderer.materialAssetGuid.Set(materialGuid);
+    world->Create<Components::MeshRenderer>(meshRenderer);
+
+    const uint64_t readsBefore = Rendering::ShaderSourceCache::FileReadsOnThisThreadForTest();
+    SetSurfaceParseJobsHeldForTesting(true);
+    const SceneResolveBatch batch = EngineResolves().EnqueueWorld(*world, *m_Services);
+    for (int frame = 0; frame < 3; ++frame)
+        StepFrame();
+    EXPECT_EQ(m_Services->Materials().Registry().Find(materialGuid), nullptr)
+        << "the resolve registered the material while its surface job was held";
+    EXPECT_FALSE(EngineResolves().IsBatchComplete(batch)) << "the batch completed while the surface job was held";
+    EXPECT_EQ(Rendering::ShaderSourceCache::FileReadsOnThisThreadForTest(), readsBefore)
+        << "the main thread read a surface while the material's surface job was held";
+
+    SetSurfaceParseJobsHeldForTesting(false);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+    while (!EngineResolves().IsBatchComplete(batch) && std::chrono::steady_clock::now() < deadline)
+        StepFrame();
+    EXPECT_NE(m_Services->Materials().Registry().Find(materialGuid), nullptr)
+        << "the material was not registered after its surface job ended";
+    EXPECT_EQ(Rendering::ShaderSourceCache::FileReadsOnThisThreadForTest(), readsBefore)
+        << "the main thread read a surface to register the material after its surface job ended";
+}
+
+// A model that is resident when its entity is held gets the same job, so the resolve registers its
+// materials without reading a shader file on the main thread.
+TEST_F(SceneResolveServiceTest, TheResolveRegistersAResidentModelsMaterialsWithSurfacesAJobParsed)
+{
+    ASSERT_FALSE(RegisterHeldModel(/*fails=*/false).IsNull());
+    const GUID resident = RegisterFile("resident_material.gltf", kHeldMaterialTriangleGltf);
+    ECS::World* world = EnableRenderingLoop();
+    ASSERT_NE(world, nullptr);
+    m_Gate.Release();
+    const SharedPtr<Asset> loaded = EngineCore::GetInstance().GetAssetManager().LoadAssetAsync(resident).get();
+    ASSERT_NE(loaded, nullptr);
+    const std::filesystem::path projectRoot = m_Root / "ProjectShaders";
+    WriteStandardSurface(projectRoot, "// @texture flowMask linear\n");
+    UseProjectShaders(projectRoot);
+
+    const uint64_t readsBefore = Rendering::ShaderSourceCache::FileReadsOnThisThreadForTest();
+    SpawnAndResolve(*world, resident);
+    EXPECT_EQ(Rendering::ShaderSourceCache::FileReadsOnThisThreadForTest(), readsBefore)
+        << "the main thread read a surface to register the resident model's material";
+    EXPECT_EQ(DerivedMaterialSlotNames(resident), std::vector<std::string>{"flowMask"});
 }

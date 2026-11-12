@@ -16,6 +16,7 @@
 #include "Scene/PrefabAuthoring.h"
 #include "Types/FlatMap.h"
 #include "UI/Controls/Label.h"
+#include "UI/StyleUtil.h"
 #include "UI/UIElement.h"
 
 #include <filesystem>
@@ -34,7 +35,7 @@ constexpr const char* kMemberClass = "hierarchy-prefab-member";
 constexpr const char* kMissingClass = "hierarchy-prefab-missing";
 constexpr const char* kOverriddenClass = "hierarchy-prefab-overridden";
 constexpr const char* kAddedClass = "hierarchy-prefab-added";
-constexpr const char* kOverriddenTooltip = "This entity differs from its prefab.";
+constexpr const char* kOverriddenTooltip = "This entity has overrides.";
 constexpr const char* kAddedTooltip = "Added on this instance. The prefab does not have this entity.";
 
 // How a described instance shows one entity under its root.
@@ -234,10 +235,7 @@ void DecoratePrefabRow(ECS::World& world, ECS::EntityHandle entity, HierarchyRow
 void SetShownText(Label& label, const std::string& text)
 {
     label.SetText(text);
-    if (text.empty())
-        label.AddClass("hidden");
-    else
-        label.RemoveClass("hidden");
+    UIUtil::SetShown(label, !text.empty());
 }
 
 } // namespace GameEngine::Editor

@@ -102,9 +102,10 @@ TEST(ProjectAcquisition, AnAcquisitionHoldsNoComputeWorker)
     }
     const ScopedEditorUserDataRoot userDataRoot(root / "user");
 
+    // Declared before the pool: the job can still be inside set_value() after the wait returns.
+    std::promise<void> workerHeld;
     JobSystem::WorkStealingThreadPool pool(1);
     std::promise<void> release;
-    std::promise<void> workerHeld;
     JobSystem::TaskHandle held = pool.Submit([&workerHeld, released = release.get_future().share()]() {
         workerHeld.set_value();
         released.wait();

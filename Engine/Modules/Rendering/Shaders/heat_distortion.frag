@@ -12,7 +12,7 @@ layout(set = 0, binding = 1) uniform sampler2D uDepth;
 
 layout(set = 0, binding = 2, std140) uniform ViewParamsBlock
 {
-    // 240 B prefix of the shared ViewParams list (through viewProj, no proj).
+    // 256 B prefix of the shared ViewParams list (through viewProj, no proj).
 #define GE_VP_MAT4(name) mat4 name;
 #define GE_VP_VEC4(name) vec4 name;
 #define GE_VIEWPARAMS_OMIT_PROJ 1
@@ -84,7 +84,7 @@ vec3 ViewRay(vec2 uv, float rawDepth)
 
 vec2 DistortionVector(vec2 uv)
 {
-    float time = ViewParams.ge_nearFar.w * pc.heatDistortionSpeed;
+    float time = ViewParams.ge_viewRanges.w * pc.heatDistortionSpeed;
     float scale = max(pc.heatDistortionScale, 0.01);
     vec2 scroll = vec2(time * 0.07, -time * 2.65);
     vec2 p = uv * scale + scroll;
@@ -130,9 +130,9 @@ void main()
     }
 
     float rawDepth = GE_TAP_LOD0(uDepth, vUV).r;
-    float linearDepth = IsBackgroundDepth(rawDepth) ? ViewParams.ge_nearFar.y
-                                                    : LinearizeReverseZ(rawDepth, ViewParams.ge_nearFar.xy);
-    float depth01 = Saturate(linearDepth / max(ViewParams.ge_nearFar.y, 1.0));
+    float linearDepth = IsBackgroundDepth(rawDepth) ? ViewParams.ge_viewRanges.y
+                                                    : LinearizeReverseZ(rawDepth, ViewParams.ge_depthTerms);
+    float depth01 = Saturate(linearDepth / max(ViewParams.ge_viewRanges.y, 1.0));
     float depthMask = smoothstep(pc.heatDistortionDistanceStart,
                                  max(pc.heatDistortionDistanceEnd, pc.heatDistortionDistanceStart + 1e-4),
                                  depth01);

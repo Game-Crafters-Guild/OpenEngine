@@ -6,15 +6,15 @@ sidebar:
 ---
 
 Parenting an entity makes its transform relative to its parent. `Transform` is always
-local space, `WorldTransform` is the derived world-space matrix that rendering, bounds,
+local space, `WorldTransform` is the derived world-space placement that rendering, bounds,
 and physics read, and `TransformHierarchySystem` is what turns one into the other. This
 page is the contract between those three: which component you write, which one you read,
 and when the derived value is valid.
 
 ## Architecture
 
-- `Transform` stores the local-space 4x4 matrix.
-- `WorldTransform` stores the derived world-space matrix used by rendering and other world-space consumers.
+- `Transform` stores the local placement: an exact `Position` in doubles and a 3x3 `Basis` (rotation times scale).
+- `WorldTransform` stores the derived world-space placement in the same form, used by rendering and other world-space consumers.
 - `Parent` defines transform hierarchy edges as well as editor hierarchy relationships.
 - `TransformHierarchySystem` owns propagation and version/dirty-feed emission.
 
@@ -25,12 +25,12 @@ and when the derived value is valid.
 - Interpreted as a **local transform relative to the parent**:
   - For root entities (no `Parent` or `Parent.Entity` is no entity): local == world.
   - For children: `WorldTransform = ParentWorldTransform * Transform`.
-- Stores a full 4x4 matrix (`float[16]`), the layout GPUScene reads.
+- Stores a `Position` (a `WorldPosition`, meters in doubles, exact at any distance from the origin) and a column-major 3x3 `Basis` whose columns are the X, Y and Z axes. The bottom row of the pose is always 0, 0, 0, 1, so there is no fourth row to read or write.
 - Changes are detected through ECS component-column versions and an exact cached local-matrix snapshot. No per-component `isDirty` flag is required.
 
 ### WorldTransform (world)
 
-- The ECS component holding the **world-space** 4x4 matrix for an entity.
+- The ECS component holding the **world-space** `Position` and `Basis` of an entity.
 - Owned and maintained **only** by `TransformHierarchySystem` (and possibly physics/animation systems in clearly defined ways).
 - Consumers such as:
   - Render extraction / GPUScene upload,

@@ -55,9 +55,7 @@
 	pointer-events: none;
 }
 
-.asset-view-panel-root .asset-view-anim-arrow,
-.asset-view-panel-root button.asset-view-anim-arrow,
-.asset-view-panel-root .button.asset-view-anim-arrow {
+.asset-view-panel-root .asset-view-anim-arrow {
 	opacity: 0.28;
 	background-color: transparent;
 	border-color: transparent;
@@ -65,14 +63,8 @@
 }
 
 .asset-view-panel-root .asset-view-anim-arrow:hover,
-.asset-view-panel-root button.asset-view-anim-arrow:hover,
-.asset-view-panel-root .button.asset-view-anim-arrow:hover,
 .asset-view-panel-root .asset-view-anim-arrow:active,
-.asset-view-panel-root button.asset-view-anim-arrow:active,
-.asset-view-panel-root .button.asset-view-anim-arrow:active,
-.asset-view-panel-root .asset-view-anim-arrow.pressed,
-.asset-view-panel-root button.asset-view-anim-arrow.pressed,
-.asset-view-panel-root .button.asset-view-anim-arrow.pressed {
+.asset-view-panel-root .asset-view-anim-arrow.pressed {
 	opacity: 1.0;
 	background-color: transparent;
 	border-color: transparent;

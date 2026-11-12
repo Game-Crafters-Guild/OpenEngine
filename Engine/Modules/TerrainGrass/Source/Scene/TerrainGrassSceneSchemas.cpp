@@ -193,6 +193,7 @@ public:
         outLines.push_back("TerrainGrass.bladesPerSquareMeter = " + FormatFloat(c->BladesPerSquareMeter));
         outLines.push_back("TerrainGrass.range = " + FormatFloat(c->Range));
         outLines.push_back("TerrainGrass.densityFalloff = " + FormatFloat(c->DensityFalloff));
+        outLines.push_back("TerrainGrass.farThinning = " + FormatFloat(c->FarThinning));
         outLines.push_back("TerrainGrass.placementSeed = " + FormatFloat(c->PlacementSeed));
         outLines.push_back("TerrainGrass.clumpSize = " + FormatFloat(c->ClumpSize));
         outLines.push_back("TerrainGrass.clumpHeightVariance = " + FormatFloat(c->ClumpHeightVariance));
@@ -261,6 +262,7 @@ public:
         else if (property == "bladespersquaremeter") { if (!ParseF32(value, c.BladesPerSquareMeter, outError)) return false; }
         else if (property == "range") { if (!ParseF32(value, c.Range, outError)) return false; }
         else if (property == "densityfalloff") { if (!ParseF32(value, c.DensityFalloff, outError)) return false; }
+        else if (property == "farthinning") { if (!ParseF32(value, c.FarThinning, outError)) return false; }
         else if (property == "placementseed") { if (!ParseF32(value, c.PlacementSeed, outError)) return false; }
         else if (property == "clumpsize") { if (!ParseF32(value, c.ClumpSize, outError)) return false; }
         else if (property == "clumpheightvariance") { if (!ParseF32(value, c.ClumpHeightVariance, outError)) return false; }

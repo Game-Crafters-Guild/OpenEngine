@@ -15,16 +15,15 @@ namespace
 // The writing process of a temporary sibling named <target>.<pid>-<thread>-<counter>.tmp
 // (MakeTemporarySiblingPath), or -1 when the name has another shape. `targetSuffix` must end the
 // target's own name.
-int64_t TemporaryWriterProcess(const std::string& name, std::string_view targetSuffix)
+int64_t TemporaryWriterProcess(std::string_view name, std::string_view targetSuffix)
 {
     constexpr std::string_view kTemporaryExtension = ".tmp";
-    if (name.size() <= kTemporaryExtension.size() ||
-        name.compare(name.size() - kTemporaryExtension.size(), kTemporaryExtension.size(), kTemporaryExtension) != 0)
+    if (name.size() <= kTemporaryExtension.size() || !name.ends_with(kTemporaryExtension))
         return -1;
-    const std::string stem = name.substr(0, name.size() - kTemporaryExtension.size());
+    const std::string_view stem = name.substr(0, name.size() - kTemporaryExtension.size());
     const std::size_t dot = stem.rfind('.');
-    if (dot == std::string::npos || dot < targetSuffix.size() ||
-        stem.compare(dot - targetSuffix.size(), targetSuffix.size(), targetSuffix) != 0)
+    if (dot == std::string_view::npos || dot < targetSuffix.size() ||
+        stem.substr(dot - targetSuffix.size(), targetSuffix.size()) != targetSuffix)
         return -1;
     int64_t pid = -1;
     const char* first = stem.data() + dot + 1;
@@ -36,6 +35,11 @@ int64_t TemporaryWriterProcess(const std::string& name, std::string_view targetS
 }
 
 } // namespace
+
+bool IsTemporarySiblingName(std::string_view fileName)
+{
+    return TemporaryWriterProcess(fileName, {}) >= 0;
+}
 
 std::size_t RemoveOrphanedTemporaryFiles(const std::filesystem::path& directory, std::string_view targetSuffix)
 {

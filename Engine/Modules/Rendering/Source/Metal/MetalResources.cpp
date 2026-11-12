@@ -10,9 +10,12 @@
 #include "Rendering/Core/DeviceFormatting.h"
 #include "Rendering/Core/Pipeline/PipelineTypes.h"
 #include "Rendering/Core/SpecializationConstants.h"
+#include "Rendering/ShaderCache/ShaderPackageIO.h"
+#include "Rendering/ShaderCache/ShaderStageRecord.h"
 #include "Logger/Logger.h"
 
 #include <algorithm>
+#include <cassert>
 #include <chrono>
 #include <cstring>
 #include <functional>
@@ -25,19 +28,6 @@ namespace Rendering
 
 namespace
 {
-constexpr uint32_t kSpirvMagic = 0x07230203u;
-
-bool IsSpirv(const std::vector<uint8_t>& bytes)
-{
-    if (bytes.size() < 4)
-    {
-        return false;
-    }
-    uint32_t magic = 0;
-    std::memcpy(&magic, bytes.data(), sizeof(magic));
-    return magic == kSpirvMagic;
-}
-
 // GE_METAL_DUMP_PIPELINE_TIMING=1: per-pipeline stage costs (translate /
 // newLibrary / PSO) for attributing first-frame creation hitches.
 bool DumpPipelineTiming()
@@ -52,24 +42,6 @@ bool DumpPipelineTiming()
 NS::String* MakeNSString(const std::string& s)
 {
     return NS::String::string(s.c_str(), NS::UTF8StringEncoding);
-}
-
-// Shared MSL compile options. Fast math stays OFF: the depth prepass and the
-// color pass compile the same vertex shader into separate pipelines, and the
-// reverse-Z GreaterOrEqual contract needs both to produce bit-identical
-// positions (fast-math reassociation breaks that between compilations).
-MTL::CompileOptions* MakeCompileOptions()
-{
-    MTL::CompileOptions* options = MTL::CompileOptions::alloc()->init();
-    // Fast math matches what the Vulkan path gets (MoltenVK compiles its MSL
-    // with fast math on by default) and what GLSL-without-precise implies.
-    // GE_METAL_PRECISE_MATH=1 flips it off when bisecting NaN/precision bugs.
-    static const bool kPreciseMath = []() {
-        const char* env = std::getenv("GE_METAL_PRECISE_MATH");
-        return env != nullptr && env[0] != '0';
-    }();
-    options->setFastMathEnabled(!kPreciseMath);
-    return options;
 }
 
 // Debug aids: failed MSL compiles always dump the generated source;
@@ -123,6 +95,16 @@ MTL::Function* NewSpecializedFunction(MTL::Library* library, const char* entry)
                            error->localizedDescription()->utf8String());
     }
     return fn;
+}
+
+// A pass binds a combined depth-stencil target as its stencil attachment too,
+// so the pipeline names the same format there. A stencil format in the key wins.
+MTL::PixelFormat StencilPixelFormat(const PipelineFormatKey& fk)
+{
+    if (static_cast<uint32_t>(fk.StencilFormat) != 0)
+        return MetalMappings::ToMTLPixelFormat(fk.StencilFormat);
+    const MTL::PixelFormat depth = MetalMappings::ToMTLPixelFormat(fk.DepthFormat);
+    return MetalMappings::IsCombinedDepthStencil(depth) ? depth : MTL::PixelFormatInvalid;
 }
 } // namespace
 
@@ -758,6 +740,86 @@ void MetalDevice::DestroySampler(SamplerHandle handle)
 // Pipelines
 // ---------------------------------------------------------------------------
 
+MetalDevice::StageLibraryCounts MetalDevice::GetStageLibraryCounts() const
+{
+    return {m_ShippedStageCount.load(std::memory_order_relaxed), m_CompiledStageCount.load(std::memory_order_relaxed)};
+}
+
+MTL::Function* MetalDevice::NewStageFunction(const std::vector<uint8_t>& source, MetalShaderStage stage,
+                                             const char* rawEntry,
+                                             const std::vector<const DescriptorSetLayoutDesc*>& setLayouts,
+                                             const SpecializationConstants* specialization,
+                                             const std::string& debugName, StageBuildTiming& timing,
+                                             MetalShaderTranslation& outTranslation)
+{
+    auto msSince = [](std::chrono::steady_clock::time_point start) {
+        return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    };
+    std::string msl;
+    std::string entry = rawEntry;
+    if (IsSpirvModule(source))
+    {
+        const PrecompiledShaderFiles files = GetPrecompiledShaderFiles();
+        if (!files.MetalLibraries.empty())
+        {
+            const auto lookupStart = std::chrono::steady_clock::now();
+            MTL::Function* shipped = m_ShippedLibraries.NewFunction(
+                m_Device, files.MetalLibraries, ComputeMetalLibraryOptionsHash(MetalFastMathEnabled()),
+                ComputeTranslationHash(source, stage, setLayouts, specialization), outTranslation);
+            timing.LibraryMs += msSince(lookupStart);
+            if (shipped != nullptr)
+            {
+                m_ShippedStageCount.fetch_add(1, std::memory_order_relaxed);
+                ++timing.ShippedStages;
+                return shipped;
+            }
+        }
+        const auto translateStart = std::chrono::steady_clock::now();
+        outTranslation = TranslateSpirvToMsl(source, stage, setLayouts, specialization);
+        timing.TranslateMs += msSince(translateStart);
+        if (!outTranslation.Success)
+        {
+            Logger::Log::Error("MetalDevice: SPIR-V->MSL translation failed for '{}': {}", debugName,
+                               outTranslation.Error);
+            DumpMslTo("ge_msl_translate_fail_", outTranslation.Error, debugName);
+            return nullptr;
+        }
+        msl = std::move(outTranslation.Msl);
+        entry = outTranslation.EntryPoint;
+        if (ShouldDumpAllMsl())
+        {
+            static constexpr const char* kDumpPrefixes[] = {"ge_msl_vs_", "ge_msl_fs_", "ge_msl_cs_", "ge_msl_ms_",
+                                                            "ge_msl_os_"};
+            DumpMslTo(kDumpPrefixes[static_cast<size_t>(stage)], msl, debugName);
+        }
+    }
+    else
+    {
+        msl.assign(reinterpret_cast<const char*>(source.data()), source.size());
+    }
+    NS::Error* error = nullptr;
+    MTL::CompileOptions* compileOptions = MakeMetalCompileOptions();
+    const auto libraryStart = std::chrono::steady_clock::now();
+    MTL::Library* library = m_Device->newLibrary(MakeNSString(msl), compileOptions, &error);
+    timing.LibraryMs += msSince(libraryStart);
+    compileOptions->release();
+    m_CompiledStageCount.fetch_add(1, std::memory_order_relaxed);
+    if (library == nullptr)
+    {
+        Logger::Log::Error("MetalDevice: MSL compile failed for '{}': {}", debugName,
+                           error != nullptr ? error->localizedDescription()->utf8String() : "unknown error");
+        DumpFailedMsl(msl, debugName);
+        return nullptr;
+    }
+    MTL::Function* fn = NewSpecializedFunction(library, entry.c_str());
+    library->release();
+    if (fn == nullptr)
+    {
+        Logger::Log::Error("MetalDevice: entry point '{}' not found in MSL source for '{}'", entry, debugName);
+    }
+    return fn;
+}
+
 PipelineHandle MetalDevice::CreateConcreteGraphicsPipeline(const GraphicsPipelineDesc& gd, const PipelineFormatKey& fk)
 {
     // Pipeline builds run on job workers, which have no autorelease pool of their
@@ -775,17 +837,7 @@ PipelineHandle MetalDevice::CreateConcreteGraphicsPipeline(const GraphicsPipelin
         return INVALID_PIPELINE_HANDLE;
     }
 
-    // Snapshot layout descs by value under the cache mutex: pipeline creation
-    // runs on prewarm job threads concurrently with interning, which can
-    // reallocate the storage Lookup* pointers alias.
-    std::vector<DescriptorSetLayoutDesc> layoutValues;
-    layoutValues.reserve(gd.DescriptorSetLayouts.size());
-    for (DescriptorSetLayoutId id : gd.DescriptorSetLayouts)
-    {
-        DescriptorSetLayoutDesc layout{};
-        CopyDescriptorSetLayout(id, layout);
-        layoutValues.push_back(std::move(layout));
-    }
+    const std::vector<DescriptorSetLayoutDesc> layoutValues = CopyDescriptorSetLayouts(gd.DescriptorSetLayouts);
     std::vector<const DescriptorSetLayoutDesc*> setLayouts;
     setLayouts.reserve(layoutValues.size());
     for (const DescriptorSetLayoutDesc& layout : layoutValues)
@@ -796,8 +848,8 @@ PipelineHandle MetalDevice::CreateConcreteGraphicsPipeline(const GraphicsPipelin
         gd.Specialization.has_value() ? &gd.Specialization.value() : nullptr;
 
     const auto creationStart = std::chrono::steady_clock::now();
-    double translateMs = 0.0;
-    double libraryMs = 0.0;
+    StageBuildTiming timing;
+    std::vector<MetalWrittenBinding> writtenStorage;
     // Mesh stage's workgroup size (threads per mesh threadgroup), captured during
     // translation for DrawMeshTasks. Defaults to 1 for hand-written MSL.
     uint32_t meshThreadsX = 1, meshThreadsY = 1, meshThreadsZ = 1;
@@ -805,63 +857,24 @@ PipelineHandle MetalDevice::CreateConcreteGraphicsPipeline(const GraphicsPipelin
         return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
     };
 
-    // Each stage is either SPIR-V (translated through SPIRV-Cross, entry
+    // Each stage is either SPIR-V (a shipped library, or translated through SPIRV-Cross; entry
     // "main0") or raw MSL text (bring-up/test path, entry "<stage>_main").
     auto compileStage = [&](const std::vector<uint8_t>& source, MetalShaderStage stage,
                             const char* rawEntry) -> MTL::Function* {
-        std::string msl;
-        std::string entry = rawEntry;
-        if (IsSpirv(source))
+        MetalShaderTranslation translation;
+        MTL::Function* fn =
+            NewStageFunction(source, stage, rawEntry, setLayouts, specialization, gd.DebugName, timing, translation);
+#ifndef NDEBUG
+        if (fn != nullptr && IsSpirvModule(source))
         {
-            const auto translateStart = std::chrono::steady_clock::now();
-            MetalShaderTranslation translation = TranslateSpirvToMsl(source, stage, setLayouts, specialization);
-            translateMs += msSince(translateStart);
-            if (!translation.Success)
-            {
-                Logger::Log::Error("MetalDevice: SPIR-V->MSL translation failed for '{}': {}", gd.DebugName,
-                                   translation.Error);
-                DumpMslTo("ge_msl_translate_fail_", translation.Error, gd.DebugName);
-                return nullptr;
-            }
-            msl = std::move(translation.Msl);
-            entry = translation.EntryPoint;
-            if (stage == MetalShaderStage::Mesh)
-            {
-                meshThreadsX = std::max(1u, translation.LocalSizeX);
-                meshThreadsY = std::max(1u, translation.LocalSizeY);
-                meshThreadsZ = std::max(1u, translation.LocalSizeZ);
-            }
-            if (ShouldDumpAllMsl())
-            {
-                const char* dumpPrefix = "ge_msl_fs_";
-                if (stage == MetalShaderStage::Vertex) dumpPrefix = "ge_msl_vs_";
-                else if (stage == MetalShaderStage::Mesh) dumpPrefix = "ge_msl_ms_";
-                else if (stage == MetalShaderStage::Object) dumpPrefix = "ge_msl_os_";
-                DumpMslTo(dumpPrefix, msl, gd.DebugName);
-            }
+            AppendWrittenStorageBindings(source, writtenStorage);
         }
-        else
+#endif
+        if (stage == MetalShaderStage::Mesh)
         {
-            msl.assign(reinterpret_cast<const char*>(source.data()), source.size());
-        }
-        NS::Error* error = nullptr;
-        MTL::CompileOptions* compileOptions = MakeCompileOptions();
-        const auto libraryStart = std::chrono::steady_clock::now();
-        MTL::Library* library = m_Device->newLibrary(MakeNSString(msl), compileOptions, &error);
-        libraryMs += msSince(libraryStart);
-        compileOptions->release();
-        if (library == nullptr)
-        {
-            Logger::Log::Error("MetalDevice: MSL compile failed for '{}': {}", gd.DebugName,
-                               error != nullptr ? error->localizedDescription()->utf8String() : "unknown error");
-            DumpFailedMsl(msl, gd.DebugName);
-            return nullptr;
-        }
-        MTL::Function* fn = NewSpecializedFunction(library, entry.c_str());
-        library->release();
-        if (fn == nullptr)
-        {
-            Logger::Log::Error("MetalDevice: entry point '{}' not found in MSL source for '{}'", entry, gd.DebugName);
+            meshThreadsX = std::max(1u, translation.LocalSizeX);
+            meshThreadsY = std::max(1u, translation.LocalSizeY);
+            meshThreadsZ = std::max(1u, translation.LocalSizeZ);
         }
         return fn;
     };
@@ -928,8 +941,7 @@ PipelineHandle MetalDevice::CreateConcreteGraphicsPipeline(const GraphicsPipelin
         }
         if (static_cast<uint32_t>(fk.DepthFormat) != 0)
             md->setDepthAttachmentPixelFormat(MetalMappings::ToMTLPixelFormat(fk.DepthFormat));
-        if (static_cast<uint32_t>(fk.StencilFormat) != 0)
-            md->setStencilAttachmentPixelFormat(MetalMappings::ToMTLPixelFormat(fk.StencilFormat));
+        md->setStencilAttachmentPixelFormat(StencilPixelFormat(fk));
 
         NS::Error* meshError = nullptr;
         pso = m_Device->newRenderPipelineState(md, MTL::PipelineOptionNone, nullptr, &meshError);
@@ -1001,10 +1013,7 @@ PipelineHandle MetalDevice::CreateConcreteGraphicsPipeline(const GraphicsPipelin
     {
         pd->setDepthAttachmentPixelFormat(MetalMappings::ToMTLPixelFormat(fk.DepthFormat));
     }
-    if (static_cast<uint32_t>(fk.StencilFormat) != 0)
-    {
-        pd->setStencilAttachmentPixelFormat(MetalMappings::ToMTLPixelFormat(fk.StencilFormat));
-    }
+    pd->setStencilAttachmentPixelFormat(StencilPixelFormat(fk));
 
     if (!gd.VertexAttributes.empty())
     {
@@ -1044,8 +1053,10 @@ PipelineHandle MetalDevice::CreateConcreteGraphicsPipeline(const GraphicsPipelin
     pso = m_Device->newRenderPipelineState(pd, &error);
     if (DumpPipelineTiming())
     {
-        Logger::Log::Warning("MetalPipelineTiming: '{}' total={:.1f}ms translate={:.1f}ms library={:.1f}ms pso={:.1f}ms",
-                             gd.DebugName, msSince(creationStart), translateMs, libraryMs, msSince(psoStart));
+        Logger::Log::Warning(
+            "MetalPipelineTiming: '{}' total={:.1f}ms translate={:.1f}ms library={:.1f}ms pso={:.1f}ms shipped={}",
+            gd.DebugName, msSince(creationStart), timing.TranslateMs, timing.LibraryMs, msSince(psoStart),
+            timing.ShippedStages);
     }
     pd->release();
     vertexFn->release();
@@ -1072,10 +1083,8 @@ PipelineHandle MetalDevice::CreateConcreteGraphicsPipeline(const GraphicsPipelin
         wrapper.localSizeZ = meshThreadsZ;
     }
     wrapper.formatKey = fk;
-    for (const DescriptorSetLayoutDesc& layout : layoutValues)
-    {
-        wrapper.setLayouts.push_back(ComputeMetalArgumentBufferLayout(layout));
-    }
+    wrapper.setLayouts.reserve(layoutValues.size());
+    wrapper.writtenStorage = std::move(writtenStorage);
     wrapper.primitiveType = MetalMappings::ToMTLPrimitiveType(gd.Topology);
     wrapper.cullMode = MetalMappings::ToMTLCullMode(gd.Rasterization.cullMode);
     wrapper.winding = MetalMappings::ToMTLWinding(gd.Rasterization.frontFace);
@@ -1123,6 +1132,10 @@ PipelineHandle MetalDevice::CreateConcreteGraphicsPipeline(const GraphicsPipelin
     }
 
     std::lock_guard<std::recursive_mutex> lock(m_ResourceMutex);
+    for (const DescriptorSetLayoutDesc& layout : layoutValues)
+    {
+        wrapper.setLayouts.push_back(&ArgumentBufferLayoutForLocked(layout));
+    }
     return FromGeneric<PipelineTag>(m_Pipelines.Create(std::move(wrapper)));
 }
 
@@ -1136,69 +1149,38 @@ PipelineHandle MetalDevice::CreateConcreteComputePipeline(const ComputePipelineD
     }
 
     const auto creationStart = std::chrono::steady_clock::now();
-    std::string msl;
-    std::string entry = "compute_main";
     uint32_t localSizeX = 0;
     uint32_t localSizeY = 0;
     uint32_t localSizeZ = 0;
-    std::vector<DescriptorSetLayoutDesc> layoutValues;
-    layoutValues.reserve(cd.DescriptorSetLayouts.size());
-    for (DescriptorSetLayoutId id : cd.DescriptorSetLayouts)
+    std::vector<MetalWrittenBinding> writtenStorage;
+    const std::vector<DescriptorSetLayoutDesc> layoutValues = CopyDescriptorSetLayouts(cd.DescriptorSetLayouts);
+    std::vector<const DescriptorSetLayoutDesc*> setLayouts;
+    setLayouts.reserve(layoutValues.size());
+    for (const DescriptorSetLayoutDesc& layout : layoutValues)
     {
-        DescriptorSetLayoutDesc layout{};
-        CopyDescriptorSetLayout(id, layout);
-        layoutValues.push_back(std::move(layout));
+        setLayouts.push_back(&layout);
     }
-    if (IsSpirv(*cd.ComputeShader))
-    {
-        std::vector<const DescriptorSetLayoutDesc*> setLayouts;
-        setLayouts.reserve(layoutValues.size());
-        for (const DescriptorSetLayoutDesc& layout : layoutValues)
-        {
-            setLayouts.push_back(&layout);
-        }
-        const SpecializationConstants* specialization =
-            cd.Specialization.has_value() ? &cd.Specialization.value() : nullptr;
-        MetalShaderTranslation translation =
-            TranslateSpirvToMsl(*cd.ComputeShader, MetalShaderStage::Compute, setLayouts, specialization);
-        if (!translation.Success)
-        {
-            Logger::Log::Error("MetalDevice: SPIR-V->MSL translation failed for compute '{}': {}", cd.DebugName,
-                               translation.Error);
-            DumpMslTo("ge_msl_translate_fail_", translation.Error, cd.DebugName);
-            return INVALID_PIPELINE_HANDLE;
-        }
-        msl = std::move(translation.Msl);
-        entry = translation.EntryPoint;
-        localSizeX = translation.LocalSizeX;
-        localSizeY = translation.LocalSizeY;
-        localSizeZ = translation.LocalSizeZ;
-    }
-    else
-    {
-        msl.assign(reinterpret_cast<const char*>(cd.ComputeShader->data()), cd.ComputeShader->size());
-    }
-
-    NS::Error* error = nullptr;
-    MTL::CompileOptions* compileOptions = MakeCompileOptions();
-    MTL::Library* library = m_Device->newLibrary(MakeNSString(msl), compileOptions, &error);
-    compileOptions->release();
-    if (library == nullptr)
-    {
-        Logger::Log::Error("MetalDevice: MSL compile failed for compute '{}': {}", cd.DebugName,
-                           error != nullptr ? error->localizedDescription()->utf8String() : "unknown error");
-        DumpFailedMsl(msl, cd.DebugName);
-        return INVALID_PIPELINE_HANDLE;
-    }
-    MTL::Function* fn = NewSpecializedFunction(library, entry.c_str());
-    library->release();
+    const SpecializationConstants* specialization =
+        cd.Specialization.has_value() ? &cd.Specialization.value() : nullptr;
+    StageBuildTiming timing;
+    MetalShaderTranslation translation;
+    MTL::Function* fn = NewStageFunction(*cd.ComputeShader, MetalShaderStage::Compute, "compute_main", setLayouts,
+                                         specialization, cd.DebugName, timing, translation);
     if (fn == nullptr)
     {
-        Logger::Log::Error("MetalDevice: entry point '{}' not found for '{}'", entry, cd.DebugName);
         return INVALID_PIPELINE_HANDLE;
     }
+#ifndef NDEBUG
+    if (IsSpirvModule(*cd.ComputeShader))
+    {
+        AppendWrittenStorageBindings(*cd.ComputeShader, writtenStorage);
+    }
+#endif
+    localSizeX = translation.LocalSizeX;
+    localSizeY = translation.LocalSizeY;
+    localSizeZ = translation.LocalSizeZ;
 
-    error = nullptr;
+    NS::Error* error = nullptr;
     const auto psoStart = std::chrono::steady_clock::now();
     MTL::ComputePipelineState* pso = m_Device->newComputePipelineState(fn, &error);
     fn->release();
@@ -1206,8 +1188,10 @@ PipelineHandle MetalDevice::CreateConcreteComputePipeline(const ComputePipelineD
     {
         const auto ms = [](auto from, auto to) { return std::chrono::duration<double, std::milli>(to - from).count(); };
         const auto now = std::chrono::steady_clock::now();
-        Logger::Log::Warning("MetalPipelineTiming: compute '{}' total={:.1f}ms pso={:.1f}ms thread={}", cd.DebugName,
-                             ms(creationStart, now), ms(psoStart, now),
+        Logger::Log::Warning("MetalPipelineTiming: compute '{}' total={:.1f}ms translate={:.1f}ms library={:.1f}ms "
+                             "pso={:.1f}ms shipped={} thread={}",
+                             cd.DebugName, ms(creationStart, now), timing.TranslateMs, timing.LibraryMs,
+                             ms(psoStart, now), timing.ShippedStages,
                              std::hash<std::thread::id>{}(std::this_thread::get_id()));
     }
     if (pso == nullptr)
@@ -1220,10 +1204,8 @@ PipelineHandle MetalDevice::CreateConcreteComputePipeline(const ComputePipelineD
     MetalPipeline wrapper{};
     wrapper.computePipeline = pso;
     wrapper.type = PipelineType::Compute;
-    for (const DescriptorSetLayoutDesc& layout : layoutValues)
-    {
-        wrapper.setLayouts.push_back(ComputeMetalArgumentBufferLayout(layout));
-    }
+    wrapper.setLayouts.reserve(layoutValues.size());
+    wrapper.writtenStorage = std::move(writtenStorage);
     wrapper.localSizeX = localSizeX;
     wrapper.localSizeY = localSizeY;
     wrapper.localSizeZ = localSizeZ;
@@ -1236,6 +1218,10 @@ PipelineHandle MetalDevice::CreateConcreteComputePipeline(const ComputePipelineD
     }
 
     std::lock_guard<std::recursive_mutex> lock(m_ResourceMutex);
+    for (const DescriptorSetLayoutDesc& layout : layoutValues)
+    {
+        wrapper.setLayouts.push_back(&ArgumentBufferLayoutForLocked(layout));
+    }
     return FromGeneric<PipelineTag>(m_Pipelines.Create(std::move(wrapper)));
 }
 
@@ -1262,30 +1248,40 @@ void MetalDevice::DestroyPipeline(PipelineHandle handle)
 
 namespace
 {
-// Bytes of the entries of a set's argument table: one per resource slot plus
-// the size-constants address at SizeConstantsSlot (MetalShaderTranslator
-// reserves that id for SPIRV-Cross's kBufferSizeBufferBinding). The 4-byte
-// sizes, one per resource slot, follow the entries.
-size_t ArgumentTableEntryBytes(const MetalArgumentBufferLayout& layout)
+// Bytes of the entries of a table with `slotCount` resource slots: one per slot, then the sizes'
+// address at SizeConstantsSlot, which is slotCount (MetalShaderTranslator reserves that id for
+// SPIRV-Cross's kBufferSizeBufferBinding). The 4-byte sizes, one per slot, follow the entries.
+size_t ArgumentTableEntryBytes(uint32_t slotCount)
 {
-    return (static_cast<size_t>(layout.SizeConstantsSlot) + 1) * sizeof(uint64_t);
+    return (static_cast<size_t>(slotCount) + 1) * sizeof(uint64_t);
 }
 
-size_t ArgumentTableBytes(const MetalArgumentBufferLayout& layout)
+size_t ArgumentTableBytes(uint32_t slotCount)
 {
-    return ArgumentTableEntryBytes(layout) + std::max<size_t>(1, layout.TotalSlotCount) * sizeof(uint32_t);
+    return ArgumentTableEntryBytes(slotCount) + std::max<size_t>(1, slotCount) * sizeof(uint32_t);
 }
 
 // Points `set` at its zeroed table at `data` (GPU address `gpuAddress`) and
 // stores the sizes' address in the size-constants entry.
 void AttachArgumentTable(MetalDescriptorSet& set, uint8_t* data, uint64_t gpuAddress)
 {
-    const size_t entryBytes = ArgumentTableEntryBytes(set.layout);
+    const size_t entryBytes = ArgumentTableEntryBytes(set.layout->TotalSlotCount);
     set.entries = reinterpret_cast<uint64_t*>(data);
     set.sizeConstants = reinterpret_cast<uint32_t*>(data + entryBytes);
-    set.entries[set.layout.SizeConstantsSlot] = gpuAddress + entryBytes;
+    set.entries[set.layout->SizeConstantsSlot] = gpuAddress + entryBytes;
 }
 } // namespace
+
+const MetalArgumentBufferLayout& MetalDevice::ArgumentBufferLayoutForLocked(const DescriptorSetLayoutDesc& desc)
+{
+    std::unique_ptr<const MetalArgumentBufferLayout>& layout =
+        m_ArgumentBufferLayouts.GetOrInsert(HashDescriptorSetLayoutDesc(desc));
+    if (layout == nullptr)
+    {
+        layout = std::make_unique<const MetalArgumentBufferLayout>(ComputeMetalArgumentBufferLayout(desc));
+    }
+    return *layout;
+}
 
 DescriptorSetHandle MetalDevice::CreateDescriptorSet(const DescriptorSetDesc& desc)
 {
@@ -1293,51 +1289,69 @@ DescriptorSetHandle MetalDevice::CreateDescriptorSet(const DescriptorSetDesc& de
     {
         return DescriptorSetHandle{};
     }
+    // The slot count comes from the desc alone. Thus the table size and the buffer of a persistent
+    // set are made before the lock.
+    const uint32_t slotCount = MetalArgumentSlotCount(desc.layout);
+    const size_t tableBytes = ArgumentTableBytes(slotCount);
+    MTL::Buffer* persistentBuffer = nullptr;
+    if (!desc.transient)
+    {
+        persistentBuffer = m_Device->newBuffer(tableBytes, MTL::ResourceStorageModeShared);
+        if (persistentBuffer == nullptr)
+        {
+            return DescriptorSetHandle{};
+        }
+        if (desc.debugName != nullptr)
+        {
+            persistentBuffer->setLabel(NS::String::string(desc.debugName, NS::UTF8StringEncoding));
+        }
+        std::memset(persistentBuffer->contents(), 0, tableBytes);
+    }
+
+    // The only lock of a create. A transient set reads the frame slot once under it: the slot
+    // indexes both the arena and the set list, and RecycleFrameSlot recycles both under this lock.
+    std::lock_guard<std::recursive_mutex> lock(m_ResourceMutex);
+    // A destroyed set of the same slot count gives its storage, so the fills below do not allocate.
     MetalDescriptorSet set{};
-    set.layout = ComputeMetalArgumentBufferLayout(desc.layout);
+    std::vector<MetalDescriptorSet>& released = m_ReleasedDescriptorSets.GetOrInsert(slotCount);
+    if (!released.empty())
+    {
+        set = std::move(released.back());
+        released.pop_back();
+        // Released storage is empty, so a slot or a name that this set does not write stays empty.
+        assert(set.residentResources.Empty() && set.residentWritable.Empty() && set.residentIndirectArguments.Empty() &&
+               set.extraResidentReads.empty() && set.debugName.empty());
+    }
     set.transient = desc.transient;
+    set.residentResources.Resize(slotCount, nullptr);
+    set.residentWritable.Resize(slotCount, 0);
+    set.residentIndirectArguments.Resize(slotCount, 0);
+    if (desc.debugName != nullptr)
+    {
+        set.debugName = desc.debugName;
+    }
+    set.layout = &ArgumentBufferLayoutForLocked(desc.layout);
+    // A hash collision with another desc gives a layout of another size, and the residents would be too short.
+    assert(set.layout->TotalSlotCount == slotCount);
     if (ShouldDumpAllMsl() && desc.debugName != nullptr)
     {
         std::string mapping;
-        for (const MetalArgumentSlot& slot : set.layout.Slots)
+        for (const MetalArgumentSlot& slot : set.layout->Slots)
         {
             mapping += " b" + std::to_string(slot.Binding) + "(t" + std::to_string(slot.Type == DescriptorType::UniformBuffer ? 0 : static_cast<int>(slot.Type)) +
                        ",buf=" + std::to_string(slot.BufferId) + ",tex=" + std::to_string(slot.TextureId) +
                        ",smp=" + std::to_string(slot.SamplerId) + ",n=" + std::to_string(slot.Count) + ")";
         }
-        Logger::Log::Warning("MetalSetLayout '{}': total={}{}", desc.debugName, set.layout.TotalSlotCount, mapping);
+        Logger::Log::Warning("MetalSetLayout '{}': total={}{}", desc.debugName, set.layout->TotalSlotCount, mapping);
     }
-    const size_t tableBytes = ArgumentTableBytes(set.layout);
-    set.residentResources.Resize(set.layout.TotalSlotCount, nullptr);
-    set.residentWritable.Resize(set.layout.TotalSlotCount, 0);
-    set.residentIndirectArguments.Resize(set.layout.TotalSlotCount, 0);
-    if (desc.debugName != nullptr)
-    {
-        set.debugName = desc.debugName;
-    }
-
     if (!desc.transient)
     {
-        set.argumentBuffer = m_Device->newBuffer(tableBytes, MTL::ResourceStorageModeShared);
-        if (set.argumentBuffer == nullptr)
-        {
-            return DescriptorSetHandle{};
-        }
+        set.argumentBuffer = persistentBuffer;
         set.ownsArgumentBuffer = true;
-        if (desc.debugName != nullptr)
-        {
-            set.argumentBuffer->setLabel(MakeNSString(set.debugName));
-        }
-        auto* data = static_cast<uint8_t*>(set.argumentBuffer->contents());
-        std::memset(data, 0, tableBytes);
-        AttachArgumentTable(set, data, set.argumentBuffer->gpuAddress());
-        std::lock_guard<std::recursive_mutex> lock(m_ResourceMutex);
+        AttachArgumentTable(set, static_cast<uint8_t*>(persistentBuffer->contents()), persistentBuffer->gpuAddress());
         return FromGeneric<DescriptorSetTag>(m_DescriptorSets.Create(std::move(set)));
     }
 
-    // The arena and the set list are indexed by the same frame slot, read once
-    // under the lock that BeginFrame recycles both under.
-    std::lock_guard<std::recursive_mutex> lock(m_ResourceMutex);
     const uint32_t frameSlot = m_FrameIndex.load(std::memory_order_relaxed);
     const MetalTransientDescriptorArena::Allocation table =
         m_TransientDescriptorArenas[frameSlot].Allocate(*m_Device, tableBytes);
@@ -1361,7 +1375,7 @@ void MetalDevice::UpdateDescriptorSet(DescriptorSetHandle descriptorSet, const D
     {
         return;
     }
-    const MetalArgumentSlot* slot = set->layout.FindBinding(update.binding);
+    const MetalArgumentSlot* slot = set->layout->FindBinding(update.binding);
     if (slot == nullptr)
     {
         Logger::Log::Error("MetalDevice::UpdateDescriptorSet: binding {} not in layout", update.binding);
@@ -1394,12 +1408,13 @@ void MetalDevice::UpdateDescriptorSet(DescriptorSetHandle descriptorSet, const D
                                  : buf->size - offset;
         const uint32_t slotId = slot->BufferId + update.arrayElement + static_cast<uint32_t>(i);
         entries[slotId] = buf->buffer->gpuAddress() + offset;
-        if (slotId < set->layout.TotalSlotCount)
+        if (slotId < set->layout->TotalSlotCount)
         {
             sizeConstants[slotId] = static_cast<uint32_t>(range);
         }
-        setResident(slotId, buf->buffer, update.type == DescriptorType::StorageBuffer,
-                    (buf->usage & BufferUsage::Indirect) != BufferUsage::None);
+        setResident(slotId, buf->buffer, slot->Writable,
+                    update.type == DescriptorType::StorageBuffer &&
+                        (buf->usage & BufferUsage::Indirect) != BufferUsage::None);
     }
 
     const bool useViews = !update.textureViews.empty();
@@ -1423,7 +1438,7 @@ void MetalDevice::UpdateDescriptorSet(DescriptorSetHandle descriptorSet, const D
         }
         const uint32_t slotId = slot->TextureId + update.arrayElement + static_cast<uint32_t>(i);
         entries[slotId] = texture->gpuResourceID()._impl;
-        setResident(slotId, texture, update.type == DescriptorType::StorageImage, /*indirectArguments=*/false);
+        setResident(slotId, texture, slot->Writable, /*indirectArguments=*/false);
     }
 
     if (slot->AccelerationStructureId != MetalArgumentSlot::kUnused &&
@@ -1489,8 +1504,7 @@ void MetalDevice::DestroyDescriptorSet(DescriptorSetHandle descriptorSet)
     set->argumentBuffer = nullptr;
     set->entries = nullptr;
     set->sizeConstants = nullptr;
-    set->residentResources.Clear();
-    set->extraResidentReads.clear();
+    m_ReleasedDescriptorSets.GetOrInsert(set->layout->TotalSlotCount).push_back(set->ReleaseStorage());
     m_DescriptorSets.Destroy(ToGeneric(descriptorSet));
 }
 

@@ -8,6 +8,9 @@
 #include "Rendering/Core/Pipeline/PipelineManager.h"
 #include "Rendering/Core/RendererProfile.h"
 #include "Rendering/Core/ReverseZ.h"
+#include "Rendering/ShaderCache/ShaderPackageIO.h"
+#include "Rendering/ShaderCache/ShaderStageRecord.h"
+#include "ShaderCache/ShaderStage/ShaderStageRecorder.h"
 #if defined(RENDERING_HAS_VULKAN)
 #include "../Vulkan/VulkanDevice/VulkanDevice.h"
 #endif
@@ -26,6 +29,7 @@
 #include <cctype>
 #include <chrono>
 #include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <string>
 
@@ -278,7 +282,8 @@ std::unique_ptr<CommandList> IDevice::CreateSecondaryCommandList(QueueType /*que
     IDevice::IDevice()
         : m_PipelineCache(std::make_unique<PipelineCache>()),
           m_PipelineBuilds(std::make_shared<PipelineBuildTable>()),
-          m_DescriptorSetCache(std::make_unique<DescriptorSetCache>())
+          m_DescriptorSetCache(std::make_unique<DescriptorSetCache>()),
+          m_StageRecorder(std::make_unique<ShaderStageRecorder>())
     {
     }
 
@@ -506,13 +511,13 @@ std::unique_ptr<CommandList> IDevice::CreateSecondaryCommandList(QueueType /*que
         // sweep destroys the handle but the concrete cache keeps the key).
         // Serving the corpse forever turns one stale row into a permanently dead
         // pass, so the probe treats it as a miss and the build below recreates it.
-        if (PipelineHandle hit = TryGetWarmGraphicsPipeline(id, fk); hit.IsValid())
-            return hit;
         PipelineBuildRequest request{};
         request.Key = PipelineCache::CombineGraphicsKey(id, fk);
+        if (PipelineHandle hit = ProbeWarmPipeline(request.Key); hit.IsValid())
+            return hit;
         request.PipelineIdValue = id.Value;
         request.FormatKey = fk;
-        return BuildPipelineOnCallingThread(request);
+        return GetOrBuildPipeline(request);
     }
 
     PipelineHandle IDevice::TryGetWarmGraphicsPipeline(GraphicsPipelineId id,
@@ -520,13 +525,10 @@ std::unique_ptr<CommandList> IDevice::CreateSecondaryCommandList(QueueType /*que
     {
         if (!id.IsValid())
             return {};
-        PipelineHandle hit{};
-        // A cached row can outlive its pipeline, and a dead handle must read as
-        // cold so the caller requests a rebuild instead of binding a corpse. The
-        // probe MUST be the virtual (module-correct) one, never IsValidPipeline.
-        if (m_PipelineCache->TryGetConcrete(PipelineCache::CombineGraphicsKey(id, fk), hit)
-            && IsPipelineAlive(hit))
+        const uint64_t key = PipelineCache::CombineGraphicsKey(id, fk);
+        if (PipelineHandle hit = ProbeWarmPipeline(key); hit.IsValid())
             return hit;
+        CountLookupIfBuilding(key);
         return {};
     }
 
@@ -535,22 +537,23 @@ std::unique_ptr<CommandList> IDevice::CreateSecondaryCommandList(QueueType /*que
         if (!id.IsValid())
             return {};
         // Same self-heal as the graphics path: never serve a dead handle.
-        if (PipelineHandle hit = TryGetWarmComputePipeline(id); hit.IsValid())
-            return hit;
         PipelineBuildRequest request{};
         request.Key = PipelineCache::CombineComputeKey(id);
+        if (PipelineHandle hit = ProbeWarmPipeline(request.Key); hit.IsValid())
+            return hit;
         request.IsCompute = true;
         request.PipelineIdValue = id.Value;
-        return BuildPipelineOnCallingThread(request);
+        return GetOrBuildPipeline(request);
     }
 
     PipelineHandle IDevice::TryGetWarmComputePipeline(ComputePipelineId id) const
     {
         if (!id.IsValid())
             return {};
-        PipelineHandle hit{};
-        if (m_PipelineCache->TryGetConcrete(PipelineCache::CombineComputeKey(id), hit) && IsPipelineAlive(hit))
+        const uint64_t key = PipelineCache::CombineComputeKey(id);
+        if (PipelineHandle hit = ProbeWarmPipeline(key); hit.IsValid())
             return hit;
+        CountLookupIfBuilding(key);
         return {};
     }
 
@@ -558,10 +561,10 @@ std::unique_ptr<CommandList> IDevice::CreateSecondaryCommandList(QueueType /*que
     {
         if (!id.IsValid())
             return PipelineBuildState::Failed;
-        if (TryGetWarmGraphicsPipeline(id, fk).IsValid())
-            return PipelineBuildState::Warm;
         PipelineBuildRequest request{};
         request.Key = PipelineCache::CombineGraphicsKey(id, fk);
+        if (ProbeWarmPipeline(request.Key).IsValid())
+            return PipelineBuildState::Warm;
         request.PipelineIdValue = id.Value;
         request.FormatKey = fk;
         return RequestPipelineBuild(request);
@@ -571,19 +574,24 @@ std::unique_ptr<CommandList> IDevice::CreateSecondaryCommandList(QueueType /*que
     {
         if (!id.IsValid())
             return PipelineBuildState::Failed;
-        if (TryGetWarmComputePipeline(id).IsValid())
-            return PipelineBuildState::Warm;
         PipelineBuildRequest request{};
         request.Key = PipelineCache::CombineComputeKey(id);
+        if (ProbeWarmPipeline(request.Key).IsValid())
+            return PipelineBuildState::Warm;
         request.IsCompute = true;
         request.PipelineIdValue = id.Value;
         return RequestPipelineBuild(request);
     }
 
+    uint64_t IDevice::GetBuildingPipelineLookupCount() const
+    {
+        return m_BuildingPipelineLookups.load(std::memory_order_relaxed);
+    }
+
     void IDevice::SetPipelineBuildDispatcher(PipelineBuildDispatcher dispatcher)
     {
         std::shared_ptr<const PipelineBuildDispatcher> next;
-        if (dispatcher)
+        if (dispatcher.Dispatch)
             next = std::make_shared<const PipelineBuildDispatcher>(std::move(dispatcher));
         std::lock_guard lock(m_PipelineBuildDispatcherMutex);
         m_PipelineBuildDispatcher = std::move(next);
@@ -608,12 +616,26 @@ std::unique_ptr<CommandList> IDevice::CreateSecondaryCommandList(QueueType /*que
         }
 
         const PipelineBuildTable::RequestResult queued = m_PipelineBuilds->Request(request.Key, epoch);
-        if (queued.Ticket == 0)
-            return queued.State;
+        PipelineBuildState state = queued.State;
+        if (queued.Ticket != 0)
+        {
+            DispatchQueuedPipelineBuild(*dispatcher, request, queued.Ticket, epoch, PipelineBuildPriority::Load);
+            state = ProbeWarmPipeline(request.Key).IsValid()
+                        ? PipelineBuildState::Warm
+                        : m_PipelineBuilds->Find(request.Key, epoch).value_or(PipelineBuildState::Pending);
+        }
+        if (state == PipelineBuildState::Pending)
+            m_BuildingPipelineLookups.fetch_add(1, std::memory_order_relaxed);
+        return state;
+    }
 
+    void IDevice::DispatchQueuedPipelineBuild(const PipelineBuildDispatcher& dispatcher,
+                                              const PipelineBuildRequest& request, uint64_t ticket,
+                                              uint64_t invalidationEpoch, PipelineBuildPriority priority)
+    {
         PipelineBuildRequest job = request;
-        job.Ticket = queued.Ticket;
-        job.InvalidationEpoch = epoch;
+        job.Ticket = ticket;
+        job.InvalidationEpoch = invalidationEpoch;
         // The job holds the table, not the device: it may run or be destroyed
         // after the device is gone, and then its claim fails (Shutdown cancelled
         // the row) before anything of the device is reached.
@@ -624,17 +646,57 @@ std::unique_ptr<CommandList> IDevice::CreateSecondaryCommandList(QueueType /*que
         auto releaseIfUnrun = std::shared_ptr<void>(
             nullptr, [builds, key = job.Key, ticket = job.Ticket](void*) { builds->ReleaseUnrun(key, ticket); });
         // Called outside every device lock: a dispatcher may run the job inline.
-        (*dispatcher)(
+        dispatcher.Dispatch(
             [this, builds, job, releaseIfUnrun]()
             {
-                // Cancelled, or a synchronous caller took the build over.
+                // Cancelled, taken over, or built by another job of the ticket.
                 if (builds->ClaimQueued(job.Key, job.Ticket))
                     RunClaimedPipelineBuild(job);
-            });
+            },
+            priority);
+    }
 
-        if (TryGetWarmPipeline(request).IsValid())
-            return PipelineBuildState::Warm;
-        return m_PipelineBuilds->Find(request.Key, epoch).value_or(PipelineBuildState::Pending);
+    std::shared_ptr<const IDevice::PipelineBuildDispatcher> IDevice::DispatcherForWaitingCaller() const
+    {
+        if (!GetCapabilities().supportsMultithreadedResourceCreation)
+            return {};
+        std::shared_ptr<const PipelineBuildDispatcher> dispatcher;
+        {
+            std::lock_guard lock(m_PipelineBuildDispatcherMutex);
+            dispatcher = m_PipelineBuildDispatcher;
+        }
+        if (!dispatcher || !dispatcher->CallerMayWait || !dispatcher->CallerMayWait())
+            return {};
+        return dispatcher;
+    }
+
+    PipelineHandle IDevice::GetOrBuildPipeline(const PipelineBuildRequest& request)
+    {
+        if (std::shared_ptr<const PipelineBuildDispatcher> dispatcher = DispatcherForWaitingCaller())
+        {
+            // A wait can end with nothing published: the dispatcher dropped the
+            // job, an invalidation overtook the build, or the row got a new
+            // ticket. Then this thread asks again, and builds it after the last wait.
+            constexpr int kWorkerBuildWaits = 2;
+            for (int waits = 0;; ++waits)
+            {
+                if (PipelineHandle hit = ProbeWarmPipeline(request.Key); hit.IsValid())
+                    return hit;
+                if (waits == kWorkerBuildWaits)
+                    break;
+                const uint64_t epoch = m_PipelineCache->GetInvalidationEpoch();
+                const PipelineBuildTable::BlockingRequestResult queued =
+                    m_PipelineBuilds->RequestBlocking(request.Key, epoch);
+                if (queued.State == PipelineBuildState::Failed)
+                    return {};
+                if (queued.MustDispatch)
+                    DispatchQueuedPipelineBuild(*dispatcher, request, queued.Ticket, epoch,
+                                                PipelineBuildPriority::Blocking);
+                if (m_PipelineBuilds->WaitForBuildEnd(request.Key, queued.Ticket))
+                    return {};
+            }
+        }
+        return BuildPipelineOnCallingThread(request);
     }
 
     PipelineHandle IDevice::BuildPipelineOnCallingThread(const PipelineBuildRequest& request)
@@ -649,7 +711,7 @@ std::unique_ptr<CommandList> IDevice::CreateSecondaryCommandList(QueueType /*que
                 // Another thread's build of this key ended: serve what it
                 // published. It can publish nothing without failing when an
                 // invalidation overtook it; build again then.
-                if (PipelineHandle hit = TryGetWarmPipeline(request); hit.IsValid())
+                if (PipelineHandle hit = ProbeWarmPipeline(request.Key); hit.IsValid())
                     return hit;
                 if (waitedBuildFailed)
                     return {};
@@ -689,11 +751,22 @@ std::unique_ptr<CommandList> IDevice::CreateSecondaryCommandList(QueueType /*que
         m_PipelineBuilds->Finish(request.Key, request.Ticket, h.IsValid(), request.InvalidationEpoch);
     }
 
-    PipelineHandle IDevice::TryGetWarmPipeline(const PipelineBuildRequest& request) const
+    PipelineHandle IDevice::ProbeWarmPipeline(uint64_t key) const
     {
-        if (request.IsCompute)
-            return TryGetWarmComputePipeline(ComputePipelineId{request.PipelineIdValue});
-        return TryGetWarmGraphicsPipeline(GraphicsPipelineId{request.PipelineIdValue}, request.FormatKey);
+        // A cached row can outlive its pipeline, and a dead handle must read as
+        // cold so the caller requests a rebuild instead of binding a corpse. The
+        // probe MUST be the virtual (module-correct) one, never IsValidPipeline.
+        PipelineHandle hit{};
+        if (m_PipelineCache->TryGetConcrete(key, hit) && IsPipelineAlive(hit))
+            return hit;
+        return {};
+    }
+
+    void IDevice::CountLookupIfBuilding(uint64_t key) const
+    {
+        // A key with no row or a Failed row does not count: no build of it will land.
+        if (m_PipelineBuilds->Find(key, m_PipelineCache->GetInvalidationEpoch()) == PipelineBuildState::Pending)
+            m_BuildingPipelineLookups.fetch_add(1, std::memory_order_relaxed);
     }
 
     PipelineHandle IDevice::CreateAndPublishPipeline(const PipelineBuildRequest& request, bool& published)
@@ -722,6 +795,7 @@ std::unique_ptr<CommandList> IDevice::CreateSecondaryCommandList(QueueType /*que
             return {};
         }
 
+        RecordPipelineStages(gd);
         const std::string previousFailure = GetLastGraphicsPipelineFailure();
         PipelineHandle h = CreateConcreteGraphicsPipeline(gd, fk);
         if (!h.IsValid())
@@ -758,6 +832,7 @@ std::unique_ptr<CommandList> IDevice::CreateSecondaryCommandList(QueueType /*que
         if (!m_PipelineCache->TryCopyComputePipeline(id, cd))
             return {};
 
+        RecordPipelineStages(cd);
         PipelineHandle h = CreateConcreteComputePipeline(cd);
         if (!h.IsValid())
             return {};
@@ -797,7 +872,58 @@ std::unique_ptr<CommandList> IDevice::CreateSecondaryCommandList(QueueType /*que
         const auto* gd = m_PipelineCache->LookupGraphicsPipeline(id);
         if (!gd)
             return {};
+        RecordPipelineStages(*gd);
         return CreateConcreteGraphicsPipeline(*gd, fk);
+    }
+
+    namespace
+    {
+    // Records @p bytes when they are SPIR-V; a backend's own source (MSL text) has no record.
+    void RecordSpirvStage(ShaderStageRecorder& recorder, const std::filesystem::path& file,
+                          const std::shared_ptr<const std::vector<uint8_t>>& bytes, std::string_view stage,
+                          std::span<const DescriptorSetLayoutDesc> layouts,
+                          const std::optional<SpecializationConstants>& specialization)
+    {
+        if (!bytes || !IsSpirvModule(*bytes))
+            return;
+        recorder.Record(file, MakeShaderStageRecord(*bytes, stage, layouts,
+                                                    specialization.has_value() ? &*specialization : nullptr));
+    }
+    } // namespace
+
+    void IDevice::RecordPipelineStages(const GraphicsPipelineDesc& gd)
+    {
+        const std::filesystem::path file = GetPrecompiledShaderFiles().StageRecord;
+        if (file.empty())
+            return;
+        const std::vector<DescriptorSetLayoutDesc> layouts = CopyDescriptorSetLayouts(gd.DescriptorSetLayouts);
+        if (gd.Kind == GraphicsPipelineKind::MeshFragment)
+        {
+            RecordSpirvStage(*m_StageRecorder, file, gd.MeshShader, "mesh", layouts, gd.Specialization);
+            RecordSpirvStage(*m_StageRecorder, file, gd.AmplificationShader, "task", layouts, gd.Specialization);
+        }
+        else
+        {
+            RecordSpirvStage(*m_StageRecorder, file, gd.VertexShader, "vert", layouts, gd.Specialization);
+        }
+        RecordSpirvStage(*m_StageRecorder, file, gd.PixelShader, "frag", layouts, gd.Specialization);
+    }
+
+    void IDevice::RecordPipelineStages(const ComputePipelineDesc& cd)
+    {
+        const std::filesystem::path file = GetPrecompiledShaderFiles().StageRecord;
+        if (file.empty())
+            return;
+        RecordSpirvStage(*m_StageRecorder, file, cd.ComputeShader, "comp",
+                         CopyDescriptorSetLayouts(cd.DescriptorSetLayouts), cd.Specialization);
+    }
+
+    std::vector<DescriptorSetLayoutDesc> IDevice::CopyDescriptorSetLayouts(std::span<const DescriptorSetLayoutId> ids) const
+    {
+        std::vector<DescriptorSetLayoutDesc> layouts(ids.size());
+        for (size_t i = 0; i < ids.size(); ++i)
+            CopyDescriptorSetLayout(ids[i], layouts[i]);
+        return layouts;
     }
 
     PipelineCacheStats IDevice::GetPipelineCacheStats() const

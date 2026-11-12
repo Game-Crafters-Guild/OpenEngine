@@ -119,8 +119,10 @@ bool CommitMarkupNotesEdit(ECS::World& world, ECS::EntityHandle entity, UndoRedo
     }
     if (!addedTags.empty() && vocabularyChanged)
         vocabularyChanged();
+    // The Markup commit is announced inside the compound, so what it records joins the edit's step.
     if (undo)
     {
+        undo->BeginCompound(label);
         undo->CommitAlreadyApplied(std::make_unique<MarkupNotesEditCommand>(
             label, world, entity, notifications, std::move(notesBefore), markupBefore,
             *service->FindNotes(world, entity), *world.GetComponent<Components::Markup>(entity),
@@ -128,6 +130,8 @@ bool CommitMarkupNotesEdit(ECS::World& world, ECS::EntityHandle entity, UndoRedo
     }
     if (notifications)
         notifications->NotifyComponentCommit<Components::Markup>(&world, entity);
+    if (undo)
+        undo->EndCompound();
     return true;
 }
 

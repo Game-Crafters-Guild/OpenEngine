@@ -7,11 +7,12 @@
 #include "Assets/MeshLODGeometry.h"
 #include "Assets/MeshLODGenerator.h"
 #include "Engine/Rendering/MeshLODThresholds.h"
+#include "Engine/Rendering/ModelMaterialBridge.h"
 #include "Logger/Logger.h"
+#include "Memory/ScratchScope.h"
 #include "Rendering/Core/CommandList.h" // IndexType
 #include "Rendering/Core/Device.h"
 #include "Rendering/Core/GPUScene.h"
-#include "Types/Fnv1a.h"
 
 #include <algorithm>
 #include <array>
@@ -21,6 +22,7 @@
 #include <iterator>
 #include <limits>
 #include <memory>
+#include <span>
 
 namespace
 {
@@ -76,6 +78,17 @@ constexpr std::array<const char*, 6> kExtraUvDebugNames = {
     "MeshGPU.Bucket.UV5VB",
     "MeshGPU.Bucket.UV6VB",
     "MeshGPU.Bucket.UV7VB",
+};
+
+// The vertex streams one upload can write: core, tangent, colour, UV1, joints,
+// weights, joints1, weights1 and the extra UVs.
+constexpr size_t kMaxVertexStreams = 8u + kExtraUvFlags.size();
+
+// A run of vertices an upload writes in order, with their RGBA colours when the mesh uploads colour.
+struct UploadVertexBlock
+{
+    std::span<const GameEngine::Vertex> Vertices;
+    std::span<const float> Colours;
 };
 
 GameEngine::Rendering::PrimitiveTopology ToRenderingTopology(GameEngine::MeshPrimitiveTopology topology)
@@ -234,6 +247,7 @@ void MeshGPURegistry::Shutdown()
     // metadata, no GPU handles of their own.
     m_KeyToHandle.clear();
     m_ModelHandles.clear();
+    m_ModelMaterials.Clear();
     m_Entries.Clear();
     ++m_ContentRevision;
 
@@ -318,7 +332,7 @@ std::vector<MeshGPUHandle> MeshGPURegistry::RegisterModelMeshes(
     for (uint32_t i = 0; i < meshCount; ++i)
     {
         MeshGPUKey key{assetGuid, i};
-        MeshGPUHandle h = RegisterSubmesh(key, asset.GetMesh(i));
+        MeshGPUHandle h = RegisterModelSubmesh(key, asset);
         handles.push_back(h);
     }
 
@@ -335,78 +349,22 @@ std::vector<MeshGPUHandle> MeshGPURegistry::RegisterModelMeshes(
     return handles;
 }
 
-// FNV-1a hash over everything UploadMesh consumes, so a dedup hit can detect an
-// in-place content change (LOD generation, geometry edit) the {assetGuid,
-// submeshIndex} key cannot see. False positives only cost a redundant re-upload;
-// there are no false negatives for the streams covered here.
-static uint64_t ComputeMeshContentHash(const Mesh& mesh)
+std::shared_ptr<const MeshGPURegistry::ModelMaterialList> MeshGPURegistry::FindModelMaterials(
+    const GUID& assetGuid) const
 {
-    using Hashing::Fnv1a64;
-    using Hashing::Fnv1a64Value;
-    using Hashing::Fnv1a64Values;
-    uint64_t h = 1469598103934665603ull; // FNV-1a offset basis
-    h = Fnv1a64Value(h, static_cast<uint32_t>(mesh.PrimitiveTopology));
-    h = Fnv1a64Value(h, mesh.MinBounds);
-    h = Fnv1a64Value(h, mesh.MaxBounds);
-    h = Fnv1a64Value(h, static_cast<uint64_t>(mesh.Vertices.size()));
-    if (!mesh.Vertices.empty())
-        h = Fnv1a64(mesh.Vertices.data(), mesh.Vertices.size() * sizeof(Vertex), h);
-    h = Fnv1a64Values(h, mesh.Indices);
-    h = Fnv1a64Value(h, static_cast<uint64_t>(mesh.ExtraLODs.size()));
-    for (const auto& lod : mesh.ExtraLODs)
-        h = Fnv1a64Values(h, lod);
-    // Cover the error carrier so an errors-only retune (same indices, different
-    // achieved error after a generator change) re-seeds the derived thresholds
-    // through the content-hash re-upload path.
-    h = Fnv1a64Value(h, static_cast<uint64_t>(mesh.ExtraLODErrors.size()));
-    if (!mesh.ExtraLODErrors.empty())
-        h = Fnv1a64(mesh.ExtraLODErrors.data(),
-                    mesh.ExtraLODErrors.size() * sizeof(float), h);
-    if (!mesh.ExtraLODSloppy.empty())
-        h = Fnv1a64(mesh.ExtraLODSloppy.data(),
-                    mesh.ExtraLODSloppy.size() * sizeof(uint8), h);
-    // Per-LOD vertex blocks and switch coverages (Phase C1; blocks also carry
-    // generated attribute-honest shells now). Without these, a vertex-block or
-    // coverage edit would re-upload stale geometry / stale thresholds under the
-    // same handle on a dedup hit — the exact stale-under-same-handle class the
-    // error/index hashing above guards. Both hash as "size 0" when empty (every
-    // index-only mesh), a constant term that keeps that path's dedup behavior
-    // unperturbed. The authored provenance flag folds too: it selects the
-    // threshold table (authored default vs sloppy-capped derived), so identical
-    // bytes with different provenance must not dedup into one row.
-    h = Fnv1a64Value(h, mesh.AuthoredLODs);
-    h = Fnv1a64Value(h, static_cast<uint64_t>(mesh.ExtraLODVertices.size()));
-    for (const auto& block : mesh.ExtraLODVertices)
-    {
-        h = Fnv1a64Value(h, static_cast<uint64_t>(block.size()));
-        if (!block.empty())
-            h = Fnv1a64(block.data(), block.size() * sizeof(Vertex), h);
-    }
-    h = Fnv1a64Value(h, static_cast<uint64_t>(mesh.ExtraLODCoverage.size()));
-    if (!mesh.ExtraLODCoverage.empty())
-        h = Fnv1a64(mesh.ExtraLODCoverage.data(),
-                    mesh.ExtraLODCoverage.size() * sizeof(float), h);
-    auto hashFloats = [&h](const Vector<float>& v) {
-        h = Fnv1a64Value(h, static_cast<uint64_t>(v.size()));
-        if (!v.empty()) h = Fnv1a64(v.data(), v.size() * sizeof(float), h);
-    };
-    auto hashU16 = [&h](const Vector<uint16>& v) {
-        h = Fnv1a64Value(h, static_cast<uint64_t>(v.size()));
-        if (!v.empty()) h = Fnv1a64(v.data(), v.size() * sizeof(uint16), h);
-    };
-    hashFloats(mesh.Color0);
-    if (!mesh.ExtraLODColor0.empty()) {
-        h = Fnv1a64Value(h, static_cast<uint64_t>(mesh.ExtraLODColor0.size()));
-        for (const auto& colours : mesh.ExtraLODColor0) hashFloats(colours);
-    }
-    hashFloats(mesh.TexCoords1);
-    h = Fnv1a64Value(h, static_cast<uint64_t>(mesh.ExtraTexCoords.size()));
-    for (const auto& uv : mesh.ExtraTexCoords) hashFloats(uv);
-    hashU16(mesh.Joints0);  hashFloats(mesh.Weights0);
-    hashU16(mesh.Joints1);  hashFloats(mesh.Weights1);
-    h = Fnv1a64Value(h, mesh.Skinned);
-    h = Fnv1a64Value(h, static_cast<uint64_t>(mesh.MorphTargets.size()));
-    return h;
+    TableScope scope(*this);
+    const auto* materials = m_ModelMaterials.Find(assetGuid);
+    return materials ? *materials : nullptr;
+}
+
+void MeshGPURegistry::KeepModelMaterials(const GUID& assetGuid,
+                                         std::shared_ptr<const ModelMaterialList> materials)
+{
+    TableScope scope(*this);
+    // A model unregistered since its spawn keeps nothing: its next spawn registers again.
+    if (!m_ModelHandles.contains(assetGuid))
+        return;
+    m_ModelMaterials.InsertOrAssign(assetGuid, std::move(materials));
 }
 
 // Build the std430 GPUMesh SSBO row from an uploaded entry. lodIndexOffset[0]/
@@ -526,8 +484,25 @@ MeshGPUHandle MeshGPURegistry::RegisterSubmesh(const MeshGPUKey& key,
                                                 bool retainCpuMesh)
 {
     TableScope scope(*this);
+    ++m_ComputedContentHashCount;
+    return RegisterHashedSubmesh(key, mesh, ComputeMeshContentHash(mesh), retainCpuMesh);
+}
 
-    const uint64_t contentHash = ComputeMeshContentHash(mesh);
+MeshGPUHandle MeshGPURegistry::RegisterModelSubmesh(const MeshGPUKey& key, const ModelAsset& asset)
+{
+    const Mesh& mesh = asset.GetMesh(key.submeshIndex);
+    const std::span<const uint64> contentHashes = asset.GetMeshContentHashes();
+    if (contentHashes.size() != asset.GetMeshCount())
+        return RegisterSubmesh(key, mesh);
+    return RegisterHashedSubmesh(key, mesh, contentHashes[key.submeshIndex], /*retainCpuMesh=*/false);
+}
+
+MeshGPUHandle MeshGPURegistry::RegisterHashedSubmesh(const MeshGPUKey& key,
+                                                      const Mesh& mesh,
+                                                      uint64_t contentHash,
+                                                      bool retainCpuMesh)
+{
+    TableScope scope(*this);
 
     // Dedup: already registered?
     auto it = m_KeyToHandle.find(key);
@@ -649,7 +624,10 @@ bool MeshGPURegistry::UnregisterSubmesh(const MeshGPUKey& key)
         auto& handles = itModel->second;
         handles.erase(std::remove(handles.begin(), handles.end(), handle), handles.end());
         if (handles.empty())
+        {
+            m_ModelMaterials.Erase(key.assetGuid);
             m_ModelHandles.erase(itModel);
+        }
     }
 
     // Consumers caching GPU row indices (GPUInstance.meshIndex, extraction's
@@ -942,6 +920,7 @@ void MeshGPURegistry::UnregisterModel(const GUID& assetGuid)
         }
     }
 
+    m_ModelMaterials.Erase(assetGuid);
     m_ModelHandles.erase(itModel);
 
     ++m_ContentRevision;
@@ -959,6 +938,10 @@ MeshGPUReloadReport MeshGPURegistry::ReloadModelMeshes(const GUID& assetGuid, co
 
     if (m_ModelHandles.find(assetGuid) == m_ModelHandles.end())
         return report; // never registered: nothing resident to refresh
+
+    // The reloaded model can carry other materials: its next spawn converts and
+    // registers them again.
+    m_ModelMaterials.Erase(assetGuid);
 
     const uint32_t newCount = asset.GetMeshCount();
     report.SubmeshesTotal = newCount;
@@ -983,7 +966,7 @@ MeshGPUReloadReport MeshGPURegistry::ReloadModelMeshes(const GUID& assetGuid, co
         const MeshGPUEntry* before = FindByKey(key);
         const uint64_t priorHash = before ? before->contentHash : 0;
 
-        const MeshGPUHandle handle = RegisterSubmesh(key, asset.GetMesh(i));
+        const MeshGPUHandle handle = RegisterModelSubmesh(key, asset);
         handles.push_back(handle);
 
         const MeshGPUEntry* after = Find(handle);
@@ -1381,42 +1364,29 @@ MeshGPUEntry MeshGPURegistry::UploadMesh(const Mesh& mesh)
     // (mesh.HasAuthoredLODs(), the explicit flag).
     const bool authoredChain = mesh.HasAuthoredLODs();
     const uint32_t lodCount = geometry.LevelCount;
-    bool honorOwnVertex = false;
-    for (uint32_t level = 1; level < lodCount && level <= mesh.ExtraLODVertices.size(); ++level)
-        honorOwnVertex |= !mesh.ExtraLODVertices[level - 1].empty();
+    const bool hasColour = HasFlag(flags, VertexAttributeFlags::HasColor);
+
+    // The vertex blocks in upload order: LOD0's block, then the block of each own-vertex level.
+    std::array<UploadVertexBlock, MeshGPUEntry::kMaxEntryLODs> vertexBlocks{};
+    uint32_t vertexBlockCount = 0;
+    vertexBlocks[vertexBlockCount++] = {mesh.Vertices,
+                                        hasColour ? std::span<const float>(mesh.Color0) : std::span<const float>()};
 
     uint32_t lodVertexOffset[MeshGPUEntry::kMaxEntryLODs] = {}; // relative, in vertices
     uint32_t maxLevelVertCount = baseVertCount; // for the per-LOD u16/u32 decision
-    std::vector<Vertex> concatVertices;   // only populated for own-vertex chains
-    std::vector<float> concatColours;
-    const float* colours = mesh.Color0.data();
-    const Vertex* verts     = mesh.Vertices.data();
-    uint32_t      vertCount  = baseVertCount;
-    if (honorOwnVertex)
+    uint32_t vertCount = baseVertCount;
+    for (uint32_t k = 1; k < lodCount && k <= mesh.ExtraLODVertices.size(); ++k)
     {
-        concatVertices = mesh.Vertices;
-        if (HasFlag(flags, VertexAttributeFlags::HasColor)) concatColours = mesh.Color0;
-        for (uint32_t k = 1; k < lodCount; ++k)
-        {
-            const size_t blockIdx = k - 1u;
-            if (blockIdx < mesh.ExtraLODVertices.size() &&
-                !mesh.ExtraLODVertices[blockIdx].empty())
-            {
-                const auto& block  = mesh.ExtraLODVertices[blockIdx];
-                lodVertexOffset[k] = static_cast<uint32_t>(concatVertices.size());
-                maxLevelVertCount =
-                    std::max(maxLevelVertCount, static_cast<uint32_t>(block.size()));
-                concatVertices.insert(concatVertices.end(), block.begin(), block.end());
-                if (HasFlag(flags, VertexAttributeFlags::HasColor)) {
-                    const auto& colourBlock = mesh.ExtraLODColor0[blockIdx];
-                    concatColours.insert(concatColours.end(), colourBlock.begin(), colourBlock.end());
-                }
-            }
-            // else index-only level: lodVertexOffset[k] stays 0 (shares LOD0).
-        }
-        verts     = concatVertices.data();
-        vertCount = static_cast<uint32_t>(concatVertices.size());
-        if (HasFlag(flags, VertexAttributeFlags::HasColor)) colours = concatColours.data();
+        const auto& block = mesh.ExtraLODVertices[k - 1u];
+        if (block.empty())
+            continue; // index-only level: lodVertexOffset[k] stays 0 (shares LOD0).
+        lodVertexOffset[k] = vertCount;
+        maxLevelVertCount = std::max(maxLevelVertCount, static_cast<uint32_t>(block.size()));
+        vertCount += static_cast<uint32_t>(block.size());
+        const std::span<const float> blockColours =
+            hasColour ? std::span<const float>(mesh.ExtraLODColor0[k - 1u]) : std::span<const float>();
+        assert(vertexBlockCount < vertexBlocks.size() && "an upload has at most one vertex block per LOD level");
+        vertexBlocks[vertexBlockCount++] = {block, blockColours};
     }
 
     const size_t coreBytes = static_cast<size_t>(vertCount) * coreStride;
@@ -1430,21 +1400,39 @@ MeshGPUEntry MeshGPURegistry::UploadMesh(const Mesh& mesh)
     const bool     use16Indices = (maxLevelVertCount <= 65535u);
     const uint32_t indexStride  = use16Indices ? 2u : 4u;
 
-    // --- Build core interleaved data (pos + normal + uv0) ---
-    std::vector<uint8_t> coreData(coreBytes);
+    // Staging for the streams built below. UpdateBuffer copies each one before it returns.
+    Memory::ScratchScope scratch;
+
+    // --- Build core interleaved data (pos + normal + uv0), tangents and chain colours in one pass ---
+    // Only a chain with own-vertex blocks stages its colours; LOD0 alone uploads mesh.Color0 as it is.
+    // The core stream is raw memory: the loop writes every byte of it.
+    std::byte* const coreData = static_cast<std::byte*>(scratch.Allocate(coreBytes, alignof(float)));
+    const std::span<float> tangents =
+        hasTangent ? scratch.AllocateArrayForOverwrite<float>(static_cast<size_t>(vertCount) * 4u) : std::span<float>();
+    const std::span<float> chainColours = hasColour && vertexBlockCount > 1u
+        ? scratch.AllocateArrayForOverwrite<float>(static_cast<size_t>(vertCount) * 4u)
+        : std::span<float>();
+    std::byte* coreDst = coreData;
+    size_t vertexIndex = 0;
+    for (const UploadVertexBlock& block : std::span(vertexBlocks.data(), vertexBlockCount))
     {
-        uint8_t* dst = coreData.data();
-        for (uint32_t vi = 0; vi < vertCount; ++vi)
+        if (!chainColours.empty())
+            std::copy(block.Colours.begin(), block.Colours.end(), chainColours.data() + vertexIndex * 4u);
+        for (const Vertex& vertex : block.Vertices)
         {
-            const Vertex& v = verts[vi];
-            std::memcpy(dst, v.Position, 3 * sizeof(float));
-            dst += 3 * sizeof(float);
-            std::memcpy(dst, v.Normal, 3 * sizeof(float));
-            dst += 3 * sizeof(float);
-            std::memcpy(dst, v.TexCoords, 2 * sizeof(float));
-            dst += 2 * sizeof(float);
+            std::memcpy(coreDst, vertex.Position, sizeof(vertex.Position));
+            coreDst += sizeof(vertex.Position);
+            std::memcpy(coreDst, vertex.Normal, sizeof(vertex.Normal));
+            coreDst += sizeof(vertex.Normal);
+            std::memcpy(coreDst, vertex.TexCoords, sizeof(vertex.TexCoords));
+            coreDst += sizeof(vertex.TexCoords);
+            if (hasTangent)
+                std::memcpy(&tangents[vertexIndex * 4u], vertex.Tangent, sizeof(vertex.Tangent));
+            ++vertexIndex;
         }
     }
+    const float* colours = chainColours.empty() ? mesh.Color0.data() : chainColours.data();
+    const size_t tBytes = tangents.size_bytes();
 
     // --- Build index data: all LODs concatenated into one allocation ---
     // Generated LODs share the vertex buffer (meshopt reuses indices); authored
@@ -1460,28 +1448,27 @@ MeshGPUEntry MeshGPURegistry::UploadMesh(const Mesh& mesh)
         totalIndices += lodCounts[k];
     }
 
-    std::vector<uint16_t> indices16;
-    std::vector<uint32_t> indices32;
-    const void*           ibSrc;
-    size_t                ibBytes;
+    const void* ibSrc;
+    size_t      ibBytes;
     if (use16Indices)
     {
-        indices16.resize(totalIndices);
+        // Pad to an even index count so the upload size is a multiple of 4 (see
+        // kIndexUploadAlignmentBytes). The pad index is outside every LOD's count
+        // and is never drawn.
+        const std::span<uint16_t> indices16 =
+            scratch.AllocateArrayForOverwrite<uint16_t>(totalIndices + totalIndices % 2u);
         size_t w = 0;
         for (uint32_t k = 0; k < lodCount; ++k)
             for (uint32 idx : mesh.LODIndices(k))
                 indices16[w++] = static_cast<uint16_t>(idx);
-        // Pad to an even index count so the upload size is a multiple of 4 (see
-        // kIndexUploadAlignmentBytes). The pad index is outside every LOD's count
-        // and is never drawn.
-        if (indices16.size() & 1u)
-            indices16.push_back(0u);
+        if (w < indices16.size())
+            indices16[w] = 0u;
         ibSrc   = indices16.data();
-        ibBytes = indices16.size() * sizeof(uint16_t);
+        ibBytes = indices16.size_bytes();
     }
     else
     {
-        indices32.resize(totalIndices);
+        const std::span<uint32_t> indices32 = scratch.AllocateArrayForOverwrite<uint32_t>(totalIndices);
         size_t w = 0;
         for (uint32_t k = 0; k < lodCount; ++k)
         {
@@ -1490,24 +1477,10 @@ MeshGPUEntry MeshGPURegistry::UploadMesh(const Mesh& mesh)
             w += src.size();
         }
         ibSrc   = indices32.data();
-        ibBytes = indices32.size() * sizeof(uint32_t);
+        ibBytes = indices32.size_bytes();
     }
 
-    // --- Build optional stream data ---
-    std::vector<float> tangentData;
-    size_t             tBytes = 0;
-    if (HasFlag(flags, VertexAttributeFlags::HasTangent))
-    {
-        tangentData.resize(static_cast<size_t>(vertCount) * 4);
-        for (uint32_t i = 0; i < vertCount; ++i)
-        {
-            tangentData[i * 4 + 0] = verts[i].Tangent[0];
-            tangentData[i * 4 + 1] = verts[i].Tangent[1];
-            tangentData[i * 4 + 2] = verts[i].Tangent[2];
-            tangentData[i * 4 + 3] = verts[i].Tangent[3];
-        }
-        tBytes = tangentData.size() * sizeof(float);
-    }
+    // --- Optional streams the upload copies from the mesh as they are ---
     const size_t cBytes = HasFlag(flags, VertexAttributeFlags::HasColor)
                               ? static_cast<size_t>(vertCount) * 4u * sizeof(float) : 0;
     const size_t uv1Bytes = HasFlag(flags, VertexAttributeFlags::HasUV1)
@@ -1622,7 +1595,8 @@ MeshGPUEntry MeshGPURegistry::UploadMesh(const Mesh& mesh)
         uint32_t* poolIndex = nullptr;
     };
 
-    std::vector<VertexStreamRequest> vertexStreams;
+    std::array<VertexStreamRequest, kMaxVertexStreams> vertexStreamSlots{};
+    size_t vertexStreamCount = 0;
     auto addVertexStream = [&](std::vector<MeshGPUStreamPool>& pools,
                                uint64_t initialCapacity,
                                uint32_t stride,
@@ -1633,8 +1607,9 @@ MeshGPUEntry MeshGPURegistry::UploadMesh(const Mesh& mesh)
     {
         if (bytes == 0)
             return;
-        vertexStreams.push_back(VertexStreamRequest{
-            &pools, initialCapacity, stride, bytes, debugName, &alloc, &poolIndex});
+        assert(vertexStreamCount < kMaxVertexStreams && "kMaxVertexStreams must count every vertex stream an upload can write");
+        vertexStreamSlots[vertexStreamCount++] = VertexStreamRequest{
+            &pools, initialCapacity, stride, bytes, debugName, &alloc, &poolIndex};
     };
 
     addVertexStream(bucket.corePools, kBucketCoreInitialBytes, coreStride,
@@ -1665,6 +1640,7 @@ MeshGPUEntry MeshGPURegistry::UploadMesh(const Mesh& mesh)
         addVertexStream(bucket.extraUvPools[i], kBucketOtherInitialBytes, 8u,
                         extraUvBytes[i], kExtraUvDebugNames[i],
                         extraUvSub[i], extraUvPoolIndex[i]);
+    const std::span<VertexStreamRequest> vertexStreams(vertexStreamSlots.data(), vertexStreamCount);
 
     auto clearVertexAllocations = [&]()
     {
@@ -1725,7 +1701,8 @@ MeshGPUEntry MeshGPURegistry::UploadMesh(const Mesh& mesh)
     {
         const uint32_t newGroupIndex = static_cast<uint32_t>(bucket.corePools.size());
         bool createdGroup = true;
-        std::vector<VertexStreamRequest*> createdStreams;
+        // The streams whose pool this group created: the first createdStreamCount of vertexStreams.
+        size_t createdStreamCount = 0;
         for (auto& stream : vertexStreams)
         {
             if (!stream.pools || stream.pools->size() != newGroupIndex)
@@ -1752,19 +1729,19 @@ MeshGPUEntry MeshGPURegistry::UploadMesh(const Mesh& mesh)
                 createdGroup = false;
                 break;
             }
-            createdStreams.push_back(&stream);
+            ++createdStreamCount;
         }
 
         if (!createdGroup)
         {
-            for (VertexStreamRequest* stream : createdStreams)
+            for (VertexStreamRequest& stream : vertexStreams.first(createdStreamCount))
             {
-                if (!stream || !stream->pools || stream->pools->size() <= newGroupIndex)
+                if (!stream.pools || stream.pools->size() <= newGroupIndex)
                     continue;
-                MeshGPUStreamPool& pool = (*stream->pools)[newGroupIndex];
+                MeshGPUStreamPool& pool = (*stream.pools)[newGroupIndex];
                 if (pool.buffer.IsValid())
                     m_Device->DestroyBuffer(pool.buffer);
-                stream->pools->pop_back();
+                stream.pools->pop_back();
             }
         }
 
@@ -1850,9 +1827,9 @@ MeshGPUEntry MeshGPURegistry::UploadMesh(const Mesh& mesh)
         m_Device->UpdateBuffer(pool->buffer, alloc.Offset, size, data);
     };
 
-    updateStream(bucket.corePools, corePoolIndex, coreSub, coreBytes, coreData.data());
+    updateStream(bucket.corePools, corePoolIndex, coreSub, coreBytes, coreData);
     updateStream(indexPools, indexPoolIndex, indexSub, ibBytes, ibSrc);
-    updateStream(bucket.tangentPools, tangentPoolIndex, tangentSub, tBytes, tangentData.data());
+    updateStream(bucket.tangentPools, tangentPoolIndex, tangentSub, tBytes, tangents.data());
     updateStream(bucket.colorPools, colorPoolIndex, colorSub, cBytes, colours);
     updateStream(bucket.uv1Pools, uv1PoolIndex, uv1Sub, uv1Bytes, mesh.TexCoords1.data());
     updateStream(bucket.jointsPools, jointsPoolIndex, jointsSub, jBytes, mesh.Joints0.data());

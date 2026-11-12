@@ -1,5 +1,6 @@
 #include "ShaderSourceCache.h"
 
+#include "Rendering/Materials/Shader/ShaderComposer.h"
 #include "ShaderIncludeClosure.h"
 #include "Types/StringUtils.h"
 
@@ -9,6 +10,9 @@
 namespace GameEngine { namespace Rendering {
 
 namespace {
+
+// Files this thread has read from disk through the cache, a failed read included.
+thread_local uint64_t t_FileReadsOnThisThread = 0;
 
 // `dir / operand` when it exists.
 ShaderSourceCache::ResolutionPtr TryResolveIn(const std::filesystem::path& dir, const std::filesystem::path& operand)
@@ -61,6 +65,7 @@ ShaderSourceCache::EntryPtr ShaderSourceCache::Read(const std::filesystem::path&
     // Read, hash and scan outside the lock: on a cold cache a parallel prewarm
     // must not serialize every worker behind one file read.
     std::string bytes;
+    ++t_FileReadsOnThisThread;
     if (!ReadShaderFileText(path, bytes, nullptr))
         return nullptr;
     auto entry = std::make_shared<Entry>();
@@ -85,6 +90,42 @@ bool ShaderSourceCache::ReadText(const std::filesystem::path& path, std::string&
         return false;
     out = entry->Bytes;
     return true;
+}
+
+ShaderSourceCache::TextureSlotsPtr ShaderSourceCache::TextureSlots(const std::filesystem::path& path,
+                                                                   const std::string& normalizedKey)
+{
+    uint64_t generation = 0;
+    {
+        std::lock_guard<std::mutex> lock(m_Mutex);
+        const auto it = m_TextureSlots.find(normalizedKey);
+        if (it != m_TextureSlots.end())
+            return it->second;
+        generation = m_Generation;
+    }
+
+    // Parse outside the lock, as Read reads: an owner-thread lookup never waits for a worker's parse.
+    const EntryPtr entry = Read(path, normalizedKey);
+    if (!entry)
+        return nullptr;
+    TextureSlotsPtr slots = std::make_shared<const TextureSlotResolution>(ShaderComposer::ResolveTextureSlots(entry->Bytes));
+
+    std::lock_guard<std::mutex> lock(m_Mutex);
+    // Parsed from bytes read before an announcement: they serve this caller only.
+    if (generation != m_Generation)
+        return slots;
+    return m_TextureSlots.try_emplace(normalizedKey, std::move(slots)).first->second;
+}
+
+bool ShaderSourceCache::HoldsTextureSlots(const std::string& normalizedKey)
+{
+    std::lock_guard<std::mutex> lock(m_Mutex);
+    return m_TextureSlots.contains(normalizedKey);
+}
+
+uint64_t ShaderSourceCache::FileReadsOnThisThreadForTest()
+{
+    return t_FileReadsOnThisThread;
 }
 
 ShaderSourceCache::ResolutionPtr ShaderSourceCache::Resolve(const std::filesystem::path& requestingDir,
@@ -129,6 +170,7 @@ void ShaderSourceCache::InvalidateAll()
     ++m_Generation;
     m_Entries.clear();
     m_Resolutions.clear();
+    m_TextureSlots.clear();
 }
 
 uint64_t ShaderSourceCache::Generation()

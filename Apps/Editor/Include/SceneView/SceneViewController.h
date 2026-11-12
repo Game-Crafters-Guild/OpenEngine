@@ -114,7 +114,9 @@ class SceneViewController
     bool DeclareTargetsRG(Rendering::RenderGraph::RGFrame& frame, uint32_t width, uint32_t height,
                            uint64_t windowId,
                            Engine::Renderer::Pipeline::ViewTargetsRG& outTargets);
-    void PrepareForActivation();
+    /// Requests this view for the next extraction, and allocates the camera and the view on
+    /// first use. A call before Engine Update lets the same frame's declare render the scene.
+    void RequestFrame();
     bool IsWaitingForExtraction() const { return m_WaitingForExtractionRG; }
     bool UpdatePresentedSnapshotRG(Rendering::RenderGraph::RGFrame& frame,
                                    Rendering::RenderGraph::RGTexture source,
@@ -177,17 +179,17 @@ class SceneViewController
     std::optional<float> GetMeteredExposureEv() const { return m_MeteredExposureEv; }
     std::optional<float> GetLightsReadingEv() const { return m_LightsReadingEv; }
 
-    // The projection the Scene View last submitted, with the viewport it was
+    // The camera the Scene View last submitted, with the viewport it was
     // built from. The pair is captured in one assignment, so a reader can never
-    // combine this frame's matrix with the next frame's size across a resize.
+    // combine this frame's matrices with the next frame's size across a resize.
     // Returns false until the first frame has been recorded.
-    bool GetLastFrameProjection(Mathematics::Matrix4x4& outProj,
-                                std::uint32_t& outViewportWidthPx,
-                                std::uint32_t& outViewportHeightPx) const
+    bool GetLastFrameCamera(Rendering::CameraData& outCamera,
+                            std::uint32_t& outViewportWidthPx,
+                            std::uint32_t& outViewportHeightPx) const
     {
         if (!m_HasFrameCameraData)
             return false;
-        outProj = m_FrameCameraData.proj;
+        outCamera = m_FrameCameraData;
         outViewportWidthPx = m_FrameCameraViewportW;
         outViewportHeightPx = m_FrameCameraViewportH;
         return true;

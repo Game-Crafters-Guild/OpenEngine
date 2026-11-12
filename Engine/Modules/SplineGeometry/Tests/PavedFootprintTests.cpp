@@ -813,8 +813,10 @@ TEST(PavedFootprint, AnArmWhoseStopFallsInATurnStopsPastTheTurn)
         for (const Vector2& point : run.Points)
         {
             if (point.x > 10.0f + kPavedTouchMeters)
+            {
                 EXPECT_LE(point.y, stop.OpenLeft.y + kPavedTouchMeters)
                     << "the ribbon turns back past its cap at x " << point.x;
+            }
         }
     }
     ExpectAccepted(fixture, footprint);

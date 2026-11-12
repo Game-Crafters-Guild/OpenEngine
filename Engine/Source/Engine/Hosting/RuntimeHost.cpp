@@ -19,7 +19,6 @@
 #include "Engine/Rendering/FrameOrchestrator.h"
 #include "Engine/Rendering/RenderDeviceContext.h"
 #include "Engine/Rendering/RenderServices.h"
-#include "Engine/Rendering/SceneResolveService.h"
 #include "Engine/Rendering/ViewFinalize.h"
 #include "Engine/Rendering/ViewReadbackUtils.h"
 #include "Engine/Rendering/VkValidationRequest.h"
@@ -31,9 +30,6 @@
 #include "Rendering/Core/ReverseZ.h"
 #include "Rendering/Passes/SRGBEncodePass.h"
 #include "Rendering/Passes/TemporalDither.h"
-#include "Scene/AssetManagerSceneResolver.h"
-#include "Scene/SceneIO.h"
-#include "SplineRecipes/SplineRecipeSystem.h"
 #include "UI/UIManager.h"
 #include "UI/UITextureSpace.h"
 
@@ -132,6 +128,13 @@ bool RuntimeHost::InitWindow()
     inputCfg.getPlaySurface = [this]() { return HudPlaySurface(); };
     WindowInputRouter::BindBasicHandlers(inputCfg);
     m_Window->SetRefreshHandler([this] { m_Application.Tick(); });
+    // The close arrives in the event pump between frames, so the loop stops before the next frame.
+    m_Window->SetCloseRequestedHandler(
+        [this]
+        {
+            m_Application.RequestExit();
+            return false;
+        });
 
     ApplyFullscreenMode(*m_Window, m_Desc.Mode);
 
@@ -221,6 +224,7 @@ bool RuntimeHost::InitRendering()
     m_Window->GetFramebufferSize(fbW, fbH);
     params.width = static_cast<uint32>(fbW > 0 ? fbW : m_Desc.WindowWidth);
     params.height = static_cast<uint32>(fbH > 0 ? fbH : m_Desc.WindowHeight);
+    params.windowTargetChannel = &EngineCore::GetInstance().GetStartupChannel();
     params.createRenderServices = true;
 
     if (!m_RenderCtx->Initialize(params))
@@ -315,72 +319,19 @@ Engine::Renderer::PipelineResolveFailure RuntimeHost::LoadRenderPipeline()
     return Engine::Renderer::PipelineResolveFailure::None;
 }
 
-bool RuntimeHost::OpenScene(const std::filesystem::path& scenePath)
+void RuntimeHost::EnsureCamera(ECS::World& world)
 {
-    auto& engine = EngineCore::GetInstance();
-    auto* world = engine.EnsurePrimaryWorld();
-    if (!world)
-    {
-        Logger::Log::Error("Runtime: Failed to create primary ECS world");
-        return false;
-    }
+    if (Engine::Renderer::FindActiveCamera(world))
+        return;
 
-    const auto& assetRoot = engine.GetResolvedAssetRoot();
-    const auto sceneFile = assetRoot / scenePath;
-
-    // What the spline recipes generated belongs to the outgoing scene: release it
-    // against the outgoing world, before the load clears it (SplineRecipeSystem).
-    auto* loop = engine.GetRenderingLoop();
-    auto* systems = loop ? loop->GetSystemManager() : nullptr;
-    if (auto* recipes = systems ? systems->GetSystem<SplineRecipes::SplineRecipeSystem>() : nullptr)
-        recipes->ReleaseSceneScoped(*world);
-
-    Scene::AssetManagerSceneResolver assetResolver(engine.GetAssetManager(), assetRoot,
-                                                   Scene::AssetManagerSceneResolver::UnknownFile::AssignGuid);
-
-    Scene::SceneReadOptions opts{};
-    opts.clearWorldFirst = true;
-    opts.assetResolver = &assetResolver;
-    opts.assetRootOverride = assetRoot;
-    if (!Scene::ReadSceneInto(*world, sceneFile, opts))
-    {
-        // The loader reports through its error record and does not log the
-        // reason itself; this is the one line that carries it.
-        const auto& err = Scene::GetLastSceneIOError();
-        Logger::Log::Error("Runtime: failed to load scene '{}' at {}:{}: {}", sceneFile.string(),
-                           err.file.string(), err.line, err.message);
-        return false;
-    }
-
-    // The scene's models and materials resolve through the engine's resolve
-    // service: their loads start now, and each entity binds on the frame its model
-    // has landed, so no frame waits for a load. Skeletons bind as entities complete.
-    m_SceneResolve = Engine::Renderer::SceneResolveBatch::None;
-    auto* rs = m_RenderCtx ? m_RenderCtx->GetRenderServices() : nullptr;
-    if (rs && loop)
-        m_SceneResolve = loop->GetSceneResolveService().EnqueueWorld(*world, *rs);
-
-    Logger::Log::Info("Runtime: Loaded scene '{}'", sceneFile.string());
-
-    // If the scene has no camera, create a default one so the host can render.
-    auto existingCam = Engine::Renderer::FindActiveCamera(*world);
-    if (!existingCam)
-    {
-        // Projection settings come from Components::Camera's own defaults so the
-        // fallback cannot drift from them; only the placement is chosen here.
-        Components::Camera cam{};
-
-        Components::Transform xf{};
-        // Default camera at (0, 2, -5) looking forward (+Z)
-        xf.matrix[12] = 0.0f;
-        xf.matrix[13] = 2.0f;
-        xf.matrix[14] = -5.0f;
-
-        world->Create(cam, xf);
-        Logger::Log::Info("Runtime: Created default camera (no camera found in scene)");
-    }
-
-    return true;
+    // Projection settings come from Components::Camera's own defaults so the
+    // fallback cannot drift from them; only the placement is chosen here.
+    Components::Camera cam{};
+    Components::Transform xf{};
+    // Default camera at (0, 2, -5) looking forward (+Z)
+    xf.Position = Mathematics::WorldPosition{0.0, 2.0, -5.0};
+    world.Create(cam, xf);
+    Logger::Log::Info("Runtime: Created default camera (no camera found in scene)");
 }
 
 void RuntimeHost::Render(float deltaTime)
@@ -402,6 +353,14 @@ void RuntimeHost::Render(float deltaTime)
     {
         if (m_Hooks.OnDeviceFailed)
             m_Hooks.OnDeviceFailed();
+        return;
+    }
+    // The window's swapchain is created on a start-up job; its failure fails the start.
+    if (device->HasWindowTargetCreationFailed(m_RenderCtx->GetWindowTarget()))
+    {
+        Logger::Log::Error("Runtime: Failed to initialize RenderDeviceContext");
+        m_Application.SetExitCode(Application::kInitializeFailedExitCode);
+        m_Application.RequestExit();
         return;
     }
 
@@ -430,6 +389,7 @@ void RuntimeHost::Render(float deltaTime)
 
         if (activeCam)
         {
+            m_WarnedNoCamera = false;
             if (m_CameraId == 0)
                 m_CameraId = rs->Views().AllocateCamera("RuntimeHost.Camera");
             if (m_ViewId == 0)
@@ -469,8 +429,9 @@ void RuntimeHost::Render(float deltaTime)
                               ? std::optional<float>(activeCam->params.RenderScale)
                               : std::nullopt);
         }
-        else
+        else if (!m_WarnedNoCamera)
         {
+            m_WarnedNoCamera = true;
             Logger::Log::Warning("Runtime: no enabled Camera in the scene — nothing will be drawn");
         }
     }
@@ -505,7 +466,7 @@ void RuntimeHost::RenderFrameRG(Engine::Renderer::RenderServices& rs,
     if (!m_RenderGraphStream.Frame)
         m_RenderGraphStream = RenderGraph::MakeWindowRGFrame(device);
     // Contract: AFTER IDevice::BeginFrame (the profiling resolve reads the
-    // slot BeginFrame just fence-waited).
+    // slot whose GPU work is complete once BeginFrame returns).
     m_RenderGraphStream.Frame->BeginFrame(m_RGFrameIndex++);
 
     // Caller view targets: pool-backed, window-sized. HDR-float color because the
@@ -814,7 +775,7 @@ void RuntimeHost::RenderFrameRG(Engine::Renderer::RenderServices& rs,
                 static_cast<unsigned long long>(m_RGFrameIndex), g.PassCount(),
                 g.LivePassCount(), out.Out.IsValid() ? out.Out.Id : 0xFFFFFFFFu,
                 backbuffer.IsValid() ? backbuffer.Id : 0xFFFFFFFFu);
-        for (const auto& t : m_RenderGraphStream.Frame->LastFrameTimings())
+        for (const auto& t : m_RenderGraphStream.Frame->LastFrameProfiling().Passes)
             fprintf(stderr, "[RGDiag]   gpu span '%s' = %.4fms%s (cpu %.4fms)\n", t.Name,
                     static_cast<double>(t.GpuSpanMs), t.SpanShared ? " (shared encoder)" : "",
                     static_cast<double>(t.CpuMs));

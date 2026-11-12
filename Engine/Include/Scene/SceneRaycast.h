@@ -59,12 +59,15 @@ struct PickHit
     uint32                        SubmeshIndex  = 0u;
     uint32                        TriangleIndex = ~0u;
     Mathematics::Vector3          Barycentrics{};
-    Mathematics::Vector3          WorldPosition{};
+    Mathematics::Vector3          Point{};
     Mathematics::Vector3          WorldNormal{};
     float32                       Distance      = 0.0f;
     /// A Bounds hit standing in for a mesh still preparing its picking data. A caller that would
     /// write the hit into the scene refuses it and asks again once the data is published.
     bool                          MeshBvhPending = false;
+    /// A terrain hit whose height came from a page coarser than the finest: the finest page there
+    /// was not on the CPU, so a later read can move the hit.
+    bool                          CoarseHeight   = false;
 };
 
 struct PickResult

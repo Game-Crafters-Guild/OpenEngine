@@ -603,6 +603,7 @@ void BookmarksPanel::CreateBookmarkRow(size_t index, UIElement* container)
     
     // Remove button (styled via CSS class)
     auto removeBtn = std::make_unique<Button>();
+    removeBtn->AddClass("icon-button");
     removeBtn->AddClass("bookmark-remove");
     removeBtn->SetText("×");
     // Capture bookmark identity at row creation time (not at click time) so the
@@ -1048,7 +1049,7 @@ void BookmarksPanel::PerformDrop(const UI::Interaction::DropRequest& request)
             bookmark.Name = item.name.empty() ? item.slug : item.name;
 
             // Use cached Polyhaven thumbnail if available.
-            std::filesystem::path thumbPath = PolyhavenService::GetCacheDir() / (item.slug + ".png");
+            std::filesystem::path thumbPath = PolyhavenService::GetThumbnailPath(item.slug);
             std::error_code ec;
             if (std::filesystem::exists(thumbPath, ec))
                 bookmark.IconPath = thumbPath.string();
@@ -1565,7 +1566,7 @@ void BookmarksPanel::UpdateBookmarkIcon(UIElement* iconEl, const Bookmark& bookm
         if (bookmark.Reference.rfind("polyhaven:", 0) == 0)
         {
             const std::string slug = bookmark.Reference.substr(10);
-            std::filesystem::path thumbPath = PolyhavenService::GetCacheDir() / (slug + ".png");
+            std::filesystem::path thumbPath = PolyhavenService::GetThumbnailPath(slug);
             std::error_code ec;
             if (std::filesystem::exists(thumbPath, ec))
                 UI::Layout::SetBackgroundPath(*iconEl, thumbPath.string());

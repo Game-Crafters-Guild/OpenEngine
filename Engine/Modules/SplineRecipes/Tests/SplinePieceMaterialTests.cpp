@@ -12,7 +12,9 @@
 #include "SplineRecipes/SplinePieceMaterial.h"
 
 #include <initializer_list>
+#include <memory>
 #include <utility>
+#include <vector>
 
 using namespace GameEngine;
 using namespace GameEngine::Engine::Renderer;
@@ -58,7 +60,7 @@ ModelRenderResources TwoSubmeshResources(ModelAsset& model, GUID& embeddedSlot0,
     ConvertedModelMaterial slot1{};
     slot1.materialIndex = 1;
     slot1.derivedGuid = embeddedSlot1;
-    resources.materials = {slot0, slot1};
+    resources.materials = std::make_shared<const std::vector<ConvertedModelMaterial>>(std::vector{slot0, slot1});
     return resources;
 }
 

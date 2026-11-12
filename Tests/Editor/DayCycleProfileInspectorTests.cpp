@@ -125,7 +125,9 @@ TEST_F(DayCycleEditorTests, SaveIsEnabledOnlyWithUnsavedChanges)
         BuildInspector(root, asset);
         for (Button* button : All<Button>(root))
             if (button->GetText() == "Save a copy to the project")
+            {
                 EXPECT_TRUE(button->IsEnabled());
+            }
         EXPECT_TRUE(HasButton(root, "Save a copy to the project"));
     }
 }

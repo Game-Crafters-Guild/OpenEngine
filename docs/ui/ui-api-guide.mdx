@@ -115,6 +115,47 @@ constexpr StringId kPad = "--pad"_sid;
 float pad = style->GetCustomNumber(kPad, 0.0f);
 ```
 
+### Borders
+
+Each side of a border has its own width and color: `border-top`, `border-right`,
+`border-bottom` and `border-left`, their `-width` and `-color` longhands, and
+`border-width`, which takes one to four values. A side with a width paints in its own
+color, and a side with width 0 paints nothing. A border color that no rule sets is
+transparent.
+
+`border-style` is one value for the whole box: `solid`, `dashed`, `dotted` or `none`.
+A per-side `none` or `hidden` (`border-top: none`) removes that side. A per-side
+`dashed` or `dotted` (`border-left: 3px dashed`) does not change its side: the side
+paints in the box's `border-style`, and the UI logs a warning once per declaration.
+Write `border-style: dashed` to dash every side.
+
+Where two sides of different colors meet at a square corner, the corner splits on
+the line from its outer point to its inner point, as in a browser. A 1px top beside a
+3px left gives most of the corner to the left side.
+
+Where two sides of different colors meet at a rounded corner, each side runs around
+the corner and narrows to nothing. The color that most sides share paints first, and
+the other sides paint over it in the order top, right, bottom, left. The colors do not
+split on the corner's diagonal as they do in a browser. A 1px top beside a 3px left on a
+4px radius gives the first 3 pixels of the top's row to the left side at each left
+corner. Set `border-radius: 0` where the split must be exact. The UI logs a warning
+once per class list that has such a corner, or once per id for an element without a
+class. A transparent side does not count: the side next to it keeps the whole corner.
+
+Where a translucent color meets another color at a corner, square or rounded, both
+colors paint the corner, so the corner differs from both sides. Use opaque colors where
+two border colors meet. An element `opacity` below 1, as in a fade, has the same effect
+on each side in a color that most sides do not share: the background shows through
+that side, and its corners differ from both sides.
+
+Dots and dashes take the color of their side, and dashes run only along sides that
+have a width. Every dot and dash uses the width of the widest side.
+
+```css title="An ember bar on the left of a focused menu entry"
+.menu-entry { border-width: 0 0 0 3px; border-color: rgba(224, 138, 42, 0); }
+.menu-entry:focus { border-left-color: #e08a2a; }
+```
+
 ## Declaring layout in C++
 
 Declare a control or a static layout in a `.uxml` file. Use the typed C++ builder
@@ -341,9 +382,9 @@ if (Ui.FindElement("Score") is Ui.Label score)
 ::::
 :::::
 
-`GameUI::FindElementById` searches every mounted UI document. In C++ an element id is a `StringId`: write an id you know in code as a `"Score"_sid` literal, which is hashed at compile time, and hash an id built at runtime with `HashStringId(name)`. When two documents use the same id, the document owned by the lowest entity id wins, so the result is stable. To look in one document only, call `FindById` on its root, `GameUI::FindDocumentRoot(entity)`. The optional second argument of `FindElementById` receives the entity whose document matched.
+`GameUI::FindElementById` searches every mounted UI document. The root element of a document's layout is the document's container: its classes and its id apply to the container, so a lookup of the root's id finds the container. In C++ an element id is a `StringId`: write an id you know in code as a `"Score"_sid` literal, which is hashed at compile time, and hash an id built at runtime with `HashStringId(name)`. When two documents use the same id, the document owned by the lowest entity id wins, so the result is stable. To look in one document only, call `FindById` on its root, `GameUI::FindDocumentRoot(entity)`. The optional second argument of `FindElementById` receives the entity whose document matched.
 
-`Ui.FindElement` searches every mounted UI document, or only one when you pass its entity, and returns a wrapper typed from the element's tag, such as `Ui.Button`, `Ui.Label`, or [`Ui.MarkdownText`](ui-control-defaults.mdx#markdown-text). Tags without a dedicated wrapper return `Ui.Element`. Elements also take classes from a script (`AddClass`), which is how a HUD shows, hides, and expresses state through its stylesheet.
+`Ui.FindElement` searches every mounted UI document, or only one when you pass its entity, and returns a wrapper typed from the element's tag, such as `Ui.Button`, `Ui.Label`, [`Ui.ProgressBar`](ui-control-defaults.mdx#the-progress-bar) (its `Value`, `Max` and `Indeterminate`), or [`Ui.MarkdownText`](ui-control-defaults.mdx#markdown-text). Tags without a dedicated wrapper return `Ui.Element`. Elements also take classes from a script (`AddClass`), which is how a HUD shows, hides, and expresses state through its stylesheet.
 
 ### Element calls from a script
 

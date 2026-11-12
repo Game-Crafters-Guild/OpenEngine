@@ -229,7 +229,7 @@ TEST_F(AssetDecodeCancellationSeamTest, PublishedFlagReachesTheTextureCook)
     // bytes — and a cook that produces no bytes cannot write a cache entry.
     auto cancelled = std::make_shared<std::atomic<bool>>(true);
     const SharedPtr<Asset> abandoned =
-        DecodeAssetPayload(*m_Manager, metadata.Guid, metadata, bytes, cancelled);
+        DecodeAssetPayload(*m_Manager, metadata.Guid, metadata, ByteBuffer::CopyOf(bytes), cancelled);
     EXPECT_EQ(abandoned, nullptr);
     EXPECT_EQ(CookedArtifactCount(), 0u) << "a cancelled decode wrote a derived-cache entry";
 
@@ -237,7 +237,7 @@ TEST_F(AssetDecodeCancellationSeamTest, PublishedFlagReachesTheTextureCook)
     // same asset through the same seam with the flag clear has to cook.
     auto live = std::make_shared<std::atomic<bool>>(false);
     const SharedPtr<Asset> loaded =
-        DecodeAssetPayload(*m_Manager, metadata.Guid, metadata, bytes, live);
+        DecodeAssetPayload(*m_Manager, metadata.Guid, metadata, ByteBuffer::CopyOf(bytes), live);
     EXPECT_NE(loaded, nullptr);
     EXPECT_GE(CookedArtifactCount(), 1u)
         << "the uncancelled control never cooked, so the cancelled case above proves nothing "
@@ -379,7 +379,7 @@ TEST_F(LodCacheCancellationTest, CancelledGenerationLeavesNoLodCacheEntry)
     // Cancelled: the generator abandons between levels, so the chain it hands
     // back is short. Nothing may persist it.
     auto cancelled = std::make_shared<std::atomic<bool>>(true);
-    DecodeAssetPayload(*m_Manager, metadata.Guid, metadata, bytes, cancelled);
+    DecodeAssetPayload(*m_Manager, metadata.Guid, metadata, ByteBuffer::CopyOf(bytes), cancelled);
     EXPECT_EQ(LodCacheEntryCount(), 0u)
         << "a cancelled generation wrote a LOD cache entry; every later load would take that "
            "truncated chain as a hit";
@@ -388,7 +388,7 @@ TEST_F(LodCacheCancellationTest, CancelledGenerationLeavesNoLodCacheEntry)
     // same model through the same seam with the flag clear has to cook LODs.
     auto live = std::make_shared<std::atomic<bool>>(false);
     const SharedPtr<Asset> loaded =
-        DecodeAssetPayload(*m_Manager, metadata.Guid, metadata, bytes, live);
+        DecodeAssetPayload(*m_Manager, metadata.Guid, metadata, ByteBuffer::CopyOf(bytes), live);
     ASSERT_NE(loaded, nullptr);
     ASSERT_EQ(LodCacheEntryCount(), 1u)
         << "the uncancelled control never cooked LODs, so the cancelled case above proves "

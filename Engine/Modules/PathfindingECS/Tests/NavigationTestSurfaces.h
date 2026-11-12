@@ -117,14 +117,9 @@ inline ECS::Entity CreateTurnedBox(ECS::World& world, float32 x, float32 y, floa
     entity.Set(shape);
     entity.Set(Components::Transform{});
     Components::WorldTransform transform{};
-    transform.matrix[0] = cosine;
-    transform.matrix[2] = -sine;
-    transform.matrix[5] = 1.0f;
-    transform.matrix[8] = sine;
-    transform.matrix[10] = cosine;
-    transform.matrix[12] = x;
-    transform.matrix[13] = y;
-    transform.matrix[14] = z;
+    transform.Basis[0] = glm::vec3(cosine, 0.0f, -sine);
+    transform.Basis[2] = glm::vec3(sine, 0.0f, cosine);
+    transform.Position = Mathematics::WorldPosition{x, y, z};
     transform.Version = 1u; // resolved, as TransformHierarchySystem leaves it
     entity.Set(transform);
     return entity;

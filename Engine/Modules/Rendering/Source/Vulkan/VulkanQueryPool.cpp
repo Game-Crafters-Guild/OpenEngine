@@ -5,6 +5,7 @@
 
 #include "VulkanQueryPool.h"
 #include "VulkanCommandList.h"
+#include "Logger/Logger.h"
 #include <iostream>
 #include <algorithm>
 #include <cstring>
@@ -24,6 +25,7 @@ namespace Rendering {
         m_PipelineStatsQueries.resize(m_FramesInFlight);
         m_CachedTimestampValues.resize(m_FramesInFlight);
         m_CachedTimestampValuesValid.assign(m_FramesInFlight, false);
+        m_CachedPipelineStatsValues.resize(m_FramesInFlight);
 
         for (uint32_t i = 0; i < m_FramesInFlight; ++i) {
             m_TimestampQueries[i].reserve(m_Config.MaxTimestampQueries);
@@ -101,8 +103,8 @@ namespace Rendering {
             ps.reserve(psTarget);
 
         // Keep the cached values populated by CollectResults() above — RenderGraph
-        // reads them in BeginFrame() before this slot is recorded again. The cache
-        // is refreshed the next time this slot completes and CollectResults() runs.
+        // reads them in BeginFrame() before this slot is recorded again. The first
+        // timestamp and the first statistics query of the frame clear their cache.
 
         // Prefer host reset after the fence wait. Devices without hostQueryReset use
         // the command-buffer fallback in ResetQueries().
@@ -281,6 +283,9 @@ namespace Rendering {
         if (m_CurrentPipelineStatsQuery >= m_Config.MaxPipelineStatsQueries) {
             return UINT32_MAX;
         }
+        if (m_CurrentPipelineStatsQuery == 0) {
+            m_CachedPipelineStatsValues[m_CurrentFrame].clear();
+        }
         uint32_t queryIndex = GetFrameQueryIndex(m_CurrentPipelineStatsQuery, m_Config.MaxPipelineStatsQueries);
 
         // Begin pipeline statistics query (only if command buffer is valid and recording)
@@ -304,7 +309,9 @@ namespace Rendering {
         info.Active = true;
 
         m_PipelineStatsQueries[m_CurrentFrame].push_back(info);
-        return m_CurrentPipelineStatsQuery++;
+        ++m_CurrentPipelineStatsQuery;
+        // The frame-global index, like WriteTimestamp, so the result is found after the frame moves on.
+        return queryIndex;
     }
 
     void VulkanQueryPool::EndPipelineStats(CommandList* commandList, uint32_t queryIndex) {
@@ -312,7 +319,6 @@ namespace Rendering {
             return;
         }
 
-        uint32_t frameQueryIndex = GetFrameQueryIndex(queryIndex, m_Config.MaxPipelineStatsQueries);
         VulkanCommandList* vkCL = dynamic_cast<VulkanCommandList*>(commandList);
         if (!vkCL || !vkCL->IsRecording()) {
             return;
@@ -322,7 +328,7 @@ namespace Rendering {
             return;
         }
 
-        vkCmdEndQuery(commandBuffer, m_PipelineStatsPool, frameQueryIndex);
+        vkCmdEndQuery(commandBuffer, m_PipelineStatsPool, queryIndex);
     }
 
 
@@ -431,6 +437,8 @@ namespace Rendering {
                 VK_QUERY_PIPELINE_STATISTIC_INPUT_ASSEMBLY_VERTICES_BIT |
                 VK_QUERY_PIPELINE_STATISTIC_INPUT_ASSEMBLY_PRIMITIVES_BIT |
                 VK_QUERY_PIPELINE_STATISTIC_VERTEX_SHADER_INVOCATIONS_BIT |
+                VK_QUERY_PIPELINE_STATISTIC_CLIPPING_INVOCATIONS_BIT |
+                VK_QUERY_PIPELINE_STATISTIC_CLIPPING_PRIMITIVES_BIT |
                 VK_QUERY_PIPELINE_STATISTIC_FRAGMENT_SHADER_INVOCATIONS_BIT |
                 VK_QUERY_PIPELINE_STATISTIC_COMPUTE_SHADER_INVOCATIONS_BIT;
 
@@ -542,8 +550,27 @@ namespace Rendering {
             }
         }
 
-        // TODO: Collect occlusion and pipeline statistics results
-        // This would follow similar patterns but with different data structures
+        CollectPipelineStatsResults(frameIndex);
+    }
+
+    void VulkanQueryPool::CollectPipelineStatsResults(uint32_t frameIndex) {
+        auto& values = m_CachedPipelineStatsValues[frameIndex];
+        values.clear();
+        const auto queryCount = static_cast<uint32_t>(m_PipelineStatsQueries[frameIndex].size());
+        if (!m_PipelineStatsSupported || queryCount == 0)
+            return;
+
+        // No wait bit: a query that never executed reads unavailable instead of blocking.
+        values.resize(static_cast<size_t>(queryCount) * kPipelineStatsResultWords);
+        constexpr VkDeviceSize kStride = kPipelineStatsResultWords * sizeof(uint64_t);
+        const VkResult result = vkGetQueryPoolResults(
+            m_Device, m_PipelineStatsPool, frameIndex * m_Config.MaxPipelineStatsQueries, queryCount,
+            values.size() * sizeof(uint64_t), values.data(), kStride,
+            VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
+        if (result != VK_SUCCESS && result != VK_NOT_READY) {
+            Logger::Log::Warning("QueryPool: pipeline statistics readback failed: {}", static_cast<int>(result));
+            values.clear();
+        }
     }
 
     uint32_t VulkanQueryPool::GetFrameQueryIndex(uint32_t baseIndex, uint32_t perFrameMax) const {
@@ -607,10 +634,29 @@ namespace Rendering {
         return false;
     }
 
-    bool VulkanQueryPool::GetPipelineStatsResult(uint32_t queryIndex, QueryResult& outResult) {
-        // Implementation would retrieve pipeline statistics result
-        outResult.Available = false;
-        return false;
+    bool VulkanQueryPool::GetPipelineStatsResult(uint32_t queryIndex, PipelineStatistics& outStatistics) const {
+        outStatistics = PipelineStatistics{};
+        if (queryIndex == UINT32_MAX)
+            return false;
+        const uint32_t frame = queryIndex / m_Config.MaxPipelineStatsQueries;
+        const uint32_t indexInFrame = queryIndex % m_Config.MaxPipelineStatsQueries;
+        if (frame >= m_FramesInFlight)
+            return false;
+        const auto& values = m_CachedPipelineStatsValues[frame];
+        const size_t first = static_cast<size_t>(indexInFrame) * kPipelineStatsResultWords;
+        if (first + kPipelineStatsResultWords > values.size())
+            return false;
+        const uint64_t* words = values.data() + first;
+        if (words[kPipelineStatsResultWords - 1] == 0) // the availability word
+            return false;
+        outStatistics.InputAssemblyVertices = words[0];
+        outStatistics.InputAssemblyPrimitives = words[1];
+        outStatistics.VertexShaderInvocations = words[2];
+        outStatistics.ClippingInvocations = words[3];
+        outStatistics.ClippingPrimitives = words[4];
+        outStatistics.FragmentShaderInvocations = words[5];
+        outStatistics.ComputeShaderInvocations = words[6];
+        return true;
     }
 
     const VulkanQueryPool::ProfilingStats& VulkanQueryPool::GetProfilingStats() const {

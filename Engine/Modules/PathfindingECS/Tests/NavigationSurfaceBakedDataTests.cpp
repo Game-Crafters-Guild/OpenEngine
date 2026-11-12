@@ -97,9 +97,7 @@ protected:
         crate.Set(box);
         crate.Set(Components::Transform{});
         Components::WorldTransform placed{};
-        placed.matrix[12] = crateX;
-        placed.matrix[13] = 2.0f;
-        placed.matrix[14] = crateZ;
+        placed.Position = Mathematics::WorldPosition{crateX, 2.0, crateZ};
         placed.Version = 1u;
         crate.Set(placed);
 

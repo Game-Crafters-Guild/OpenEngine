@@ -18,9 +18,13 @@
 #include "UI/UIStyle.h"
 #include "UIRgTestHarness.h"
 
+#include "Core/ApplicationPaths.h"
+
 #include <algorithm>
 #include <cstdint>
+#include <fstream>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -262,7 +266,42 @@ StylesheetHandle ParseSheet(const char* css)
     return sheet;
 }
 
+std::string ReadShippedSheet(const char* relative)
+{
+    std::ifstream in(ApplicationPaths::GetExecutableDirectory() / "Assets" / "UI" / relative, std::ios::binary);
+    std::ostringstream text;
+    text << in.rdbuf();
+    return text.str();
+}
+
 } // namespace
+
+// A game ships the UI module's sheets but not the editor's tokens.css: the Button sheet reads only the
+// tokens the default sheet defines, so a Button with no theme still has a fill and a border.
+TEST(DefaultStylesheet, AButtonWithOnlyTheModuleSheetsResolvesItsTokens)
+{
+    const std::string buttonCss = ReadShippedSheet("controls/Button.css");
+    ASSERT_FALSE(buttonCss.empty()) << "controls/Button.css is not staged next to the test exe";
+    Stylesheet button{};
+    ASSERT_TRUE(UIParsing::CSSParser::ParseStylesFromString(buttonCss, button));
+    button.Origin = StyleOrigin::Control;
+    const StylesheetHandle defaults = UI::GetDefaultStylesheet();
+    ASSERT_NE(defaults, nullptr);
+    const std::vector<const Stylesheet*> sheets{defaults.get(), &button};
+
+    UIElement root;
+    auto owned = std::make_unique<UIElement>();
+    owned->AddClass("button");
+    UIElement* element = owned.get();
+    root.AddChild(std::move(owned));
+    const ResolvedStyle rootStyle = UIParsing::CSSParser::ComputeStyleFor(root, sheets, UIParsing::ElementState{},
+                                                                          static_cast<const ResolvedStyle*>(nullptr));
+    const ResolvedStyle style =
+        UIParsing::CSSParser::ComputeStyleFor(*element, sheets, UIParsing::ElementState{}, &rootStyle);
+
+    EXPECT_TRUE(IsVisible(style.Visual.BackgroundColor)) << "--ui_color_border_subtle has no default";
+    EXPECT_TRUE(IsVisible(style.Visual.BorderColor.Top)) << "--ui_color_border_subtle has no default";
+}
 
 // A theme added to the manager after construction, at the default's own specificity.
 TEST(DefaultStylesheet, AGlobalThemeRuleAddedLaterWinsOverTheDefault)

@@ -269,9 +269,7 @@ ECS::EntityHandle CreateMesh(ECS::World& world, const Mathematics::Vector3& posi
     renderer.modelAssetGuid.Set(Engine::Renderer::PrimitiveGenerator::CubeGuid());
     world.AddComponentImmediate(entity, renderer);
     Components::WorldTransform transform{};
-    transform.matrix[12] = position.x;
-    transform.matrix[13] = position.y;
-    transform.matrix[14] = position.z;
+    transform.Position = Mathematics::WorldPosition::FromVector3(position);
     transform.Version = 1u;
     world.AddComponentImmediate(entity, transform);
     Components::LocalBounds bounds{};
@@ -342,12 +340,12 @@ TEST(SplineSceneConformDigest, MovesWithAMeshUnderTheRunAndNotWithGeneratedOrFar
     EXPECT_EQ(DigestWhenCurrent(world, run), built) << "a runtime-only mesh moved the digest";
 
     auto* farTransform = world.GetComponentForWrite<Components::WorldTransform>(far);
-    farTransform->matrix[12] = 600.0f;
+    farTransform->Position.X = 600.0;
     ++farTransform->Version;
     EXPECT_EQ(DigestWhenCurrent(world, run), built) << "a mesh far from the run moved the digest";
 
     auto* propTransform = world.GetComponentForWrite<Components::WorldTransform>(prop);
-    propTransform->matrix[12] = 30.0f;
+    propTransform->Position.X = 30.0;
     ++propTransform->Version;
     EXPECT_NE(DigestWhenCurrent(world, run), built) << "the mesh under the run moved and the digest did not";
     Scene::ReleaseSceneTlas(world);
@@ -388,7 +386,7 @@ TEST(SplineSceneConformDigest, WalksTheSceneOnlyWhenTheSceneTlasChanges)
     const uint64 atRest = digest.Value;
 
     auto* propTransform = world.GetComponentForWrite<Components::WorldTransform>(prop);
-    propTransform->matrix[12] = 30.0f;
+    propTransform->Position.X = 30.0;
     ++propTransform->Version;
     walks = 0;
     for (int frame = 0; frame < kFrames; ++frame)
@@ -398,6 +396,30 @@ TEST(SplineSceneConformDigest, WalksTheSceneOnlyWhenTheSceneTlasChanges)
     }
     EXPECT_EQ(walks, 1) << "a mesh move did not walk the scene once";
     EXPECT_NE(digest.Value, atRest) << "the walk after the move did not see it";
+    Scene::ReleaseSceneTlas(world);
+}
+
+// A run that grows walks the scene once, also when the scene TLAS stays the same.
+TEST(SplineSceneConformDigest, WalksTheSceneOnceWhenTheRunGrows)
+{
+    ECS::World world;
+    Mathematics::AABB run = Mathematics::AABB::Empty();
+    run.Expand(Mathematics::Vector3(0.0f, 0.0f, 0.0f));
+    run.Expand(Mathematics::Vector3(50.0f, 0.0f, 0.0f));
+    CreateMesh(world, Mathematics::Vector3(10.0f, 0.0f, 0.0f), false);
+    Scene::SceneTlas& tlas = Scene::GetSceneTlas(world);
+    tlas.WaitCurrent(world);
+    SplineRecipes::SceneConformDigest digest;
+    ASSERT_TRUE(SplineRecipes::RefreshSceneConformDigest(world, tlas, run, digest));
+    const uint64 versionAtRest = digest.TlasVersion;
+
+    run.Expand(Mathematics::Vector3(60.0f, 0.0f, 0.0f));
+    EXPECT_TRUE(SplineRecipes::RefreshSceneConformDigest(world, tlas, run, digest))
+        << "a run that grew did not walk the scene";
+    EXPECT_FALSE(SplineRecipes::RefreshSceneConformDigest(world, tlas, run, digest))
+        << "the same run walked the scene twice";
+    EXPECT_EQ(digest.TlasVersion, versionAtRest) << "the scene TLAS changed, so the check proves nothing";
+    EXPECT_EQ(digest.RunBounds, run);
     Scene::ReleaseSceneTlas(world);
 }
 
@@ -419,7 +441,7 @@ TEST(SplineSceneConformDigest, WalksNothingWhileTheSceneTlasIsUpdating)
     const uint64 versionAtRest = digest.TlasVersion;
 
     auto* propTransform = world.GetComponentForWrite<Components::WorldTransform>(prop);
-    propTransform->matrix[12] = 30.0f;
+    propTransform->Position.X = 30.0;
     ++propTransform->Version;
     run.Expand(Mathematics::Vector3(60.0f, 0.0f, 0.0f));
     {

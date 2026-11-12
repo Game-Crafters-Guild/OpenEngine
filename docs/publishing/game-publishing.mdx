@@ -51,7 +51,25 @@ A build ships the scenes in its scene list and the assets they reference, follow
 
 Nothing else from a package ships. A package that ships nothing is left out of the game, so editor-only packages such as the version control integrations add nothing to it. Only shipped textures are baked.
 
-A script cannot be scanned for the assets it loads. If a script loads an asset by GUID or by path and nothing in a shipped scene references that asset, the asset is not in the build. When the game asks for it, the log shows `asset <id> is not in this build`, and the load returns nothing. To ship such an asset, reference it from a scene or a material in the build. A package author instead lists the files the package's code loads by path under `runtimeAssets`, keyed by the component that loads them. See [the package data model](../packages/package-data-model.mdx#what-a-game-ships-from-a-package).
+Every build has a `ThirdPartyNotices` folder beside `game.config`, with the licenses and notices of the third-party code in the engine. Keep this folder in every copy of the game that you distribute, because some of these licenses require it.
+
+A script cannot be scanned for the assets it loads. If a script loads an asset by GUID or by path and nothing in a shipped scene references that asset, the asset is not in the build. When the game asks for it, the log shows `asset <id> is not in this build`, and the load returns nothing. To ship such an asset, reference it from a scene or a material in the build, or set its folder to `always` as the next paragraph shows. A package author instead lists the files the package's code loads by path under `runtimeAssets`, keyed by the component that loads them. See [the package data model](../packages/package-data-model.mdx#what-a-game-ships-from-a-package).
+
+A folder can set what ships from it. Put a file named `.assetfolder` in the folder, with one key, `ship`, for example `{"ship": "always"}`. The key takes one of three values. With `always`, every asset in the folder and its subfolders ships, and so do the assets it references, even when no scene uses them. With `never`, no asset in the folder ships. If a shipped asset references one of them, or the scene list holds one, the export fails, and the error shows the chain of references, such as `Scenes/Castle.scene → Prefabs/Wall.prefab → Textures/Old/Wall.png`. With `inferred`, the default, an asset ships only when a shipped asset references it. The nearest `.assetfolder` above an asset sets its rule, so a subfolder with `inferred` inside an `always` folder ships only what is referenced. A file that is not valid JSON, has another key or value, or cannot be read fails the export with a sentence that names the file. The export reads these files only under the project's asset folder (`Assets/`). A `.assetfolder` inside a package is not read.
+
+A web export puts `THIRD_PARTY_NOTICES.md` in the exported folder, beside `WebPlayer.html`. The file holds the licenses and notices of the third-party code in the web player and its shaders. Keep it in the folder when you publish the game, because some of these licenses require it. The file comes from the web player build, which writes it beside `WebPlayer.wasm`. If the player template has no notices file, the export stops and tells you to build the `WebPlayer` target again.
+
+## Export requirements
+
+Some exports need a tool on the build machine. A Mac export needs the Metal Toolchain. With it, the export compiles the shader stages that the game used in the editor into Metal libraries, and the game loads them instead of compiling those stages while it runs. Install the toolchain once:
+
+```sh title="Install the Metal Toolchain"
+xcodebuild -downloadComponent MetalToolchain
+```
+
+Without the toolchain, the export still succeeds. It shows a warning that names the install command, and the game compiles each shader stage when it first draws with it.
+
+The editor records the shader stages that the open project uses in `.Cache/Pipelines/ShaderStages.txt` under the project folder, and the export reads that file. Play the scenes of the game in the editor before an export, so that the record holds their stages. A Player records in its user data folder, which the export does not read.
 
 ## Build, prepare, verify
 

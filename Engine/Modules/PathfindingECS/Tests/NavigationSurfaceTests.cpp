@@ -17,6 +17,7 @@
 #include "Components/Hierarchy.h"
 #include "Components/Rendering/MeshRenderer.h"
 #include "Components/Terrain/Terrain.h"
+#include "Components/Terrain/TerrainPlanetRelief.h"
 #include "Components/Transform.h"
 #include "ECS/Component/ComponentFactory.h"
 #include "ECS/Component/ComponentRegistry.h"
@@ -67,12 +68,10 @@ Components::WorldTransform Placed(float32 x, float32 y, float32 z, float32 scale
                                   float32 scaleZ = 1.0f)
 {
     Components::WorldTransform transform{};
-    transform.matrix[0] = scaleX;
-    transform.matrix[5] = scaleY;
-    transform.matrix[10] = scaleZ;
-    transform.matrix[12] = x;
-    transform.matrix[13] = y;
-    transform.matrix[14] = z;
+    transform.Basis[0].x = scaleX;
+    transform.Basis[1].y = scaleY;
+    transform.Basis[2].z = scaleZ;
+    transform.Position = Mathematics::WorldPosition{x, y, z};
     transform.Version = 1u; // resolved, as TransformHierarchySystem leaves it
     return transform;
 }
@@ -237,6 +236,7 @@ protected:
                 data->Heightfield.SetSample(x, z, heightAt(worldX) / heightScale);
             }
         data->MarkFullDirty();
+        TE::TerrainService::Get().RebuildQuadtree(handle);
 
         auto entity = world->Create();
         Components::Terrain terrain{};
@@ -362,6 +362,30 @@ TEST_F(NavigationSurfaceTest, TerrainIsBakedFromItsHeightfield)
     EXPECT_NEAR(endY, 6.0f, 0.3f);
 }
 
+// A fitted surface spans the heights the terrain holds, not its nominal band above the
+// transform, and a valley below the transform is walkable.
+TEST_F(NavigationSurfaceTest, AValleyBelowTheTerrainsTransformIsBaked)
+{
+    CreateTerrain(64.0f, 16.0f, 65, [](float32 x) { return -6.0f * std::max(0.0f, 1.0f - std::abs(x) / 20.0f); });
+    auto entity = world->Create();
+    entity.Set(NavigationSurface{}); // fitted to the terrain
+    world->ProcessCommands();
+
+    Mathematics::Vector3 min, max;
+    ASSERT_TRUE(Navigation::SurfaceBounds(*world, entity.GetHandle(), min, max));
+    EXPECT_NEAR(min.y, -6.0f, 0.01f);
+    EXPECT_NEAR(max.y, 0.0f, 0.01f);
+
+    BakeAll();
+
+    ASSERT_EQ(SurfaceOf(entity).BakePhase, NavigationBakePhase::Baked) << Navigation::FormatBakeStatus(SurfaceOf(entity));
+    float32 endY = 0.0f;
+    EXPECT_EQ(FindPath(entity, -28.0f, 0.0f, -28.0f, 0.0f, -6.0f, 0.0f, &endY), Pathfinding::PathStatus::Complete);
+    EXPECT_NEAR(endY, -6.0f, 0.3f);
+    EXPECT_EQ(FindPath(entity, -28.0f, 0.0f, 0.0f, 28.0f, 0.0f, 0.0f, &endY), Pathfinding::PathStatus::Complete);
+    EXPECT_NEAR(endY, 0.0f, 0.3f);
+}
+
 // A terrain whose heightfield has not been built holds the bake, and the notice says so.
 TEST_F(NavigationSurfaceTest, TerrainWithoutItsHeightfieldWaits)
 {
@@ -378,6 +402,78 @@ TEST_F(NavigationSurfaceTest, TerrainWithoutItsHeightfieldWaits)
 
     EXPECT_EQ(SurfaceOf(surface).BakePhase, NavigationBakePhase::Waiting);
     EXPECT_EQ(Navigation::FormatBakeStatus(SurfaceOf(surface)), "Waiting for: the terrain's heightfield to be built");
+}
+
+// A surface on a planet is refused even with geometry inside its bounds, and a surface on a planar
+// terrain in the same world still bakes.
+TEST_F(NavigationSurfaceTest, ASurfaceOnAPlanetIsRefusedAndAPlanarTerrainStillBakes)
+{
+    auto planet = world->Create();
+    Components::Terrain component{};
+    component.Domain = Components::TerrainDomain::Spherical;
+    component.PlanetRadius = 2000.0f;
+    component.HeightScale = 20.0f;
+    planet.Set(component);
+    planet.Set(Components::Transform{});
+    planet.Set(Placed(0.0f, 0.0f, 0.0f));
+    CreateTerrain(64.0f, 16.0f, 65, [](float32) { return 6.0f; });
+    CreateCubeMesh(0.0f, 2000.0f, 0.0f, 4.0f, 1.0f, 4.0f);
+    auto onPlanet = CreateMeshSurface(16.0f);
+    onPlanet.Set(Components::Transform{});
+    onPlanet.Set(Placed(0.0f, 2000.0f, 0.0f));
+    auto onPlanar = world->Create();
+    onPlanar.Set(NavigationSurface{}); // fitted to the planar terrain
+    world->ProcessCommands();
+
+    BakeAll();
+
+    EXPECT_EQ(SurfaceOf(onPlanet).BakePhase, NavigationBakePhase::Failed);
+    EXPECT_EQ(Navigation::FormatBakeStatus(SurfaceOf(onPlanet)),
+              "Failed: navigation is not supported on a planet. Move this surface onto a flat terrain, or "
+              "remove it.");
+    EXPECT_EQ(SurfaceOf(onPlanar).BakePhase, NavigationBakePhase::Baked)
+        << Navigation::FormatBakeStatus(SurfaceOf(onPlanar));
+}
+
+// In a world with a planet, a surface 6 km from its center bakes the mesh inside it, and with nothing
+// inside it fails for want of geometry. On P-2 (radius 2000 m, relief amplitude 50 m: ground up to
+// 2075 m) a surface whose bounds reach down to 2060 m is refused, and one whose bounds stop at 2100 m bakes.
+TEST_F(NavigationSurfaceTest, ASurfaceOffAPlanetBakesItsGeometryAndOneThatReachesThePlanetIsRefused)
+{
+    auto planet = world->Create();
+    Components::Terrain component{};
+    component.Domain = Components::TerrainDomain::Spherical;
+    component.PlanetRadius = 2000.0f;
+    component.HeightScale = 20.0f;
+    planet.Set(component);
+    planet.Set(Components::TerrainPlanetRelief{50.0f, 6.0f, 4u});
+    planet.Set(Components::Transform{});
+    planet.Set(Placed(0.0f, 0.0f, 0.0f));
+    CreateCubeMesh(-6000.0f, 0.0f, 0.0f, 4.0f, 1.0f, 4.0f);
+    CreateCubeMesh(0.0f, 2110.0f, 0.0f, 4.0f, 1.0f, 4.0f);
+    CreateCubeMesh(0.0f, 2150.0f, 50.0f, 4.0f, 1.0f, 4.0f);
+    auto station = CreateMeshSurface(16.0f);
+    station.Set(Components::Transform{});
+    station.Set(Placed(-6000.0f, 0.0f, 0.0f));
+    auto empty = CreateMeshSurface(16.0f);
+    empty.Set(Components::Transform{});
+    empty.Set(Placed(0.0f, 0.0f, 6000.0f));
+    auto reaching = CreateMeshSurface(16.0f); // extent 50 m on Y: its bounds reach down to 2060 m
+    reaching.Set(Components::Transform{});
+    reaching.Set(Placed(0.0f, 2110.0f, 0.0f));
+    auto above = CreateMeshSurface(16.0f); // its bounds stop at 2100 m
+    above.Set(Components::Transform{});
+    above.Set(Placed(0.0f, 2150.0f, 50.0f));
+    world->ProcessCommands();
+
+    BakeAll();
+
+    EXPECT_EQ(SurfaceOf(station).BakePhase, NavigationBakePhase::Baked) << Navigation::FormatBakeStatus(SurfaceOf(station));
+    EXPECT_EQ(SurfaceOf(empty).BakePhase, NavigationBakePhase::Failed);
+    EXPECT_EQ(SurfaceOf(empty).BakeFailure, Components::NavigationBakeFailure::NoGeometry);
+    EXPECT_EQ(SurfaceOf(reaching).BakePhase, NavigationBakePhase::Failed);
+    EXPECT_EQ(SurfaceOf(reaching).BakeFailure, Components::NavigationBakeFailure::SphericalTerrain);
+    EXPECT_EQ(SurfaceOf(above).BakePhase, NavigationBakePhase::Baked) << Navigation::FormatBakeStatus(SurfaceOf(above));
 }
 
 // A trigger volume is not ground: a static trigger collider is left out of the bake.

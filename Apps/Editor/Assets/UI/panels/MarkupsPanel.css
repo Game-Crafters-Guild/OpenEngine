@@ -398,8 +398,8 @@
 	flex-direction: column;
 }
 
-/* The hint in an empty comment field: the search fields' placeholder look (theme/widgets.css
-   .search-field-with-filter-placeholder), quiet and italic. */
+/* The hint in an empty comment field: the text fields' placeholder look
+   (controls/FieldPlaceholder/FieldPlaceholder.css), quiet and italic. */
 .markup-inspector-comment-placeholder {
 	position: absolute;
 	left: 7px;

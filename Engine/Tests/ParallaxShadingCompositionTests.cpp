@@ -378,6 +378,51 @@ uint64_t VuidCount(const IDevice& device, std::string_view vuid, std::string* fi
     return 0;
 }
 
+// Registers a marching, centroid parallax colour material on `device` and builds its colour
+// pipeline at 4x MSAA. The program takes the pixel-centre footprint exactly where the device has
+// the interpolation functions.
+void BuildTheParallaxColourPipeline(IDevice& device, const std::filesystem::path& shaderDir)
+{
+    RenderServices services;
+    ASSERT_TRUE(services.Initialize(&device));
+    MaterialBuildContext context{};
+    context.AdapterShaderDir = shaderDir;
+    context.CacheRoot = std::filesystem::temp_directory_path() / ("ge_parallax_validity_" + GUID::Generate().ToString());
+    context.IncludeDirs = {shaderDir};
+    services.Materials().SetMaterialBuildContext(context);
+
+    MaterialDocument doc{};
+    doc.materialName = "ParallaxValidityProbe";
+    doc.lightingModel = "StandardPBR";
+    doc.surfaceShader = "Surfaces/standard_pbr.glsl";
+    doc.textures["heightMap"] = "__embedded__:0";
+    const Material* material = services.Materials().RegisterMaterialFromDocument(GUID::Generate(), doc);
+    ASSERT_NE(material, nullptr);
+    const GraphicsPipelineId id = material->GetGraphicsPipelineId();
+    const GraphicsPipelineDesc* pipeline = device.LookupGraphicsPipeline(id);
+    ASSERT_NE(pipeline, nullptr);
+    ASSERT_TRUE(pipeline->PixelShader && !pipeline->PixelShader->empty());
+    // The probe must be the case in question: a marching, centroid colour program that takes
+    // the pixel-centre footprint wherever this device allows it.
+    ASSERT_TRUE(Names(*pipeline->PixelShader, "GE_ParallaxMarch")) << "the registered program does not march";
+    EXPECT_EQ(CountGlslStd450Instructions(*pipeline->PixelShader, kGlslStd450InterpolateAtOffset) != 0,
+              device.GetCapabilities().supportsInterpolationFunctions)
+        << "the pixel-centre footprint does not follow the device's interpolation functions";
+
+    PipelineFormatKey format{};
+    format.ColorCount = static_cast<uint8_t>(std::max<size_t>(pipeline->ColorBlend.attachments.size(), 1));
+    for (uint8_t i = 0; i < format.ColorCount; ++i)
+        format.ColorFormats[i] = TextureFormat::R16G16B16A16_FLOAT;
+    format.DepthFormat = TextureFormat::D32_FLOAT;
+    format.RasterizationSamples = 4;
+    const PipelineFormatKey formats[] = {format};
+    device.PrewarmGraphicsPipeline(id, formats);
+    EXPECT_TRUE(device.TryGetWarmGraphicsPipeline(id, format).IsValid()) << "the colour pipeline was not built";
+    services.Shutdown();
+    std::error_code ec;
+    std::filesystem::remove_all(context.CacheRoot, ec);
+}
+
 // The shader module of every desktop parallax colour pipeline is created when a pass first draws
 // it. On a validating device that creation must raise no capability error: the
 // VUID-VkShaderModuleCreateInfo-pCode-08740 an interpolation function raises on a device that did
@@ -406,50 +451,34 @@ TEST(ParallaxPipelineOnAValidatingDevice, TheCentroidParallaxColourPipelineDecla
         GTEST_SKIP() << "Vulkan validation layer not active: the capability VUID cannot be observed";
     }
 
+    device->ResetValidationStats();
+    BuildTheParallaxColourPipeline(*device, shaderDir);
+    std::string message;
+    EXPECT_EQ(VuidCount(*device, "VUID-VkShaderModuleCreateInfo-pCode-08740", &message), 0u) << message;
+    device->Shutdown();
+}
+
+// Metal takes the interpolation functions as the pull-model interpolation SPIRV-Cross translates
+// them to, so the parallax colour pipeline builds with the pixel-centre footprint.
+TEST(ParallaxPipelineOnAMetalDevice, TheCentroidParallaxColourPipelineBuildsWithThePixelCentreFootprint)
+{
+    const std::filesystem::path shaderDir = TestPaths::StagedRenderingShadersDir();
+    ASSERT_TRUE(std::filesystem::exists(shaderDir)) << "Staged engine shader tree not found: " << shaderDir.string();
+    const RestoredShaderCompileProfile restoredProfile;
+
+    DeviceDesc desc{};
+    desc.preferredAPI = GraphicsAPI::Metal;
+    desc.enableSwapchain = false;
+    std::unique_ptr<IDevice> device = DeviceFactory::CreateDevice(desc);
+    if (!device || !device->Initialize(desc) || device->GetAPI() != GraphicsAPI::Metal)
+        GTEST_SKIP() << "No Metal device available";
+    if (!device->GetCapabilities().supportsInterpolationFunctions)
     {
-        RenderServices services;
-        ASSERT_TRUE(services.Initialize(device.get()));
-        MaterialBuildContext context{};
-        context.AdapterShaderDir = shaderDir;
-        context.CacheRoot = std::filesystem::temp_directory_path() / ("ge_parallax_validity_" + GUID::Generate().ToString());
-        context.IncludeDirs = {shaderDir};
-        services.Materials().SetMaterialBuildContext(context);
-
-        MaterialDocument doc{};
-        doc.materialName = "ParallaxValidityProbe";
-        doc.lightingModel = "StandardPBR";
-        doc.surfaceShader = "Surfaces/standard_pbr.glsl";
-        doc.textures["heightMap"] = "__embedded__:0";
-        const Material* material = services.Materials().RegisterMaterialFromDocument(GUID::Generate(), doc);
-        ASSERT_NE(material, nullptr);
-        const GraphicsPipelineId id = material->GetGraphicsPipelineId();
-        const GraphicsPipelineDesc* pipeline = device->LookupGraphicsPipeline(id);
-        ASSERT_NE(pipeline, nullptr);
-        ASSERT_TRUE(pipeline->PixelShader && !pipeline->PixelShader->empty());
-        // The probe must be the case in question: a marching, centroid colour program that takes
-        // the pixel-centre footprint wherever this device allows it.
-        ASSERT_TRUE(Names(*pipeline->PixelShader, "GE_ParallaxMarch")) << "the registered program does not march";
-        EXPECT_EQ(CountGlslStd450Instructions(*pipeline->PixelShader, kGlslStd450InterpolateAtOffset) != 0,
-                  device->GetCapabilities().supportsSampleRateShading)
-            << "the pixel-centre footprint does not follow the device's sampleRateShading";
-
-        PipelineFormatKey format{};
-        format.ColorCount = static_cast<uint8_t>(std::max<size_t>(pipeline->ColorBlend.attachments.size(), 1));
-        for (uint8_t i = 0; i < format.ColorCount; ++i)
-            format.ColorFormats[i] = TextureFormat::R16G16B16A16_FLOAT;
-        format.DepthFormat = TextureFormat::D32_FLOAT;
-        format.RasterizationSamples = 4;
-        device->ResetValidationStats();
-        const PipelineFormatKey formats[] = {format};
-        device->PrewarmGraphicsPipeline(id, formats);
-        EXPECT_TRUE(device->TryGetWarmGraphicsPipeline(id, format).IsValid()) << "the colour pipeline was not built";
-
-        std::string message;
-        EXPECT_EQ(VuidCount(*device, "VUID-VkShaderModuleCreateInfo-pCode-08740", &message), 0u) << message;
-        services.Shutdown();
-        std::error_code ec;
-        std::filesystem::remove_all(context.CacheRoot, ec);
+        device->Shutdown();
+        GTEST_SKIP() << "This GPU has no pull-model interpolation";
     }
+
+    BuildTheParallaxColourPipeline(*device, shaderDir);
     device->Shutdown();
 }
 

@@ -24,6 +24,7 @@
 
 #include "Core/CpuProfiler.h"
 #include "Logger/Logger.h"
+#include "Memory/ScratchScope.h"
 
 #include <algorithm>
 #include <cmath>
@@ -550,18 +551,20 @@ namespace
 // and vice versa → outEntered (mouse-enter). Chains are collected root-ward;
 // each element appears in at most one output.
 void DiffHoverChains(UIElement* prevHover, UIElement* curHover,
-                     std::vector<UIElement*>& outLeft,
-                     std::vector<UIElement*>& outEntered)
+                     std::pmr::vector<UIElement*>& outLeft,
+                     std::pmr::vector<UIElement*>& outEntered)
 {
     outLeft.clear();
     outEntered.clear();
     if (prevHover == curHover)
         return;
 
-    static thread_local std::vector<UIElement*> oldChain;
-    static thread_local std::vector<UIElement*> newChain;
+    // The chains use the resource of the outputs. Do not open a scope here: the outputs
+    // then grow through an outer scope.
+    std::pmr::vector<UIElement*> oldChain{outLeft.get_allocator().resource()};
+    std::pmr::vector<UIElement*> newChain{outLeft.get_allocator().resource()};
 
-    auto collectChain = [](UIElement* start, std::vector<UIElement*>& out)
+    auto collectChain = [](UIElement* start, std::pmr::vector<UIElement*>& out)
     {
         out.clear();
         UIElement* cur = start;
@@ -576,7 +579,7 @@ void DiffHoverChains(UIElement* prevHover, UIElement* curHover,
     collectChain(prevHover, oldChain);
     collectChain(curHover, newChain);
 
-    auto containsEl = [](const std::vector<UIElement*>& chain, UIElement* el) -> bool
+    auto containsEl = [](const std::pmr::vector<UIElement*>& chain, UIElement* el) -> bool
     {
         return std::find(chain.begin(), chain.end(), el) != chain.end();
     };
@@ -628,12 +631,11 @@ bool UIManager::MarkHoverTransitionDirty(UIElement* prevHover, UIElement* newHov
     if (!hoverAffectsAnything)
         return false;
 
-    static thread_local std::vector<UIElement*> oldChain;
-    static thread_local std::vector<UIElement*> newChain;
-    oldChain.clear();
-    newChain.clear();
+    Memory::ScratchScope scratch;
+    std::pmr::vector<UIElement*> oldChain{&scratch.Resource()};
+    std::pmr::vector<UIElement*> newChain{&scratch.Resource()};
 
-    auto collectChain = [](UIElement* start, std::vector<UIElement*>& out)
+    auto collectChain = [](UIElement* start, std::pmr::vector<UIElement*>& out)
     {
         out.clear();
         UIElement* cur = start;
@@ -648,7 +650,7 @@ bool UIManager::MarkHoverTransitionDirty(UIElement* prevHover, UIElement* newHov
     collectChain(prevHover, oldChain);
     collectChain(newHover, newChain);
 
-    auto containsEl = [](const std::vector<UIElement*>& chain, UIElement* el) -> bool
+    auto containsEl = [](const std::pmr::vector<UIElement*>& chain, UIElement* el) -> bool
     {
         return std::find(chain.begin(), chain.end(), el) != chain.end();
     };
@@ -757,8 +759,8 @@ bool UIManager::MarkHoverTransitionDirty(UIElement* prevHover, UIElement* newHov
                         markOneElement(ch.get());
             }
         }
-        static thread_local std::vector<UIElement*> stack;
-        stack.clear();
+        Memory::ScratchScope walkScratch;
+        std::pmr::vector<UIElement*> stack{&walkScratch.Resource()};
         stack.push_back(root);
         while (!stack.empty())
         {
@@ -987,8 +989,9 @@ UIManager::PointerFrameResult UIManager::TryPointerOnlyFrame(unsigned dirtyNow, 
     CaptureAncestorChainIds(newHover, m_HoverEventDiffBaseChain);
     {
         ScopedSectionTimer _tEvents(profEnabled, &prof.EventDispatchMs);
-        static thread_local std::vector<UIElement*> left;
-        static thread_local std::vector<UIElement*> entered;
+        Memory::ScratchScope scratch;
+        std::pmr::vector<UIElement*> left{&scratch.Resource()};
+        std::pmr::vector<UIElement*> entered{&scratch.Resource()};
         DiffHoverChains(prevHover, newHover, left, entered);
         for (UIElement* el : left)
             if (el)
@@ -1190,8 +1193,8 @@ void UIManager::MarkPseudoStateScope(UIElement* el,
     {
         if (!rootToMark)
             return;
-        static thread_local std::vector<UIElement*> stack;
-        stack.clear();
+        Memory::ScratchScope scratch;
+        std::pmr::vector<UIElement*> stack{&scratch.Resource()};
         stack.reserve(64);
         stack.push_back(rootToMark);
         while (!stack.empty())

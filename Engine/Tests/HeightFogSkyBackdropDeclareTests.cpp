@@ -16,6 +16,8 @@
 #include "Rendering/Sky/SkySettings.h"
 #include "Rendering/Sky/SkySystem.h"
 #include "SharedHeadlessDevice.h"
+#include "TestCameraEye.h"
+
 #include <gtest/gtest.h>
 
 #include <nlohmann/json.hpp>
@@ -120,7 +122,7 @@ struct SkyBackdropFixture
         camera.viewProj = viewProj;
         camera.cameraPos.y = 3.0f;
         const CameraId cam = Rs->Views().AllocateCamera("SkyBackdropCam");
-        Rs->Views().SetCameraData(cam, camera);
+        Rs->Views().SetCameraData(cam, ::GameEngine::Tests::TestCameraWithEye(camera), {0.5f, 600.0f});
         View = Rs->Views().AllocateView("SkyBackdropView", cam);
         Rs->Views().SetViewRenderLayerMask(View, GameEngine::Rendering::RenderLayerMask::Default());
         Rendering::ViewClearConfig clear{};

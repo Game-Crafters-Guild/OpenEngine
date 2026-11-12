@@ -49,8 +49,8 @@
     "physics_raycast": "Single-shot physics raycast; no typed tool yet.",
     "get_terrain_debug": "Per-entity terrain dump: component, splat/heightfield stats, authored grass parameters, and the per-view grassPlacement rows — placed-blade counts, each row's liveness (isCurrent/framesSinceDeclared: a view that stops being declared keeps serving its last count, so read those first), and the always-on grass dropout tallies (zeroGrassFrames/staleArgFrames/lastDropoutFrameIndex, dated against the top-level grassFrameIndex). Raw-only because it is a diagnostic wall of numbers rather than a question. NOT covered by get_terrain_stats, which answers CBT tessellation health and carries no grass data at all.",
     "cbt_force_vertex_eval": "Forces a CBT vertex evaluation pass; a terrain-debugging primitive, not a workflow.",
-    "get_cbt_tree_audit": "CBT watertightness audit of the live tree (a ~160 MiB one-shot readback: CPU edge multiset over the decoded HeapIDs plus link, occupancy, corner-cache and draw-stream checks); a terrain-debugging primitive, not a workflow.",
-    "terrain_sculpt_dab": "Applies one terrain sculpt dab; no typed tool yet.",
+    "get_cbt_tree_audit": "CBT watertightness audit of the live tree (a ~160 MiB one-shot readback: CPU edge multiset over the decoded HeapIDs plus link, occupancy, corner-cache and draw-stream checks, and the visible leaves counted by projected area in Scene View pixels); a terrain-debugging primitive, not a workflow.",
+    "terrain_sculpt_dab": "Applies one terrain sculpt stroke; on a planet whose sculpt is refused it applies no dab and replies with the refusal; no typed tool yet.",
     "planet_page_overlay": "Places a test bump in a planet's height-page overlay; a terrain-debugging primitive for capture pairs, not a workflow.",
     "set_terrain_brush": "Configures the terrain sculpt brush; pairs with terrain_sculpt_dab, promote together.",
 

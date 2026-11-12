@@ -274,6 +274,17 @@ bool OceanSceneGrab::DeclareForView(Engine::Renderer::Pipeline::ViewDeclare& d, 
     return true;
 }
 
+void OceanSceneGrab::RequestPipeline(IDevice& device, const PipelineFormatKey& source)
+{
+    // The grab is one single-sample target in the format of the colour it grabs (EnsureTexture).
+    const bool msaa = source.RasterizationSamples > 1;
+    if (source.ColorCount == 0 || !(msaa ? EnsureResolvePipeline(device) : EnsurePipeline(device)))
+        return;
+    const RenderGraph::RGAttachmentKeyInput grab{0u, false, source.ColorFormats[0], 1u};
+    device.RequestGraphicsPipeline(msaa ? m_ResolvePipelineId : m_CopyPipelineId,
+                                   RenderGraph::DeriveFormatKey(&grab, 1u, TextureFormat{}));
+}
+
 RenderGraph::RGTexture OceanSceneGrab::ImportForSampling(RenderGraph::RGFrame& frame,
                                                          uint32_t viewId,
                                                          uint32_t frameIndex) const

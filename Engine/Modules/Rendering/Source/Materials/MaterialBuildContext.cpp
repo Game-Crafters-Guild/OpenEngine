@@ -28,6 +28,11 @@ std::filesystem::path MaterialSourceIdentity(const std::filesystem::path& materi
     return identity;
 }
 
+std::string MaterialSourceIdentityKey(const std::filesystem::path& materialPath, const MaterialBuildContext& context)
+{
+    return AssetPaths::NormalizeForRegistryKey(MaterialSourceIdentity(materialPath, context));
+}
+
 namespace
 {
 constexpr std::string_view kEngineShaderLabel = "engine";

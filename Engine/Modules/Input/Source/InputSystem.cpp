@@ -1,6 +1,7 @@
 #include "Input/InputSystem.h"
 #include "Input/KeyCodes.h"
 #include "Input/GamepadCodes.h"
+#include "Input/Gamepad/GamepadPoller.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -509,6 +510,11 @@ bool InputSystem::OnGamepadButton(int gamepadIndex, int button, bool down)
 
     pad.buttons[button] = true;
     return true;
+}
+
+GamepadRuntimeState InputSystem::GetGamepadRuntimeState() const
+{
+    return GamepadPoller::GetRuntimeState();
 }
 
 bool InputSystem::IsGamepadConnected(int gamepadIndex) const

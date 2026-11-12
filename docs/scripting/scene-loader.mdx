@@ -1,0 +1,515 @@
+---
+title: Scene loader
+description: Replace the scene a game shows or add a scene to it with one call, report the game's own generation work, and react when the new scene is revealed, fails or is cancelled.
+sidebar:
+  order: 7
+---
+
+The scene loader is the one way to replace the scene that a game shows, or to add a scene to it. A game calls `Load` with the scene's path and keeps the handle it returns. The loader reads the scene on a worker, instantiates the scene on the main thread, and raises `Revealed` when the [scene load tracker](scene-ready-to-show.mdx) says the scene is ready to show. A single load, the default, clears the world first. An additive load keeps the world and adds the scene to it (see [Add a scene to the running world](#add-a-scene-to-the-running-world)).
+
+## A map generated on top of the scene
+
+A skirmish game loads an authored base scene (sky, water, lighting, an empty terrain) and generates the map on top of it. The game registers one category for its generation and reports each step as a ticket in its own units. The loader holds the reveal until the scene's own work and the game's tickets are done and the game's gates are clear. The engine work that the generation causes, such as the models of the spawned entities, is reported by the systems that do it.
+
+:::::tabs
+::::tab[C++]
+
+```cpp title="Generate a skirmish map on top of the base scene"
+#include "Core/Engine.h"
+#include "Engine/Loading/SceneLoadInstantiated.h"
+#include "Engine/Loading/SceneLoader.h"
+#include "SceneLoadTracker/SceneLoadTracker.h"
+
+using Tracker = GameEngine::SceneLoadTracker;
+
+// Once per session, when the game module initializes.
+void SkirmishModule::Initialize(GameEngine::EngineCore& engine)
+{
+    Tracker& tracker = engine.GetSceneLoadTracker();
+    m_Generation = tracker.RegisterCategory({
+        .Id = "skirmish.generation", // owner-prefixed and stable
+        .Label = "Generating the map",
+        .Unit = Tracker::CostUnit::Items, // one generation work item
+    });
+    m_StepNames = {tracker.Intern("Shape terrain"), tracker.Intern("Place start positions"),
+                   tracker.Intern("Place forests"), tracker.Intern("Place critters and camps")};
+}
+
+// The lobby's Start button.
+void SkirmishFlow::StartMatch(const SkirmishSettings& settings)
+{
+    GameEngine::SceneLoadRequest request;
+    request.Scene = "Scenes/SkirmishBase.scene";
+    request.OnInstantiated = [this, settings](GameEngine::SceneLoadInstantiated& loaded)
+    {
+        // The world holds the new scene. What is spawned from here on counts toward this load.
+        m_Plan = SkirmishPlan::Make(settings);
+        for (size_t i = 0; i < m_Plan.Steps.size(); ++i)
+            m_Tickets[i] = m_Generation.BeginWork(m_StepNames[i], m_Plan.Steps[i].Items);
+        // A condition with no units: the fog of war built for the generated map.
+        m_FogGate = m_Generation.RegisterGate(
+            [this]
+            {
+                return m_Fog.IsBuiltFor(m_Plan.Generation)
+                           ? Tracker::GateReport{}
+                           : Tracker::GateReport{Tracker::GateState::Waiting, "Building the fog of war", 1};
+            });
+        m_Generator.Begin(loaded.World(), m_Plan); // state only: SkirmishGenerationSystem does the work
+    };
+
+    m_Load = GameEngine::EngineCore::GetInstance().GetSceneLoader().Load(std::move(request));
+    m_LoadSubs.push_back(m_Load.Revealed() += [this] { m_MissionClock.Start(); });
+    m_LoadSubs.push_back(m_Load.Failed() += [this](std::string_view reason) { ReturnToLobby(reason); });
+}
+
+// SkirmishGenerationSystem::OnUpdate: a slice of the current step each frame.
+if (m_Generator.RunSlice(world, kSliceSeconds)) // true when the step is done
+    m_Tickets[m_Generator.Step()].Complete();
+```
+
+::::
+::::tab[C#]
+
+:::caution[C# binding pending]
+A C# script starts a load with `SceneLoader.Load` (see [The API](#the-api)), but it cannot run code at `OnInstantiated` or report work to the tracker yet. These come to C# in a later version. The native calls are `SceneLoadRequest::OnInstantiated`, `SceneLoadTracker::RegisterCategory` and `Category::BeginWork`.
+:::
+
+::::
+:::::
+
+Keep each subscription that `+=` returns: it unsubscribes when it is destroyed.
+
+## What a load does
+
+`Load` queues the request and returns at once. The load starts at the next frame boundary, at the start of `EngineCore::Update`, never inside a system. Then:
+
+1. The loader waits for the project's asset scan without blocking the main thread, and reads the scene on a job worker. The read touches no world. A read that fails raises `Failed`, and the world keeps the scene it showed.
+2. On the main thread, the loader clears the primary world and instantiates the scene in one frame, then calls the request's `OnInstantiated`. An additive load does not clear the world. `SceneLoadInstantiated::World()` is the world that holds the new scene, and `Degradation()` lists the scene lines that did not apply. `Fail(reason)` refuses the scene: the load raises `Failed` with the reason and starts no user system. The refused scene stays in the primary world. After a single load, the scene shown before the load is gone.
+3. At the first load of a session, the loader starts the user systems. A later load keeps the user systems that run: `OnStart` runs once per session.
+4. On a later frame, when the tracker's snapshot is ready to show, the load is ready. A load with `PauseWorldDrawing` resumes the world in that frame instead, and is ready after 3 complete frames (see [Pause the world behind a loading cover](#pause-the-world-behind-a-loading-cover)). When the load is ready, `IsReadyToShow()` becomes true, `Progress()` is 1, and the loader raises `Ready`. The snapshot holds the models and materials that the scene resolves and every ticket and gate that `OnInstantiated` began.
+5. With the request's `Reveal` at `SceneRevealPolicy::AtReady`, the default, the loader raises `Revealed` in the same frame. With `SceneRevealPolicy::WhenGameReleases`, the load stays ready until the game calls `Reveal()` (see [Click to continue](#click-to-continue)).
+
+A load raises exactly one of `Revealed`, `Failed` and `Cancelled`, once. A load that is still in progress when the engine shuts down raises none. `Ready` comes before `Revealed`, and a load that waits for `Reveal()` can still be cancelled. A cancelled or failed load never raises `Revealed`. A newer single `Load` cancels the load in progress, before or after its clear: the older load raises `Cancelled`, and the newer one is already current, so `IsLoading()` is true in the handler. A game drops its pending state for the cancelled load in that handler, its tickets included.
+
+`IsLoading()` is true while a load of either mode is queued or in progress, also while the load waits for `Reveal()`. `IsReplacingScene()` is true while a single load is queued or in progress, also while it waits for `Reveal()`, and false for an additive load. A game that pauses its match while a scene loads reads `IsReplacingScene()` once per frame. A pause on `IsLoading()` also stops the match while an additive load adds a scene to the running world.
+
+## Pause the world behind a loading cover
+
+While a loading cover hides the screen, the world behind it still draws every frame. A camera's **World Drawing Paused** field stops this: the view that the camera drives draws no world and shows its clear color, with the game's UI over it. Culling, extraction and shadows skip the view too. Terrain textures keep uploading while the view is paused. Models and materials keep loading, and the engine builds their pipelines during the pause, so most of them are ready when the world draws again. It builds them for the view's current settings, such as the new scene's height fog and screen-space shadows. Reflections and ray-traced shadows add keywords only while the world draws: the build takes these from the view's last drawn frame, and a view that has not drawn yet builds those pipelines when the world draws. The engine also builds the pipelines of the view's `FullscreenShader` and `ComputeShader` pipeline nodes during the pause, and the scene load tracker does not report ready to show while one of them builds. A node that will not run when the world draws again, such as one that `skipWhen` skips, builds nothing. The depth copy, the ocean, grass placement and screen-space shadow passes build their pipelines during the pause too. A view that culls with the depth pyramid also builds its depth pyramid, occlusion culling and draw stream pipelines during the pause. The terrain, grass drawing and shadow culling passes ask for their pipelines only when the world draws again, and so does the culling of a view that does not use the depth pyramid. Until those pipelines are built, the frames draw without the terrain and the grass, and a frame that waits for a culling or shadow pipeline comes late. So the world must draw again behind the cover before the cover lifts. Extraction reads the field in the frame that the field is set or cleared.
+
+For a load, set the request's `PauseWorldDrawing` and keep an opaque cover up until `Revealed`. The loader then pauses the world, resumes it behind the cover, and raises `Ready` only when the frames are complete. To pause the world for anything that is not a load, set the camera field yourself: see [Pause the world without a load](#pause-the-world-without-a-load).
+
+### What the switch does
+
+:::steps
+
+1. At the next frame boundary after `Load`, the loader sets **World Drawing Paused** on every camera of the primary world. The frame in which the game calls `Load` can still draw the world, so show the cover in that frame.
+2. Once the scene is built, the loader pauses the new scene's cameras too, before it calls `OnInstantiated`. After `OnInstantiated` and the user systems' `OnStart` (step 3 of [What a load does](#what-a-load-does)), the loader also pauses the cameras that they created.
+3. When the content is ready to show, the loader clears the pauses that it set, and the world draws again behind the cover. The load is not ready yet: `IsReadyToShow()` is false, `Progress()` stays below 1, and `EstimatedSecondsRemaining()` is 0.
+4. The loader waits for 3 frames in a row in which the scene load tracker is ready to show. A frame that is not ready starts the count again. Then the load is ready: the loader raises `Ready`, and with `SceneRevealPolicy::AtReady` it raises `Revealed` in the same frame.
+5. On `Revealed`, lift the cover and start the game's own world: its simulation, timelines and particles. With `SceneRevealPolicy::WhenGameReleases`, the load waits for `Reveal()` after `Ready`, for example for the player's click.
+
+:::
+
+The tracker is not ready to show after a frame that looked up a pipeline that is still building (see [What holds the query](scene-ready-to-show.mdx#what-holds-the-query)). One ready frame is not proof that the frame drew complete. Some features ask for a pipeline only when something first comes into view or first exists, such as the first grass or the first transparent surface in view, and a feature can start a chain of work that asks for its next pipeline a frame or two after the last one was built. The count of 3 covers a chain that asks for its next pipeline up to two frames later. The loader reads each snapshot right after the engine takes it, so it does not read the snapshots one frame late as a native C++ user system does.
+
+The loader clears only the pauses that it set. A camera that was already paused when the loader came to it stays paused: a camera that the game paused before the load, or that the scene saves paused. A camera that the game creates after step 2, for example in a system's `OnUpdate` or in a C# `GameSystem`, is not paused by the loader, so it draws during the load.
+
+The loader owns its pauses until the load ends, and every end resumes them. Before the load raises `Failed`, the loader clears the pauses that it set, so the `Failed` handler sees the world draw. To keep the world hidden behind an error screen, keep the cover up, or set **World Drawing Paused** again in the handler. When a newer single load replaces the load (`Cancelled`), a newer load without `PauseWorldDrawing` resumes the cameras when it starts. A newer load with `PauseWorldDrawing` takes the pauses over: the cameras stay paused, no frame draws the world between the two loads, and the newer load resumes them when it ends.
+
+### When a build never ends
+
+The loader has no time limit. A build that never ends holds the load before the resume, and holds the count after it. The game sees a load that goes on: `IsLoading()` stays true, `IsReadyToShow()` stays false, `Progress()` stays below 1, and the load raises no `Ready` and no `Revealed`. When no work moves forward for 10 s, the scene load tracker's `GetStatus().Stalled` is true, and the engine logs the work that holds in one error line (see [Counts and the stall detail](scene-ready-to-show.mdx#counts-and-the-stall-detail)). Native code can read `Stalled` and `Describe()` and show them on the cover.
+
+The game cannot make the load reveal. It can start a newer `Load`, for example of its menu: that load cancels this one and, without `PauseWorldDrawing`, resumes the cameras. If the game lifts the cover instead, it shows the clear color while the cameras are paused, and after the resume it shows frames that skip the draws whose pipelines are still building. If the work ends later, the load still raises `Ready` and `Revealed`.
+
+:::::tabs
+::::tab[C++]
+
+```cpp title="Load behind a cover, with the world paused"
+#include "Core/Engine.h"
+#include "Engine/Loading/SceneLoader.h"
+
+void MissionFlow::LoadMission(std::filesystem::path scene)
+{
+    m_Cover.Show(); // opaque: the world draws behind it from the resume until Revealed
+    m_Load = GameEngine::EngineCore::GetInstance().GetSceneLoader().Load(
+        {.Scene = std::move(scene), .PauseWorldDrawing = true});
+    m_LoadSubs.push_back(m_Load.Revealed() += [this] { StartMission(); });
+    m_LoadSubs.push_back(m_Load.Failed() += [this](std::string_view reason) { ShowLoadError(reason); });
+}
+
+void MissionFlow::StartMission()
+{
+    m_Cover.Hide();
+    StartMatch(); // the simulation, timelines and particles start here, not at Ready
+}
+```
+
+::::
+::::tab[C#]
+
+```csharp title="Load behind a cover, with the world paused"
+using GameEngine.Scripting;
+
+SceneLoadOperation m_Load;
+
+void LoadMission(string scene)
+{
+    ShowCover(); // opaque: the world draws behind it from the resume until the load is ready
+    m_Load = SceneLoader.Load(scene, SceneRevealPolicy.AtReady, pauseWorldDrawing: true);
+}
+
+// Once per frame while the cover is up.
+void UpdateCover()
+{
+    if (m_Load.Id == 0 || SceneLoader.IsLoading())
+        return;
+    bool shown = SceneLoader.IsReadyToShow(m_Load);
+    m_Load = new SceneLoadOperation();
+    if (shown)
+        StartMission(); // lifts the cover and starts the match
+    else
+        ShowLoadError(); // failed or cancelled: the loader resumed the cameras, and the engine log gives the reason
+}
+```
+
+::::
+:::::
+
+### Pause the world while the Player loads the startup scene
+
+The Player loads the scene that `startupScene` in `game.config` names, and the game gets no operation for that load. The Player always sets `PauseWorldDrawing` on that load, so the world starts to draw when the first scene is ready. Until then, no frame draws the world through the scene's cameras, the camera that the Player adds when the scene has none, or a camera that a native system creates in `OnStart`. A camera that the game creates later, in a system's `OnUpdate` or in a C# `GameSystem`, draws during the load.
+
+A game that wants a cover shows it from its first frame, and lifts or fades it when the startup load is revealed. The game's systems start after the scene is built, with its cameras already paused, so show the cover in the first frame of a system and lift it when `IsLoading()` becomes false. The loader resumes the world when the content is ready to show, and reveals the load when complete frames draw. Between the two, the world draws behind the cover. On a cold start this can take seconds, while the last pipelines build. A game with no cover shows no world until the resume. Before the scene is built, the world has no camera and draws nothing. After that, the paused cameras show their clear color, with the game's UI over it. From the resume to the reveal, parts of the world can be missing. If the startup scene fails, the Player exits. Until the load ends, do not set or clear **World Drawing Paused** on the cameras: the loader owns the pause.
+
+### Pause the world without a load
+
+The camera field also pauses the world outside a load, for example behind a menu that covers the screen. The game sets **World Drawing Paused** on the cameras, and the loader does not touch a camera that is already paused when the loader comes to it. To lift a cover after such a pause:
+
+1. Clear the field on the cameras while the cover is still up.
+2. From the next frame, count the frames in a row in which the scene load tracker's `IsReadyToShow()` is true. A frame that is not ready sets the count to zero. The snapshot of the frame that clears the field comes from before the world drew, so that frame does not count. A native C++ user system in the Player or in the editor's play mode reads each snapshot one frame late, so for such a system the first frame after the clear does not count either.
+3. After 3 ready frames in a row, lift the cover.
+
+```cpp title="Every camera of a world"
+// Every camera of the world draws no world while paused is true.
+void SetWorldDrawingPaused(GameEngine::ECS::World& world, bool paused)
+{
+    world.Query<ECS::Write<GameEngine::Components::Camera>>().Each(
+        [paused](ECS::EntityHandle, GameEngine::Components::Camera& camera) { camera.WorldDrawingPaused = paused; });
+}
+```
+
+### What the cover does not wait for
+
+The scene load tracker holds for the work of its categories: the scene read and its instantiation, model and material resolves, shader compiles, draw variants, pipeline builds, and texture uploads. No category tracks the work that settles over several frames after the world draws:
+
+- terrain pages that stream in,
+- the terrain's subdivision, which splits and merges over several frames until it is at rest,
+- the history of temporal effects,
+- the [exposure](../rendering/exposure.mdx), which adapts over time.
+
+This work goes on behind the cover while the ready frames are counted, and it can still settle after the reveal. The count covers what the first view draws. A pipeline that the game needs later, for example when the camera turns, builds while the game runs.
+
+### What it costs
+
+The pipelines that the first frames ask for build after the content is ready, not during the load, so the cover stays up longer. On a large menu scene with terrain, grass, and water, a development build with a cold pipeline cache keeps the cover up for about two seconds more. With a warm cache, the builds are faster and the wait is shorter. The world draws full frames behind the cover while these pipelines build. These frames share the GPU and the job workers with the builds and with the cover's own drawing, so an animation on the cover can stutter.
+
+The field is saved with the scene. The Camera inspector shows it as **World Drawing Paused**, below **Visible Layers**.
+
+## The API
+
+:::::tabs
+::::tab[C++]
+
+```cpp title="Engine/Loading/SceneLoader.h"
+class SceneLoader // EngineCore::GetInstance().GetSceneLoader(); main thread
+{
+public:
+    SceneLoadOperation Load(SceneLoadRequest request);
+    bool IsLoading() const;
+    bool IsReplacingScene() const;
+};
+```
+
+```cpp title="Engine/Loading/SceneLoadRequest.h"
+enum class SceneLoadMode : uint8_t { Single, Additive };
+enum class SceneRevealPolicy : uint8_t { AtReady, WhenGameReleases };
+
+struct SceneLoadRequest
+{
+    std::filesystem::path Scene; // relative to the project's asset root
+    SceneLoadMode Mode = SceneLoadMode::Single;
+    std::function<void(SceneLoadInstantiated&)> OnInstantiated;
+    SceneRevealPolicy Reveal = SceneRevealPolicy::AtReady;
+    bool PauseWorldDrawing = false; // pause the world until the frames after the resume are complete
+};
+```
+
+```cpp title="Engine/Loading/SceneLoadInstantiated.h"
+class SceneLoadInstantiated
+{
+public:
+    ECS::World& World();
+    const Scene::SceneDegradation& Degradation() const;
+    void Fail(std::string reason);
+};
+```
+
+```cpp title="Engine/Loading/SceneLoadOperation.h"
+class SceneLoadOperation // a shared handle, cheap to copy; main thread
+{
+public:
+    float Progress() const;                    // 0 to 1; never goes down
+    bool IsProgressShown() const;              // draw the bar while true
+    double EstimatedSecondsRemaining() const;  // until ready to show; 0 once ready
+    bool IsReadyToShow() const;
+    void Reveal();                             // releases a WhenGameReleases load
+    Event<>& Ready() const;
+    Event<>& Revealed() const;
+    Event<>& Cancelled() const;
+    Event<std::string_view>& Failed() const;
+};
+```
+
+::::
+::::tab[C#]
+
+```csharp title="GameEngine.Scripting.SceneLoader"
+public enum SceneRevealPolicy : byte { AtReady, WhenGameReleases }
+
+public struct SceneLoadOperation { public ulong Id; } // 0 is no load
+
+public static class SceneLoader // main thread
+{
+    public static SceneLoadOperation Load(string scene, SceneRevealPolicy reveal = SceneRevealPolicy.AtReady,
+                                          bool pauseWorldDrawing = false);
+    public static bool IsLoading();
+    public static float Progress(SceneLoadOperation load);                   // 0 to 1; never goes down
+    public static bool IsProgressShown(SceneLoadOperation load);             // draw the bar while true
+    public static double EstimatedSecondsRemaining(SceneLoadOperation load); // until ready to show; 0 once ready
+    public static bool IsReadyToShow(SceneLoadOperation load);
+    public static void Reveal(SceneLoadOperation load);                      // releases a WhenGameReleases load
+}
+```
+
+A script keeps the operation that `Load` returns and gives it to the other calls. The calls answer as the native getters do. Call them on the main thread, where a system's update runs today. A call from another thread throws `EngineCallException`.
+
+- The operation stays readable after its load ends.
+- After a newer `SceneLoader.Load`, a call with an older operation throws `EngineCallException`. The message tells you to use the operation that the newest `Load` returned. A single load that native code starts also cancels the script's load, but the script's operation stays readable, and its `IsReadyToShow` stays false.
+- `new SceneLoadOperation()` is no load: it answers 0 and false, and `Reveal` does nothing.
+
+:::caution[No events in C# yet]
+C# has no `Ready`, `Revealed`, `Cancelled` or `Failed` event, no failure reason and no `OnInstantiated` yet. A script polls instead. A load that failed or was cancelled ends with `IsLoading()` false while `IsReadyToShow` is false, and the engine log gives the reason. The events come to C# in a later version.
+
+C# has no `IsReplacingScene` yet. `IsLoading()` is also true while an additive load that native code started runs.
+:::
+
+::::
+:::::
+
+A default-constructed `SceneLoadOperation` belongs to no load: its events are never raised. A game can keep one as a member and subscribe after it assigns the handle that `Load` returns.
+
+## Show load progress
+
+The engine draws no loading UI. The game draws its own menu from the operation's getters and events, and it decides when the menu shows the new scene.
+
+A loading menu reads four getters of the operation once per frame:
+
+- `Progress()` is the value of the bar, from 0 to 1. Before ready, it never goes down and it rises at most 0.1 in any 250 ms. It is 1 from the frame the scene is ready to show, also when the bar was low. When new work joins the load, such as the shaders of a model that has just landed, the bar keeps its value and continues more slowly toward the new end.
+- `IsProgressShown()` tells the menu that the load is long enough for a bar. It becomes true once the load has run for 1 s and `EstimatedSecondsRemaining()` plus the time so far is 2.5 s or more, and then it stays true. A short load stays false, and a menu can show no bar for it.
+- `EstimatedSecondsRemaining()` is the tracker's estimate of the seconds until the scene is ready to show. It comes from the work that is open and from how fast each category of work has run in this session. A load with `PauseWorldDrawing` reports 0 from the frame it resumes the world until it is ready.
+- `IsReadyToShow()` is true from the frame the scene is ready to show.
+
+The engine does not wait for the bar. With `SceneRevealPolicy::AtReady`, the load raises `Revealed` in the frame it is ready. A menu that shows the full bar first, or waits for the player, uses `SceneRevealPolicy::WhenGameReleases` (see [Click to continue](#click-to-continue)).
+
+:::::tabs
+::::tab[C++]
+
+```cpp title="LoadingMenu.cpp"
+#include "Core/Engine.h"
+#include "Engine/Loading/SceneLoader.h"
+
+#include <cmath>
+#include <format>
+#include <string>
+
+void LoadingMenu::Open(const std::filesystem::path& scene)
+{
+    m_Load = EngineCore::GetInstance().GetSceneLoader().Load({.Scene = scene});
+    m_Subscriptions.push_back(m_Load.Revealed() += [this] { Close(); });
+}
+
+// Once per frame while the menu is open. m_Bar and m_Status are Labels of the menu.
+void LoadingMenu::Update()
+{
+    if (!m_Load.IsProgressShown())
+        return;
+    constexpr int kCells = 20;
+    const int filled = static_cast<int>(std::lround(m_Load.Progress() * kCells));
+    m_Bar->SetText(std::string(filled, '#') + std::string(kCells - filled, '-'));
+    m_Status->SetText(m_Load.IsReadyToShow()
+                          ? std::string("Ready")
+                          : std::format("About {:.0f} s left", std::ceil(m_Load.EstimatedSecondsRemaining())));
+}
+```
+
+::::
+::::tab[C#]
+
+```csharp title="LoadingScreen.cs"
+using System;
+using GameEngine.Scripting;
+
+SceneLoadOperation m_Load;
+
+void Open(string scene)
+{
+    m_Load = SceneLoader.Load(scene);
+}
+
+// Once per frame while the screen is open. ShowBar and ShowStatus write the screen's labels.
+// This screen assumes that no native code starts an additive load: such a load keeps IsLoading() true.
+void UpdateLoadingScreen()
+{
+    if (!SceneLoader.IsLoading())
+    {
+        Close(); // revealed, or it failed or was cancelled: the engine log gives the reason
+        return;
+    }
+    if (!SceneLoader.IsProgressShown(m_Load))
+        return;
+    const int cells = 20;
+    int filled = (int)MathF.Round(SceneLoader.Progress(m_Load) * cells);
+    ShowBar(new string('#', filled) + new string('-', cells - filled));
+    ShowStatus(SceneLoader.IsReadyToShow(m_Load)
+                   ? "Ready"
+                   : $"About {Math.Ceiling(SceneLoader.EstimatedSecondsRemaining(m_Load))} s left");
+}
+```
+
+::::
+:::::
+
+A category that a game registers declares `DefaultSecondsPerUnit`, the wall time one of its units takes on a typical machine. The tracker uses it until the category's completed tickets have run for 0.5 s or have 16 units, then uses the rate it measured. The rate counts the time a ticket runs, after `Start()`, and not the time it waits in the queue. A ticket that is dropped before `Complete()`, such as the read of a scene that fails, adds none of its time. A category that declares none uses 0.1 s per unit. A started ticket advances by its elapsed time until it reaches 90 % of its estimate, and a waiting gate counts as 1 s of work that advances the same way.
+
+## Click to continue
+
+A menu that shows the full bar and waits for the player sets the request's `Reveal` to `SceneRevealPolicy::WhenGameReleases`. The load then stays ready until the game calls `Reveal()`:
+
+- `Ready` is raised once, in the frame the scene is ready to show. `Progress()` is 1 in its handlers.
+- `Reveal()` releases the load, and the loader raises `Revealed` at the next frame boundary. A call before ready, or from a `Ready` handler, reveals the load in the frame of `Ready`.
+- `Reveal()` does nothing for an `AtReady` load and for a load that was revealed, failed, or was cancelled.
+
+While the load waits, the new scene is in the primary world and the user systems run. For a single load, `IsReplacingScene()` stays true until `Revealed`, so a game that pauses its match while a scene loads keeps it paused.
+
+:::::tabs
+::::tab[C++]
+
+```cpp title="Show the full bar and wait for a click"
+void LoadingMenu::Open(const std::filesystem::path& scene)
+{
+    m_Load = EngineCore::GetInstance().GetSceneLoader().Load(
+        {.Scene = scene, .Reveal = SceneRevealPolicy::WhenGameReleases});
+    m_Subscriptions.push_back(m_Load.Ready() += [this] { OnLoadReady(); });
+    m_Subscriptions.push_back(m_Load.Revealed() += [this] { Close(); });
+}
+
+void LoadingMenu::OnLoadReady()
+{
+    // A load too short for a bar needs no click: Reveal() here reveals it in this frame.
+    if (!m_Load.IsProgressShown())
+    {
+        m_Load.Reveal();
+        return;
+    }
+    // Update in the sample above keeps drawing the bar, now full, until the player clicks.
+    m_Continue->SetEnabled(true);
+}
+
+// The click handler of the menu's Continue button.
+void LoadingMenu::OnContinueClicked()
+{
+    m_Load.Reveal();
+}
+```
+
+::::
+::::tab[C#]
+
+```csharp title="Show the full bar and wait for a key"
+void Open(string scene)
+{
+    m_Load = SceneLoader.Load(scene, SceneRevealPolicy.WhenGameReleases);
+}
+
+// Once per frame while the screen is open, with UpdateLoadingScreen above.
+void UpdateContinue()
+{
+    if (!SceneLoader.IsReadyToShow(m_Load))
+        return;
+    // A load too short for a bar needs no key. Reveal shows the new scene at the next frame boundary.
+    if (!SceneLoader.IsProgressShown(m_Load) || Input.WasKeyPressed(Key.Space))
+        SceneLoader.Reveal(m_Load);
+}
+```
+
+A script polls, so it sees `IsReadyToShow` in its first update after the load is ready, and `Reveal` shows the new scene at the next frame boundary. The `Ready` event comes to C# in a later version.
+
+::::
+:::::
+
+## Add a scene to the running world
+
+An open-world game adds a town as the player walks toward it. A strategy game adds a prepared encounter to the map that the player sees. Each sets the request's `Mode` to `SceneLoadMode::Additive`. Then:
+
+- The loader reads the scene on a worker, as for a single load. In one frame on the main thread, it adds the scene's entities to the primary world and calls `OnInstantiated`. The entities that the world holds stay, with the generated content of their scene.
+- The world's clock runs on. The load keeps the world's simulation tick and does not apply the tick that the scene file was saved at.
+- Nothing pauses. The game plays and draws the world while the load runs, and the resolve slice keeps its default (see [The frame budget](#the-frame-budget)). A game that pauses its match or shows a loading screen for a single load does neither for an additive load: `IsLoading()` is true and `IsReplacingScene()` is false while it runs.
+- The scene's entity ids get a unique `import_N.` prefix, so they do not collide with the ids of the entities that the world holds.
+- `Progress()`, `IsReadyToShow()`, `Ready` and `Revealed` work as for a single load. The load is ready to show when the tracker's snapshot is ready: the new entities are in the world, their models and materials are resolved, and the tickets that `OnInstantiated` began are done. The snapshot also holds the other work in progress, such as the models of entities that the game spawned and that are not bound yet. That work can make the load ready later, never earlier.
+- `Fail(reason)` in `OnInstantiated` fails the load. The scene's entities stay in the world, beside the entities that the world held. An instantiate that stops at an error also fails the load, and the entities that it added before the error stay in the world.
+
+One load runs at a time. At each frame boundary, the loader takes the loads requested since the last frame in call order:
+
+| Request | No load in progress | A load in progress |
+| --- | --- | --- |
+| Single | Starts. | Starts. The load in progress raises `Cancelled`. |
+| Additive | Starts. | Raises `Failed` and leaves the world untouched. The load in progress goes on. |
+
+So of two additive loads requested in one frame, the first starts and the second fails. A single load cancels an additive load in progress, also after its entities are in the world, and its clear removes them. A game that adds several scenes starts each additive load after the one before it raises `Revealed`, `Failed` or `Cancelled`.
+
+:::::tabs
+::::tab[C++]
+
+```cpp title="Add a town to the running world"
+void TownStreamer::AddTown(const std::filesystem::path& town)
+{
+    m_Load = EngineCore::GetInstance().GetSceneLoader().Load({.Scene = town, .Mode = SceneLoadMode::Additive});
+    m_Subscriptions.push_back(m_Load.Revealed() += [this] { OpenTownGate(); });
+    m_Subscriptions.push_back(m_Load.Failed() += [this](std::string_view reason) { OnTownFailed(reason); });
+}
+```
+
+::::
+::::tab[C#]
+
+:::caution[C# binding pending]
+C# has no `Mode` yet: `SceneLoader.Load` makes a single load. Additive loads come to C# in a later version. The native field is `SceneLoadRequest::Mode`.
+:::
+
+::::
+:::::
+
+## What the loader reports
+
+| Category | Work | Holds ready |
+| --- | --- | --- |
+| `scene.read` | The read of the scene file on a worker, named by the file. | Yes |
+| `scene.instantiate` | The clear of a single load, the instantiate and `OnInstantiated`, named by the file. | Yes |
+
+A read that fails, an instantiate that fails and a scene that `OnInstantiated` refuses count as failed in their category. When a load is cancelled after its read is queued on the job system, the read runs to its end and counts in `scene.read` like any other read. A load cancelled while it waits for the project scan gives up its read ticket, and that ticket counts as failed.
+
+## The frame budget
+
+While a single load runs, the resolve service's slice on the main thread takes what the frame bound of 33 ms leaves after the rest of the frame's main-thread work. So a scene's models bind faster behind a load than during play. An additive load runs during play, so it leaves the slice at its default. The time the main thread waits for the GPU, for a free frame slot and for the next swapchain image, is not work. On a frame that the GPU bounds, the slice uses that time. The Metal and Vulkan devices report this wait. On Direct3D 12 and WebGPU, the wait counts as work. When no single load runs, the slice is back to its default of 2 ms.

@@ -377,7 +377,48 @@ TEST_F(SplineNetworkTest, ArmsSortCounterClockwiseFromAboveWhicheverMemberComesF
             EXPECT_NEAR(node.Arms[i].AngleRadians / std::numbers::pi_v<float32>, expected[i], 1e-3f) << i;
         EXPECT_NEAR(node.Arms[0].Forward.z, -1.0f, 1e-3f);
         EXPECT_NEAR(node.Arms[1].Forward.x, 1.0f, 1e-3f);
+        // The -X arm has a z of +0 or -0. Its angle is exactly pi with every libm.
+        EXPECT_EQ(node.Arms[3].AngleRadians, std::numbers::pi_v<float32>);
     }
+}
+
+// A road turned half a turn about +Y keeps a z of about 1e-7 in its tangent from the rounding of
+// the turn. Its arm along -X is still at pi and sorts last, whichever way it turns.
+TEST_F(SplineNetworkTest, AHalfTurnedRoadSortsItsMinusXArmLast)
+{
+    for (const float32 turn : {std::numbers::pi_v<float32>, -std::numbers::pi_v<float32>})
+    {
+        ECS::World world;
+        AddRoad({{0.0f, 0.0f, -50.0f}, {0.0f, 0.0f, 50.0f}}, false, &world);
+        const ECS::EntityHandle turned = AddRoad({{-50.0f, 0.0f, 0.0f}, {50.0f, 0.0f, 0.0f}}, false, &world);
+        world.GetComponentForWrite<Components::WorldTransform>(turned)->Basis =
+            Components::Transform::FromTRS(Mathematics::WorldPosition(),
+                                           Mathematics::Quaternion::FromAxisAngle(Vector3(0.0f, 1.0f, 0.0f), turn),
+                                           Vector3(1.0f, 1.0f, 1.0f))
+                .Basis;
+        Derive(&world);
+        ASSERT_EQ(Nodes().size(), 1u);
+        const SplineNode& node = Nodes()[0];
+        ASSERT_EQ(node.ArmCount, 4u);
+        const SplineECS::SplineNodeArm& last = node.Arms[3];
+        EXPECT_EQ(last.Member, turned) << turn;
+        EXPECT_EQ(last.Direction, 1) << turn;
+        EXPECT_NE(last.Forward.z, 0.0f) << turn;
+        EXPECT_EQ(last.AngleRadians, std::numbers::pi_v<float32>) << turn;
+    }
+}
+
+// The arms of two diagonal roads that cross lie in the four quadrants: -3pi/4, -pi/4, pi/4, 3pi/4.
+TEST_F(SplineNetworkTest, DiagonalArmsSortCounterClockwiseInAllFourQuadrants)
+{
+    AddRoad({{-50.0f, 0.0f, -50.0f}, {50.0f, 0.0f, 50.0f}});
+    AddRoad({{-50.0f, 0.0f, 50.0f}, {50.0f, 0.0f, -50.0f}});
+    Derive();
+    ASSERT_EQ(Nodes().size(), 1u);
+    ASSERT_EQ(Nodes()[0].ArmCount, 4u);
+    const float32 expected[4] = {-0.75f, -0.25f, 0.25f, 0.75f};
+    for (uint32 i = 0; i < 4; ++i)
+        EXPECT_NEAR(Nodes()[0].Arms[i].AngleRadians / std::numbers::pi_v<float32>, expected[i], 1e-3f) << i;
 }
 
 TEST_F(SplineNetworkTest, ABridgeIsSplitLevelUntilAnAtGradeRuleJoinsIt)

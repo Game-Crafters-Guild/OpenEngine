@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { ToolDef } from "../registry.js";
-import { proxyTool } from "./proxy.js";
+import { definedOnly, proxyTool } from "./proxy.js";
 
 // Mirrors kDefaultUITreeMaxTextLength (Apps/Editor/Source/DebugServer/UITreeDump.h). The editor
 // applies its own default when the parameter is absent; this keeps the two tools that advertise it
@@ -9,6 +9,22 @@ const kDefaultMaxTextLength = 512;
 const kMaxTextLengthHelp =
   `Cut text values longer than this (default ${kDefaultMaxTextLength}; 0 = whole text). A cut node ` +
   `carries textTruncated:true, so a substring you do not find is genuinely absent unless that flag is set`;
+
+// GLFW key codes start at 32, so an integer from 0 to 9 names no key: send_key reads it as the
+// digit key. The CLI passes the token of `--key 8` as the number 8.
+function digitKeyAsName(key: string | number): string | number {
+  return typeof key === "number" && Number.isInteger(key) && key >= 0 && key <= 9 ? String(key) : key;
+}
+
+// GLFW key codes run from 32 to 348 (GLFW_KEY_LAST). The schema refuses an integer that is
+// neither a digit nor a GLFW key code.
+function namesAKey(key: string | number): boolean {
+  return typeof key !== "number" || (key >= 0 && key <= 9) || (key >= 32 && key <= 348);
+}
+
+function noKeyMessage(key: string | number): { message: string } {
+  return { message: `key ${key} names no key: key takes a key name, a digit 0 to 9, or a GLFW key code from 32 to 348` };
+}
 
 export const tools: ToolDef[] = [
   proxyTool({
@@ -115,15 +131,33 @@ export const tools: ToolDef[] = [
   }),
 
   proxyTool({
+    name: "send_scroll",
+    category: "ui",
+    description:
+      "Turn the mouse wheel in the editor, along the path a real wheel takes: the editor UI, a game HUD, then the game's input in play mode (a wheel zoom over the Game View). With a target, the pointer moves there and the wheel starts on the next frame; without one, the wheel turns at the pointer. count puts the delta on that many frames, one delta per frame, as a wheel turned over several frames does. The reply follows the last delta and names the element under the pointer. Modifiers travel with the wheel as the platform reports them, so mods=control is the Ctrl+wheel item resize gesture (Assets grid icon size) with no key press first. Only the editor's pointer moves: the desktop cursor stays where it is.",
+    schema: {
+      elementId: z.string().optional().describe("Element ID whose center the wheel turns over. Must have a layout box with extent on at least one axis"),
+      x: z.coerce.number().optional().describe("X in the editor window's UI coordinates (the logical pixels get_ui_tree reports), not desktop pixels. Give x and y together"),
+      y: z.coerce.number().optional().describe("Y in the editor window's UI coordinates (the logical pixels get_ui_tree reports), not desktop pixels. Give x and y together"),
+      dy: z.coerce.number().optional().describe("Vertical wheel steps per frame (one notch of the wheel is 1); positive is a wheel up (away from the user). Default 0"),
+      dx: z.coerce.number().optional().describe("Horizontal wheel steps per frame (one notch of the wheel is 1). Default 0; dx or dy must be non-zero"),
+      count: z.coerce.number().int().optional().describe("Frames that each take the dx/dy delta (default 1, at most 240)"),
+      mods: z.union([z.string(), z.array(z.string())]).optional().describe("Modifier(s) held during the wheel: shift | control | alt | super (string or array)"),
+      windowIndex: z.coerce.number().optional().describe("Editor window (default 0, the main window)"),
+    },
+  }),
+
+  proxyTool({
     name: "send_key",
     category: "ui",
     description: "Inject a keyboard event into the editor along the path a real key takes: global editor shortcuts first, then the focused element, then a running game's HUD and input, then editor actions. Use it for keyboard-driven behavior like Tab focus traversal, Enter commit and Escape cancel, and for typing into a game HUD while play mode runs. Pair with take_screenshot to observe focus highlights.",
     schema: {
-      key: z.union([z.string(), z.number()]).describe("Key name (Tab, Enter, Return, NumpadEnter, Escape, Space, Backspace, Delete, Home, End, Up, Down, Left, Right, A-Z, 0-9) or a raw GLFW keycode integer"),
+      key: z.union([z.string(), z.number()]).refine(namesAKey, noKeyMessage).describe("Key name (Tab, Enter, Return, NumpadEnter, Escape, Space, Backspace, Delete, Home, End, Up, Down, Left, Right, A-Z, 0-9) or a raw GLFW keycode integer (32 to 348); an integer from 0 to 9 is the digit key, and any other integer is refused"),
       mods: z.union([z.string(), z.array(z.string())]).optional().describe("Modifier(s): shift | control | alt | super (string or array). Shift+Tab tabs backwards."),
       action: z.enum(["tap", "press", "release", "repeat"]).optional().describe("tap (default: press + release next frame), press, release, or repeat (OS key-repeat edge, e.g. held Tab)"),
-      count: z.coerce.number().optional().describe("tap only: number of taps to issue (e.g. Tab x3). Default 1."),
+      count: z.coerce.number().optional().describe("tap only: number of taps to issue (e.g. Tab x3), 1 to 64. Each tap is a press on one frame and a release on the next, so a game reads each tap as its own press; the reply comes after the last release. Default 1."),
     },
+    params: (args) => definedOnly({ ...args, key: digitKeyAsName(args.key) }),
   }),
 
   proxyTool({

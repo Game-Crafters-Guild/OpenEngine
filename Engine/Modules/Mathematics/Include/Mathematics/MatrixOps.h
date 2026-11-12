@@ -6,6 +6,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
+#include "Mathematics/MulAdd.h"
 #include "Mathematics/Types.h"
 
 namespace GameEngine {
@@ -126,6 +127,23 @@ inline Matrix4x4 MakeOrthographicLH_ZO_ReverseZ(float left,
 }
 
 // Basic linear algebra helpers.
+
+// out = a * b for column-major 4x4 matrices of 16 floats. Each element is one chain of MulAdd,
+// so the result has the same bits on every platform. out must not alias a or b.
+inline void MultiplyColumnMajor4x4(const float* a, const float* b, float* out)
+{
+    for (int col = 0; col < 4; ++col)
+    {
+        for (int row = 0; row < 4; ++row)
+        {
+            const float* bColumn = b + col * 4;
+            out[col * 4 + row] = Math::MulAdd(a[12 + row], bColumn[3],
+                                              Math::MulAdd(a[8 + row], bColumn[2],
+                                                           Math::MulAdd(a[row], bColumn[0], a[4 + row] * bColumn[1])));
+        }
+    }
+}
+
 inline Matrix4x4 Transpose(const Matrix4x4& m)
 {
     return Matrix4x4(glm::transpose(m.GetGLM()));

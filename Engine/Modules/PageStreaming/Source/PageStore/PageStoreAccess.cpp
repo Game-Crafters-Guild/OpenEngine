@@ -59,17 +59,17 @@ PageFetchOutcome PageStoreAccess::Fetch(const PageAddress& address) const
     return outcome;
 }
 
-void PageStoreAccess::AddChange(const std::optional<PageSampleRect>& level0Rect)
+void PageStoreAccess::AddChange(const std::optional<PageStoreCommit>& commit)
 {
     std::lock_guard lock(m_ChangesMutex);
     const uint64 version = m_Version.load(std::memory_order_relaxed) + 1u;
-    m_Changes.push_back(ReadableChange{version, level0Rect});
+    m_Changes.push_back(ReadableChange{version, commit});
     if (m_Changes.size() > kReadableChangesKept)
         m_Changes.pop_front();
     m_Version.store(version, std::memory_order_release);
 }
 
-uint64 PageStoreAccess::ReadableSince(uint64 since, std::vector<PageSampleRect>& outRects, bool& outWhole) const
+uint64 PageStoreAccess::ReadableSince(uint64 since, std::vector<PageStoreCommit>& outCommits, bool& outWhole) const
 {
     std::lock_guard lock(m_ChangesMutex);
     const uint64 version = m_Version.load(std::memory_order_relaxed);
@@ -81,8 +81,8 @@ uint64 PageStoreAccess::ReadableSince(uint64 since, std::vector<PageSampleRect>&
     {
         if (change.Version <= since)
             continue;
-        if (change.Level0Rect)
-            outRects.push_back(*change.Level0Rect);
+        if (change.Commit)
+            outCommits.push_back(*change.Commit);
         else
             outWhole = true;
     }
@@ -142,17 +142,17 @@ std::string PageStoreAccess::OpenForPatch(const std::filesystem::path& file, Pag
     return error;
 }
 
-std::string PageStoreAccess::AddPresentPages(std::span<const uint8> present)
+std::string PageStoreAccess::AddPresentPages(std::span<const PageAddress> added)
 {
     std::unique_lock lock(m_Mutex);
-    std::string error = m_Writer.AddPresentPages(present);
+    std::string error = m_Writer.AddPresentPages(added);
     m_Writing = m_Writing && error.empty();
     return error;
 }
 
-void PageStoreAccess::Commit(const PageSampleRect& level0Rect)
+void PageStoreAccess::Commit(const PageSampleRect& level0Rect, uint32 level)
 {
-    AddChange(level0Rect);
+    AddChange(PageStoreCommit{level0Rect, level});
 }
 
 std::string PageStoreAccess::Finish()

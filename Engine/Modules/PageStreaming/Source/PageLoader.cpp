@@ -5,6 +5,8 @@
 #include "PageStreaming/PageStore/PageStoreFormat.h"
 #include "PageStreaming/PageStore/PageStoreReader.h"
 
+#include "Bc5PageCodec.h"
+
 #include "AssetCore/Asset.h"
 #include "Assets/AssetIOService.h"
 #include "JobSystem/WorkStealingThreadPool.h"
@@ -15,6 +17,7 @@
 #include <cassert>
 #include <mutex>
 #include <string_view>
+#include <utility>
 
 namespace GameEngine::PageStreaming
 {
@@ -121,7 +124,7 @@ private:
 };
 
 // The decode continuation of a store page: its stored bytes to its loaded bytes.
-void DecodeStorePage(const PageFetchHolder& holder, const Vector<uint8>& bytes)
+void DecodeStorePage(const PageFetchHolder& holder, const ByteBuffer& bytes)
 {
     PendingPageFetch& fetch = holder.Fetch();
     if (IsSet(fetch.Cancel))
@@ -156,7 +159,7 @@ void ReadStorePage(AssetIOService& io, const PageFetchHolder& holder)
     read.RangeOffset = store.BaseOffset() + entry->Offset;
     read.RangeBytes = store.Layout().StoredBytes(*entry);
     read.CancelRequested = fetch.Cancel;
-    read.ProcessData = [holder](Vector<uint8> bytes) {
+    read.ProcessData = [holder](ByteBuffer bytes) {
         DecodeStorePage(holder, bytes);
         return SharedPtr<Asset>(); // a page is not an asset
     };
@@ -195,6 +198,54 @@ PageFetchOutcome FetchPlanes(const PageSource& source, const PageAddress& addres
             return own;
         }
         payload->insert(payload->end(), own.Bytes->begin(), own.Bytes->end());
+    }
+    outcome.Bytes = std::move(payload);
+    return outcome;
+}
+
+// Page `address` of `planes`, generated on the calling thread: a plane of texels is filled in its
+// place in the payload; a Bc5 plane is filled as its two channels, then encoded to its blocks here.
+PageFetchOutcome FetchGeneratedPlanes(const GeneratedPagePlanes& planes, uint32 payloadBytes, const PageAddress& address)
+{
+    PageFetchOutcome outcome;
+    outcome.Address = address;
+    auto payload = std::make_shared<std::vector<uint8>>(payloadBytes);
+    std::vector<std::vector<uint8>> unencoded(planes.Formats.size());
+    std::vector<std::span<uint8>> spans;
+    spans.reserve(planes.Formats.size());
+    std::size_t offset = 0;
+    for (std::size_t plane = 0; plane < planes.Formats.size(); ++plane)
+    {
+        const PageFieldFormat format = planes.Formats[plane];
+        const uint32 stride = PageStrideTexels(format);
+        const std::size_t texelBytes = static_cast<std::size_t>(stride) * stride * PageTexelBytes(format);
+        if (IsBlockFormat(format))
+        {
+            unencoded[plane].resize(texelBytes);
+            spans.push_back(unencoded[plane]);
+        }
+        else
+            spans.emplace_back(payload->data() + offset, texelBytes);
+        offset += PagePayloadBytes(format);
+    }
+    if (!planes.Fill(address, spans))
+    {
+        outcome.Absent = true; // outside the generated pyramid
+        return outcome;
+    }
+    const Bc5PageCodec codec;
+    EncodedPage encoded;
+    offset = 0;
+    for (std::size_t plane = 0; plane < planes.Formats.size(); ++plane)
+    {
+        const PageFieldFormat format = planes.Formats[plane];
+        if (IsBlockFormat(format))
+        {
+            assert(format == PageFieldFormat::Bc5 && "a generated block plane is Bc5");
+            codec.Encode(address.Level, unencoded[plane], PageFootprint{}, encoded);
+            std::copy(encoded.Bytes.begin(), encoded.Bytes.end(), payload->begin() + static_cast<std::ptrdiff_t>(offset));
+        }
+        offset += PagePayloadBytes(format);
     }
     outcome.Bytes = std::move(payload);
     return outcome;
@@ -271,10 +322,17 @@ void PageFetcher::Reuse(std::shared_ptr<const std::vector<uint8>> bytes)
 
 uint32 PageSource::PayloadBytes() const
 {
-    assert((Store || Generated || !Planes.empty()) && "a page source has a store, a generated provider or planes");
+    assert((Store || Generated || !Planes.empty() || GeneratedPlanes) &&
+           "a page source has a store, a generated provider, planes or generated planes");
+    uint32 bytes = 0;
+    if (GeneratedPlanes)
+    {
+        for (PageFieldFormat format : GeneratedPlanes->Formats)
+            bytes += PagePayloadBytes(format);
+        return bytes;
+    }
     if (Planes.empty())
         return PagePayloadBytes(Store ? Store->Layout().Header.Format : PageFieldFormat::HeightSteps);
-    uint32 bytes = 0;
     for (const std::shared_ptr<const PageStoreAccess>& plane : Planes)
         bytes += PagePayloadBytes(plane->Format());
     return bytes;
@@ -298,6 +356,8 @@ PageFetchOutcome FetchPage(const PageSource& source, const PageAddress& address)
 {
     if (!source.Planes.empty())
         return FetchPlanes(source, address);
+    if (source.GeneratedPlanes)
+        return FetchGeneratedPlanes(*source.GeneratedPlanes, source.PayloadBytes(), address);
     PageFetchOutcome outcome;
     outcome.Address = address;
     if (source.Store && !source.Store->Layout().FindPresent(address))

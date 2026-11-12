@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -71,6 +72,12 @@ struct AchievementState
     bool Unlocked = false;
     uint32_t Current = 0;
     uint32_t Target = 0;
+};
+
+struct SaveFileInfo
+{
+    uint64_t SizeBytes = 0;
+    std::chrono::system_clock::time_point LastWriteTime; // UTC
 };
 
 struct Config

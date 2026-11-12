@@ -13,6 +13,7 @@
 #include <utility>
 #include <vector>
 
+namespace GameEngine::Components { struct SplineExtrude; }
 namespace GameEngine::ECS { class World; }
 namespace GameEngine::Mathematics
 {
@@ -43,6 +44,9 @@ struct ConformMissTally
     // Rays that crossed a mesh whose BVH is still being built. They are not misses: the rebuild
     // holds (HoldForPendingBvh) and casts them again once the BVH is published.
     uint32 PendingBvh = 0;
+    // Terrain hits whose height came from a coarse page (Scene::PickHit::CoarseHeight). A finer page can
+    // land there later and move the hit.
+    uint32 CoarseHeights = 0;
 
     // The first missing sample is kept as the witness: it is the one a reader can
     // navigate to, and later misses in the same run are almost always its neighbours.
@@ -87,11 +91,23 @@ inline constexpr float32 kGroundSurfaceLiftMeters = 0.05f;
 // null in a headless or pre-init process, where a tiled read reports no terrain.
 [[nodiscard]] const TerrainECS::TerrainModifierSystem* ResolveTerrainModifierSystem();
 
-// A digest of the terrain ground the conform rays measure: the seven pick inputs (translation, SizeX, SizeZ,
-// HeightScale, Domain) and the heightfield's content and identity. It does not cover mesh ground or a planet's drawn
-// surface. Pass `modifierSystem` to read the composed ground of a tiled terrain, or null to conform by raycast.
-[[nodiscard]] uint64 ConformSurfaceRevision(
-    ECS::World& world, const TerrainECS::TerrainModifierSystem* modifierSystem);
+// A digest of the ground in `reach` (GroundReach): the terrain set, the bakes there with `modifierSystem`, and per
+// terrain that meets it, its overlay version and its page stamp. It changes when a conform ray in the reach can read
+// other heights, and also when a page or an overlay step away from the reach changes.
+[[nodiscard]] uint64 ConformSurfaceRevision(ECS::World& world,
+                                            const TerrainECS::TerrainModifierSystem* modifierSystem,
+                                            const Mathematics::AABB& reach);
+
+// A reach that every terrain, page and bake meets. Its ConformSurfaceRevision changes when any ground
+// changes: the stamp ConformGroundWatch compares.
+[[nodiscard]] Mathematics::AABB UnboundedConformRun();
+
+// The ground a recipe reads past its run's bounds, in meters: the slack of the terrain sampling at
+// the edge of what it reads.
+inline constexpr float32 kGroundReadSlackMetres = 4.0f;
+
+// `runBounds` widened by `reachMetres` in XZ: the box a recipe reads the ground in.
+[[nodiscard]] Mathematics::AABB GroundReach(const Mathematics::AABB& runBounds, float32 reachMetres);
 
 // The surface term of one recipe's rebuild-settle observation: `worldDigest` when `readsSurface`, else 0, so terrain
 // movement does not reset the settle clock of a recipe that does not read the ground. `readsSurface` is
@@ -120,10 +136,11 @@ enum class ConformSurfaceReadiness : uint8
 {
     // No terrain near the run: the recipe places against what is there.
     NoSurface,
-    // A terrain is declared but neither of its data handles resolves yet. This is permanent only when
-    // terrain extraction does not run, for example with no render device.
+    // A terrain is declared but neither of its data handles resolves yet, or a tiled terrain's height pages
+    // have no source yet. This is permanent only when terrain extraction does not run, for example with no
+    // render device.
     Provisioning,
-    // Every declared terrain has resolvable surface data.
+    // Every declared terrain has resolvable surface data, and every tiled one a page source.
     Ready
 };
 

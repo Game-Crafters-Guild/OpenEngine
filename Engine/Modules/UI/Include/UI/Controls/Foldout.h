@@ -26,6 +26,10 @@ class Foldout : public UIElement
     void SetIconClass(const std::string& iconClass);
     const std::string& GetIconClass() const { return m_IconClass; }
 
+    // Shows a short status pill after the title (for example "Generating"), with the tooltip on the
+    // pill. Empty text hides it. The rows below do not move.
+    void SetHeaderBadge(const std::string& text, const std::string& tooltip);
+
     // Expanded/collapsed state
     void SetExpanded(bool expanded);
     bool IsExpanded() const { return m_Expanded; }
@@ -75,6 +79,7 @@ class Foldout : public UIElement
     UIElement* m_Chevron = nullptr;
     UIElement* m_Icon = nullptr;
     Label* m_TitleLabel = nullptr;
+    Label* m_Badge = nullptr;
     UIElement* m_ContentContainer = nullptr;
 
     ExpandedChangedHandler m_OnExpandedChanged;

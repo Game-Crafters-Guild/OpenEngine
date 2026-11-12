@@ -13,6 +13,8 @@
 #include "Engine/Rendering/RenderServices.h"
 #include "Engine/Rendering/HlodRuntime.h"
 #include "ECSModules/Rendering/Systems/HLODSelectSystem.h"
+#include "ECSModules/Rendering/Systems/TransformHierarchySystem.h"
+#include "Components/Hierarchy.h"
 
 #include "Assets/HlodBakeDriver.h"
 #include "Assets/HlodCache.h"
@@ -33,6 +35,7 @@
 #include "ECS/World.h"
 
 #include "Rendering/Camera/CameraTypes.h"
+#include "TestCameraEye.h"
 
 #include <cstring>
 #include <filesystem>
@@ -85,9 +88,7 @@ struct ModelBank {
 
 Components::WorldTransform WorldAt(float x, float y, float z) {
     Components::WorldTransform wt{};
-    wt.matrix[12] = x;
-    wt.matrix[13] = y;
-    wt.matrix[14] = z;
+    wt.Position = Mathematics::WorldPosition{x, y, z};
     return wt;
 }
 
@@ -105,6 +106,9 @@ Components::LocalBounds BoxBounds(float extent) {
         Mathematics::Vector3{extent, extent, extent});
     return lb;
 }
+
+// The near and culling range of the CameraAt() cameras.
+constexpr Rendering::CameraRanges kCameraAtRanges{0.1f, 1000.0f};
 
 // A camera at (x,y,z) with an identity projection (projScaleY = proj[1][1] = 1).
 Rendering::CameraData CameraAt(float x, float y, float z) {
@@ -159,14 +163,9 @@ void AddVolume(ECS::World& world) {
 
 constexpr int kMemberCount = 10;
 
-// Bake + reconcile a fresh world; returns the .gehlod path (caller removes it).
-std::filesystem::path BakeAndReconcile(RenderServices& rs, ECS::World& world, ModelBank& bank,
-                                       Hlod::HlodRuntime& runtime, const GUID& matGuid,
-                                       float clusterX, const char* fileName) {
-    AddVolume(world);
-    SpawnCluster(world, bank, kMemberCount, clusterX, matGuid);
-    world.ProcessCommands();
-
+// Bake + reconcile the world as it is; returns the .gehlod path (caller removes it).
+std::filesystem::path BakeAndReconcileWorld(RenderServices& rs, ECS::World& world, ModelBank& bank,
+                                            Hlod::HlodRuntime& runtime, const char* fileName) {
     const std::filesystem::path out = TempPath(fileName);
     std::filesystem::remove(out);
     const Hlod::BakeDriverResult bake = Hlod::BakeHlodForWorld(world, bank.Resolver(), out);
@@ -174,6 +173,83 @@ std::filesystem::path BakeAndReconcile(RenderServices& rs, ECS::World& world, Mo
 
     runtime.ReconcileScene(world, rs.GetMeshGPURegistry(), out, "test", bank.Resolver());
     return out;
+}
+
+// Bake + reconcile a fresh world; returns the .gehlod path (caller removes it).
+std::filesystem::path BakeAndReconcile(RenderServices& rs, ECS::World& world, ModelBank& bank,
+                                       Hlod::HlodRuntime& runtime, const GUID& matGuid,
+                                       float clusterX, const char* fileName) {
+    AddVolume(world);
+    SpawnCluster(world, bank, kMemberCount, clusterX, matGuid);
+    world.ProcessCommands();
+    return BakeAndReconcileWorld(rs, world, bank, runtime, fileName);
+}
+
+ECS::EntityHandle FindTagged(ECS::World& world, const std::string& name) {
+    ECS::EntityHandle found{};
+    world.Query<ECS::Read<SceneEntityTag>>().Each([&](ECS::EntityHandle e, const SceneEntityTag& tag) {
+        if (tag.View() == name)
+            found = e;
+    });
+    return found;
+}
+
+// A still scene: the hierarchy and the select system run each frame and nothing moves.
+// The destroyed member is alone in its archetype, so its chunk empties and gets no column stamp.
+void ExpectDestroyedMemberMakesClusterStale(Rendering::IDevice* device, bool parented, const char* fileName) {
+    RenderServices rs;
+    ASSERT_TRUE(rs.Initialize(device));
+    auto world = std::make_unique<ECS::World>(nullptr);
+    ModelBank bank;
+    Hlod::HlodRuntime& runtime = rs.GetHlodRuntime();
+    TransformHierarchySystem hierarchy;
+    HLODSelectSystem select(&rs);
+    constexpr float kDt = 1.0f / 60.0f;
+
+    AddVolume(*world);
+    SpawnCluster(*world, bank, kMemberCount, 0.0f, GUID::Derive(GUID::Null(), fileName));
+    world->ProcessCommands();
+    const ECS::EntityHandle lone = FindTagged(*world, "member_0");
+    ASSERT_TRUE(lone.IsValid());
+    world->AddComponent(lone, Transform::FromTRS(Mathematics::WorldPosition{0.0, 0.0, 0.0}, Mathematics::Quaternion{},
+                                                 Mathematics::Vector3{1.0f, 1.0f, 1.0f}));
+    if (parented) {
+        // An identity root, so the member is a hierarchy node and its world pose does not change.
+        ECS::Entity anchor = world->Create();
+        anchor.Set(Transform{});
+        anchor.Set(WorldTransform{});
+        world->AddComponent(lone, Parent{anchor.GetHandle()});
+    }
+    world->ProcessCommands();
+    // The first update writes every pose. Do it before the reconcile records the member versions.
+    hierarchy.Update(*world, kDt);
+    const std::filesystem::path out = BakeAndReconcileWorld(rs, *world, bank, runtime, fileName);
+    ASSERT_EQ(runtime.GetClusters().size(), 1u);
+
+    Rendering::CameraId cam = rs.Views().AllocateCamera("HlodDestroyedMemberCam");
+    rs.Views().SetViewpointCamera(cam);
+    rs.Views().SetCameraData(cam, ::GameEngine::Tests::TestCameraWithEye(CameraAt(0.0f, 0.0f, -2000.0f)), kCameraAtRanges);
+    for (int frame = 0; frame < 3; ++frame) {
+        hierarchy.Update(*world, kDt);
+        select.Update(*world, kDt);
+    }
+    ASSERT_TRUE(runtime.GetClusters()[0].ProxyActive);
+    ASSERT_FALSE(runtime.GetClusters()[0].Stale);
+
+    world->DestroyEntity(lone);
+    world->ProcessCommands();
+    for (int frame = 0; frame < 2; ++frame) {
+        hierarchy.Update(*world, kDt);
+        select.Update(*world, kDt);
+    }
+    EXPECT_TRUE(runtime.GetClusters()[0].Stale) << "a destroyed member must mark the cluster stale";
+    EXPECT_FALSE(runtime.GetClusters()[0].ProxyActive) << "the proxy must not stand in for a destroyed member";
+
+    runtime.Retire(*world, rs.GetMeshGPURegistry());
+    world.reset();
+    rs.Shutdown();
+    std::error_code ec;
+    std::filesystem::remove(out, ec);
 }
 
 } // namespace
@@ -319,7 +395,7 @@ TEST(HlodRuntimeReconcile, SelectSystemFlipsResidencyByCoverage) {
     constexpr float kDt = 1.0f / 60.0f;
 
     // FAR: coverage = radius * 1 / dist ~ 10 / 2000 = 0.005 < enter (0.08) -> proxy.
-    rs.Views().SetCameraData(cam, CameraAt(0.0f, 0.0f, -2000.0f));
+    rs.Views().SetCameraData(cam, ::GameEngine::Tests::TestCameraWithEye(CameraAt(0.0f, 0.0f, -2000.0f)), kCameraAtRanges);
     select.Update(*world, kDt);
 
     ASSERT_TRUE(rs.ConsumeHlodResidencyExtractionPending())
@@ -337,7 +413,7 @@ TEST(HlodRuntimeReconcile, SelectSystemFlipsResidencyByCoverage) {
     }
 
     // NEAR: camera close to the cluster -> coverage high -> members back.
-    rs.Views().SetCameraData(cam, CameraAt(9.0f, 0.0f, -12.0f));
+    rs.Views().SetCameraData(cam, ::GameEngine::Tests::TestCameraWithEye(CameraAt(9.0f, 0.0f, -12.0f)), kCameraAtRanges);
     select.Update(*world, kDt);
 
     EXPECT_TRUE(rs.ConsumeHlodResidencyExtractionPending());
@@ -420,7 +496,7 @@ TEST(HlodRuntimeReconcile, MovedMemberFallsBackToMembersOnlyAndStaysStale) {
     constexpr float kDt = 1.0f / 60.0f;
 
     // Far -> proxy-active.
-    rs.Views().SetCameraData(cam, CameraAt(0.0f, 0.0f, -2000.0f));
+    rs.Views().SetCameraData(cam, ::GameEngine::Tests::TestCameraWithEye(CameraAt(0.0f, 0.0f, -2000.0f)), kCameraAtRanges);
     select.Update(*world, kDt);
     ASSERT_TRUE(runtime.GetClusters()[0].ProxyActive);
     (void)rs.ConsumeHlodResidencyExtractionPending();
@@ -430,11 +506,11 @@ TEST(HlodRuntimeReconcile, MovedMemberFallsBackToMembersOnlyAndStaysStale) {
     const ECS::EntityHandle moved = runtime.GetClusters()[0].Members.front();
     auto* wt = world->GetComponentForWrite<WorldTransform>(moved);
     ASSERT_NE(wt, nullptr);
-    wt->matrix[12] += 50.0f;
+    wt->Position.X += 50.0;
     wt->Version += 1u;
 
     // Next select tick: the edit is detected -> cluster stale -> members-only.
-    rs.Views().SetCameraData(cam, CameraAt(0.0f, 0.0f, -2000.0f));
+    rs.Views().SetCameraData(cam, ::GameEngine::Tests::TestCameraWithEye(CameraAt(0.0f, 0.0f, -2000.0f)), kCameraAtRanges);
     select.Update(*world, kDt);
 
     EXPECT_TRUE(runtime.GetClusters()[0].Stale) << "a moved member must mark the cluster stale";
@@ -452,7 +528,7 @@ TEST(HlodRuntimeReconcile, MovedMemberFallsBackToMembersOnlyAndStaysStale) {
 
     // Staleness is persistent: even a far camera never re-engages the proxy.
     (void)rs.ConsumeHlodResidencyExtractionPending();
-    rs.Views().SetCameraData(cam, CameraAt(0.0f, 0.0f, -3000.0f));
+    rs.Views().SetCameraData(cam, ::GameEngine::Tests::TestCameraWithEye(CameraAt(0.0f, 0.0f, -3000.0f)), kCameraAtRanges);
     select.Update(*world, kDt);
     EXPECT_TRUE(runtime.GetClusters()[0].Stale);
     EXPECT_FALSE(runtime.GetClusters()[0].ProxyActive) << "stale is sticky until rebake + reload";
@@ -462,4 +538,18 @@ TEST(HlodRuntimeReconcile, MovedMemberFallsBackToMembersOnlyAndStaysStale) {
     rs.Shutdown();
     std::error_code ec;
     std::filesystem::remove(out, ec);
+}
+
+TEST(HlodRuntimeReconcile, DestroyedParentedMemberMakesClusterStaleInStillScene) {
+    auto device = CreateVulkanDeviceFast();
+    if (!device)
+        GTEST_SKIP() << "No Vulkan device available";
+    ExpectDestroyedMemberMakesClusterStale(device.get(), true, "hlod_reconcile_destroyed_parented.gehlod");
+}
+
+TEST(HlodRuntimeReconcile, DestroyedRootMemberMakesClusterStaleInStillScene) {
+    auto device = CreateVulkanDeviceFast();
+    if (!device)
+        GTEST_SKIP() << "No Vulkan device available";
+    ExpectDestroyedMemberMakesClusterStale(device.get(), false, "hlod_reconcile_destroyed_root.gehlod");
 }

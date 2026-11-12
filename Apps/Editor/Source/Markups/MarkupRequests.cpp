@@ -158,7 +158,7 @@ VolumeGeometry ReadGeometry(const ECS::World& world, ECS::EntityHandle entity)
     if (const auto* transform = world.GetComponent<Components::Transform>(entity))
     {
         const Mathematics::Vector3 scale = transform->GetScale();
-        geometry.Center = transform->GetPosition();
+        geometry.Center = transform->GetPosition() - Mathematics::WorldPosition{};
         geometry.Rotation = transform->GetRotation();
         if (geometry.Shape == MarkupVolumeShape::Sphere)
         {
@@ -377,7 +377,7 @@ Components::Transform VolumeTransform(MarkupVolumeShape shape, const Mathematics
     const Mathematics::Vector3 scale = shape == MarkupVolumeShape::Sphere
                                            ? Mathematics::Vector3(halfExtents.x, halfExtents.x, halfExtents.x) * 2.0f
                                            : halfExtents * 2.0f;
-    return Components::Transform::FromTRS(center, rotation, scale);
+    return Components::Transform::FromTRS(Mathematics::WorldPosition::FromVector3(center), rotation, scale);
 }
 
 std::optional<json> ReadRotation(const json& value, Mathematics::Quaternion& outRotation)
@@ -500,7 +500,7 @@ std::string FreeNumberedTitle(ECS::World& world, const std::string& head, std::s
 // after it with the next index no mark-up's title uses, by the same author with the same status;
 // the new entities are appended to `created` and returned as Exclude members.
 std::vector<MarkupRegionMember> AddExclusionRegions(ECS::World& world, ECS::EntityHandle region,
-                                                    const float32 (&regionWorld)[16], const NewMarkup& parent,
+                                                    const Mathematics::Matrix4x4& regionWorld, const NewMarkup& parent,
                                                     std::span<const std::vector<Vector2>> exclusions,
                                                     float32 extrudeHeight, int64 nowUnix,
                                                     std::vector<ECS::EntityHandle>& created)
@@ -512,14 +512,15 @@ std::vector<MarkupRegionMember> AddExclusionRegions(ECS::World& world, ECS::Enti
         NewMarkup exclusion = parent;
         exclusion.Title = FreeNumberedTitle(world, parent.Title, " exclusion", index);
         exclusion.Description.clear();
-        const RegionPlacement placement = NewRegionPlacement(exclusions[i], regionWorld, regionWorld[13]);
+        const RegionPlacement placement = NewRegionPlacement(exclusions[i], regionWorld, regionWorld[3].y);
         exclusion.Transform = placement.Local;
         const ECS::EntityHandle entity = AddMarkupEntity(world, exclusion, nowUnix);
         if (!entity.IsValid())
             continue;
         world.AddComponentImmediate(entity, Components::Parent{region});
-        AddRegionParts(world, entity, placement.World.matrix, exclusions[i], Spline::SplineType::Linear,
-                       extrudeHeight);
+        AddRegionParts(world, entity,
+                       placement.World.ToMatrix4x4(placement.World.GetPosition() - Mathematics::WorldPosition{}),
+                       exclusions[i], Spline::SplineType::Linear, extrudeHeight);
         created.push_back(entity);
         members.push_back({entity, MarkupMemberMode::Exclude});
     }
@@ -586,10 +587,12 @@ void AddRegionMarkup(ECS::World& world, const NewMarkup& added, const NewRegion&
     if (!entity.IsValid())
         return;
     created.push_back(entity);
-    AddRegionParts(world, entity, added.Transform.matrix, region.Knots, region.Type, region.ExtrudeHeight);
+    const Mathematics::Matrix4x4 placed =
+        added.Transform.ToMatrix4x4(added.Transform.GetPosition() - Mathematics::WorldPosition{});
+    AddRegionParts(world, entity, placed, region.Knots, region.Type, region.ExtrudeHeight);
     std::vector<MarkupRegionMember> members = region.Members;
     const std::vector<MarkupRegionMember> exclusions = AddExclusionRegions(
-        world, entity, added.Transform.matrix, added, region.Exclusions, region.ExtrudeHeight, nowUnix, created);
+        world, entity, placed, added, region.Exclusions, region.ExtrudeHeight, nowUnix, created);
     members.insert(members.end(), exclusions.begin(), exclusions.end());
     SetRegionMembers(world, entity, members);
 }
@@ -609,7 +612,9 @@ void AddNewMarkup(ECS::World& world, const NewMarkup& added, const NewRegion* re
     if (!entity.IsValid())
         return;
     if (path)
-        AddPathParts(world, entity, added.Transform.matrix, path->Points, path->Type);
+        AddPathParts(world, entity,
+                     added.Transform.ToMatrix4x4(added.Transform.GetPosition() - Mathematics::WorldPosition{}),
+                     path->Points, path->Type);
     else
         world.AddComponentImmediate(entity, MarkupVolume{shape, {}});
     created.push_back(entity);
@@ -775,7 +780,7 @@ json CreateMarkup(const MarkupRequestContext& context, const json& params)
             return *refusal;
         const float32 groundY =
             MarkupTerrainHeightAt(*context.World, MarkupECS::RegionLabelPoint(region.Knots)).value_or(0.0f);
-        added.Transform = NewRegionPlacement(region.Knots, Components::WorldTransform{}.matrix, groundY).Local;
+        added.Transform = NewRegionPlacement(region.Knots, Mathematics::Matrix4x4::Identity(), groundY).Local;
     }
     else
     {
@@ -1119,13 +1124,12 @@ void AddExclusionsToRegion(const MarkupRequestContext& context, ECS::EntityHandl
     parent.Component.Color[0] = parent.Component.Color[1] = parent.Component.Color[2] = parent.Component.Color[3] = 0.0f;
     parent.Author = author;
     const float32 height = world.GetComponent<MarkupRegion>(region)->ExtrudeHeight;
-    Components::WorldTransform regionWorld{};
-    std::copy_n(MarkupPlacement(world, region).Data(), 16, regionWorld.matrix);
+    const Mathematics::Matrix4x4 regionWorld = MarkupPlacement(world, region);
     std::vector<ECS::EntityHandle> created;
     std::vector<MarkupRegionMember> members = CurrentMembers(world, region);
     const auto attach = [&]() {
         const std::vector<MarkupRegionMember> added =
-            AddExclusionRegions(world, region, regionWorld.matrix, parent, exclusions, height, nowUnix, created);
+            AddExclusionRegions(world, region, regionWorld, parent, exclusions, height, nowUnix, created);
         members.insert(members.end(), added.begin(), added.end());
     };
     if (!context.Undo)

@@ -4,6 +4,7 @@
 #include "Engine/Rendering/FrameOrchestrator.h"
 #include "Engine/Rendering/RenderServices.h"
 #include "UI/Controls/InspectorNotice.h"
+#include "UI/StyleUtil.h"
 
 #include <algorithm>
 #include <memory>
@@ -14,15 +15,7 @@ namespace GameEngine::Editor
 {
 namespace
 {
-constexpr const char* kHiddenClass = "hidden";
 constexpr const char* kStyleAssetPath = "UI/controls/ViewOverlay/RenderPipelineStandInNotice.css";
-void SetShown(UIElement& element, bool shown)
-{
-    if (shown)
-        element.RemoveClass(kHiddenClass);
-    else
-        element.AddClass(kHiddenClass);
-}
 
 // The names, quoted and separated by commas.
 std::string QuotedList(const std::vector<std::string>& names)
@@ -82,7 +75,7 @@ void RenderPipelineStandInNotice::Present(ViewOverlayView /*view*/, UIElement& l
     notice->AddClass("inspector-notice-opaque");
     notice->AddClass("render-pipeline-notice");
     notice->AddClass("render-pipeline-stand-in-notice");
-    notice->AddClass(kHiddenClass);
+    UIUtil::SetShown(*notice, false);
     notice->RequestSubtreeStyleAssetPath(kStyleAssetPath, "editor");
     notice->SetTitle("Render pipeline refused");
     m_Notices.push_back(UIElement::MakeWeakRef(notice.get()));
@@ -92,7 +85,7 @@ void RenderPipelineStandInNotice::Present(ViewOverlayView /*view*/, UIElement& l
     wait->AddClass("inspector-notice-opaque");
     wait->AddClass("render-pipeline-notice");
     wait->AddClass("render-pipeline-waiting-note");
-    wait->AddClass(kHiddenClass);
+    UIUtil::SetShown(*wait, false);
     wait->RequestSubtreeStyleAssetPath(kStyleAssetPath, "editor");
     wait->SetTitle("Waiting for scripts");
     m_WaitNotes.push_back(UIElement::MakeWeakRef(wait.get()));
@@ -139,7 +132,7 @@ void RenderPipelineStandInNotice::ShowRefusal(const std::string& text)
     {
         EditorUI::InspectorNotice* notice = weak.Get();
         notice->SetText(text);
-        SetShown(*notice, !text.empty());
+        UIUtil::SetShown(*notice, !text.empty());
     }
 }
 
@@ -149,7 +142,7 @@ void RenderPipelineStandInNotice::ShowWait(const std::string& text)
     {
         EditorUI::InspectorNotice* note = weak.Get();
         note->SetText(text);
-        SetShown(*note, !text.empty());
+        UIUtil::SetShown(*note, !text.empty());
     }
 }
 

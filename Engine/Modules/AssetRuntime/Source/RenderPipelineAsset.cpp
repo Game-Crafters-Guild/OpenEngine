@@ -54,7 +54,7 @@ bool RenderPipelineAsset::Load()
     return ok;
 }
 
-bool RenderPipelineAsset::LoadFromData(const Vector<uint8>& data)
+bool RenderPipelineAsset::LoadFromData(std::span<const uint8> data)
 {
     m_Errors.clear();
     m_Doc = RenderPipelineDocument{};

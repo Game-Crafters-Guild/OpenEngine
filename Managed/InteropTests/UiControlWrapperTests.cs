@@ -71,12 +71,56 @@ namespace GameEngine.ManagedInteropTests
             Assert.That(Find<Ui.TextField>("f", "textfield"), Is.Not.Null);
             Assert.That(Find<Ui.Dropdown>("d", "dropdown"), Is.Not.Null);
             Assert.That(Find<Ui.ScrollView>("v", "scrollview"), Is.Not.Null);
+            Assert.That(Find<Ui.ProgressBar>("p", "progressbar"), Is.Not.Null);
 
             Assert.That(GE_TestUI_AddElement("plain", "uielement", out ulong plainId), Is.EqualTo(0));
             Ui.Element? plain = Ui.FindElement("plain");
             Assert.That(plain, Is.Not.Null);
             Assert.That(plain!.GetType(), Is.EqualTo(typeof(Ui.Element)));
             _ = plainId;
+        }
+
+        /// <summary>
+        /// A progress bar's Value goes through the float value exports. The clamp to [0, max]
+        /// is the native control's, pinned by ProgressBarTests in UIControlTests.
+        /// </summary>
+        [Test]
+        public void ProgressBarValueRoundTripsThroughTheFloatExports()
+        {
+            Ui.ProgressBar bar = Find<Ui.ProgressBar>("load", "progressbar");
+
+            bar.Value = 0.25f;
+            Assert.That(bar.Value, Is.EqualTo(0.25f));
+
+            bar.Value = 0.75f;
+            Assert.That(bar.Value, Is.EqualTo(0.75f));
+        }
+
+        /// <summary>
+        /// Max and Indeterminate go through their own exports: a new max clamps the value down
+        /// and a max that is not positive is refused. GameUIElementHandleTests in UITests drives
+        /// the same exports on the real control.
+        /// </summary>
+        [Test]
+        public void ProgressBarMaxAndIndeterminateGoThroughTheirExports()
+        {
+            Ui.ProgressBar bar = Find<Ui.ProgressBar>("hp", "progressbar");
+            Assert.That(bar.Max, Is.EqualTo(1f));
+
+            bar.Max = 100f;
+            bar.Value = 80f;
+            bar.Max = 50f;
+            Assert.That(bar.Max, Is.EqualTo(50f));
+            Assert.That(bar.Value, Is.EqualTo(50f));
+
+            bar.Max = 0f;
+            Assert.That(bar.Max, Is.EqualTo(50f));
+
+            Assert.That(bar.Indeterminate, Is.False);
+            bar.Indeterminate = true;
+            Assert.That(bar.Indeterminate, Is.True);
+            bar.Indeterminate = false;
+            Assert.That(bar.Indeterminate, Is.False);
         }
 
         /// <summary>

@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -344,7 +345,7 @@ TEST(TerrainMaxDepth, PlanarCapReachesTheProvisionedLattice)
     const Terrain lakeside = MakePlanar(576.0f, 576.0f, 1.0f);
     EXPECT_EQ(ResolveTerrainMaxDepth(lakeside, {}, false), 21u);
 
-    // Every single-heightfield terrain: the cap's leg equals the lattice spacing the sizing plan
+    // Every one-tile terrain: the cap's leg equals the lattice spacing the sizing plan
     // provisions, whatever the authored size and density.
     const float sizes[] = {100.0f, 300.0f, 576.0f, 700.0f, 1000.0f};
     const float densities[] = {0.5f, 1.0f};
@@ -353,8 +354,7 @@ TEST(TerrainMaxDepth, PlanarCapReachesTheProvisionedLattice)
         {
             const GameEngine::TerrainECS::TerrainSizingPlan plan =
                 GameEngine::TerrainECS::DeriveTerrainSizingPlan(size, size, density);
-            ASSERT_EQ(plan.Source, GameEngine::TerrainECS::TerrainHeightSource::Single)
-                << size << " m at " << density;
+            ASSERT_EQ(plan.TotalTiles, 1u) << size << " m at " << density;
             const uint32_t cap = ResolveTerrainMaxDepth(MakePlanar(size, size, density), {}, false);
             EXPECT_NEAR(PlanarCapLegMetres(size, cap), plan.MetresPerTexelNear,
                         plan.MetresPerTexelNear * 1e-4f)
@@ -372,7 +372,7 @@ TEST(TerrainMaxDepth, PlanarTiledCapFollowsTheTileLattice)
     // the finest leg is 3000 / 2^12 = 0.73 m on the 0.78 m lattice.
     const GameEngine::TerrainECS::TerrainSizingPlan plan =
         GameEngine::TerrainECS::DeriveTerrainSizingPlan(3000.0f, 400.0f, 1.0f);
-    ASSERT_NE(plan.Source, GameEngine::TerrainECS::TerrainHeightSource::Single);
+    ASSERT_GT(plan.TotalTiles, 1u);
     ASSERT_FLOAT_EQ(plan.MetresPerTexelNear, 0.78125f);
     EXPECT_EQ(ResolveTerrainMaxDepth(MakePlanar(3000.0f, 400.0f, 1.0f), {}, false), 25u);
 }
@@ -423,7 +423,7 @@ TEST(TerrainMaxDepth, PlanarTiledCapKeepsEveryImportSampleOnTheOverhangingGrid)
     // lattice cap, 21, whose 1 m legs show every one.
     const GameEngine::TerrainECS::TerrainSizingPlan plan =
         GameEngine::TerrainECS::DeriveTerrainSizingPlan(576.0f, 576.0f, 2.0f);
-    ASSERT_NE(plan.Source, GameEngine::TerrainECS::TerrainHeightSource::Single);
+    ASSERT_GT(plan.TotalTiles, 1u);
     const float gridMetres =
         static_cast<float>(std::max(plan.TilesPerAxisX, plan.TilesPerAxisZ)) * plan.TileWorldSize;
     ASSERT_FLOAT_EQ(gridMetres, 1024.0f);
@@ -456,6 +456,13 @@ TEST(TerrainPresets, EveryPresetStartsAtTheDefaultTarget)
     for (const TerrainPreset preset : {TerrainPreset::SmallPlanar, TerrainPreset::LargePlanar,
                                        TerrainPreset::Planet5km, TerrainPreset::Planet50km})
         EXPECT_FLOAT_EQ(MakeTerrainPreset(preset).TargetPixelError, 11.0f);
+}
+
+TEST(TerrainPresets, APlanarPresetIsFlatAtItsTransform)
+{
+    for (const TerrainPreset preset : {TerrainPreset::SmallPlanar, TerrainPreset::LargePlanar})
+        EXPECT_EQ(MakeTerrainPreset(preset).BaseSource, GameEngine::Components::TerrainBaseSource::Flat)
+            << "preset " << static_cast<int>(preset);
 }
 
 TEST(TerrainPresets, LargePlanarTilesAndHoldsTexelDensity)
@@ -651,10 +658,9 @@ TEST(TerrainDebugView, DefaultsOffAndValuesAreLockstep)
 
 TEST(TerrainDebugView, SurfaceParamsDefaultsTakeNoOptionalBranch)
 {
-    // A terrain that sets nothing takes no analytic, debug or atlas branch in cbt_surface.glsl,
-    // because every optional CBTSurfaceParams field defaults to 0. The struct size and field
-    // offsets are pinned by the static_assert in CBTLayout.h and by CBTLayoutTests.
-    EXPECT_EQ(CBTSurfaceParams{}.SphereAnalyticCount, 0u);
+    // A terrain that sets nothing takes no debug or atlas branch in cbt_surface.glsl, because
+    // every optional CBTSurfaceParams field defaults to 0. The struct size and field offsets
+    // are pinned by the static_assert in CBTLayout.h and by CBTLayoutTests.
     EXPECT_EQ(CBTSurfaceParams{}.DebugMode, 0u);
     EXPECT_EQ(CBTSurfaceParams{}.AtlasBacked, 0u);
     EXPECT_EQ(CBTSurfaceParams{}.AtlasDim, 0u);
@@ -1725,10 +1731,10 @@ TerrainSurfaceRulesEffect AuthoredRuleSet()
     fx.Rules[0].Conditions[0].Min = 34.5f;
     fx.Rules[0].Conditions[0].Max = 72.25f;
     fx.Rules[0].Conditions[0].Feather = 6.5f;
-    fx.Rules[0].Conditions[1].Kind = TerrainRuleConditionKind::HeightNormalized;
-    fx.Rules[0].Conditions[1].Min = 0.125f;
-    fx.Rules[0].Conditions[1].Max = 0.875f;
-    fx.Rules[0].Conditions[1].Feather = 0.0625f;
+    fx.Rules[0].Conditions[1].Kind = TerrainRuleConditionKind::HeightMeters;
+    fx.Rules[0].Conditions[1].Min = 12.5f;
+    fx.Rules[0].Conditions[1].Max = 87.5f;
+    fx.Rules[0].Conditions[1].Feather = 6.25f;
 
     fx.Rules[1].MaterialSlot = 3;
     fx.Rules[1].Strength = 0.25f;
@@ -2184,7 +2190,7 @@ TEST(TerrainEntityProvisioning, APlanarTerrainGetsGrassAndTheScenesDefaultSurfac
     EXPECT_EQ(volumes[0], provisioned.SurfaceRulesVolume);
     const auto* rules = world.GetComponent<C::TerrainSurfaceRulesEffect>(volumes[0]);
     ASSERT_NE(rules, nullptr);
-    const auto defaults = GameEngine::TerrainECS::MakeDefaultTerrainSurfaceRules();
+    const auto defaults = GameEngine::TerrainECS::MakeDefaultTerrainSurfaceRules(0.0f, preset.HeightScale);
     ASSERT_GT(defaults.RuleCount, 0u);
     EXPECT_EQ(rules->RuleCount, defaults.RuleCount);
     EXPECT_EQ(std::memcmp(rules->Rules, defaults.Rules, sizeof(defaults.Rules)), 0);
@@ -2202,7 +2208,100 @@ TEST(TerrainEntityProvisioning, APlanarTerrainGetsGrassAndTheScenesDefaultSurfac
     EXPECT_EQ(GlobalSurfaceRuleVolumes(world).size(), 1u);
 }
 
-TEST(TerrainEntityProvisioning, ASingleTileTerrainCollidesAndAPlanetGetsItsReliefAndNoRules)
+namespace
+{
+
+// A terrain created at Height Scale 128, then given a 0 to 1200 m heightmap at Height Scale 1:
+// its one map is baked and its range committed, as the extraction system does. Returns the
+// default rules volume.
+GameEngine::ECS::EntityHandle ProvisionThenAssignTheHill(World& world)
+{
+    namespace C = GameEngine::Components;
+    auto& svc = GameEngine::TerrainECS::TerrainService::Get();
+    C::Terrain config = GameEngine::CBTTerrainECS::MakeTerrainPreset(GameEngine::CBTTerrainECS::TerrainPreset::SmallPlanar);
+    config.HeightScale = 128.0f;
+    const auto terrainEntity = world.CreateEntity();
+    const auto provisioned = GameEngine::TerrainECS::ProvisionTerrainEntity(world, terrainEntity, config, C::TerrainPlanetRelief{});
+    EXPECT_EQ(provisioned.Error, "");
+
+    GameEngine::Terrain::TerrainConfig cfg{};
+    cfg.HeightmapWidth = 65;
+    cfg.HeightmapHeight = 65;
+    cfg.WorldSizeX = 64.0f;
+    cfg.WorldSizeZ = 64.0f;
+    cfg.HeightScale = 1.0f;
+    cfg.LODLevels = 4;
+    const auto handle = svc.CreateTerrain(cfg);
+    auto* data = svc.GetTerrainData(handle);
+    EXPECT_NE(data, nullptr);
+    for (uint32_t z = 0; z < 65; ++z)
+        for (uint32_t x = 0; x < 65; ++x)
+            data->Heightfield.SetSample(x, z, 1200.0f * static_cast<float>(x) / 64.0f);
+    data->ResetSplatmapAndCommitRange();
+
+    auto* terrain = world.GetComponentForWrite<C::Terrain>(terrainEntity);
+    terrain->HeightScale = 1.0f;
+    terrain->TerrainDataHandle = handle.Index;
+    terrain->TerrainDataGeneration = handle.Generation;
+    return provisioned.SurfaceRulesVolume;
+}
+
+} // namespace
+
+// #6360: the untouched default snow row follows a heightmap assigned after creation. It sits at
+// 0.85 of the hill's 0 to 1200 m (1020 m), not at 0.85 of the creation band (108.8 m).
+TEST(TerrainEntityProvisioning, TheUntouchedDefaultSnowRowFollowsAHeightmapAssignedAfterCreation)
+{
+    namespace C = GameEngine::Components;
+    ScopedTerrainService scoped;
+    World world;
+    const auto volume = ProvisionThenAssignTheHill(world);
+    ASSERT_TRUE(volume.IsValid());
+    EXPECT_FLOAT_EQ(world.GetComponent<C::TerrainSurfaceRulesEffect>(volume)->Rules[3].Conditions[0].Min, 108.8f);
+
+    EXPECT_EQ(GameEngine::TerrainECS::PlaceProvisionedSurfaceRules(world), 1u);
+    const auto* rules = world.GetComponent<C::TerrainSurfaceRulesEffect>(volume);
+    EXPECT_NEAR(rules->Rules[3].Conditions[0].Min, 1020.0f, 1.0e-3f) << "the snow row did not follow the hill";
+    EXPECT_TRUE(rules->ProvisionedDefaults);
+    EXPECT_EQ(GameEngine::TerrainECS::PlaceProvisionedSurfaceRules(world), 0u) << "an unchanged range rewrote the rows";
+}
+
+// A row the user edited keeps the edit after a new heightmap.
+TEST(TerrainEntityProvisioning, AnEditedDefaultRowKeepsItsBandAfterANewHeightmap)
+{
+    namespace C = GameEngine::Components;
+    ScopedTerrainService scoped;
+    World world;
+    const auto volume = ProvisionThenAssignTheHill(world);
+    ASSERT_TRUE(volume.IsValid());
+    auto* edited = world.GetComponentForWrite<C::TerrainSurfaceRulesEffect>(volume);
+    edited->Rules[3].Conditions[0].Min = 900.0f;
+    edited->ProvisionedDefaults = false;
+
+    EXPECT_EQ(GameEngine::TerrainECS::PlaceProvisionedSurfaceRules(world), 0u);
+    EXPECT_FLOAT_EQ(world.GetComponent<C::TerrainSurfaceRulesEffect>(volume)->Rules[3].Conditions[0].Min, 900.0f);
+}
+
+// The scene stores the provisioned mark as one field, so a reopened scene keeps following.
+TEST(TerrainSurfaceRulesSchema, TheProvisionedMarkRoundTrips)
+{
+    const auto* schema = SurfaceRulesSchema();
+    ASSERT_NE(schema, nullptr);
+    World src;
+    const auto s = src.CreateEntity();
+    src.AddComponentImmediate(s, GameEngine::TerrainECS::MakeDefaultTerrainSurfaceRules(0.0f, 1200.0f));
+    const auto props = SerializedProps(*schema, src, s);
+
+    World dst;
+    const auto d = dst.CreateEntity();
+    std::string err;
+    ASSERT_TRUE(TryLoadRuleProps(dst, d, props, &err)) << err;
+    EXPECT_TRUE(dst.GetComponent<TerrainSurfaceRulesEffect>(d)->ProvisionedDefaults);
+}
+
+// A small planar terrain is tiled like any other: provisioning makes no heightfield or heightfield
+// collider for it, and the extraction system provisions its tile, pages and page colliders.
+TEST(TerrainEntityProvisioning, ASmallPlanarTerrainIsLeftToTheTiledPathAndAPlanetGetsItsReliefAndNoRules)
 {
     namespace C = GameEngine::Components;
     ScopedTerrainService scoped;
@@ -2211,14 +2310,10 @@ TEST(TerrainEntityProvisioning, ASingleTileTerrainCollidesAndAPlanetGetsItsRelie
     const auto small = world.CreateEntity();
     const auto smallPreset = GameEngine::CBTTerrainECS::MakeTerrainPreset(GameEngine::CBTTerrainECS::TerrainPreset::SmallPlanar);
     ASSERT_EQ(GameEngine::TerrainECS::ProvisionTerrainEntity(world, small, smallPreset, C::TerrainPlanetRelief{}).Error, "");
-    const auto* shape = world.GetComponent<C::HeightFieldColliderShape>(small);
-    ASSERT_NE(shape, nullptr);
+    EXPECT_EQ(world.GetComponent<C::HeightFieldColliderShape>(small), nullptr);
     const auto* smallTerrain = world.GetComponent<C::Terrain>(small);
-    EXPECT_NE(GameEngine::TerrainECS::TerrainService::Get().GetTerrainData(GameEngine::TerrainECS::TerrainHandle{
-                  smallTerrain->TerrainDataHandle, smallTerrain->TerrainDataGeneration}),
-              nullptr)
-        << "the single tile's heightfield is provisioned now";
-    EXPECT_EQ(shape->sizeX, smallPreset.SizeX);
+    EXPECT_EQ(smallTerrain->TerrainDataHandle, 0u);
+    EXPECT_EQ(smallTerrain->TerrainDataGeneration, 0u);
 
     World planetWorld;
     const auto planet = planetWorld.CreateEntity();
@@ -2234,52 +2329,90 @@ TEST(TerrainEntityProvisioning, ASingleTileTerrainCollidesAndAPlanetGetsItsRelie
     EXPECT_EQ(planetWorld.GetComponent<C::HeightFieldColliderShape>(planet), nullptr);
 }
 
-TEST(TerrainEntityProvisioning, APlanarSideBeyondWhatTheDensityCanTileIsRefusedWithTheLimit)
+TEST(TerrainEntityProvisioning, APlanarSideBeyondTheCbtDepthIsRefusedWithTheLimit)
 {
     namespace C = GameEngine::Components;
     World world;
     auto config = GameEngine::CBTTerrainECS::MakeTerrainPreset(GameEngine::CBTTerrainECS::TerrainPreset::LargePlanar);
+    ASSERT_EQ(config.SamplesPerMeter, 1.0f);
     const float maxExtent = GameEngine::TerrainECS::MaxTerrainExtentMetres(config.SamplesPerMeter);
-    EXPECT_EQ(maxExtent, 131072.0f) << "128 tiles of 1024 samples at 1 sample per metre";
+    EXPECT_EQ(maxExtent, 1048576.0f) << "2^20 lattice intervals at 1 sample per metre";
 
     config.SizeX = maxExtent;
     config.SizeZ = maxExtent;
     const auto atLimit = world.CreateEntity();
     EXPECT_EQ(GameEngine::TerrainECS::ProvisionTerrainEntity(world, atLimit, config, C::TerrainPlanetRelief{}).Error, "");
-    const auto plan = GameEngine::TerrainECS::DeriveTerrainSizingPlan(config.SizeX, config.SizeZ, config.SamplesPerMeter);
-    EXPECT_EQ(plan.TilesPerAxisX, GameEngine::TerrainECS::kMaxTerrainTilesPerAxis);
 
-    for (const float side : {std::nextafter(maxExtent, 2.0f * maxExtent), 1e30f, 0.0f, -5.0f})
+    for (const float side : {maxExtent + 1.0f, 1e30f, 0.0f, -5.0f, std::numeric_limits<float>::quiet_NaN()})
     {
         config.SizeX = side;
         const auto refused = world.CreateEntity();
         const auto result = GameEngine::TerrainECS::ProvisionTerrainEntity(world, refused, config, C::TerrainPlanetRelief{});
-        EXPECT_NE(result.Error.find("up to 131072 m on each side"), std::string::npos) << result.Error;
+        EXPECT_NE(result.Error, "") << side;
         EXPECT_EQ(world.GetComponent<C::Terrain>(refused), nullptr) << "a refused terrain leaves the entity untouched";
     }
-    config.SizeX = 200000.0f;
+    config.SizeX = 2000000.0f;
     const auto refused = world.CreateEntity();
     EXPECT_EQ(GameEngine::TerrainECS::ProvisionTerrainEntity(world, refused, config, C::TerrainPlanetRelief{}).Error,
-              "A terrain at 1 samples per meter is up to 131072 m on each side; this one is 200000 x 131072 m. "
+              "A terrain at 1 sample per meter is up to 1,048,576 m on each side; this one is 2,000,000 x 1,048,576 m. "
               "Make it smaller or lower its samples per meter.");
+}
+
+TEST(TerrainEntityProvisioning, A250KilometreTerrainIsCreatedAtOneAndTwoSamplesPerMetre)
+{
+    namespace C = GameEngine::Components;
+    World world;
+    auto config = GameEngine::CBTTerrainECS::MakeTerrainPreset(GameEngine::CBTTerrainECS::TerrainPreset::LargePlanar);
+    config.SizeX = 250000.0f;
+    config.SizeZ = 250000.0f;
+    for (const float density : {1.0f, 2.0f})
+    {
+        config.SamplesPerMeter = density;
+        const auto entity = world.CreateEntity();
+        EXPECT_EQ(GameEngine::TerrainECS::ProvisionTerrainEntity(world, entity, config, C::TerrainPlanetRelief{}).Error, "")
+            << density << " samples per metre";
+        EXPECT_NE(world.GetComponent<C::Terrain>(entity), nullptr);
+    }
+    // The depth is 1 + round(2 log2(intervals)): 250000 intervals -> 37, 500000 -> 39. The leaf
+    // edge, 250000 m x 2^-(depth - 1) / 2, is within one lattice spacing.
+    using GameEngine::CBTTerrainECS::DeriveTerrainMaxDepth;
+    const uint32_t depthAt1 = DeriveTerrainMaxDepth(C::TerrainDomain::Planar, 250000.0f, 250000.0f, 1.0f, 0.0f, false);
+    const uint32_t depthAt2 = DeriveTerrainMaxDepth(C::TerrainDomain::Planar, 250000.0f, 250000.0f, 2.0f, 0.0f, false);
+    EXPECT_EQ(depthAt1, 37u);
+    EXPECT_EQ(depthAt2, 39u);
+    EXPECT_LE(250000.0 * std::exp2(-0.5 * (depthAt1 - 1u)), 1.0);
+    EXPECT_LE(250000.0 * std::exp2(-0.5 * (depthAt2 - 1u)), 0.5);
 }
 
 TEST(TerrainEntityProvisioning, TheDensityLimitAndTheExtentLimitAreOneRule)
 {
     using GameEngine::TerrainECS::MaxTerrainExtentMetres;
     using GameEngine::TerrainECS::MaxTerrainSamplesPerMeter;
+    using GameEngine::TerrainECS::PlanarTerrainSizeError;
     // At the limit the two functions map onto each other; one step past it is over.
-    EXPECT_EQ(MaxTerrainSamplesPerMeter(131072.0f, 4096.0f), 1.0f);
-    EXPECT_EQ(MaxTerrainExtentMetres(MaxTerrainSamplesPerMeter(131072.0f, 256.0f)), 131072.0f);
-    EXPECT_EQ(MaxTerrainSamplesPerMeter(32768.0f, 32768.0f), 4.0f);
+    EXPECT_EQ(MaxTerrainSamplesPerMeter(1048576.0f, 4096.0f), 1.0f);
+    EXPECT_EQ(MaxTerrainExtentMetres(MaxTerrainSamplesPerMeter(1048576.0f, 256.0f)), 1048576.0f);
+    EXPECT_EQ(MaxTerrainSamplesPerMeter(262144.0f, 262144.0f), 4.0f);
     const float over = std::nextafter(1.0f, 2.0f);
-    EXPECT_LT(MaxTerrainExtentMetres(over), 131072.0f) << "a denser terrain of the same side is past the limit";
+    EXPECT_LT(MaxTerrainExtentMetres(over), 1048576.0f) << "a denser terrain of the same side is past the limit";
+
+    EXPECT_EQ(PlanarTerrainSizeError(1048576.0f, 1048576.0f, 1.0f), "");
+    EXPECT_NE(PlanarTerrainSizeError(1048577.0f, 16.0f, 1.0f), "") << "one sample more than 2^20 intervals";
+    EXPECT_EQ(PlanarTerrainSizeError(524288.0f, 524288.0f, 2.0f), "");
+    EXPECT_NE(PlanarTerrainSizeError(524288.0f, 524288.0f, over * 2.0f), "");
+    EXPECT_EQ(PlanarTerrainSizeError(1000.0f, 1000.0f, std::numeric_limits<float>::quiet_NaN()),
+              "The terrain's samples per meter is not a number. Enter a number.");
+    EXPECT_EQ(PlanarTerrainSizeError(std::numeric_limits<float>::quiet_NaN(), 1000.0f, 1.0f),
+              "The terrain's size is not a number. Enter a size in meters.");
+    EXPECT_EQ(PlanarTerrainSizeError(1e30f, -5.0f, 0.5f),
+              "A terrain at 0.5 samples per meter is up to 2,097,152 m on each side; this one is 1e+30 x -5 m. "
+              "Make it smaller or lower its samples per meter.");
 }
 
 TEST(TerrainEntityProvisioning, TheSizingPlanCountsTilesWithinRangeForAnySize)
 {
-    // A side no provisioning accepts still reaches the derivation from a scene file or a
-    // component write: its tile counts saturate instead of overflowing.
+    // A side no provisioning accepts still reaches the derivation (the inspector's preview, the
+    // depth rule): its tile counts saturate instead of overflowing.
     const auto plan = GameEngine::TerrainECS::DeriveTerrainSizingPlan(1e30f, 256.0f, 1.0f);
     EXPECT_EQ(plan.TilesPerAxisX, GameEngine::TerrainECS::kMaxDerivedTilesPerAxis);
     EXPECT_EQ(plan.TilesPerAxisZ, 1u);

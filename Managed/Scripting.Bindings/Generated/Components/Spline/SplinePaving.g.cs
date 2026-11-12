@@ -23,6 +23,14 @@ namespace GameEngine.Scripting
         Flared = 1,
     }
 
+    public enum SplinePavingSeam : byte
+    {
+        HardCut = 0,
+        Blend = 1,
+        JointLine = 2,
+        StoneCourse = 3,
+    }
+
     [StructLayout(LayoutKind.Explicit, Size = 8)]
     [BuiltInComponent("GameEngine::Components::SplinePavingMember")]
     public partial struct SplinePavingMember
@@ -58,7 +66,7 @@ namespace GameEngine.Scripting
         private _PadArray m__Pad;
     }
 
-    [StructLayout(LayoutKind.Explicit, Size = 196)]
+    [StructLayout(LayoutKind.Explicit, Size = 224)]
     [BuiltInComponent("GameEngine::Components::SplinePaving")]
     public partial struct SplinePaving : IComponent
     {
@@ -141,9 +149,28 @@ namespace GameEngine.Scripting
         }
 
         [FieldOffset(193)]
+        private SplinePavingSeam m_Seam;
+        public SplinePavingSeam Seam
+        {
+            readonly get => m_Seam;
+            set => m_Seam = (byte)value <= 3
+                ? value
+                : throw new ArgumentOutOfRangeException(nameof(value), value, "SplinePaving.Seam is HardCut, Blend, JointLine or StoneCourse.");
+        }
+
+        [FieldOffset(196)]
+        public float SeamBandTiles;
+
+        [FieldOffset(200)]
+        public float SeamCourseWidth;
+
+        [FieldOffset(204)]
+        public AssetGuid SeamCourseMaterial;
+
+        [FieldOffset(220)]
         public bool CastShadows;
 
-        [FieldOffset(194)]
+        [FieldOffset(221)]
         public bool ReceiveShadows;
     }
 }

@@ -457,6 +457,50 @@ TEST(RGFrame, RequireTransferUsageWidensAPoolImportForTheNextFrame)
     dev->WaitForIdle();
 }
 
+// The frame that retires a physical can still read it: here a second importer resizes the entry after
+// the first importer drew into it. After the device's BeginFrame of frame f, frames up to
+// f - GetFramesInFlight() are complete, so the retired physical lives exactly that many frames more.
+TEST(RGFrame, ARetiredPhysicalLivesForTheDeviceFramesInFlight)
+{
+    RG_REQUIRE_DEVICE(dev);
+    RGResourcePool persistent(dev.get());
+    RGTransientPool transient(dev.get());
+    RGUploadRing ring(dev.get(), dev->GetFrameRingDepth(), 4096);
+    RGFrame frame(dev.get(), &persistent, &transient, &ring);
+    const uint64_t framesInFlight = dev->GetFramesInFlight();
+
+    auto drawInto = [&](const TextureDesc& desc)
+    {
+        const RGTexture target = frame.ImportPersistentTexture("History", desc);
+        frame.AddPass("Draw", 0, [&](RGPassBuilder& p) { p.AttachColor(0, target); },
+                      [](RGContext&) {});
+        frame.MarkOutput(target);
+    };
+
+    frame.BeginFrame(0);
+    drawInto(ColorDesc(64, 64));
+    frame.Execute();
+
+    constexpr uint64_t kRetireFrame = 1;
+    frame.BeginFrame(kRetireFrame);
+    drawInto(ColorDesc(64, 64));
+    drawInto(ColorDesc(128, 128));
+    ASSERT_EQ(persistent.DeferredCount(), 1u) << "the resize retires the physical this frame drew into";
+    frame.Execute();
+
+    for (uint64_t f = kRetireFrame + 1; f <= kRetireFrame + framesInFlight; ++f)
+    {
+        frame.BeginFrame(f);
+        drawInto(ColorDesc(128, 128));
+        frame.Execute();
+        const size_t expected = f < kRetireFrame + framesInFlight ? 1u : 0u;
+        EXPECT_EQ(persistent.DeferredCount(), expected)
+            << "after frame " << f << " with " << framesInFlight << " frames in flight: "
+            << (expected ? "the retire frame may still be on the GPU" : "the retire frame is complete");
+    }
+    dev->WaitForIdle();
+}
+
 // C3 write-back proof: the pool carries the imported texture's end-of-frame
 // layout into the next frame, so frame N+1's barrier transitions from the REAL
 // prior layout instead of discarding via Undefined.
@@ -745,6 +789,15 @@ TEST(RGFrame, ExportBatchRecordsOnTheQueueThatTouchedTheResource)
                       p.Write(data);
                   },
                   [](RGContext&) {});
+    // Graphics work beside Analyze, so Analyze keeps the compute queue.
+    RGTexture overlay = frame.CreateTexture("Overlay", ColorDesc());
+    frame.AddPass("Overlay", 0,
+                  [&](RGPassBuilder& p)
+                  {
+                      p.Read(data);
+                      p.AttachColor(0, overlay, {.Load = RGLoadOp::Clear});
+                  },
+                  [](RGContext&) {});
     frame.AddComputePass("Analyze", 0, // final submission is COMPUTE; never touches color
                          [&](RGPassBuilder& p)
                          {
@@ -753,6 +806,7 @@ TEST(RGFrame, ExportBatchRecordsOnTheQueueThatTouchedTheResource)
                          },
                          [](RGContext&) {});
     frame.MarkOutput(analysis);
+    frame.MarkOutput(overlay);
     frame.MarkOutput(color, RGImageLayout::ShaderReadOnly);
     frame.Execute();
     dev->WaitForIdle(); // validation-relevant: barriers must be queue-valid

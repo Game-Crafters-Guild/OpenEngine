@@ -117,9 +117,7 @@ bool DecodeShadowReceiverResult(const ShadowReceiverReadback& readback,
 
     out.Measured = context;
     // Reverse-Z: the largest depth word is the NEAREST receiver.
-    out.NearDepth = LinearizeReverseZDepthLH_ZO(FloatFromBits(readback.MaxWords[0]),
-                                                context.NearPlane, context.FarPlane,
-                                                context.Orthographic);
+    out.NearDepth = LinearizeReverseZDepthLH_ZO(FloatFromBits(readback.MaxWords[0]), context.DepthTerms);
     if (!std::isfinite(out.NearDepth))
         return false;
     constexpr uint32_t kRaysBase = 1 + 3 * ShadowReceiverMeasurement::kDepthBins;
@@ -151,6 +149,7 @@ void SetShadowReceiverCamera(const Rendering::CameraData& camera, bool orthograp
     // unit depth under a perspective projection, absolute under an orthographic one.
     context.WindowHalfX = 1.0f / std::max(std::abs(camera.proj[0][0]), 1e-6f);
     context.WindowHalfY = 1.0f / std::max(std::abs(camera.proj[1][1]), 1e-6f);
+    context.DepthTerms = ProjectionDepthTerms::Of(camera.proj);
     context.Orthographic = orthographic;
 }
 

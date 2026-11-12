@@ -19,6 +19,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -55,9 +56,19 @@ struct TerrainInstanceInfo
     float32 WorldOriginX;
     float32 WorldOriginY;
     float32 WorldOriginZ;
+    // The lattice's extent: a tiled terrain's covers whole tiles, past its authored size.
     float32 SizeX;
     float32 SizeZ;
+    // The authored size (Terrain::SizeX/Z): the terrain draws, casts and answers inside it.
+    float32 AuthoredSizeX = 0.0f;
+    float32 AuthoredSizeZ = 0.0f;
     float32 HeightScale;
+    // The world heights the terrain's samples span (SurfaceHeightQuery::HeightRange). A lowered
+    // terrain reaches below WorldOriginY, a raised one above WorldOriginY + HeightScale.
+    float32 WorldMinY = 0.0f;
+    float32 WorldMaxY = 0.0f;
+    // TerrainGrass.FarThinning, clamped to [0, 1]; 1 when the terrain has no grass.
+    float32 GrassFarThinning = 1.0f;
     float32 LODRangeScale;
     uint32 LODLevels;
     float32 MaterialTiling = 10.0f;
@@ -511,9 +522,12 @@ public:
     // The buffer carries no BufferCreateFlags::FrameSlotted: that flag diagnoses any write
     // outside an acquired frame, which is the right question only for a ring sized AT the
     // pacing, and would fire on every legitimate write to this one.
-    void UploadTerrainParamsArray(const Terrain::TerrainGPUParams* params, uint32 count,
-                                  const Terrain::TerrainMaterialRecord* materials,
-                                  uint32 materialCount, uint32 deviceFrameIndex);
+    // `infos` holds one row per params row, in the same order (asserted): the grass summary reads
+    // each terrain's height extent there.
+    void UploadTerrainParamsArray(std::span<const Terrain::TerrainGPUParams> params,
+                                  std::span<const TerrainInstanceInfo> infos,
+                                  std::span<const Terrain::TerrainMaterialRecord> materials,
+                                  uint32 deviceFrameIndex);
     // `paramsSlot` is a published element index (GetLastTerrainParamsSlot); the modulo is a
     // bounds guard, not a rotation.
     Rendering::BufferHandle GetTerrainParamsSSBO(uint32 paramsSlot) const { return m_TerrainParamsSSBO[paramsSlot % kMaxFrames]; }
@@ -542,7 +556,17 @@ public:
         float32 MaxNearDensity = 0.0f; // blades per square metre at the camera
         float32 MaxRange = 0.0f;
         float32 MinFalloff = 0.0f;
+        // Meters: the tallest authored blade. The range fit's band box takes it above the highest ground.
         float32 MaxBladeHeight = 0.0f;
+        // Meters: the farthest any blade vertex lies from its root (Terrain::TerrainGrassBladeReach).
+        float32 MaxBladeReach = 0.0f;
+        // The thinnest blade (0 when a terrain draws cards), the shortest and the widest: the GPU budget
+        // fit bounds the floor-band thinning of every terrain with them.
+        float32 MinBladeWidth = 0.0f;
+        float32 MinBladeHeight = 0.0f;
+        float32 MaxBladeWidth = 0.0f;
+        // The lowest far-thinning dial: the ring bound needs the lowest value, and the per-view block carries one.
+        float32 MinFarThinning = 1.0f;
         float32 WorldMinY = 0.0f;
         float32 WorldMaxY = 0.0f;
         // Both flags are reduced once per params UPLOAD, over every ACTIVE grass row in the array.
@@ -956,13 +980,12 @@ public:
     // baked tile (slot + rect + params + tile index). Recorded by the extraction system;
     // flushed by TerrainUploadNode before CBT VertexEval. When `settle`, each dispatched tile's
     // slot rect is copied GPU->CPU after the bake so the CPU heightfield can be refreshed. The
-    // splat pass runs after the normal pass when `splatEligible`, normalizing altitude against the
-    // committed range (`splatMinH`/`splatMaxH`) and compositing `surfaceRules` (whose conditions
-    // are addressed into `surfaceRuleConditions`) on top; it is skipped for a paint-carrying bake
-    // so the CPU-composited splat stands until settle.
+    // splat pass runs after the normal pass when `splatEligible`, compositing `surfaceRules` (whose
+    // conditions are addressed into `surfaceRuleConditions`) on top; it is skipped for a
+    // paint-carrying bake so the CPU-composited splat stands until settle.
     void QueueGpuHeightBake(TerrainHandle handle, std::vector<ModifierGpu> modifiers,
                             std::vector<GpuHeightBakeDispatch> dispatches, bool settle,
-                            float splatMinH, float splatMaxH, bool splatEligible,
+                            bool splatEligible,
                             std::vector<SurfaceRuleGpu> surfaceRules,
                             std::vector<SurfaceRuleConditionGpu> surfaceRuleConditions);
     bool HasPendingBakes() const;
@@ -1022,8 +1045,6 @@ private:
         std::vector<ModifierGpu> Modifiers;
         std::vector<GpuHeightBakeDispatch> Dispatches;
         bool Settle = false;
-        float SplatMinH = 0.0f;
-        float SplatMaxH = 0.0f;
         bool SplatEligible = false;
         std::vector<SurfaceRuleGpu> SurfaceRules;
         std::vector<SurfaceRuleConditionGpu> SurfaceRuleConditions;

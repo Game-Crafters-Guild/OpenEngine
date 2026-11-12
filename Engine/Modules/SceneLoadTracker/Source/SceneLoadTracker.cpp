@@ -15,10 +15,25 @@ namespace GameEngine
 namespace
 {
 constexpr uint32_t kNoSlot = std::numeric_limits<uint32_t>::max();
+// The seed of a category that declares none.
+constexpr double kDefaultSecondsPerUnit = 0.1;
+// The estimate of a waiting gate. A gate reports no cost of its own.
+constexpr double kDefaultGateSeconds = 1.0;
+// The measured rate replaces the seed once a category was active this long or completed this many units.
+constexpr double kMeasuredRateSeconds = 0.5;
+constexpr double kMeasuredRateUnits = 16.0;
+// Started work with no report and a waiting gate advance by elapsed / estimate up to this share.
+constexpr double kUnreportedShare = 0.9;
 
 double SecondsBetween(std::chrono::steady_clock::time_point from, std::chrono::steady_clock::time_point to)
 {
     return std::chrono::duration<double>(to - from).count();
+}
+
+// The seconds that work estimated at `estimate` still needs after `elapsed` seconds with no report.
+double UnreportedRemaining(double estimate, double elapsed)
+{
+    return estimate - std::min(kUnreportedShare * estimate, elapsed);
 }
 } // namespace
 
@@ -29,6 +44,8 @@ struct SceneLoadTracker::TrackerState
         uint64_t Id = 0;
         std::shared_ptr<CategoryState> Category;
         std::function<GateReport()> Evaluate;
+        bool Waiting = false;
+        std::chrono::steady_clock::time_point WaitingSince{}; // the first Tick of this wait
     };
 
     std::string NameOf(StringId id)
@@ -80,6 +97,9 @@ struct SceneLoadTracker::CategoryState
         uint32_t Prev = kNoSlot;
         uint32_t Next = kNoSlot;
         bool Running = false;
+        bool SeenRunning = false;
+        std::chrono::steady_clock::time_point RunningSince{}; // the first Tick that saw it running
+        double ActiveSeconds = 0.0; // its shares of the Tick intervals it ran in
     };
 
     uint32_t Open(StringId name, double units)
@@ -106,9 +126,19 @@ struct SceneLoadTracker::CategoryState
         return index;
     }
 
-    void Close(uint32_t index)
+    // A completed ticket gives its units and its shares to the measured rate at the next Tick.
+    // A dropped ticket gives none.
+    void Close(uint32_t index, bool completed)
     {
         const Slot& slot = Slots[index];
+        if (completed)
+        {
+            UnitsSinceTick += slot.Units;
+            SecondsSinceTick += slot.ActiveSeconds;
+            ++CompletedSinceTick;
+            if (!slot.SeenRunning)
+                ++CompletedUnseenSinceTick;
+        }
         (slot.Running ? Running : Queued) -= 1;
         RemainingUnits -= slot.Units;
         if (slot.Prev != kNoSlot)
@@ -120,6 +150,48 @@ struct SceneLoadTracker::CategoryState
         else
             Tail = slot.Prev;
         FreeSlots.push_back(index);
+    }
+
+    // The wall seconds per unit: the measured rate once there is enough of it, else the seed.
+    double SecondsPerUnit() const
+    {
+        const bool measured = ActiveUnits > 0.0 &&
+                              (ActiveSeconds >= kMeasuredRateSeconds || ActiveUnits >= kMeasuredRateUnits);
+        return measured ? ActiveSeconds / ActiveUnits : SecondsPerUnitSeed;
+    }
+
+    // Main thread, in Tick. Moves the tickets that completed since the last Tick into the measured rate
+    // and returns the seconds the open Frame tickets still need. Only Tick's `now` is read, so a test
+    // can give any timeline.
+    double UpdateEstimate(std::chrono::steady_clock::time_point now, double interval)
+    {
+        // The tickets that ran at the last Tick and the tickets that completed before a Tick saw them run share
+        // the interval. Time in the queue is not work.
+        const uint32_t sharing = RunningAtLastTick + CompletedUnseenSinceTick;
+        const double share = sharing > 0 ? interval / sharing : 0.0;
+        ActiveSeconds += SecondsSinceTick + share * CompletedSinceTick;
+        ActiveUnits += UnitsSinceTick;
+        UnitsSinceTick = 0.0;
+        SecondsSinceTick = 0.0;
+        CompletedSinceTick = 0;
+        CompletedUnseenSinceTick = 0;
+        RunningAtLastTick = Running;
+        const double secondsPerUnit = SecondsPerUnit();
+        double seconds = 0.0;
+        for (uint32_t index = Head; index != kNoSlot; index = Slots[index].Next)
+        {
+            Slot& slot = Slots[index];
+            if (slot.SeenRunning)
+                slot.ActiveSeconds += share;
+            else if (slot.Running)
+            {
+                slot.SeenRunning = true;
+                slot.RunningSince = now;
+            }
+            const double estimate = slot.Units * secondsPerUnit;
+            seconds += slot.SeenRunning ? UnreportedRemaining(estimate, SecondsBetween(slot.RunningSince, now)) : estimate;
+        }
+        return seconds;
     }
 
     std::string Id;
@@ -138,6 +210,17 @@ struct SceneLoadTracker::CategoryState
     uint64_t Done = 0;
     uint64_t Failed = 0;
     double RemainingUnits = 0.0;
+    double SecondsPerUnitSeed = kDefaultSecondsPerUnit;
+    // The measured rate: the shares of the Tick intervals that completed Frame tickets ran in, and
+    // their units. A dropped ticket adds neither.
+    double ActiveSeconds = 0.0;
+    double ActiveUnits = 0.0;
+    // The tickets that completed since the last Tick: their units, their shares and their number.
+    double UnitsSinceTick = 0.0;
+    double SecondsSinceTick = 0.0;
+    uint32_t CompletedSinceTick = 0;
+    uint32_t CompletedUnseenSinceTick = 0; // no Tick saw them running
+    uint32_t RunningAtLastTick = 0;
     // Set by Category::Revoke. A ticket that ends after it is not counted or logged.
     bool Revoked = false;
 };
@@ -201,7 +284,7 @@ void SceneLoadTracker::WorkTicket::Finish(bool completed)
         if (m_Need == Need::Background)
             --category->Background;
         else
-            category->Close(m_Slot);
+            category->Close(m_Slot, completed);
         // The owner revoked the category first: it canceled this work on purpose.
         if (category->Revoked)
             return;
@@ -360,6 +443,8 @@ SceneLoadTracker::Category SceneLoadTracker::RegisterCategory(const CategoryDesc
     state->Id.assign(desc.Id);
     state->Label.assign(desc.Label);
     state->Unit = desc.Unit;
+    if (desc.DefaultSecondsPerUnit > 0.0)
+        state->SecondsPerUnitSeed = desc.DefaultSecondsPerUnit;
     state->Tracker = m_State;
     std::lock_guard lock(m_State->Mutex);
     m_State->Categories.push_back(state);
@@ -418,6 +503,8 @@ void SceneLoadTracker::UpdateRows()
 void SceneLoadTracker::Tick(std::chrono::steady_clock::time_point now)
 {
     std::vector<CategoryStatus>& rows = m_Status.Categories;
+    const double interval = m_HasTicked ? SecondsBetween(m_LastTick, now) : 0.0;
+    m_LastTick = now;
     {
         std::lock_guard lock(m_State->Mutex);
         UpdateRows();
@@ -425,6 +512,7 @@ void SceneLoadTracker::Tick(std::chrono::steady_clock::time_point now)
         {
             CategoryStatus& row = RowFor(rows, category->Id);
             std::lock_guard categoryLock(category->Mutex);
+            row.SecondsRemaining = std::max(row.SecondsRemaining, category->UpdateEstimate(now, interval));
             row.Queued += category->Queued;
             row.Running += category->Running;
             row.Background += category->Background;
@@ -441,20 +529,33 @@ void SceneLoadTracker::Tick(std::chrono::steady_clock::time_point now)
                 row.OldestPendingSeconds = age;
             }
         }
-        for (const TrackerState::GateEntry& gate : m_State->Gates)
+        for (TrackerState::GateEntry& gate : m_State->Gates)
         {
             const GateReport report = gate.Evaluate();
             if (report.State != GateState::Waiting)
+            {
+                gate.Waiting = false;
                 continue;
+            }
+            if (!gate.Waiting)
+            {
+                gate.Waiting = true;
+                gate.WaitingSince = now;
+            }
             CategoryStatus& row = RowFor(rows, gate.Category->Id);
             if (row.WaitingGates++ == 0)
                 row.Reason = report.Reason;
             row.GatePending += report.Pending;
+            row.SecondsRemaining = std::max(
+                row.SecondsRemaining, UnreportedRemaining(kDefaultGateSeconds, SecondsBetween(gate.WaitingSince, now)));
         }
     }
 
     const bool wasReady = m_Status.ReadyToShow;
     m_Status.ReadyToShow = std::none_of(rows.begin(), rows.end(), [](const CategoryStatus& row) { return row.HoldsReady(); });
+    m_Status.SecondsRemaining = 0.0;
+    for (const CategoryStatus& row : rows)
+        m_Status.SecondsRemaining = std::max(m_Status.SecondsRemaining, row.SecondsRemaining);
     UpdateProgress(now);
     if (m_Status.ReadyToShow && !wasReady)
         Ready.Invoke();

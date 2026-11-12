@@ -229,6 +229,7 @@ std::vector<ContextMenuManipulator::Item> SceneViewPanel::BuildMeasureMenuItems(
                          [this]
                          {
                              m_MeasureCreateEntitiesMode = !m_MeasureCreateEntitiesMode;
+                             PushMeasureSettings();
                              Editor::SettingsStore prefs = Editor::OpenEditorPreferences();
                              std::string err;
                              (void)prefs.Load(&err);

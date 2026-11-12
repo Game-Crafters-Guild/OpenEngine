@@ -894,7 +894,7 @@ bool VulkanDevice::CreateDeviceAndResources(const DeviceDesc& desc)
 
     queryConfig.MaxTimestampQueries = 512;
     queryConfig.MaxOcclusionQueries = 256;
-    queryConfig.MaxPipelineStatsQueries = 64;
+    queryConfig.MaxPipelineStatsQueries = 256; // one per profiled pass; a pass takes two timestamps
 
     // Query pool slots are 1:1 with the device frame ring. Each slot is reused
     // only after its per-frame fence signals, matching the FrameEnd timestamp readback.
@@ -1393,6 +1393,7 @@ void VulkanDevice::NotifyReprovisionComplete()
 
 void VulkanDevice::TeardownDeviceScopedForRebuild(std::vector<RetainedWindowTarget>& outTargets)
 {
+    ResolvePendingSwapchain(kWaitForPendingSwapchainForever);
     // Same first step as Shutdown, and for the same reason: a consumer cache must
     // drop its handles while they still resolve. Everything below frees the
     // generational slots those handles name, and m_RebuildInProgress already routes
@@ -2564,6 +2565,9 @@ bool VulkanDevice::CreateLogicalDevice()
     // pipeline to per-sample shading; that stays each pipeline's sampleShadingEnable. Enabled
     // whenever supported, so capability reporting can assume support == enabled.
     deviceFeatures.sampleRateShading = supportedFeatures.sampleRateShading;
+    // A tiled terrain clips its draw at its authored edge through gl_ClipDistance (the SPIR-V
+    // ClipDistance capability). Same support == enabled contract.
+    deviceFeatures.shaderClipDistance = supportedFeatures.shaderClipDistance;
 
     // Query Vulkan 1.3 feature support (synchronization2)
     VkPhysicalDeviceVulkan13Features supported13{};
@@ -3051,6 +3055,7 @@ bool VulkanDevice::CreateLogicalDevice()
         minimalFeatures.drawIndirectFirstInstance = supportedFeatures.drawIndirectFirstInstance;
         // Same support == enabled contract for sampleRateShading (the parallax footprint).
         minimalFeatures.sampleRateShading = supportedFeatures.sampleRateShading;
+        minimalFeatures.shaderClipDistance = supportedFeatures.shaderClipDistance;
         VkPhysicalDeviceVulkan12Features fallback12{};
         fallback12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
         fallback12.timelineSemaphore = supported12.timelineSemaphore;
@@ -3562,7 +3567,8 @@ void VulkanDevice::QueryDeviceCapabilities()
                                                   ? m_DeviceProperties.limits.maxSamplerAnisotropy
                                                   : 1.0f;
         // Same contract: CreateLogicalDevice enables sampleRateShading whenever supported.
-        m_Capabilities.supportsSampleRateShading = (baseFeatures.sampleRateShading == VK_TRUE);
+        m_Capabilities.supportsInterpolationFunctions = (baseFeatures.sampleRateShading == VK_TRUE);
+        m_Capabilities.supportsShaderClipDistance = (baseFeatures.shaderClipDistance == VK_TRUE);
     }
 
     // Basic capabilities - check for extensions
@@ -8573,6 +8579,14 @@ bool VulkanDevice::BeginFrame()
 
     m_AcquireSemaphoreThisFrame = VK_NULL_HANDLE;
 
+    if (!ResolvePendingSwapchain(kPendingSwapchainFrameWait))
+    {
+        // The creation job still runs: skip the frame like a timed-out acquire, so the caller pumps its messages.
+        // A failed creation skips it too; the caller reads HasWindowTargetCreationFailed and stops.
+        m_CurrentSwapchainImage = UINT32_MAX;
+        m_AcquiredThisFrame = false;
+        return false;
+    }
     if (m_Swapchain != VK_NULL_HANDLE)
     {
         uint32_t imageIndex = 0;
@@ -9627,6 +9641,7 @@ void VulkanDevice::ProcessPendingWindowTargetRetirements(bool allowBlockingFallb
 
 void VulkanDevice::TeardownAllWindowTargetsForShutdown()
 {
+    ResolvePendingSwapchain(kWaitForPendingSwapchainForever);
     if (m_HasActiveWindowTarget && m_ActiveWindowTargetId != 0)
     {
         SaveActiveWindowTargetState();
@@ -10082,8 +10097,112 @@ void VulkanDevice::SaveActiveWindowTargetState()
     m_WindowTargets[m_ActiveWindowTargetId] = CaptureWindowTargetState();
 }
 
+bool VulkanDevice::CreateAndActivateWindowTarget(void* windowHandle, uint32_t width, uint32_t height,
+                                                 WindowTargetHandle* outTarget, const WindowTargetJobDispatch& dispatch)
+{
+    if (!dispatch || m_HasActiveWindowTarget)
+        return IDevice::CreateAndActivateWindowTarget(windowHandle, width, height, outTarget, dispatch);
+
+    ResetWindowTargetMembers();
+    auto pending = std::make_shared<PendingSwapchainCreation>();
+    if (!CreateSurface(windowHandle) || !PrepareSwapchain(width, height, pending->plan) || !CreateActiveWindowTargetPresentFence())
+    {
+        WindowTargetState failedState = CaptureWindowTargetState();
+        DestroyWindowTargetState(failedState);
+        ResetWindowTargetMembers();
+        return false;
+    }
+    ApplySwapchainPlanProperties(pending->plan);
+    pending->device = m_Device;
+    pending->begun = std::chrono::steady_clock::now();
+
+    const uint64_t newId = m_NextWindowTargetId++;
+    m_WindowTargets[newId] = CaptureWindowTargetState();
+    m_ActiveWindowTargetId = newId;
+    m_HasActiveWindowTarget = true;
+    m_PendingSwapchain = pending;
+    dispatch([pending]() { RunPendingSwapchainCreation(*pending); });
+    if (outTarget)
+        *outTarget = WindowTargetHandle(newId);
+    return true;
+}
+
+// The driver call alone. It reads no device member, so it may run on any thread while the owner thread does
+// other work; Vulkan needs external synchronization only on the plan's surface and its null oldSwapchain.
+static VkResult CreateSwapchainFromPlan(VkDevice device, const VkSwapchainCreateInfoKHR& planned,
+                                        const std::array<uint32_t, 2>& queueFamilyIndices, VkSwapchainKHR& outSwapchain)
+{
+    // The plan is copied to the job by value, so its create info must chain nothing on the owner thread's stack.
+    assert(planned.pNext == nullptr && "VulkanDevice: a swapchain plan must not carry a pNext chain");
+    VkSwapchainCreateInfoKHR createInfo = planned;
+    if (createInfo.queueFamilyIndexCount > 0)
+        createInfo.pQueueFamilyIndices = queueFamilyIndices.data();
+    return vkCreateSwapchainKHR(device, &createInfo, nullptr, &outSwapchain);
+}
+
+void VulkanDevice::RunPendingSwapchainCreation(PendingSwapchainCreation& pending)
+{
+    VkSwapchainKHR swapchain = VK_NULL_HANDLE;
+    const VkResult result = CreateSwapchainFromPlan(pending.device, pending.plan.createInfo, pending.plan.queueFamilyIndices, swapchain);
+    std::lock_guard lock(pending.mutex);
+    pending.swapchain = swapchain;
+    pending.result = result;
+    pending.done = true;
+    pending.doneChanged.notify_all();
+}
+
+bool VulkanDevice::ResolvePendingSwapchain(std::chrono::milliseconds timeout)
+{
+    if (!m_PendingSwapchain)
+        return true;
+    assert(m_HasActiveWindowTarget && "VulkanDevice: a pending swapchain belongs to the active window target");
+
+    const std::shared_ptr<PendingSwapchainCreation> pending = m_PendingSwapchain;
+    const auto waitBegin = std::chrono::steady_clock::now();
+    {
+        std::unique_lock lock(pending->mutex);
+        const auto isDone = [&pending]() { return pending->done; };
+        if (timeout == kWaitForPendingSwapchainForever)
+            pending->doneChanged.wait(lock, isDone);
+        else if (!pending->doneChanged.wait_for(lock, timeout, isDone))
+            return false;
+    }
+    m_PendingSwapchain.reset();
+    const auto waitEnd = std::chrono::steady_clock::now();
+    Logger::Log::Info("[Startup]   Swapchain join wait: {:.1f}ms ({:.1f}ms after the job was dispatched)",
+                      std::chrono::duration<double, std::milli>(waitEnd - waitBegin).count(),
+                      std::chrono::duration<double, std::milli>(waitEnd - pending->begun).count());
+
+    if (pending->result == VK_SUCCESS && AdoptSwapchain(pending->swapchain, pending->plan))
+    {
+        SaveActiveWindowTargetState();
+        return true;
+    }
+    // A failed AdoptSwapchain has already moved the swapchain into the members that the teardown destroys.
+    if (pending->result != VK_SUCCESS)
+        Logger::Log::Error("Failed to create swapchain! Error: {} ({})", VkResultToString(pending->result),
+                           static_cast<int>(pending->result));
+    Logger::Log::Error("VulkanDevice: the main window's swapchain could not be created, so the start stops. Find the "
+                       "cause in the error above; if it is a driver error, update the GPU driver.");
+    const uint64_t failedId = m_ActiveWindowTargetId;
+    WindowTargetState failedState = CaptureWindowTargetState();
+    DestroyWindowTargetState(failedState);
+    ResetWindowTargetMembers();
+    m_WindowTargets.erase(failedId);
+    m_ActiveWindowTargetId = 0;
+    m_HasActiveWindowTarget = false;
+    m_FailedWindowTargetId = failedId;
+    return false;
+}
+
+bool VulkanDevice::HasWindowTargetCreationFailed(WindowTargetHandle target) const
+{
+    return target.IsValid() && target.id == m_FailedWindowTargetId;
+}
+
 WindowTargetHandle VulkanDevice::CreateWindowTarget(void* windowHandle, uint32_t width, uint32_t height)
 {
+    ResolvePendingSwapchain(kWaitForPendingSwapchainForever);
     const bool hadActive = m_HasActiveWindowTarget && m_ActiveWindowTargetId != 0;
     const uint64_t previousActiveId = m_ActiveWindowTargetId;
 
@@ -10148,6 +10267,7 @@ WindowTargetHandle VulkanDevice::CreateWindowTarget(void* windowHandle, uint32_t
 
 bool VulkanDevice::DrainWindowTarget(WindowTargetHandle target, uint64_t timeoutNs)
 {
+    ResolvePendingSwapchain(kWaitForPendingSwapchainForever);
     if (!target.IsValid())
     {
         return false;
@@ -10246,6 +10366,7 @@ bool VulkanDevice::DrainWindowTarget(WindowTargetHandle target, uint64_t timeout
 
 bool VulkanDevice::DestroyWindowTarget(WindowTargetHandle target)
 {
+    ResolvePendingSwapchain(kWaitForPendingSwapchainForever);
     if (!target.IsValid())
     {
         return false;
@@ -10318,6 +10439,7 @@ bool VulkanDevice::SetActiveWindowTarget(WindowTargetHandle target)
         return true;
     }
 
+    ResolvePendingSwapchain(kWaitForPendingSwapchainForever);
     if (m_HasActiveWindowTarget && m_ActiveWindowTargetId != 0)
     {
         SaveActiveWindowTargetState();
@@ -10360,6 +10482,8 @@ uint32_t VulkanDevice::GetActiveWindowTargetFrameIndex() const
 
 bool VulkanDevice::RecreateWindowTargetSwapchain(WindowTargetHandle target, uint32_t width, uint32_t height)
 {
+    // A resize or a mode change during the pending creation applies to the adopted swapchain.
+    ResolvePendingSwapchain(kWaitForPendingSwapchainForever);
     if (!SetActiveWindowTarget(target))
     {
         return false;
@@ -11160,7 +11284,21 @@ static TextureFormat FromVkFormat(VkFormat f);
 
 bool VulkanDevice::CreateSwapchain(uint32_t width, uint32_t height)
 {
+    SwapchainCreatePlan plan;
+    if (!PrepareSwapchain(width, height, plan))
+        return false;
+    VkSwapchainKHR swapchain = VK_NULL_HANDLE;
+    const VkResult result = CreateSwapchainFromPlan(m_Device, plan.createInfo, plan.queueFamilyIndices, swapchain);
+    if (result != VK_SUCCESS)
+    {
+        Logger::Log::Error("Failed to create swapchain! Error: {} ({})", VkResultToString(result), static_cast<int>(result));
+        return false;
+    }
+    return AdoptSwapchain(swapchain, plan);
+}
 
+bool VulkanDevice::PrepareSwapchain(uint32_t width, uint32_t height, SwapchainCreatePlan& outPlan)
+{
     if (m_Surface == VK_NULL_HANDLE)
     {
         Logger::Log::Error("Cannot create swapchain without surface");
@@ -11251,8 +11389,8 @@ bool VulkanDevice::CreateSwapchain(uint32_t width, uint32_t height)
         imageCount = surfaceCapabilities.maxImageCount;
     }
 
-    // Create swapchain
-    VkSwapchainCreateInfoKHR createInfo{};
+    VkSwapchainCreateInfoKHR& createInfo = outPlan.createInfo;
+    createInfo = VkSwapchainCreateInfoKHR{};
     createInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
     createInfo.surface = m_Surface;
     createInfo.minImageCount = imageCount;
@@ -11274,12 +11412,11 @@ bool VulkanDevice::CreateSwapchain(uint32_t width, uint32_t height)
     m_SwapchainSupportsReadback = (createInfo.imageUsage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0;
 
     // Handle queue families
-    uint32_t queueFamilyIndices[] = {m_GraphicsQueueFamily, m_PresentQueueFamily};
+    outPlan.queueFamilyIndices = {m_GraphicsQueueFamily, m_PresentQueueFamily};
     if (m_GraphicsQueueFamily != m_PresentQueueFamily)
     {
         createInfo.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
         createInfo.queueFamilyIndexCount = 2;
-        createInfo.pQueueFamilyIndices = queueFamilyIndices;
     }
     else
     {
@@ -11292,17 +11429,20 @@ bool VulkanDevice::CreateSwapchain(uint32_t width, uint32_t height)
     createInfo.clipped = VK_TRUE;
     createInfo.oldSwapchain = VK_NULL_HANDLE;
 
-    VkResult result = vkCreateSwapchainKHR(m_Device, &createInfo, nullptr, &m_Swapchain);
-    if (result != VK_SUCCESS)
-    {
-        Logger::Log::Error("Failed to create swapchain! Error: {}", (int)result);
-        return false;
-    }
+    outPlan.surfaceFormat = surfaceFormat;
+    outPlan.surfaceMinImageCount = surfaceCapabilities.minImageCount;
+    outPlan.surfaceMaxImageCount = surfaceCapabilities.maxImageCount;
+    return true;
+}
 
-    // Store swapchain properties
+// The format, the color space, the extent and the HDR state follow from the plan alone, so they are valid
+// before the swapchain exists.
+void VulkanDevice::ApplySwapchainPlanProperties(const SwapchainCreatePlan& plan)
+{
+    const VkSurfaceFormatKHR& surfaceFormat = plan.surfaceFormat;
     m_SwapchainImageFormat = surfaceFormat.format;
     m_SwapchainColorSpace = surfaceFormat.colorSpace;
-    m_SwapchainExtent = extent;
+    m_SwapchainExtent = plan.createInfo.imageExtent;
 
     // Debug: log the chosen swapchain format and color space in engine terms
     TextureFormat swapchainFmt = FromVkFormat(m_SwapchainImageFormat);
@@ -11345,6 +11485,17 @@ bool VulkanDevice::CreateSwapchain(uint32_t width, uint32_t height)
     m_HdrState.display.hdrActive = IsHdrOutputModeActive(m_HdrState.activeMode);
     m_HdrState.display.resolvedMode = m_HdrState.activeMode;
     m_HdrState.display.outputMaxLinearValue = GetHdrOutputMaxLinearValue(m_HdrState);
+}
+
+bool VulkanDevice::AdoptSwapchain(VkSwapchainKHR swapchain, const SwapchainCreatePlan& plan)
+{
+    m_Swapchain = swapchain;
+    SetVkObjectName(VK_OBJECT_TYPE_SWAPCHAIN_KHR, reinterpret_cast<uint64_t>(m_Swapchain), "window_swapchain");
+    ApplySwapchainPlanProperties(plan);
+    const VkSurfaceFormatKHR& surfaceFormat = plan.surfaceFormat;
+    const VkPresentModeKHR presentMode = plan.createInfo.presentMode;
+    const TextureFormat swapchainFmt = FromVkFormat(m_SwapchainImageFormat);
+    uint32_t imageCount = plan.createInfo.minImageCount;
 
 #ifdef VK_EXT_HDR_METADATA_EXTENSION_NAME
     if (m_FpSetHdrMetadataEXT && m_Swapchain != VK_NULL_HANDLE && m_HdrState.activeMode == HdrOutputMode::HDR10_PQ)
@@ -11381,8 +11532,8 @@ bool VulkanDevice::CreateSwapchain(uint32_t width, uint32_t height)
     Logger::Log::Info(
         "VulkanDevice: Swapchain images={} (surface min={}, max={}) {}",
         imageCount,
-        surfaceCapabilities.minImageCount,
-        surfaceCapabilities.maxImageCount,
+        plan.surfaceMinImageCount,
+        plan.surfaceMaxImageCount,
         VulkanMappings::PresentModeLogField(presentMode));
 
     // Get swapchain images
@@ -12101,7 +12252,8 @@ bool VulkanDevice::IsTextureFormatSupported(TextureFormat format, uint32_t usage
 
 bool VulkanDevice::GetSwapchainSize(uint32_t& outWidth, uint32_t& outHeight) const
 {
-    if (m_Swapchain != VK_NULL_HANDLE)
+    // A pending swapchain already has its extent, so a caller does not see a size change that would recreate it.
+    if (m_Swapchain != VK_NULL_HANDLE || m_PendingSwapchain)
     {
         outWidth = m_SwapchainExtent.width;
         outHeight = m_SwapchainExtent.height;

@@ -289,8 +289,11 @@ void VideoPlayerModal::Open(const std::string& videoPath, const std::string& tit
     AddClass("visible");
     if (m_UIManager)
     {
-        UIManager* manager = m_UIManager;
-        manager->PostToUI([manager, this]() { manager->FocusElement(this); });
+        PostSafeAction([this]()
+        {
+            if (UIManager* manager = GetOwnerManager())
+                manager->FocusElement(this);
+        });
     }
 
     UpdateControlState();

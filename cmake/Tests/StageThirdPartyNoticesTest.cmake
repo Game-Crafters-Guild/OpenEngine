@@ -48,11 +48,20 @@ expect_copy("${_share}/transitive-only-port/LICENSES/nested/part.txt"
 expect_copy("${SOURCE}/ThirdParty/KhronosPbrNeutral/LICENSE.txt" "${_out}/Khronos-PBR-Neutral/LICENSE.txt")
 expect_copy("${SOURCE}/ThirdParty/MinimalAgX/LICENSE.txt" "${_out}/Minimal-AgX/LICENSE.txt")
 expect_copy("${SOURCE}/ThirdParty/OpenColorIO/LICENSE.txt" "${_out}/OpenColorIO/LICENSE.txt")
+expect_copy("${SOURCE}/Engine/Modules/TerrainECS/Include/TerrainECS/Erosion/ErosionFilter.h"
+            "${_out}/Runevision-Erosion-Filter/ErosionFilter.h")
+expect_copy("${SOURCE}/Engine/Modules/TerrainECS/Source/Erosion/ErosionFilter.cpp"
+            "${_out}/Runevision-Erosion-Filter/ErosionFilter.cpp")
 expect_copy("${SOURCE}/ThirdParty/SpeedballGi/LICENSE.md" "${_out}/Speedball-GI/LICENSE.md")
 expect_copy("${SOURCE}/Engine/Source/ThirdParty/miniz/LICENSE" "${_out}/miniz/LICENSE")
 expect_copy("${SOURCE}/Engine/Modules/VolumetricClouds/ThirdParty/SebLague-Clouds/LICENSE"
             "${_out}/SebLague-Clouds/LICENSE")
 expect_copy("${SOURCE}/ThirdParty/GTAO/LICENSE.txt" "${_out}/GTAO/LICENSE.txt")
+expect_copy("${SOURCE}/ThirdParty/fdlibm/LICENSE.txt" "${_out}/fdlibm/LICENSE.txt")
+expect_copy("${SOURCE}/Packages/film-simulation/LICENSE.txt"
+            "${_out}/AMD-FidelityFX-Lens-Film-Grain/LICENSE.txt")
+expect_copy("${SOURCE}/ThirdParty/Slug/LICENSE-MIT" "${_out}/Slug/LICENSE-MIT")
+expect_copy("${SOURCE}/ThirdParty/Slug/NOTICE" "${_out}/Slug/NOTICE")
 file(READ "${_out}/THIRD_PARTY_NOTICES.md" _book)
 string(FIND "${_book}" "````\nCopyright transitive-only-port" _fenced)
 if(_fenced EQUAL -1)

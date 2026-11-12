@@ -2,6 +2,7 @@
 
 #include "PageStreaming/PageCache.h"
 #include "PageStreaming/PageStore/PageStoreFormat.h"
+#include "Mathematics/Vector2.h"
 #include "Mathematics/Vector3.h"
 #include "Types/Types.h"
 

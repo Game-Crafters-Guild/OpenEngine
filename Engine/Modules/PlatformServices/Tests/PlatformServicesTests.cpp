@@ -4,8 +4,11 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #ifdef _WIN32
@@ -204,6 +207,89 @@ TEST_F(PlatformServicesTest, DeleteRemovesFile)
     std::vector<uint8_t> readBack;
     EXPECT_EQ(PS::Get().ReadFile("slot1", "save.bin", readBack), PS::Result::NotFound);
     EXPECT_EQ(PS::Get().DeleteFile("slot1", "save.bin"), PS::Result::NotFound);
+}
+
+TEST_F(PlatformServicesTest, DeleteSlotRemovesTheSlotAndItsFiles)
+{
+    ASSERT_EQ(PS::Get().WriteFile("slot1", "a.bin", Bytes({1})), PS::Result::Ok);
+    ASSERT_EQ(PS::Get().WriteFile("slot1", "b.bin", Bytes({2})), PS::Result::Ok);
+    ASSERT_EQ(PS::Get().WriteFile("slot2", "c.bin", Bytes({3})), PS::Result::Ok);
+
+    ASSERT_EQ(PS::Get().DeleteSlot("slot1"), PS::Result::Ok);
+
+    std::vector<std::string> slots;
+    ASSERT_EQ(PS::Get().ListSlots(slots), PS::Result::Ok);
+    EXPECT_EQ(slots, std::vector<std::string>{"slot2"});
+    EXPECT_FALSE(std::filesystem::exists(TestSaveRoot() / "slot1"));
+    EXPECT_EQ(PS::Get().DeleteSlot("slot1"), PS::Result::NotFound);
+}
+
+TEST_F(PlatformServicesTest, FileInfoGivesTheSizeAndTheWriteTime)
+{
+    const auto before = std::chrono::system_clock::now();
+    ASSERT_EQ(PS::Get().WriteFile("slot1", "save.bin", Bytes({1, 2, 3})), PS::Result::Ok);
+
+    PS::SaveFileInfo info;
+    ASSERT_EQ(PS::Get().GetFileInfo("slot1", "save.bin", info), PS::Result::Ok);
+    EXPECT_EQ(info.SizeBytes, 3u);
+    EXPECT_LT(std::chrono::abs(info.LastWriteTime - before), std::chrono::seconds(1));
+    EXPECT_EQ(PS::Get().GetFileInfo("slot1", "missing.bin", info), PS::Result::NotFound);
+}
+
+TEST_F(PlatformServicesTest, ConcurrentWritesOfOneFileLeaveOneCompleteFile)
+{
+    const std::vector<uint8_t> first(4096, 0x11);
+    const std::vector<uint8_t> second(4096, 0x22);
+    std::thread writer([&] {
+        for (int i = 0; i < 50; ++i)
+            EXPECT_EQ(PS::Get().WriteFile("slot1", "save.bin", first), PS::Result::Ok);
+    });
+    for (int i = 0; i < 50; ++i)
+        EXPECT_EQ(PS::Get().WriteFile("slot1", "save.bin", second), PS::Result::Ok);
+    writer.join();
+
+    std::vector<std::string> files;
+    ASSERT_EQ(PS::Get().ListFiles("slot1", files), PS::Result::Ok);
+    EXPECT_EQ(files, std::vector<std::string>{"save.bin"});
+    std::vector<uint8_t> readBack;
+    ASSERT_EQ(PS::Get().ReadFile("slot1", "save.bin", readBack), PS::Result::Ok);
+    EXPECT_TRUE(readBack == first || readBack == second);
+}
+
+TEST_F(PlatformServicesTest, InitializeRemovesTheTemporaryFileOfAStoppedWriter)
+{
+    ASSERT_EQ(PS::Get().WriteFile("slot1", "save.bin", Bytes({1})), PS::Result::Ok);
+    // No process has this id, so the writer of this file stopped before its rename.
+    const std::filesystem::path orphan = TestSaveRoot() / "slot1" / "save.bin.2147483600-77-0.tmp";
+    std::ofstream(orphan, std::ios::binary) << "partial";
+
+    PS::Get().Shutdown();
+    PS::Config config;
+    config.AppName = "PlatformServicesTests";
+    config.SaveRootOverride = TestSaveRoot();
+    ASSERT_EQ(PS::Get().Initialize(config), PS::Result::Ok);
+
+    std::vector<std::string> files;
+    ASSERT_EQ(PS::Get().ListFiles("slot1", files), PS::Result::Ok);
+    EXPECT_EQ(files, std::vector<std::string>{"save.bin"});
+    EXPECT_FALSE(std::filesystem::exists(orphan));
+}
+
+TEST_F(PlatformServicesTest, ListFilesSkipsTheTemporaryFileOfARunningWriter)
+{
+    ASSERT_EQ(PS::Get().WriteFile("slot1", "save.bin", Bytes({1})), PS::Result::Ok);
+    // The save root's name is this process's id, so this writer is still running.
+    const std::string processId = TestSaveRoot().filename().string();
+    std::ofstream(TestSaveRoot() / "slot1" / ("save.bin." + processId + "-77-0.tmp"), std::ios::binary) << "partial";
+
+    std::vector<std::string> files;
+    ASSERT_EQ(PS::Get().ListFiles("slot1", files), PS::Result::Ok);
+    EXPECT_EQ(files, std::vector<std::string>{"save.bin"});
+}
+
+TEST_F(PlatformServicesTest, TemporaryFileNamesAreRejected)
+{
+    EXPECT_EQ(PS::Get().WriteFile("slot1", "level.2147483600-3.tmp", Bytes({1})), PS::Result::InvalidArgument);
 }
 
 TEST_F(PlatformServicesTest, SavesPersistAcrossReinitialize)

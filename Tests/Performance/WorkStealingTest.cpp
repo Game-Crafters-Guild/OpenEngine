@@ -4,17 +4,20 @@
 #include "JobSystem/Types.h"
 #include <atomic>
 #include <chrono>
+#include <cstdint>
+#include <cstdio>
 #include <thread>
 #include <vector>
 
 #include "../Jobs/LatencyBudget.h"
+#include "../Jobs/ScopedLogLevel.h"
 
 // Scheduling-contract tests for the post-overhaul pool (issue #242 re-baseline,
 // slice 6). The pre-overhaul versions of these tests asserted per-worker work
 // SPREAD (every thread does some work, load imbalance < 50%, linear scaling
 // efficiency > 70%). That was never the pool's contract, and since slice 1/4
 // it is explicitly NOT the behavior: producers issue a BOUNDED number of
-// wakes (min(need, sleepers, 4)) and worker-side propagation only extends the
+// wakes (one idle worker per publish) and worker-side propagation only extends the
 // wake front while a backlog remains, so for cheap tasks a few workers
 // legitimately drain everything while the rest stay parked. That is the
 // design (no thundering herd), not a defect — asserting spread rejected the
@@ -37,15 +40,35 @@
 
 namespace GameEngine::Performance {
 
+namespace {
+
+// An odd 64-bit multiplier (the MMIX linear congruential one).
+constexpr std::uint64_t kTaskWorkMultiplier = 6364136223846793005ull;
+
+// The work of one task in the uniform-weight tests.
+constexpr size_t kUniformTaskSteps = 1000;
+
+// One task's work: `steps` multiply-add steps on one value. Each step uses the result of the step before.
+// In an optimized build, the value stays in a register, and the result is stored once, so the loop stays and its time
+// does not change with the stack layout.
+void RunTaskWork(size_t steps) {
+    // A volatile read gives the start value and the step count at run time, so the compiler cannot fold the call.
+    volatile size_t runTimeSteps = steps;
+    size_t stepCount = runTimeSteps;
+    std::uint64_t value = stepCount;
+    for (size_t step = 0; step < stepCount; ++step) {
+        value = value * kTaskWorkMultiplier + step;
+    }
+    volatile std::uint64_t result = value;
+    (void)result;
+}
+
+} // namespace
+
 class WorkStealingTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        Logger::Log::SetLogLevel(Logger::LogLevel::Error);
         m_Budget = GameEngine::Tests::ReadLatencyBudget();
-    }
-
-    void TearDown() override {
-        Logger::Log::SetLogLevel(Logger::LogLevel::Info);
     }
 
     // True when the machine load skips the budgets. A test checks it after its correctness checks.
@@ -53,6 +76,10 @@ protected:
 
     // Read in SetUp, before the test starts its pool.
     GameEngine::Tests::LatencyBudget m_Budget;
+
+private:
+    // The cases print their [bench] records with std::printf, so a run at this level still shows them.
+    GameEngine::Tests::ScopedLogLevel m_LogLevel{Logger::LogLevel::Error};
 };
 
 // Mixed-weight burst: every task completes, and end-to-end throughput stays
@@ -77,10 +104,7 @@ TEST_F(WorkStealingTest, MixedWeightBurstDrainsPromptly) {
     for (size_t i = 0; i < numTasks; ++i) {
         handles.push_back(pool.Submit([&completedTasks, i]() {
             size_t workAmount = (i % 10 == 0) ? 10000 : 100;
-            volatile size_t sum = 0;
-            for (size_t j = 0; j < workAmount; ++j) {
-                sum += j;
-            }
+            RunTaskWork(workAmount);
             completedTasks.fetch_add(1, std::memory_order_relaxed);
         }));
     }
@@ -89,13 +113,13 @@ TEST_F(WorkStealingTest, MixedWeightBurstDrainsPromptly) {
         handle.Wait();
     }
 
-    auto endTime = std::chrono::high_resolution_clock::now();
-    auto durationMs =
-        std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count();
+    const auto interval = std::chrono::high_resolution_clock::now() - startTime;
+    auto durationMs = std::chrono::duration_cast<std::chrono::milliseconds>(interval).count();
 
-    double tasksPerSecond = numTasks * 1000.0 / static_cast<double>(std::max<long long>(1, durationMs));
-    Logger::Log::Info("MixedWeightBurst: {} tasks in {}ms ({:.0f} tasks/sec)",
-                      numTasks, durationMs, tasksPerSecond);
+    const double elapsedMs = std::chrono::duration<double, std::milli>(interval).count();
+    const double tasksPerSecond = numTasks * 1000.0 / std::max(elapsedMs, 1e-3);
+    std::printf("[bench] MixedWeightBurst: %zu tasks in %.2fms (%.0f tasks/sec)\n", numTasks, elapsedMs,
+                tasksPerSecond);
 
     EXPECT_EQ(completedTasks.load(), numTasks) << "every published task must execute";
     // Basis: measured ~130-180ms (280-380k tasks/sec). A stranded backlog
@@ -128,10 +152,7 @@ TEST_F(WorkStealingTest, BoundedWakePropagationCompletesPromptly) {
 
     for (size_t i = 0; i < numTasks; ++i) {
         handles.push_back(pool.Submit([&completedTasks]() {
-            volatile size_t sum = 0;
-            for (size_t j = 0; j < 1000; ++j) {
-                sum += j;
-            }
+            RunTaskWork(kUniformTaskSteps);
             completedTasks.fetch_add(1, std::memory_order_relaxed);
         }));
     }
@@ -140,11 +161,11 @@ TEST_F(WorkStealingTest, BoundedWakePropagationCompletesPromptly) {
         handle.Wait();
     }
 
-    auto endTime = std::chrono::high_resolution_clock::now();
-    auto durationMs =
-        std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count();
+    const auto interval = std::chrono::high_resolution_clock::now() - startTime;
+    auto durationMs = std::chrono::duration_cast<std::chrono::milliseconds>(interval).count();
 
-    Logger::Log::Info("BoundedWakePropagation: {} tasks in {}ms", numTasks, durationMs);
+    const double elapsedMs = std::chrono::duration<double, std::milli>(interval).count();
+    std::printf("[bench] BoundedWakePropagation: %zu tasks in %.2fms\n", numTasks, elapsedMs);
 
     EXPECT_EQ(completedTasks.load(), numTasks) << "every published task must execute";
     // Basis: measured ~40-70ms. See file header for the x3+ budget rationale.
@@ -181,10 +202,7 @@ TEST_F(WorkStealingTest, StormCompletesWithinBudgetAtEveryWidth) {
         handles.reserve(numTasks);
         for (size_t i = 0; i < numTasks; ++i) {
             handles.push_back(pool.Submit([&completedTasks]() {
-                volatile size_t sum = 0;
-                for (size_t j = 0; j < 1000; ++j) {
-                    sum += j;
-                }
+                RunTaskWork(kUniformTaskSteps);
                 completedTasks.fetch_add(1, std::memory_order_relaxed);
             }));
         }
@@ -193,11 +211,11 @@ TEST_F(WorkStealingTest, StormCompletesWithinBudgetAtEveryWidth) {
             handle.Wait();
         }
 
-        auto endTime = std::chrono::high_resolution_clock::now();
-        auto durationMs =
-            std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count();
+        const auto interval = std::chrono::high_resolution_clock::now() - startTime;
+        auto durationMs = std::chrono::duration_cast<std::chrono::milliseconds>(interval).count();
 
-        Logger::Log::Info("Storm width {}: {} tasks in {}ms", numThreads, numTasks, durationMs);
+        const double elapsedMs = std::chrono::duration<double, std::milli>(interval).count();
+        std::printf("[bench] Storm width %zu: %zu tasks in %.2fms\n", numThreads, numTasks, elapsedMs);
 
         EXPECT_EQ(completedTasks.load(), numTasks)
             << "width " << numThreads << ": every published task must execute";

@@ -19,6 +19,7 @@
 #include "Engine/Rendering/Material.h"
 #include "Engine/Rendering/MaterialRegistry.h"
 #include "Engine/Rendering/PrimitiveGenerator.h"
+#include "Engine/Rendering/RenderOrigin.h"
 #include "Engine/Rendering/RenderServices.h"
 #include "Engine/Rendering/WindVolumeResolver.h"
 #include "Engine/Rendering/WorldDrawTypes.h"
@@ -510,7 +511,8 @@ Engine::Renderer::ResolvedWind BuildBaseWindWorld(const EZTree::TreeOptions& opt
     if (!options.wind.enabled)
         return wind;
 
-    const float* m = worldTransform.matrix;
+    const Mathematics::Matrix4x4 basis = worldTransform.ToMatrix4x4(Mathematics::Vector3{});
+    const float* m = basis.Data();
     wind.VelocityX = m[0] * options.wind.strength.x + m[4] * options.wind.strength.y + m[8] * options.wind.strength.z;
     wind.VelocityY = m[1] * options.wind.strength.x + m[5] * options.wind.strength.y + m[9] * options.wind.strength.z;
     wind.VelocityZ = m[2] * options.wind.strength.x + m[6] * options.wind.strength.y + m[10] * options.wind.strength.z;
@@ -521,7 +523,8 @@ Engine::Renderer::ResolvedWind BuildBaseWindWorld(const EZTree::TreeOptions& opt
 Engine::Renderer::ResolvedWind WorldWindToLocal(const Engine::Renderer::ResolvedWind& worldWind,
                                                  const Components::WorldTransform& worldTransform)
 {
-    const float* m = worldTransform.matrix;
+    const Mathematics::Matrix4x4 basis = worldTransform.ToMatrix4x4(Mathematics::Vector3{});
+    const float* m = basis.Data();
     float axisX[3]{m[0], m[1], m[2]};
     float axisY[3]{m[4], m[5], m[6]};
     float axisZ[3]{m[8], m[9], m[10]};
@@ -594,13 +597,17 @@ void SubmitPart(Engine::Renderer::RenderServices& renderServices,
     if (meshIndex == 0xFFFFFFFFu || materialIndex == 0xFFFFFFFFu)
         return;
 
+    Mathematics::Vector3Int sector;
+    const Mathematics::Matrix4x4 localMatrix = GameEngine::Engine::Renderer::SectorLocalMatrix(worldTransform, sector);
+    const float* elements = localMatrix.Data();
     Rendering::GPUInstance instance{};
-    std::memcpy(instance.transform.Data(), worldTransform.matrix, sizeof(worldTransform.matrix));
-    std::memcpy(instance.prevTransform.Data(), worldTransform.matrix, sizeof(worldTransform.matrix));
+    std::memcpy(instance.transform.Data(), elements, sizeof(float) * 16);
+    std::memcpy(instance.prevTransform.Data(), elements, sizeof(float) * 16);
+    GameEngine::Rendering::PackSector(sector.x, sector.y, sector.z, instance.sectorPacked[0], instance.sectorPacked[1]);
     bool mirrored = false;
     Rendering::Vector4 normalColumn0;
     Rendering::MatrixUtils::ComputeNormalMatrixColumns(
-        worldTransform.matrix,
+        elements,
         normalColumn0,
         instance.normalMatrixCol1,
         instance.normalMatrixCol2,
@@ -625,15 +632,11 @@ void SubmitPart(Engine::Renderer::RenderServices& renderServices,
     if (mirrored && Rendering::MirroredWindingEnabled())
         instance.flags |= Rendering::kInstanceFlagMirrored;
     instance.lodBias = 0.0f;
-    const float* m = worldTransform.matrix;
-    const auto& center = bounds.Box.center;
-    instance.boundingCenter = Rendering::Vector3(
-        m[0] * center.x + m[4] * center.y + m[8] * center.z + m[12],
-        m[1] * center.x + m[5] * center.y + m[9] * center.z + m[13],
-        m[2] * center.x + m[6] * center.y + m[10] * center.z + m[14]);
-    const float sx = std::sqrt(m[0] * m[0] + m[1] * m[1] + m[2] * m[2]);
-    const float sy = std::sqrt(m[4] * m[4] + m[5] * m[5] + m[6] * m[6]);
-    const float sz = std::sqrt(m[8] * m[8] + m[9] * m[9] + m[10] * m[10]);
+    // The bounding center is local to the sector in sectorPacked; each reader composes it.
+    instance.boundingCenter = localMatrix.TransformPoint(bounds.Box.center);
+    const float sx = std::sqrt(elements[0] * elements[0] + elements[1] * elements[1] + elements[2] * elements[2]);
+    const float sy = std::sqrt(elements[4] * elements[4] + elements[5] * elements[5] + elements[6] * elements[6]);
+    const float sz = std::sqrt(elements[8] * elements[8] + elements[9] * elements[9] + elements[10] * elements[10]);
     instance.boundingRadius = (bounds.Box.Radius() + boundsInflation) * std::max({sx, sy, sz});
 
     if (instanceIndex == 0xFFFFFFFFu)
@@ -797,10 +800,11 @@ void EZTreeExtractionSystem::Update(ECS::World& world, float32 /*deltaTime*/)
             Engine::Renderer::ResolvedWind worldWind = BuildBaseWindWorld(tree.Options, *worldTransform);
             if (tree.Options.wind.enabled)
             {
+                const Mathematics::Vector3 treePosition = worldTransform->GetPosition() - Mathematics::WorldPosition{};
                 worldWind = Engine::Renderer::WindVolumeResolver::ResolveAt(world,
-                                                                              worldTransform->matrix[12],
-                                                                              worldTransform->matrix[13],
-                                                                              worldTransform->matrix[14],
+                                                                              treePosition.x,
+                                                                              treePosition.y,
+                                                                              treePosition.z,
                                                                               worldWind);
             }
             const Engine::Renderer::ResolvedWind localWind = WorldWindToLocal(worldWind, *worldTransform);

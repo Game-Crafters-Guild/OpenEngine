@@ -33,19 +33,13 @@
 
 .panel-sub { color: #ffffff; font-size: 16px; }
 
-.bar-track {
+.health-bar {
     width: 100%;
     height: 16px;
-    background-color: rgba(0, 0, 0, 0.28);
     border: 1px solid rgba(120, 173, 255, 0.6);
-    border-radius: 8px;
-}
-
-.bar-fill {
-    width: 78%;
-    height: 100%;
-    background-color: rgba(80, 220, 130, 0.95);
-    border-radius: 8px;
+    --ui_color_progress_track: rgba(0, 0, 0, 0.28);
+    --ui_color_progress_fill: rgba(80, 220, 130, 0.95);
+    --ui_progress_radius: 8px;
 }
 
 .score-value {

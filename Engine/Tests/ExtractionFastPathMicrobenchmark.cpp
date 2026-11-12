@@ -85,9 +85,8 @@ TEST_F(ExtractionFastPathTest, DISABLED_RendererIncrementalMicrobenchmark)
             total, [&](size_t i, WorldTransform& wt, MeshRenderer& mr, MeshGPUData& bridge)
             {
                 wt = {};
-                SetIdentityMatrix(wt.matrix);
-                wt.matrix[12] = static_cast<float>(i % 1000u);
-                wt.matrix[14] = static_cast<float>(i / 1000u);
+                wt.Position.X = static_cast<double>(i % 1000u);
+                wt.Position.Z = static_cast<double>(i / 1000u);
                 wt.Version = 1u;
                 mr = {};
                 mr.meshGpuHandleId = static_cast<uint64>(h.meshHandle);
@@ -140,7 +139,7 @@ TEST_F(ExtractionFastPathTest, DISABLED_RendererIncrementalMicrobenchmark)
                                                GetComponentTypeId<WorldTransform>());
             for (const auto& item : moving)
             {
-                item.Transform->matrix[13] = y;
+                item.Transform->Position.Y = y;
                 ++item.Transform->Version;
             }
             h.world->EmitComponentDirtyBatch(GetComponentTypeId<WorldTransform>(),

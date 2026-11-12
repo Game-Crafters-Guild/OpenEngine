@@ -8,8 +8,8 @@
 //   * get_log forwards since and pattern and leaves the defaults to the editor;
 //   * every get_log reply ends with the next call: since=<nextSince> with the same level
 //     and pattern, the narrower call when the cap left lines out, the same line after
-//     'unchanged'; the MCP server's reply carries it as `next`, the CLI prints it as its
-//     last line, and a value holding a single quote is double-quoted with bash escapes;
+//     'unchanged'; the MCP server's reply carries it as `next`, the CLI prints it on
+//     stderr, and a value holding a single quote is double-quoted with bash escapes;
 //   * a gtest XML reads as declared = ran + disabled, the failures with their first
 //     message line and the skips with their reason;
 //   * a run in which no test ran (a filter that matches nothing) reads as void, never
@@ -166,20 +166,27 @@ try {
     check('MCP get_log: the reply holds next beside nextSince',
           mcpReply?.nextSince === 57 && mcpReply?.next === 'get_log since=57 pattern="shader"', mcpText);
 
-    // The CLI prints the next call as its last line, with the flags the call used.
+    // The CLI prints the next call on stderr, with the flags the call used; stdout holds
+    // only the answer, so a filter of stdout for the pattern finds only the matches.
     logReply = { lines: ['[12:00:01] [warning] shader x'], nextSince: 57 };
     const cli = await new Promise((resolve) => {
         const child = spawn(process.execPath, [path.join(repoRoot, 'mcp', 'ge.mjs'), 'get_log', '--since', '41',
                                                '--min-level', 'warning', '--pattern', 'shader|pipeline'],
                             { cwd: repoRoot, env: { ...process.env, GE_CLI_NO_BUILD: '1' } });
         let stdout = '';
+        let stderr = '';
         child.stdout.on('data', (chunk) => { stdout += chunk; });
-        child.on('close', (code) => resolve({ code, stdout }));
+        child.stderr.on('data', (chunk) => { stderr += chunk; });
+        child.on('close', (code) => resolve({ code, stdout, stderr }));
     });
-    const lastLine = cli.stdout.trimEnd().split(/\r?\n/).at(-1);
-    check('CLI get_log: the last line is the next call to paste',
-          cli.code === 0 && lastLine === `next: node mcp/ge.mjs get_log --since 57 --min-level warning --pattern 'shader|pipeline' --port ${fake.address().port}`,
-          `exit ${cli.code}, last line: ${lastLine}`);
+    const nextLine = cli.stderr.split(/\r?\n/).find((line) => line.startsWith('next: '));
+    check('CLI get_log: stderr names the next call to paste',
+          cli.code === 0 && nextLine === `next: node mcp/ge.mjs get_log --since 57 --min-level warning --pattern 'shader|pipeline' --port ${fake.address().port}`,
+          `exit ${cli.code}, next line: ${nextLine}`);
+    const stdoutWithPattern = cli.stdout.split(/\r?\n/).filter((line) => line.includes('shader'));
+    check('CLI get_log: no stdout line but the match holds the pattern',
+          stdoutWithPattern.length === 1 && stdoutWithPattern[0].includes('shader x'),
+          `stdout lines holding the pattern: ${JSON.stringify(stdoutWithPattern)}`);
 
     const summaries = await import(pathToFileURL(path.join(dist, 'build', 'summaries.js')).href);
 

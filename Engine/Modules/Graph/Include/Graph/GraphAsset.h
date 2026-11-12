@@ -16,7 +16,7 @@ public:
     GraphAsset(const GUID& guid, const std::filesystem::path& path);
 
     bool Load() override;
-    bool LoadFromData(const Vector<uint8>& data) override;
+    bool LoadFromData(std::span<const uint8> data) override;
     void Unload() override;
 
     const Graph::Model& GetModel() const { return m_Model; }

@@ -458,4 +458,17 @@ void* ScratchScope::AllocateAside(std::size_t bytes, std::size_t alignment)
     return Detail::AllocateSide(*m_Frame, bytes, alignment);
 }
 
+bool ScratchScope::TryExtendLatest(const void* begin, const void* end, std::size_t addedBytes)
+{
+#if GE_DEBUG_INSTRUMENTATION
+    assert(Detail::PeekScratchThread() == m_Thread &&
+           "a ScratchScope allocates only on the thread that opened it; give other threads spans");
+#endif
+    if (*m_OpenDepth != m_Depth + 1)
+        return false;
+    // An outermost scope owns every take in the arena and keeps no marker of its own.
+    const Arena::Marker floor = m_Depth == 0 ? Arena::Marker{} : m_Frame->Marker;
+    return m_Arena->TryExtendLatest(begin, end, addedBytes, floor);
+}
+
 } // namespace GameEngine::Memory

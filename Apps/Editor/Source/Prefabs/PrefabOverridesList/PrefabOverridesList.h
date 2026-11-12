@@ -93,6 +93,7 @@ class PrefabOverridesList final : public UIElement, public DismissablePopup
     void ApplyTargets(std::span<const Scene::PrefabOverrideTarget> targets, const std::string& undoName);
     void RevertTargets(std::span<const Scene::PrefabOverrideTarget> targets, const std::string& undoName);
     void Discard(std::size_t skipIndex);
+    void FitWidthToBar();
     void Place();
 
     ECS::World& m_World;
@@ -105,7 +106,7 @@ class PrefabOverridesList final : public UIElement, public DismissablePopup
     const UIElement* m_Anchor = nullptr;
     UIElement* m_Panel = nullptr;
     Label* m_Title = nullptr;
-    Label* m_Against = nullptr;
+    Label* m_PrefabLabel = nullptr;
     ScrollView* m_Scroll = nullptr;
     Label* m_Empty = nullptr;
     Label* m_Note = nullptr;
@@ -115,6 +116,7 @@ class PrefabOverridesList final : public UIElement, public DismissablePopup
     std::vector<Scene::PrefabOverrideTarget> m_Targets;
     float m_PlacedX = -1.0f;
     float m_PlacedY = -1.0f;
+    float m_MaxWidth = -1.0f;
     std::optional<UI::Layout::PopupSide> m_Side;
 };
 

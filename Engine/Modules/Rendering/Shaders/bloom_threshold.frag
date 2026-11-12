@@ -135,8 +135,8 @@ void main(){
         && pc.bloomDepthVeilEnd > pc.bloomDepthVeilStart)
     {
         float rawDepth = texture(uDepth, vUV).r;
-        float linearDepth = IsBackgroundDepth(rawDepth) ? ViewParams.ge_nearFar.y
-                                                        : LinearizeReverseZ(rawDepth, ViewParams.ge_nearFar.xy);
+        float linearDepth = IsBackgroundDepth(rawDepth) ? ViewParams.ge_viewRanges.y
+                                                        : LinearizeReverseZ(rawDepth, ViewParams.ge_depthTerms);
         float startDistance = max(pc.bloomDepthVeilStart, 0.0);
         float endDistance = max(pc.bloomDepthVeilEnd, startDistance + 1e-4);
         float depthMask = smoothstep(startDistance, endDistance, linearDepth);

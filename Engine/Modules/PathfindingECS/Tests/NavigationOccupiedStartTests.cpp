@@ -57,7 +57,7 @@ protected:
     Pathfinding::GridMap& Grid() { return *NavigationService::Get().GetGridMap(Map); }
     ECS::Entity Unit() { return {&World, Actor}; }
     const NavigationAgentState& State() { return *Unit().Get<NavigationAgentState>(); }
-    Mathematics::Vector3 Position() { return Unit().Get<Transform>()->GetPosition(); }
+    Mathematics::Vector3 Position() { return Unit().Get<Transform>()->GetPosition() - Mathematics::WorldPosition{}; }
     void Create(float32 x = 4.25f, float32 z = 4.25f, float32 radius = 0.45f,
                 float32 endX = 12.5f, float32 endZ = 4.5f)
     {
@@ -75,10 +75,9 @@ protected:
         state.DestinationZ = endZ;
         state.HasDestination = state.PathDirty = true;
         Transform xf{};
-        xf.matrix[12] = x;
-        xf.matrix[14] = z;
+        xf.Position = Mathematics::WorldPosition{x, 0.0, z};
         WorldTransform wt{};
-        std::copy(std::begin(xf.matrix), std::end(xf.matrix), std::begin(wt.matrix));
+        wt.Position = xf.Position;
         Actor = World.Create(agent, state, xf, wt).GetHandle();
         World.ProcessCommands();
         Paths.Update(World, kDt);

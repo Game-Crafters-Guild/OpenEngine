@@ -324,7 +324,6 @@ if(GLSLC_EXECUTABLE)
         fullscreen_noinput.vert
         conflict_vs.vert
         world_debug.vert
-        world_debug_forwardplus.vert
         ubo_nudge.vert
     )
 
@@ -340,9 +339,7 @@ if(GLSLC_EXECUTABLE)
         pbr_forward_shadowdebug.frag
         show_shadowmap.frag
         world_debug.frag
-        world_debug_forwardplus.frag
         world_depthonly.frag
-        forwardplus_lighting.frag
     )
     # Add PBR and tonemap shaders to compile lists
     list(APPEND VERTEX_SHADERS pbr_forward.vert)
@@ -444,9 +441,9 @@ if(GLSLC_EXECUTABLE)
 
     # _defines arrives comma-separated so it survives being one field of a
     # semicolon-delimited CMake list entry.
-    function(ge_add_ui_sdf_variant _stem _stage _defines)
+    function(ge_add_ui_sdf_variant _source _stem _stage _defines)
         string(REPLACE "," ";" _defineList "${_defines}")
-        set(SHADER_SOURCE ${SHADER_SOURCE_DIR}/ui_sdf.${_stage})
+        set(SHADER_SOURCE ${SHADER_SOURCE_DIR}/${_source}.${_stage})
         if(NOT EXISTS "${SHADER_SOURCE}")
             return()
         endif()
@@ -468,7 +465,7 @@ if(GLSLC_EXECUTABLE)
             list(GET _parts 1 _defines)
         endif()
         foreach(_ui_sdf_stage vert frag)
-            ge_add_ui_sdf_variant("${_stem}" "${_ui_sdf_stage}" "${_defines}")
+            ge_add_ui_sdf_variant(ui_sdf "${_stem}" "${_ui_sdf_stage}" "${_defines}")
         endforeach()
     endforeach()
 
@@ -476,8 +473,14 @@ if(GLSLC_EXECUTABLE)
         string(REPLACE "|" ";" _parts "${_ui_sdf_variant}")
         list(GET _parts 0 _stem)
         list(GET _parts 1 _defines)
-        ge_add_ui_sdf_variant("${_stem}" "frag" "${_defines}")
+        ge_add_ui_sdf_variant(ui_sdf "${_stem}" "frag" "${_defines}")
     endforeach()
+
+    # The opaque-interior pre-pass of the UI draw (UIOpaqueInteriors). Vulkan
+    # and Metal only: the compat profile keeps the single painter's-order draw.
+    ge_add_ui_sdf_variant(ui_opaque ui_opaque vert "")
+    ge_add_ui_sdf_variant(ui_opaque ui_opaque frag "")
+    ge_add_ui_sdf_variant(ui_opaque ui_opaque_encoded frag "-DUI_BLEND_SPACE_ENCODED")
 
         # Auto-include any additional shaders found in known shader roots (so new files compile without manual edits)
         foreach(_shader_dir IN LISTS GE_SHADER_SOURCE_DIRS)
@@ -504,6 +507,8 @@ if(GLSLC_EXECUTABLE)
         list(REMOVE_ITEM FRAGMENT_SHADERS mesh_triangle.frag)
         list(REMOVE_ITEM VERTEX_SHADERS ui_sdf.vert)
         list(REMOVE_ITEM FRAGMENT_SHADERS ui_sdf.frag)
+        list(REMOVE_ITEM VERTEX_SHADERS ui_opaque.vert)
+        list(REMOVE_ITEM FRAGMENT_SHADERS ui_opaque.frag)
         # draw_command_scatter.comp uses subgroup arithmetic (P0 shadow-arc
         # per-slice triangle reduction), which needs SPIR-V >= 1.3; the generic
         # compute rule below targets glslc's vulkan1.0 default. Compile it with a
@@ -622,7 +627,7 @@ if(GLSLC_EXECUTABLE)
             COMMENT "Compiling compute shader (vulkan1.3): draw_command_scatter.comp")
 
         # Coalesced scatter-hot variant (-DSCATTER_COMPACT): same source, binds
-        # the 32 B mirror at binding 1. Same vulkan1.3/spv1.6 flags (subgroup
+        # the 40 B mirror at binding 1. Same vulkan1.3/spv1.6 flags (subgroup
         # arithmetic). Output name feeds _ge_add_shaderpkg_compute below.
         set(SCATTER_COMPACT_COMP_SPV ${SHADER_OUTPUT_DIR}/draw_command_scatter_compact.comp.spv)
         ge_compile_shader(VULKAN13
@@ -732,6 +737,7 @@ set(RENDERING_CORE_SOURCES
 	    # Core interfaces
 	    Source/Core/Device.cpp
 	    Source/Core/DescriptorSetCache.cpp
+	    Source/Core/DrawProducerRegistry.cpp
 	    Source/Core/RendererProfile.cpp
 	    Source/Core/CommandList.cpp
 	    # The compat-profile flag the resolved RendererProfile sets. Core rather
@@ -850,9 +856,9 @@ set(RENDERING_WEBGPU_SOURCES
 set_property(SOURCE Source/WebGPU/WebGpuSurfaceBridge.cpp APPEND PROPERTY
     INCLUDE_DIRECTORIES ${CMAKE_SOURCE_DIR}/Engine/Modules/Platform/Include)
 
-# The window frame reads GE_ASYNC_COMPUTE through Platform's header-only
-# environment switch, the one rule every GE_ switch follows.
-set_property(SOURCE Source/Core/RenderGraph/RGWindowFrame.cpp APPEND PROPERTY
+# The window frame (GE_ASYNC_COMPUTE) and the Metal device (GE_FRAME_TRACE) read their
+# switches through Platform's header-only environment switch, the one rule every GE_ switch follows.
+set_property(SOURCE Source/Core/RenderGraph/RGWindowFrame.cpp Source/Metal/MetalDevice.cpp APPEND PROPERTY
     INCLUDE_DIRECTORIES ${CMAKE_SOURCE_DIR}/Engine/Modules/Platform/Include)
 
 set(RENDERING_METAL_SOURCES
@@ -866,6 +872,8 @@ set(RENDERING_METAL_SOURCES
     Source/Metal/MetalSwapchain.cpp
     Source/Metal/MetalLayerBridge.cpp
     Source/Metal/MetalShaderTranslator.cpp
+    Source/Metal/MetalShippedLibraries.cpp
+    Source/Metal/MetalLibraryBake.cpp
     Source/Metal/MetalQueryPool.cpp
     Source/Metal/MetalSubmitQueue.cpp
     Source/Metal/MetalAccelerationStructures.cpp
@@ -988,6 +996,9 @@ find_package(nlohmann_json CONFIG QUIET)
             Source/ShaderCache/ShaderPackageContainer.cpp
             Source/ShaderCache/ShaderPackageIO.cpp
             Source/ShaderCache/ShaderProgramIndex.cpp
+            Source/ShaderCache/MetalLibraryArchive.cpp
+            Source/ShaderCache/ShaderStage/ShaderStageRecord.cpp
+            Source/ShaderCache/ShaderStage/ShaderStageRecorder.cpp
         )
         target_include_directories(GameEngineRendering PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/Include)
         target_link_libraries(GameEngineRendering PUBLIC nlohmann_json::nlohmann_json)
@@ -1154,6 +1165,8 @@ endif()
 if(RENDERING_HAS_METAL)
     target_sources(GameEngineRendering PRIVATE ${RENDERING_METAL_SOURCES})
     target_compile_definitions(GameEngineRendering PRIVATE RENDERING_HAS_METAL=1)
+    # A shipped stage library targets the macOS the binaries run on (MetalLibraryCompileFlags).
+    target_compile_definitions(GameEngineRendering PRIVATE GE_MACOS_DEPLOYMENT_TARGET="${CMAKE_OSX_DEPLOYMENT_TARGET}")
 
     # Vendored metal-cpp headers (no vcpkg port exists). SYSTEM silences the
     # vendor headers under -Wall -Wextra.
@@ -1304,7 +1317,6 @@ if (TARGET CompileShaders AND (TARGET ShaderReflect OR GE_SHADERREFLECT_EXECUTAB
     # Default world debug pipeline used by RenderServices (Editor Scene/Game view)
     _ge_add_shaderpkg_graphics(world_debug world_debug.vert world_debug.frag)
     _ge_add_shaderpkg_graphics(world_depthonly world_debug.vert world_depthonly.frag)
-    _ge_add_shaderpkg_graphics(world_debug_forwardplus world_debug_forwardplus.vert world_debug_forwardplus.frag)
     # Editor SceneView gizmo/grid pipelines
     _ge_add_shaderpkg_graphics(editor_lines lines.vert lines.frag)
     _ge_add_shaderpkg_graphics(markup_glow markup_glow.vert markup_glow.frag)
@@ -1443,7 +1455,6 @@ if (TARGET CompileShaders AND (TARGET ShaderReflect OR GE_SHADERREFLECT_EXECUTAB
     _ge_add_shaderpkg_compute(cluster_depth_minmax_t8 cluster_depth_minmax_t8.comp)
     _ge_add_shaderpkg_compute(shadow_minmax_reduce shadow_minmax_reduce.comp)
     _ge_add_shaderpkg_graphics(cluster_debug_overlay fullscreen_noinput.vert cluster_debug_overlay.frag)
-    _ge_add_shaderpkg_graphics(forwardplus_lighting fullscreen_noinput.vert forwardplus_lighting.frag)
     _ge_add_shaderpkg_graphics(shadow_debug_overlay fullscreen_noinput.vert shadow_debug_overlay.frag)
     _ge_add_shaderpkg_graphics(tonemap fullscreen_noinput.vert tonemap.frag)
     _ge_add_shaderpkg_graphics(copy fullscreen_noinput.vert copy.frag)
@@ -2163,10 +2174,12 @@ if(GTest_FOUND OR TARGET GTest::gtest)
     # Loud SKIP when the agent cannot diverge the two formats. Needs staged
     # shaderpkgs for the encode pass. The same hidden-window harness drives the
     # SUBOPTIMAL-acquire frames (GE_VK_FORCE_ACQUIRE_SUBOPTIMAL): rendered and
-    # presented, the swapchain recreated after the present.
+    # presented, the swapchain recreated after the present. It also drives the
+    # window target whose swapchain is created on a dispatched job.
     add_executable(RenderingWindowTargetPresentedFormatTests
         Tests/WindowTargetPresentedFormatTests.cpp
         Tests/SwapchainSuboptimalAcquireTests.cpp
+        Tests/WindowTargetPendingCreationTests.cpp
     )
     set_target_properties(RenderingWindowTargetPresentedFormatTests PROPERTIES FOLDER "Rendering/Tests")
     target_link_libraries(RenderingWindowTargetPresentedFormatTests PRIVATE
@@ -2631,10 +2644,28 @@ if(GTest_FOUND)
             COMMENT "Extracting the relief's depth from parallax_depth.glsl"
             VERBATIM)
 
+        # The compute kernels' sphere and box tests, run by FrustumTestsShaderTests.
+        set(FRUSTUM_TESTS_GLSL ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/Includes/frustum_tests.glsl)
+        set(FRUSTUM_TESTS_HEADER ${CMAKE_CURRENT_BINARY_DIR}/generated/FrustumTestsExtracted.h)
+        add_custom_command(
+            OUTPUT ${FRUSTUM_TESTS_HEADER}
+            COMMAND ${CMAKE_COMMAND} -DSRC=${FRUSTUM_TESTS_GLSL}
+                                     -DOUT=${FRUSTUM_TESTS_HEADER}
+                                     "-DBEGIN_MARKER=// GE_SHARED_FRUSTUM_TESTS_BEGIN"
+                                     "-DEND_MARKER=// GE_SHARED_FRUSTUM_TESTS_END"
+                                     -P ${GLSL_HOST_SHIM_DIR}/ExtractShaderBlock.cmake
+            DEPENDS ${FRUSTUM_TESTS_GLSL}
+                    ${GLSL_HOST_SHIM_DIR}/ExtractShaderBlock.cmake
+            COMMENT "Extracting the frustum tests from frustum_tests.glsl"
+            VERBATIM)
+
         add_executable(ShaderVariantKeyTests
             ${PARALLAX_OCCLUSION_HEADER}
             ${PARALLAX_STEPS_VIEW_HEADER}
             ${PARALLAX_DEPTH_HEADER}
+            ${FRUSTUM_TESTS_HEADER}
+            Tests/ClusterProjectionTests.cpp
+            Tests/FrustumTestsShaderTests.cpp
             Tests/ParallaxOcclusionTests.cpp
             Tests/RendererProfileTests.cpp
             Tests/ShaderVariantKeyTests.cpp
@@ -2659,9 +2690,10 @@ if(GTest_FOUND)
             Tests/VertexDeformationClockTests.cpp
             Tests/DeformationMotionVariantTests.cpp)
         target_link_libraries(ShaderVariantKeyTests PRIVATE GameEngineRendering FileSystemObjects GTest::gtest GTest::gtest_main)
-        # Module-private headers (Source/Materials/Shader/ShaderSourceCache.h) by module path.
+        # Module-private headers (Source/Materials/Shader/ShaderSourceCache.h) by module path; the
+        # engine headers for the projection depth terms (Engine/Rendering/CameraUtils.h).
         target_include_directories(ShaderVariantKeyTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
-            ${GLSL_HOST_SHIM_DIR} ${CMAKE_CURRENT_BINARY_DIR}/generated)
+            ${GLSL_HOST_SHIM_DIR} ${CMAKE_CURRENT_BINARY_DIR}/generated ${CMAKE_SOURCE_DIR}/Engine/Include)
         rendering_test_shader_paths(ShaderVariantKeyTests)
         # Real extracted eztree package shaders (Arc 3a acceptance C) and the
         # shipped default-material assets — same source-tree anchoring the
@@ -3054,7 +3086,8 @@ if(RENDERING_BUILD_TESTS)
             set_tests_properties(RenderingMetalTriangleSmokeTests PROPERTIES TIMEOUT 45 RUN_SERIAL TRUE LABELS "Present;Windowed;Metal")
         endif()
 
-        add_executable(RenderingMetalBackendHeadlessTests Tests/MetalBackendHeadlessTests.cpp Tests/MetalHdrOutputTests.cpp)
+        add_executable(RenderingMetalBackendHeadlessTests Tests/MetalBackendHeadlessTests.cpp Tests/MetalHdrOutputTests.cpp
+            Tests/MetalShippedLibraryTests.cpp)
         target_link_libraries(RenderingMetalBackendHeadlessTests PRIVATE GameEngineRendering FileSystemObjects GTest::gtest GTest::gtest_main)
         # The tests read backend state through MetalDevice.h, which includes metal-cpp.
         target_include_directories(RenderingMetalBackendHeadlessTests SYSTEM PRIVATE
@@ -3748,4 +3781,24 @@ if(BUILD_TESTING AND GLSLC_EXECUTABLE AND Python3_Interpreter_FOUND)
     add_test(NAME ShaderCookGoldenTests
              COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/Tools/ShaderCook/run_golden_tests.py)
     set_tests_properties(ShaderCookGoldenTests PROPERTIES SKIP_RETURN_CODE 125)
+    # CTest prints no reason for a skip, so the configure names the missing tool. The cook's own
+    # search (shadercook.FindTool) decides, so this check cannot disagree with the test.
+    execute_process(
+        COMMAND ${Python3_EXECUTABLE} -B -c "import shadercook; print(shadercook.FindTool('naga', None) or '')"
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/Tools/ShaderCook
+        RESULT_VARIABLE GE_SHADERCOOK_RESULT
+        OUTPUT_VARIABLE GE_SHADERCOOK_NAGA
+        ERROR_VARIABLE GE_SHADERCOOK_ERROR
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_STRIP_TRAILING_WHITESPACE)
+    if(NOT GE_SHADERCOOK_RESULT EQUAL 0)
+        message(WARNING "ShaderCookGoldenTests cannot run: ${Python3_EXECUTABLE} cannot import "
+                        "Tools/ShaderCook/shadercook.py:\n${GE_SHADERCOOK_ERROR}\nFix: correct the error "
+                        "above for that interpreter (or point Python3_EXECUTABLE at one that imports the "
+                        "cook), then configure again.")
+    elseif(NOT GE_SHADERCOOK_NAGA)
+        message(WARNING "ShaderCookGoldenTests will report SKIPPED and compare nothing: naga is not in "
+                        "Tools/ShaderCook/toolchain/<host>/ or on PATH. Fix: run "
+                        "Tools/ShaderCook/toolchain/setup.py, then configure again.")
+    endif()
 endif()

@@ -37,6 +37,7 @@ constexpr AssistantTool kTools[] = {
     {"get_undo_stack", "get_undo_stack", Class::Read, "Read the undo history", {"", "", ""}},
     {"sample_ground_height", "sample_ground_height", Class::Read, "Sample ground height", {"", "", ""}},
     {"get_placement_ground_gap", "get_placement_ground_gap", Class::Read, "Measure the ground gap", {"entityId", "", ""}},
+    {"get_ai_trace", "get_ai_trace", Class::Read, "Read an AI agent's decisions", {"entityId", "", ""}},
     {"markup_list", "markup_list", Class::Read, "List mark-ups", {"status", "", ""}},
     {"markup_get", "markup_get", Class::Read, "Read a mark-up", {"entityId", "", ""}},
     {"markup_create", "markup_create", Class::UndoableEdit, "Create mark-up", {"title", "kind", ""}},

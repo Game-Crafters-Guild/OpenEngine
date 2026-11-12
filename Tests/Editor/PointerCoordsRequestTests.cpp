@@ -14,6 +14,7 @@
 
 #include "DebugServer/DebugServerReply.h"
 #include "DebugServer/PointerCoordsRequest.h"
+#include "Input/InputSystem.h"
 
 #include <cmath>
 #include <string>
@@ -256,4 +257,15 @@ TEST(PointerCoordsRequestTests, ADragPathIsThePathPointsThenTheEnd)
     error = json();
     EXPECT_FALSE(Editor::ReadDragPath(json::parse(R"({"path": []})"), 2, points, error));
     EXPECT_TRUE(Editor::IsRefusal(error)) << error.dump();
+}
+
+// "mods" is one name, an array of names or a raw mask; names ignore case and an unknown name adds nothing.
+TEST(PointerCoordsRequestTests, KeyModifiersReadANameAnArrayOrAMask)
+{
+    EXPECT_EQ(Editor::ReadKeyModifiers(json::parse(R"({})")), 0);
+    EXPECT_EQ(Editor::ReadKeyModifiers(json::parse(R"({"mods": "Ctrl"})")), Input::kModControl);
+    EXPECT_EQ(Editor::ReadKeyModifiers(json::parse(R"({"mods": ["shift", "cmd", "hyper"]})")),
+              Input::kModShift | Input::kModSuper);
+    EXPECT_EQ(Editor::ReadKeyModifiers(json::parse(R"({"mods": 5})")), 5);
+    EXPECT_EQ(Editor::ReadKeyModifiers(json::parse(R"({"mods": "hyper"})")), 0);
 }

@@ -1,10 +1,13 @@
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <string>
 
 namespace GameEngine
 {
+enum class MaterialPatternSymmetry : uint8_t;
+class Dropdown;
 class Foldout;
 class Label;
 class UIElement;
@@ -17,9 +20,9 @@ struct SliderWithFloatValueRow;
 namespace Editor
 {
 
-// The material inspector's foldouts and the lines between its rows. Each builder sets the classes
-// that inspector.css spaces it by, so the material keeps the row rhythm of the component rows
-// around it.
+// The material inspector's foldouts, the lines between its rows and the rows that are not a single
+// property toggle or slider. Each builder sets the classes that inspector.css spaces it by, so the
+// material keeps the row rhythm of the component rows around it.
 
 // The foldout that holds a material inline in an entity inspector, under its Material row.
 std::unique_ptr<Foldout> MakeMaterialPropertiesFoldout();
@@ -34,6 +37,11 @@ Label* AddMaterialLine(UIElement* parent, const std::string& text);
 // Appends a warning line of the material inspector: a problem with the material that the user can
 // fix, in the inspector's warning treatment, keeping the row gap above and below it.
 Label* AddMaterialWarning(UIElement* parent, const std::string& text);
+
+// Appends the Pattern Symmetry row: a dropdown of None, Rectangular and Square, in the enum's order,
+// with the given value selected. Each option's value is the name the material file stores. The
+// caller wires SetOnValueChanged.
+Dropdown* AddMaterialPatternSymmetryRow(UIElement* parent, MaterialPatternSymmetry symmetry);
 
 // Makes a slider row inactive: its value is unused in the material's current state (Relief Depth
 // while the relief is refused), so the row stays, showing the value, but takes no edit and reads as

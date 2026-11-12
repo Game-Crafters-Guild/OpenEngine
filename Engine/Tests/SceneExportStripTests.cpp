@@ -231,7 +231,7 @@ TEST(SceneExportStrip, ARegionLeavesOnlyItsEntityAndTransform)
         authoredWorld.AddComponentImmediate(forest, Components::SceneEntityTag{"forest"});
         authoredWorld.AddComponentImmediate(forest, Components::Name{"Forest"});
         authoredWorld.AddComponentImmediate(
-            forest, Components::Transform::FromTRS(Mathematics::Vector3(45.0f, 0.0f, 30.0f), Mathematics::Quaternion::Identity(),
+            forest, Components::Transform::FromTRS(Mathematics::WorldPosition{45.0, 0.0, 30.0}, Mathematics::Quaternion::Identity(),
                                                    Mathematics::Vector3(1.0f, 1.0f, 1.0f)));
         authoredWorld.AddComponentImmediate(forest, Components::Markup{});
         SplineECS::SplineService& splines = SplineECS::SplineService::Get();

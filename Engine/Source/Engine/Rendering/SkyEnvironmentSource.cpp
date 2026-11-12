@@ -130,7 +130,7 @@ void FillCaptureUbo(const SkySettings& s, uint32_t face, CaptureSkyUbo& ubo)
 // FillAtmosphereFromSettings so the baked sky matches the on-screen sky exactly.
 void FillCaptureAtmosphere(const SkySettings& s, AtmosphereParametersGPU& atmo)
 {
-    SkyRenderer::FillDefaultAtmosphere(atmo);
+    SkyRenderer::FillDefaultAtmosphere(atmo, s.planet);
     atmo.groundAlbedo = Mathematics::Vector3(s.groundAlbedo.r, s.groundAlbedo.g, s.groundAlbedo.b);
     atmo.groundNightColor = Mathematics::Vector3(s.groundNightColor.r, s.groundNightColor.g, s.groundNightColor.b);
     atmo.groundHorizonColor = Mathematics::Vector3(s.groundHorizonColor.r, s.groundHorizonColor.g, s.groundHorizonColor.b);

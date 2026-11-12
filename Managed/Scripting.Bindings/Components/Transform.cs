@@ -3,11 +3,11 @@ using System.Numerics;
 namespace GameEngine.Scripting
 {
     /// <summary>
-    /// An entity's local transform: a 4x4 matrix in column-major order, as the engine stores it. Columns 0 to 2 are
-    /// the X, Y and Z axes, column 3 the translation (<c>Matrix[12]</c> to <c>Matrix[14]</c>). Left-handed, +Y up,
-    /// +Z forward. System.Numerics.Matrix4x4 multiplies a row vector, so the same 16 floats read in order are its
-    /// matrix: <see cref="ToMatrix4x4"/> and <see cref="FromMatrix4x4"/> copy them, and the translation is
-    /// <c>Matrix4x4.Translation</c>.
+    /// An entity's local transform, as the engine stores it: an exact <see cref="Position"/> in doubles and a
+    /// column-major <see cref="Basis"/>, whose columns are the X, Y and Z axes.
+    /// Left-handed, +Y up, +Z forward. System.Numerics.Matrix4x4 multiplies a row vector, so the basis columns are
+    /// its rows: <see cref="ToMatrix4x4"/> and <see cref="FromMatrix4x4"/> copy them, and the translation is
+    /// <c>Matrix4x4.Translation</c>, in floats.
     /// </summary>
     public partial struct Transform
     {
@@ -17,84 +17,31 @@ namespace GameEngine.Scripting
             get
             {
                 Transform t = default;
-                t.Matrix[0] = 1f;
-                t.Matrix[5] = 1f;
-                t.Matrix[10] = 1f;
-                t.Matrix[15] = 1f;
+                t.Basis.Column0 = Vector3.UnitX;
+                t.Basis.Column1 = Vector3.UnitY;
+                t.Basis.Column2 = Vector3.UnitZ;
                 return t;
             }
         }
 
         /// <summary>
-        /// A transform from position, rotation (a quaternion, x y z w) and scale, as the engine's
-        /// Transform::FromTRS builds it: <c>matrix * v == rotation.Rotate(v)</c>, so a +Y yaw sends +Z toward +X.
+        /// A transform from an exact position, a rotation and a scale, as the engine's Transform::FromTRS builds it:
+        /// <c>matrix * v == rotation.Rotate(v)</c>, so a +Y yaw sends +Z toward +X. Needs no engine.
         /// </summary>
-        public static Transform FromTRS(float px, float py, float pz,
-                                        float qx, float qy, float qz, float qw,
-                                        float sx, float sy, float sz)
-            => MakeTRS(px, py, pz, qx, qy, qz, qw, sx, sy, sz, leftHanded: true);
-
-        /// <summary>A transform from position, rotation and scale (System.Numerics types), as <see cref="FromTRS(float, float, float, float, float, float, float, float, float, float)"/>.</summary>
-        public static Transform FromTRS(Vector3 position, Quaternion rotation, Vector3 scale)
-            => FromTRS(position.X, position.Y, position.Z,
-                       rotation.X, rotation.Y, rotation.Z, rotation.W,
-                       scale.X, scale.Y, scale.Z);
-
-        /// <summary>
-        /// The right-handed form, as the engine's Transform::FromTRSRH builds it: the transpose of the rotation of
-        /// <see cref="FromTRS(float, float, float, float, float, float, float, float, float, float)"/>, so a +Y yaw
-        /// sends +Z toward -X.
-        /// </summary>
-        public static Transform FromTRSRH(float px, float py, float pz,
-                                          float qx, float qy, float qz, float qw,
-                                          float sx, float sy, float sz)
-            => MakeTRS(px, py, pz, qx, qy, qz, qw, sx, sy, sz, leftHanded: false);
-
-        /// <summary>The right-handed form from System.Numerics types.</summary>
-        public static Transform FromTRSRH(Vector3 position, Quaternion rotation, Vector3 scale)
-            => FromTRSRH(position.X, position.Y, position.Z,
-                         rotation.X, rotation.Y, rotation.Z, rotation.W,
-                         scale.X, scale.Y, scale.Z);
-
-        // Starts from `default` and writes all 16 elements, so it needs no engine.
-        private static Transform MakeTRS(float px, float py, float pz,
-                                         float qx, float qy, float qz, float qw,
-                                         float sx, float sy, float sz, bool leftHanded)
+        public static Transform FromTRS(WorldPosition position, Quaternion rotation, Vector3 scale)
         {
-            float x2 = qx + qx, y2 = qy + qy, z2 = qz + qz;
-            float xx = qx * x2, xy = qx * y2, xz = qx * z2;
-            float yy = qy * y2, yz = qy * z2, zz = qz * z2;
-            float wx = qw * x2, wy = qw * y2, wz = qw * z2;
-
-            float r00 = 1f - (yy + zz);
-            float r11 = 1f - (xx + zz);
-            float r22 = 1f - (xx + yy);
-            float r01 = leftHanded ? (xy - wz) : (xy + wz);
-            float r02 = leftHanded ? (xz + wy) : (xz - wy);
-            float r10 = leftHanded ? (xy + wz) : (xy - wz);
-            float r12 = leftHanded ? (yz - wx) : (yz + wx);
-            float r20 = leftHanded ? (xz - wy) : (xz + wy);
-            float r21 = leftHanded ? (yz + wx) : (yz - wx);
+            float x2 = rotation.X + rotation.X, y2 = rotation.Y + rotation.Y, z2 = rotation.Z + rotation.Z;
+            float xx = rotation.X * x2, xy = rotation.X * y2, xz = rotation.X * z2;
+            float yy = rotation.Y * y2, yz = rotation.Y * z2, zz = rotation.Z * z2;
+            float wx = rotation.W * x2, wy = rotation.W * y2, wz = rotation.W * z2;
 
             Transform t = default;
-            t.Matrix[0] = r00 * sx; t.Matrix[1] = r10 * sx; t.Matrix[2] = r20 * sx; t.Matrix[3] = 0f;
-            t.Matrix[4] = r01 * sy; t.Matrix[5] = r11 * sy; t.Matrix[6] = r21 * sy; t.Matrix[7] = 0f;
-            t.Matrix[8] = r02 * sz; t.Matrix[9] = r12 * sz; t.Matrix[10] = r22 * sz; t.Matrix[11] = 0f;
-            t.Matrix[12] = px; t.Matrix[13] = py; t.Matrix[14] = pz; t.Matrix[15] = 1f;
+            t.Basis.Column0 = new Vector3(1f - (yy + zz), xy + wz, xz - wy) * scale.X;
+            t.Basis.Column1 = new Vector3(xy - wz, 1f - (xx + zz), yz + wx) * scale.Y;
+            t.Basis.Column2 = new Vector3(xz + wy, yz - wx, 1f - (xx + yy)) * scale.Z;
+            t.Position = position;
             return t;
         }
-
-        /// <summary>The translation (column 3).</summary>
-        public readonly Vector3 GetPosition() => ColumnMajorMatrix.Position(Matrix);
-
-        /// <summary>The X of the translation.</summary>
-        public readonly float X => Matrix[12];
-
-        /// <summary>The Y of the translation.</summary>
-        public readonly float Y => Matrix[13];
-
-        /// <summary>The Z of the translation.</summary>
-        public readonly float Z => Matrix[14];
 
         /// <summary>The rotation as a quaternion, with the scale divided out of the columns first, as the engine's Transform::GetRotation.</summary>
         public readonly Quaternion GetRotation()
@@ -107,9 +54,9 @@ namespace GameEngine.Scripting
 
             float invSx = 1f / sx, invSy = 1f / sy, invSz = 1f / sz;
 
-            float r00 = Matrix[0] * invSx, r10 = Matrix[1] * invSx, r20 = Matrix[2] * invSx;
-            float r01 = Matrix[4] * invSy, r11 = Matrix[5] * invSy, r21 = Matrix[6] * invSy;
-            float r02 = Matrix[8] * invSz, r12 = Matrix[9] * invSz, r22 = Matrix[10] * invSz;
+            float r00 = Basis.Column0.X * invSx, r10 = Basis.Column0.Y * invSx, r20 = Basis.Column0.Z * invSx;
+            float r01 = Basis.Column1.X * invSy, r11 = Basis.Column1.Y * invSy, r21 = Basis.Column1.Z * invSy;
+            float r02 = Basis.Column2.X * invSz, r12 = Basis.Column2.Y * invSz, r22 = Basis.Column2.Z * invSz;
 
             float trace = r00 + r11 + r22;
             float qw, qx, qy, qz;
@@ -153,22 +100,22 @@ namespace GameEngine.Scripting
 
         /// <summary>The scale on each axis: the lengths of the columns.</summary>
         public readonly Vector3 GetScale() => new(
-            ColumnMajorMatrix.AxisLength(Matrix, 0), ColumnMajorMatrix.AxisLength(Matrix, 1), ColumnMajorMatrix.AxisLength(Matrix, 2));
+            ColumnMajorMatrix.AxisLength(Basis, 0), ColumnMajorMatrix.AxisLength(Basis, 1), ColumnMajorMatrix.AxisLength(Basis, 2));
 
         /// <summary>The local +X axis, normalized.</summary>
-        public readonly Vector3 Right => ColumnMajorMatrix.Axis(Matrix, 0);
+        public readonly Vector3 Right => ColumnMajorMatrix.Axis(Basis, 0);
 
         /// <summary>The local -X axis, normalized.</summary>
         public readonly Vector3 Left => -Right;
 
         /// <summary>The local +Y axis, normalized.</summary>
-        public readonly Vector3 Up => ColumnMajorMatrix.Axis(Matrix, 1);
+        public readonly Vector3 Up => ColumnMajorMatrix.Axis(Basis, 1);
 
         /// <summary>The local -Y axis, normalized.</summary>
         public readonly Vector3 Down => -Up;
 
         /// <summary>The local +Z axis, normalized.</summary>
-        public readonly Vector3 Forward => ColumnMajorMatrix.Axis(Matrix, 2);
+        public readonly Vector3 Forward => ColumnMajorMatrix.Axis(Basis, 2);
 
         /// <summary>The local -Z axis, normalized.</summary>
         public readonly Vector3 Back => -Forward;
@@ -176,63 +123,59 @@ namespace GameEngine.Scripting
         /// <summary>Resets the transform to the identity.</summary>
         public void SetIdentity() => this = Identity;
 
-        /// <summary>Adds an offset to the translation.</summary>
+        /// <summary>Adds an offset to the position, in doubles.</summary>
         public void Translate(float x, float y, float z)
         {
-            Matrix[12] += x;
-            Matrix[13] += y;
-            Matrix[14] += z;
+            Position.X += x;
+            Position.Y += y;
+            Position.Z += z;
         }
 
         /// <summary>Adds an offset to the translation.</summary>
         public void Translate(Vector3 offset) => Translate(offset.X, offset.Y, offset.Z);
 
         /// <summary>Replaces the rotation (a quaternion, x y z w), keeping the position and the scale, as the engine's Transform::Rotate.</summary>
-        public void Rotate(float x, float y, float z, float w)
-        {
-            Vector3 p = GetPosition();
-            Vector3 s = GetScale();
-            this = FromTRS(p.X, p.Y, p.Z, x, y, z, w, s.X, s.Y, s.Z);
-        }
+        public void Rotate(float x, float y, float z, float w) => Rotate(new Quaternion(x, y, z, w));
 
         /// <summary>Replaces the rotation, keeping the position and the scale.</summary>
-        public void Rotate(Quaternion q) => Rotate(q.X, q.Y, q.Z, q.W);
+        public void Rotate(Quaternion q) => this = FromTRS(Position, q, GetScale());
 
         /// <summary>Writes the diagonal scale values (replaces them, does not multiply), as the engine's Transform::SetScale.</summary>
         public void SetScale(float x, float y, float z)
         {
-            Matrix[0] = x;
-            Matrix[5] = y;
-            Matrix[10] = z;
+            Basis.Column0.X = x;
+            Basis.Column1.Y = y;
+            Basis.Column2.Z = z;
         }
 
         /// <summary>Writes the diagonal scale values.</summary>
         public void SetScale(Vector3 scale) => SetScale(scale.X, scale.Y, scale.Z);
 
-        /// <summary>Replaces the translation.</summary>
-        public void SetPosition(float x, float y, float z)
-        {
-            Matrix[12] = x;
-            Matrix[13] = y;
-            Matrix[14] = z;
-        }
-
-        /// <summary>Replaces the translation.</summary>
-        public void SetPosition(Vector3 position) => SetPosition(position.X, position.Y, position.Z);
-
         /// <summary>
         /// The transform as a System.Numerics.Matrix4x4, for <c>Vector3.Transform</c>, <c>Matrix4x4.Decompose</c> and
-        /// the rest of System.Numerics: the translation is in M41 to M43.
+        /// the rest of System.Numerics: the translation is in M41 to M43, rounded to floats.
         /// </summary>
-        public readonly Matrix4x4 ToMatrix4x4() => ColumnMajorMatrix.ToMatrix4x4(Matrix);
+        public readonly Matrix4x4 ToMatrix4x4() => ColumnMajorMatrix.ToMatrix4x4(Basis, Position);
 
-        /// <summary>Replaces the transform with a System.Numerics.Matrix4x4 (the translation in M41 to M43).</summary>
+        /// <summary>
+        /// Replaces the transform with an affine System.Numerics.Matrix4x4 (the translation in M41 to M43). A matrix
+        /// whose fourth column (M14, M24, M34, M44) is more than 1e-5 from 0, 0, 0, 1 is projective and throws
+        /// <see cref="System.ArgumentException"/>.
+        /// </summary>
         public void FromMatrix4x4(Matrix4x4 m)
         {
-            Matrix[0] = m.M11; Matrix[1] = m.M12; Matrix[2] = m.M13; Matrix[3] = m.M14;
-            Matrix[4] = m.M21; Matrix[5] = m.M22; Matrix[6] = m.M23; Matrix[7] = m.M24;
-            Matrix[8] = m.M31; Matrix[9] = m.M32; Matrix[10] = m.M33; Matrix[11] = m.M34;
-            Matrix[12] = m.M41; Matrix[13] = m.M42; Matrix[14] = m.M43; Matrix[15] = m.M44;
+            // A matrix read from a file carries rounding. C++ Transform::FromMatrix4x4 uses the same value.
+            const float kAffineTolerance = 1e-5f;
+            if (MathF.Abs(m.M14) > kAffineTolerance || MathF.Abs(m.M24) > kAffineTolerance ||
+                MathF.Abs(m.M34) > kAffineTolerance || MathF.Abs(m.M44 - 1f) > kAffineTolerance)
+                throw new System.ArgumentException(
+                    $"Transform.FromMatrix4x4 takes an affine matrix, but M14, M24, M34, M44 are ({m.M14}, {m.M24}, {m.M34}, {m.M44}), " +
+                    "not (0, 0, 0, 1). Build the transform with FromTRS, or apply the projection after the transform.",
+                    nameof(m));
+            Basis.Column0 = new Vector3(m.M11, m.M12, m.M13);
+            Basis.Column1 = new Vector3(m.M21, m.M22, m.M23);
+            Basis.Column2 = new Vector3(m.M31, m.M32, m.M33);
+            Position = WorldPosition.FromVector3(m.Translation);
         }
 
         /// <summary>The transform as a System.Numerics.Matrix4x4.</summary>
@@ -241,7 +184,7 @@ namespace GameEngine.Scripting
         /// <inheritdoc/>
         public override readonly string ToString()
         {
-            Vector3 p = GetPosition();
+            WorldPosition p = Position;
             return $"Transform(pos=({p.X:F3}, {p.Y:F3}, {p.Z:F3}))";
         }
     }

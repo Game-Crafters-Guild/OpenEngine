@@ -168,6 +168,11 @@ void TickUserSystems(ECS::World& world, float dt)
         s_PendingPostSimulation.Ready = true;
 }
 
+bool AreUserSystemsStarted(const ECS::World& world)
+{
+    return s_StartedWorldId != 0 && s_StartedWorldId == world.GetWorldId();
+}
+
 void StopUserSystems(ECS::World& world)
 {
     if (s_StartedWorldId == world.GetWorldId())

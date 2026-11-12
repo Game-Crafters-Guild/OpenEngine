@@ -290,6 +290,9 @@ class InputSystem : public IRawInputSink
     bool IsGamepadConnected(int gamepadIndex) const;
     float GetGamepadAxis(int gamepadIndex, GamepadAxis axis) const;
     bool IsGamepadButtonDown(int gamepadIndex, GamepadButton button) const;
+    // Whether this process can read gamepads at all (GamepadPoller::GetRuntimeState): a game
+    // reads it to tell the player that a runtime is missing rather than show a dead pad.
+    GamepadRuntimeState GetGamepadRuntimeState() const;
 
     // --- Action registration & mapping ---
     void RegisterAction(const ContextId& context, const ActionDesc& desc);

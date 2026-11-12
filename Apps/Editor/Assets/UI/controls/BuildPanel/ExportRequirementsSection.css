@@ -1,0 +1,33 @@
+/* ExportRequirementsSection (Apps/Editor/Source/Panels/BuildPanel/ExportRequirementsSection.h).
+ * The section has the Build panel's 12 px side padding. The Docs button is at the end of the heading
+ * row. Each row is an InspectorNotice, which its own sheet styles. */
+
+.export-requirements {
+	display: flex;
+	flex-direction: column;
+	flex-shrink: 0;
+	padding: 4px 12px;
+}
+
+.export-requirements-layout {
+	display: flex;
+	flex-direction: column;
+}
+
+.export-requirements-header {
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	margin-bottom: 2px;
+}
+
+.export-requirements-heading {
+	flex-grow: 1;
+	font-size: var(--ui_font_size_list);
+	color: var(--ui_color_text);
+}
+
+.export-requirements-rows {
+	display: flex;
+	flex-direction: column;
+}

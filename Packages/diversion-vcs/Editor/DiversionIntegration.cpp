@@ -1131,7 +1131,7 @@ void DiversionIntegration::UpdateStatusCache()
             {"Authorization", "Bearer " + accessToken}
         };
         
-        auto response = HttpClient::Get(apiUrl, headers);
+        auto response = HttpClient::Get(apiUrl, headers, {});
         
         // Check again after potentially long HTTP call
         if (m_StatusPoller.IsStopping())

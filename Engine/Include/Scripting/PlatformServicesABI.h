@@ -32,6 +32,10 @@ GE_API int32_t GE_CDECL GE_Platform_WriteSaveFile(
 GE_API int32_t GE_CDECL GE_Platform_ReadSaveFile(
     const char* slotUtf8, const char* nameUtf8, uint8_t* buffer, int32_t bufferSize, int32_t* outSize);
 GE_API int32_t GE_CDECL GE_Platform_DeleteSaveFile(const char* slotUtf8, const char* nameUtf8);
+GE_API int32_t GE_CDECL GE_Platform_DeleteSaveSlot(const char* slotUtf8);
+// *outLastWriteUnixMs is UTC milliseconds since 1970-01-01.
+GE_API int32_t GE_CDECL GE_Platform_GetSaveFileInfo(
+    const char* slotUtf8, const char* nameUtf8, uint64_t* outSizeBytes, int64_t* outLastWriteUnixMs);
 GE_API int32_t GE_CDECL GE_Platform_CommitSave(const char* slotUtf8);
 
 // List results are written as newline-joined UTF-8 (save names cannot

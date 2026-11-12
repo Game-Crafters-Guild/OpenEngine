@@ -57,6 +57,10 @@ public:
     std::shared_ptr<const PageStreaming::PageStoreReader> Store(const GUID& asset, uint64 contentVersion,
                                                                 std::string_view terrain);
 
+    /// True when heightmap `asset`, asked for through Store, opens no store this session: a format the
+    /// loader does not cook (a PNG keeps its texture), no packaged container, or no location.
+    bool NeverOpensStore(const GUID& asset) const;
+
     /// A cook in progress: the terrain that asked for it and the share of its source rows read
     /// (0 to 1; each row is read twice, HeightCookProgress).
     struct CookStatus

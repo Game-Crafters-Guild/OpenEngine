@@ -31,7 +31,7 @@
 #include "Platform/Capabilities.h"
 #include "Platform/Display.h"
 #include "Platform/Window.h"
-#include "GameViewController.h"
+#include "GameView/GameViewController.h"
 #include "SceneView/SceneViewController.h"
 #include "UI/Controls/DockPanel.h"
 #include "UI/Controls/DockspaceElement.h"

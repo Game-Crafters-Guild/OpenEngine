@@ -4,11 +4,13 @@
 #include "Assets/AssetManager.h"
 #include "Assets/AssetRegistry.h"
 #include "Core/Engine.h"
+#include "ECS/UnresolvedComponentStore.h"
 #include "ECS/World.h"
 #include "Logger/Logger.h"
 #include "Scene/AssetManagerSceneResolver.h"
 #include "Scene/PrefabPlacement.h"
 #include "Scene/SceneEngineEmbedMaterializer.h"
+#include "Scene/SceneSchemaRegistry.h"
 #include "Scripting/AbiMainThread.h"
 
 #include <algorithm>
@@ -27,6 +29,23 @@ bool ReadsAnyOf(const PrefabTemplate& prefab, std::span<const std::string> chang
         const std::string key = AssetPaths::NormalizeForRegistryKey(file);
         if (std::find(changedFiles.begin(), changedFiles.end(), key) != changedFiles.end())
             return true;
+    }
+    return false;
+}
+
+// True when an entity of `prefab` keeps, in `kept`, a component of a type that is registered now.
+bool KeepsARegisteredType(const PrefabTemplate& prefab, const ECS::UnresolvedComponentStore& kept)
+{
+    for (const ECS::EntityHandle entity : prefab.Entities)
+    {
+        const auto it = kept.Map().find(entity);
+        if (it == kept.Map().end())
+            continue;
+        for (const ECS::PreservedComponent& component : it->second)
+        {
+            if (SceneSchemaRegistry::Find(component.Name))
+                return true;
+        }
     }
     return false;
 }
@@ -228,6 +247,21 @@ void PrefabLibrary::RebuildFiles(std::span<const std::filesystem::path> files)
     RebuildKeys(changedFiles);
 }
 
+void PrefabLibrary::RebuildForRegisteredTypes()
+{
+    AssertWritable();
+    const ECS::UnresolvedComponentStore* kept = m_World->TryGetUnresolvedComponents();
+    if (!m_AssetManager || !kept || kept->Empty())
+        return;
+    std::vector<const PrefabTemplate*> stale;
+    for (const auto& [key, record] : m_Records)
+    {
+        if (KeepsARegisteredType(*record->Current, *kept))
+            stale.push_back(record->Current.get());
+    }
+    RebuildTemplates(stale);
+}
+
 void PrefabLibrary::SetPropagationDeferred(ECS::World& world, bool deferred)
 {
     AssertWritable();
@@ -271,6 +305,11 @@ void PrefabLibrary::RebuildKeys(std::span<const std::string> changedFiles)
         if (ReadsAnyOf(*record->Current, changedFiles))
             stale.push_back(record->Current.get());
     }
+    RebuildTemplates(stale);
+}
+
+void PrefabLibrary::RebuildTemplates(std::span<const PrefabTemplate* const> stale)
+{
     if (stale.empty())
         return;
 
@@ -278,19 +317,18 @@ void PrefabLibrary::RebuildKeys(std::span<const std::string> changedFiles)
     AssetManagerSceneResolver resolver(*m_AssetManager, engine.GetResolvedAssetRoot(),
                                        AssetManagerSceneResolver::UnknownFile::AssignGuid);
     SceneEngineEmbedMaterializer materializer(*m_AssetManager);
-    SceneReadOptions options;
-    options.assetResolver = &resolver;
-    options.assetRootOverride = resolver.GetAssetRoot();
-    options.projectRoot = engine.GetWorkspaceRoot();
-    options.embedMaterializer = &materializer;
+    SceneLoadOptions options;
+    options.Read.AssetResolver = &resolver;
+    options.Read.AssetRootOverride = resolver.GetAssetRoot();
+    options.Read.ProjectRoot = engine.GetWorkspaceRoot();
+    options.EmbedMaterializer = &materializer;
     for (const PrefabTemplate* prefab : stale)
     {
         // A rebuild retires the old generation, which stays alive while a world's instances show it.
         const std::filesystem::path& path = prefab->Path;
         std::string error;
         if (!BuildTemplateFromFile(*this, path, prefab->Source, options, error))
-            Logger::Log::Error("Prefab {} changed but could not be rebuilt, so spawns and loads still use the "
-                               "previous version: {}",
+            Logger::Log::Error("Prefab {} could not be rebuilt, so spawns and loads still use the previous version: {}",
                                path.filename().string(), error);
     }
 

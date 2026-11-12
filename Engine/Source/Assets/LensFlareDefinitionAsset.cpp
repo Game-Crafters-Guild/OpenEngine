@@ -244,7 +244,7 @@ bool LensFlareDefinitionAsset::Load()
     return ok;
 }
 
-bool LensFlareDefinitionAsset::LoadFromData(const Vector<uint8>& data)
+bool LensFlareDefinitionAsset::LoadFromData(std::span<const uint8> data)
 {
     const std::string text(reinterpret_cast<const char*>(data.data()), data.size());
     const bool ok = ParseFromText(text);

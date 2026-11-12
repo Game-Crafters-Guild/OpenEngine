@@ -9,7 +9,9 @@
 #include "Engine/Rendering/ModelEntityFactory.h"
 #include "EditorChangeNotifications.h"
 #include "InspectorRegistry.h"
+#include "Mathematics/Vector3.h"
 #include "SceneView/SceneViewToolStrip.h"
+#include "SceneView/SceneViewport/SceneViewportHost.h"
 #include "UI/Controls/Widgets/SceneView/SceneViewMeasureOverlay.h"
 #include "UI/Interaction/Types.h"
 
@@ -25,7 +27,6 @@
 
 namespace GameEngine {
 struct AssetLoadHandle;
-namespace Mathematics { struct Vector3; }
 namespace Engine::Renderer
 {
 class RenderServices;
@@ -38,11 +39,16 @@ class UIElement;
 class Label;
 class SceneCameraSettingsPopup;
 class SceneViewController;
+class SceneViewportEdits;
+class SceneViewport;
+struct SceneViewportBinding;
+struct SceneViewportMeasureSettings;
+struct SceneViewCameraGesture;
 class SceneViewToolbar;
 class CameraBookmarksWidget;
 class DownloadPillOverlay;
 
-class SceneViewPanel : public DockPanel, public UI::Interaction::IDropTarget {
+class SceneViewPanel : public DockPanel, public UI::Interaction::IDropTarget, private SceneViewportHost {
 public:
     std::string_view DeclaredTabIconClass() const override { return "dock-scene-view-icon"; }
 
@@ -81,32 +87,24 @@ public:
     SceneViewController* GetSceneControllerForSlot(ViewportSlot slot) const;
     // The controller of the pane `viewport` is, or null for an element that is no pane.
     SceneViewController* GetSceneControllerForViewport(const UIElement& viewport) const;
+    /// Binds every pane to its slot's controller; only the active pane drives its camera.
+    void BindViewports();
     // Expose current camera angles (degrees) so renderer can consume them
-    float GetYawDeg() const { return m_Yaw; }
-    float GetPitchDeg() const { return m_Pitch; }
+    float GetYawDeg() const;
+    float GetPitchDeg() const;
 
     // Setter to camera angles
-    void SetYawPitch(float yawDeg, float pitchDeg)
-    {
-        m_Yaw = yawDeg;
-        m_Pitch = pitchDeg;
-    }
+    void SetYawPitch(float yawDeg, float pitchDeg);
 
     // Viewport element (used by the renderer to size the Scene View texture)
     UIElement* GetViewportElement() const { return m_Viewport; }
     UIElement* GetViewportElementForSlot(ViewportSlot slot) const;
     bool IsQuadViewEnabled() const { return m_QuadViewEnabled; }
     ViewportSlot GetActiveViewportSlot() const { return m_ActiveViewportSlot; }
-    bool ActivateViewportForController(SceneViewController* controller);
     void ToggleQuadView();
-    void NotifyRotationGizmoOrbit(size_t viewportIndex);
-    void NotifyRotationGizmoAxisSnap(size_t viewportIndex, int axis);
 
     // Move keyboard focus to the active scene viewport (Unity-style scene view shortcuts).
     void FocusSceneViewViewport();
-
-    // FPS/perf overlay label (nullptr before RegisterViewportEvents has run).
-    UIElement* GetFpsLabelElement() const;
 
     // used by bookmark widget
     UIElement* GetPreviewPopup() const { return m_BookmarkPreviewPopup; }
@@ -116,26 +114,12 @@ public:
     void SetRenderServices(Engine::Renderer::RenderServices* services) { m_RenderServices = services; }
 
     // Simple accessors for FPS-style navigation state
-    bool IsLooking() const { return m_Dragging && m_DragButton == 1 && !m_IsAltOrbiting && !m_IsPanning && !m_IsDollying; }
-    bool IsOrbiting() const { return (m_Dragging && m_DragButton == 2 && !m_IsPanning) || m_IsAltOrbiting; }
-    bool IsPanning() const { return m_IsPanning; }
-    bool IsDollying() const { return m_IsDollying; }
-
-    // Returns true if orbiting just started this frame (for skipping look delta on first frame).
-    // Also updates the internal tracking state, so call this once per frame before ApplyLookDelta.
-    bool IsFirstOrbitFrame()
-    {
-        const bool nowOrbiting = IsOrbiting();
-        const bool firstFrame = nowOrbiting && !m_WasOrbiting;
-        m_WasOrbiting = nowOrbiting;
-        return firstFrame;
-    }
-
-    // Apply yaw/pitch delta in degrees (driven by InputSystem look axes).
-    void ApplyLookDelta(float deltaYawDeg, float deltaPitchDeg);
+    bool IsLooking() const;
+    bool IsOrbiting() const;
+    bool IsPanning() const;
+    bool IsDollying() const;
 
     // 2D mode + Shift: lock pan motion to horizontal or vertical from the gesture's direction.
-    void ConstrainPanDelta2DShiftAxis(bool shiftHeld, float& deltaX, float& deltaY);
 
     // Update the small FPS/frametime overlay label (best-effort; no-op until bound).
     void UpdatePerformanceOverlay(double deltaSeconds, const PerfBreakdown& perf);
@@ -147,13 +131,12 @@ public:
     // Update FPS overlay label in the viewport.
     void UpdateFPS(float deltaTime);
 
-    // Controls whether FPS is shown in the perf label (toggle with P key).
-    bool IsFpsVisible() const { return m_FpsVisible; }
 
     // Asset preview overlay (2D in Scene View)
     void SetAssetPreview(const std::filesystem::path& path, bool enabled);
 
     void OnPostLayout() override;
+    void OnMountVisibilityChanged(bool isVisible) override;
 
     bool AcceptsPayload(UI::Interaction::PayloadTypeId typeId) const override;
     bool HitTestDropTarget(float x, float y, UI::Interaction::DropHit& out) const override;
@@ -173,9 +156,9 @@ public:
         m_CaptureHierarchySelectionForDrop = std::move(cb);
     }
 
-    /// After a successful drop: refresh hierarchy, multi-select dropped roots, optional undo (see Editor wiring).
+    /// After a successful drop: refresh the hierarchy, select the dropped roots and record the undo step through the edits.
     /// Runs synchronously at end of PerformDrop so undo order stays before subsequent user actions.
-    void SetOnSceneAssetDropComplete(std::function<void(ECS::World*,
+    void SetOnSceneAssetDropComplete(std::function<void(SceneViewportEdits&,
                                                         const std::vector<ECS::EntityHandle>&,
                                                         const std::vector<UI::Interaction::ItemId>&,
                                                         UI::Interaction::ItemId)> cb)
@@ -244,7 +227,6 @@ private:
     void ApplyToolbarIconVisibility();
     // Shows the right-click "hide icons" menu for the scene view toolbar.
     void ShowToolbarIconContextMenu(float windowX, float windowY);
-    void UpdateHoverHighlightPill();
     void UpdateQuadViewButtonState();
     void ResetQuadViewSplits();
     void ResetQuadViewAssignments();
@@ -268,20 +250,33 @@ private:
     bool ViewportOverlaysNeedSync() const;
     void RequestViewportOverlaySync();
     void RefreshOverlayElementPointers();
-    void RefreshViewportRotationGizmos();
-    void RefreshViewportRulerOverlays();
-    void RefreshViewportMeasureOverlays();
     void SyncViewportOverlays();
-    static void GetMayaQuadCorner(ViewportSlot slot, bool& leftColumn, bool& topRow);
+    static void GetQuadCorner(ViewportSlot slot, bool& leftColumn, bool& topRow);
     void ApplyQuadViewLayout();
     void SetActiveViewportSlot(ViewportSlot slot);
     void SetHoveredViewportSlot(ViewportSlot slot);
     ViewportSlot ResolveSpaceToggleViewportSlot(ViewportSlot fallback) const;
-    void BeginViewportSpaceToggle(ViewportSlot fallback, UIEvent& ev);
-    void EndViewportSpaceToggle(ViewportSlot fallback, UIEvent& ev);
-    void BeginCameraDragTracking(float x, float y);
-    void EndCameraDragTracking();
-    bool ApplyImmediatePan(SceneViewController* controller, UIElement* viewport, UIEvent& ev);
+    void BeginViewportSpaceToggle(ViewportSlot fallback);
+    void EndViewportSpaceToggle();
+    // SceneViewportHost: the pane input that spans panes.
+    void ActivateViewport(SceneViewport& pane) override;
+    void HoverViewport(SceneViewport& pane, bool inside) override;
+    bool IsPanHoldDown() const override { return m_SpaceHeld; }
+    void MarkPanHoldDragged() override { m_SpacePanDragStarted = true; }
+    bool HandleViewportKey(SceneViewport& pane, UIEvent& ev, bool pressed) override;
+    bool ShowViewportContextMenu(const Mathematics::Vector2& position) override;
+    void ExitMeasureTool(SceneViewController& keep) override;
+    bool IsSplitView() const override;
+    const UIElement* GetHostLabel() const override;
+    void NotifyRotationGizmoOrbit(SceneViewport& pane) override;
+    void NotifyRotationGizmoAxisSnap(SceneViewport& pane, int axis) override;
+    std::optional<ViewportSlot> FindViewportSlot(const SceneViewport& pane) const;
+    bool HandleTransformToolKey(SceneViewController& controller, const UIEvent& ev);
+    void ToggleFpsLabel();
+    SceneViewportMeasureSettings MeasureSettings() const;
+    void PushMeasureSettings();
+    // The camera gesture of the active pane, or null before the layout binds.
+    const SceneViewCameraGesture* ActiveCameraGesture() const;
     bool HandleSceneViewCommandShortcut(SceneViewController* controller, UIEvent& ev);
     void FocusViewport(UIElement* viewport);
     void SetMeasureToolEnabled(bool enabled);
@@ -296,15 +291,23 @@ private:
     std::vector<ContextMenuManipulator::Item> BuildQuadViewMenuItems();
     void SetMeasureUnitSystem(SceneViewMeasureOverlay::UnitSystem unitSystem);
     void SetMeasureTwoDMode(SceneViewMeasureOverlay::TwoDMode mode);
-    ECS::EntityHandle CreateMeasureEntity(const std::array<float, 3>& start,
-                                          const std::array<float, 3>& end,
-                                          bool is2D);
-    bool HandleMeasurePointerDown(SceneViewController* controller, UIElement* viewport, ViewportSlot slot, UIEvent& ev);
-    bool HandleMeasurePointerMove(SceneViewController* controller, UIElement* viewport, ViewportSlot slot, UIEvent& ev);
-    bool HandleMeasurePointerUp(SceneViewController* controller, UIElement* viewport, ViewportSlot slot, UIEvent& ev);
-    void FinishMeasureDrag(bool allowCreateEntity);
-    void FinishMeasureDragIfReleased();
-    void RegisterAuxViewportEvents(UIElement* viewport, ViewportSlot slot);
+    /// The services a pane on `controller` edits through: the controller, the shared undo, the change notifications,
+    /// the dirty mark and this panel as the host.
+    SceneViewportBinding MakeViewportBinding(SceneViewController* controller);
+    /// Binds the pane of `slot` to the slot's controller and the panel's services, or unbinds it without one.
+    void BindViewport(ViewportSlot slot);
+    /// The pane of `slot` when it is bound to the slot's controller; null when the slot has no controller,
+    /// the layout has no pane or BindViewports has not bound it yet.
+    SceneViewport* BoundViewport(ViewportSlot slot) const;
+    /// The pane whose slot shows `controller`, else the active pane.
+    SceneViewport* BoundViewportFor(const SceneViewController* controller) const;
+    /// The world of the pane that shows the panel's current controller, or null without one.
+    ECS::World* BoundViewportWorld() const;
+    /// Hands a finished drop on `world` to the drop-complete callback with the viewport's edits.
+    void CompleteSceneAssetDrop(ECS::World& world,
+                                const std::vector<ECS::EntityHandle>& roots,
+                                const std::vector<UI::Interaction::ItemId>& selectionBefore,
+                                UI::Interaction::ItemId anchorBefore);
     void RegisterQuadSplitHandleEvents();
     void BeginQuadSplitDrag(UIElement* handle, QuadSplitDragAxis axis, UIEvent& ev);
     void UpdateQuadSplitDrag(UIEvent& ev);
@@ -345,7 +348,6 @@ private:
     // did we bind widgets to layout?
     bool m_LayoutBound = false;
     bool m_ViewportEventsBound = false;
-    bool m_AuxViewportEventsBound = false;
     bool m_QuadSplitHandleEventsBound = false;
     bool m_QuadViewEnabled = false;
     bool m_ViewportOverlaySyncPosted = false;
@@ -369,6 +371,7 @@ private:
     UIElement* m_Viewport = nullptr; // not owned
     UIElement* m_OverlayViewport = nullptr; // not owned
     std::array<UIElement*, static_cast<size_t>(ViewportSlot::Count)> m_ViewportSlots{};
+    std::array<SceneViewport*, static_cast<size_t>(ViewportSlot::Count)> m_Viewports{}; // not owned
     std::array<Label*, static_cast<size_t>(ViewportSlot::Count)> m_ViewportLabels{};
     UIElement* m_QuadSplitVerticalTop = nullptr; // not owned
     UIElement* m_QuadSplitVerticalBottom = nullptr; // not owned
@@ -386,46 +389,11 @@ private:
     // The viewport last published to the view overlay host.
     UIElement::WeakRef<UIElement> m_PublishedOverlayViewport;
 
-    Label* m_HoverHighlightLabel = nullptr; // not owned (optional)
-    // Hover highlight pill: cache layout inputs so we don't relayout or re-anchor every frame (reduces jitter).
-    std::string m_LastHoverPillLayoutText;
-    float m_LastHoverPillViewportWidth = -1.0f;
-    float m_LastHoverPillAnchoredLabelWidth = -1.0f;
-    float m_LastHoverPillAnchorMouseLocalX = -1.0f;
-    float m_LastHoverPillAnchorMouseLocalY = -1.0f;
-    bool m_LastHoverPillUsedCursorPlacement = false;
-
-    bool m_SceneViewportPointerInside = false;
-    float m_SceneViewportPointerLocalX = 0.0f;
-    float m_SceneViewportPointerLocalY = 0.0f;
-
-    // Per-viewport orientation gizmos (Maya: one view cube per pane in quad layout).
-    std::array<class ViewportRotationGizmo*, static_cast<size_t>(ViewportSlot::Count)> m_RotationGizmos{};
-    class ViewportRotationGizmo* m_RotationGizmo = nullptr; // active slot, not owned
-
-    // Per-viewport 2D mode ruler + magnification overlays (fill each viewport) — not owned.
-    std::array<class SceneViewRulerOverlay*, static_cast<size_t>(ViewportSlot::Count)> m_RulerOverlays{};
-    class SceneViewRulerOverlay* m_RulerOverlay = nullptr; // active slot, not owned
-    std::array<class SceneViewMeasureOverlay*, static_cast<size_t>(ViewportSlot::Count)> m_MeasureOverlays{};
-    class SceneViewMeasureOverlay* m_MeasureOverlay = nullptr; // active slot, not owned
-    // The per-viewport overlays above, held between refreshes; each is looked up by id
-    // again only once the element it names is destroyed (RefreshViewport*).
-    std::array<UIElement::WeakRef<class ViewportRotationGizmo>, static_cast<size_t>(ViewportSlot::Count)>
-        m_HeldRotationGizmos{};
-    std::array<UIElement::WeakRef<class SceneViewRulerOverlay>, static_cast<size_t>(ViewportSlot::Count)>
-        m_HeldRulerOverlays{};
-    std::array<UIElement::WeakRef<class SceneViewMeasureOverlay>, static_cast<size_t>(ViewportSlot::Count)>
-        m_HeldMeasureOverlays{};
     // The shared overlays, in the order of kSharedViewportOverlayIds. Mutable: a cache
     // that the const per-frame sync check fills.
-    mutable std::array<UIElement::WeakRef<UIElement>, 4> m_HeldSharedViewportOverlays{};
+    mutable std::array<UIElement::WeakRef<UIElement>, 3> m_HeldSharedViewportOverlays{};
     bool m_MeasureToolEnabled = false;
-    bool m_MeasureDragActive = false;
     bool m_MeasureCreateEntitiesMode = false;
-    ViewportSlot m_MeasureDragSlot = ViewportSlot::Perspective;
-    std::array<float, 3> m_MeasureDragStartWorld{0.0f, 0.0f, 0.0f};
-    std::array<float, 3> m_MeasureDragEndWorld{0.0f, 0.0f, 0.0f};
-    bool m_MeasureDragIs2D = false;
     SceneViewMeasureOverlay::UnitSystem m_MeasureUnitSystem = SceneViewMeasureOverlay::UnitSystem::Metric;
     SceneViewMeasureOverlay::TwoDMode m_MeasureTwoDMode = SceneViewMeasureOverlay::TwoDMode::Triangle;
     std::array<std::uint8_t, static_cast<size_t>(ViewportSlot::Count)> m_MeasureSavedToolKinds{};
@@ -446,14 +414,6 @@ private:
     std::filesystem::path m_AssetPreviewPath;
     bool m_AssetPreviewEnabled = false;
 
-    // Minimal editor camera state (placeholder until rendering uses it)
-    float m_Yaw   = 0.0f; // degrees
-    float m_Pitch = 0.0f; // degrees
-    bool  m_Dragging   = false;
-    int   m_DragButton = -1; // 0=LMB,1=RMB,2=MMB
-    bool  m_CameraDragLastMouseValid = false;
-    float m_CameraDragLastMouseX = 0.0f;
-    float m_CameraDragLastMouseY = 0.0f;
 
     const EditorContext* m_Context = nullptr; // not owned
     Platform::Window* m_Window = nullptr; // not owned
@@ -462,11 +422,6 @@ private:
     // show. Every tool-button menu is owned by its ContextMenuManipulator instead.
     std::unique_ptr<INativeContextMenu> m_ContextMenu;
     Editor::EditorChangeNotifications* m_ChangeNotifications = nullptr; // not owned
-
-    // RMB click vs drag detection for context menu
-    bool  m_RmbCandidateMenu = false;
-    float m_RmbDownX = 0.0f;
-    float m_RmbDownY = 0.0f;
 
     // Drag-to-reposition state for the floating vertical tool overlay.
     // Activated by pressing the Select (arrow) button and dragging past a
@@ -516,26 +471,7 @@ private:
     std::unique_ptr<AssetLoadHandle> m_ThemeStyleLoadHandle;
     std::unique_ptr<AssetLoadHandle> m_PanelStyleLoadHandle;
 
-    void ClearPanShift2DConstraint();
-
-    enum class Pan2DShiftAxisLock : uint8_t
-    {
-        None,
-        Horizontal,
-        Vertical,
-    };
-
-    Pan2DShiftAxisLock m_Pan2DShiftAxisLock = Pan2DShiftAxisLock::None;
-    float m_Pan2DShiftCumDx = 0.0f;
-    float m_Pan2DShiftCumDy = 0.0f;
-    bool m_PanShift2DWasHeld = false;
-
     // Editor camera modes (detected via modifiers)
-    bool m_IsAltOrbiting = false;   // Alt + LMB
-    bool m_IsPanning = false;       // Alt + Ctrl/Cmd + LMB (or Alt/Space + LMB in 2D)
-    bool m_IsDollying = false;      // Alt + Ctrl/Cmd + RMB
-    bool m_WasOrbiting = false;     // Previous frame's orbit state (for first-frame detection)
-    bool m_LmbDragIsToolMode = false; // LMB drag started as tool (gizmo/marquee), not camera
     bool m_SpaceHeld = false;       // Spacebar held (used for space+LMB panning in 2D)
 
     // FPS display in perf label (toggle with P key)
@@ -560,7 +496,7 @@ private:
 
     std::function<std::pair<std::vector<UI::Interaction::ItemId>, UI::Interaction::ItemId>()>
         m_CaptureHierarchySelectionForDrop;
-    std::function<void(ECS::World*,
+    std::function<void(SceneViewportEdits&,
                        const std::vector<ECS::EntityHandle>&,
                        const std::vector<UI::Interaction::ItemId>&,
                        UI::Interaction::ItemId)>

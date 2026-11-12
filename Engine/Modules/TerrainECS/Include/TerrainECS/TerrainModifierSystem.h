@@ -35,6 +35,7 @@
 #include <vector>
 
 namespace JobSystem { class WorkStealingThreadPool; class TaskHandle; }
+namespace GameEngine::Mathematics { struct AABB; }
 
 namespace GameEngine::PageStreaming
 {
@@ -48,7 +49,6 @@ namespace GameEngine::TerrainECS
 {
 class AreaReferenceSurface;
 struct BakeBandRegion;
-struct BakeStoreSnapshot;
 struct TerrainColorGroundWrite;
 struct TerrainSurfaceBakeInputs;
 struct TerrainGrassComposeRequest;
@@ -607,21 +607,6 @@ public:
     const char* GetName() const override { return "TerrainModifierSystem"; }
     void Update(ECS::World& world, float32 deltaTime) override;
 
-    // The document last saved or opened as `previousScene` (null when it never was) was
-    // saved as `savedScene` (the editor's save step). Restamps the document's own
-    // terrains, those whose Terrain.BakeOriginScene is `previousScene` or null, with
-    // `savedScene` (a Save As, or a first save, moves them to the new scene's identity);
-    // a terrain from a subscene or a prefab keeps the nested file's identity, which a
-    // load stamps and a save of the parent leaves unchanged. Then asks the first settled
-    // update to store each of the document's single terrains under its current key and
-    // to prune the saved scene's cache folder to them (TerrainBakeCache.h). Settled means no
-    // geometry bake deferred, no splat renormalize pending and no interactive edit:
-    // the in-memory result then equals a full bake of the current inputs. No bake
-    // runs for this; the copy of the bake and the file writes run off the update, on the
-    // job pool. A later update that is about to bake takes the copy itself if the job has
-    // not started it, so a busy pool costs at most one inline copy, never a wait for it.
-    void RequestBakeCacheStore(ECS::World& world, const GUID& previousScene, const GUID& savedScene);
-
     // Modifier-applied ground for a block of a tiled terrain's own sample lattice,
     // composed on demand — NO TILE NEEDS TO BE RESIDENT.
     //
@@ -663,14 +648,19 @@ public:
     // composition returns has in fact moved.
     [[nodiscard]] uint64 GetAppliedGroundRevision() const { return m_AppliedGroundRevision; }
 
+    // The GetAppliedGroundRevision of the last bake that moved ground in `worldReach` (world XZ), 0
+    // before one. It only rises: a bake away from the reach does not change it. A bake raises whole
+    // cells (kAppliedGroundCellMetres), so a reach reads a bake up to one cell away.
+    [[nodiscard]] uint64 GetAppliedGroundRevisionIn(const Mathematics::AABB& worldReach) const;
+
     // A copy of what the surface page bake of `tiled` reads (TerrainSurfaceBakeInputs): its lattice,
-    // its splat range, the ground `write` and the stacks the last bake applied. Main thread only.
+    // whether its resident splats are baked, the ground `write` and the stacks the last bake applied. Main thread only.
     std::shared_ptr<const TerrainSurfaceBakeInputs> SnapshotSurfaceBake(const TiledTerrainData& tiled,
                                                                         const TerrainColorGroundWrite& write) const;
 
     // Bakes the splat of surface page `address` of a level shaped `level` from `heights` (SurfaceHeightRect)
     // under the stack of `inputs`: kPageSampleCount RGBA8 texels, apron included. False when the window
-    // does not match or no splat range is committed. Safe on many threads at once.
+    // does not match or the resident splats are not baked yet. Safe on many threads at once.
     static bool BakeSurfaceSplatPage(const TerrainSurfaceBakeInputs& inputs, const PageStreaming::PageAddress& address,
                                      const PageStreaming::PageStoreLevel& level, const SurfaceHeightWindow& heights,
                                      std::vector<uint8>& outTexels);
@@ -689,7 +679,7 @@ public:
                                      std::vector<uint8>& outTexels);
 
     // The bake key of `tiled`'s `plane` store: height source `heightKey`, the lattice, the height scale, the
-    // world Y `originY`, the splat range and every writer the last bake applied. Zero when nothing writes the
+    // world Y `originY` and every writer the last bake applied. Zero when nothing writes the
     // plane (GrassControl needs a grass region, Color the ground `write` or a color zone).
     uint64 SurfaceStoreKey(const TiledTerrainData& tiled, PageStreaming::PageFieldKind plane, uint64 heightKey,
                            float32 originY, const TerrainColorGroundWrite& write) const;
@@ -710,22 +700,20 @@ public:
     // of per-frame O(all-samples) rescan that tanked tiled idle fps.
     static uint64 GetTileHeightRescanCountForTests();
 
-    // Test seam: monotonically counts how many times the change gate opened and
-    // the modifier gather actually ran. An idle frame must not increment it —
-    // the quiet-frame oracle for scenes whose modifiers reference splines,
-    // whose edits live in SplineService rather than in any ECS column.
+    // Test seam: the count of modifier gathers. Only a change of the gather's inputs raises it;
+    // an idle frame, a streamed tile's bake and a settle bake do not.
     static uint64 GetGatherCountForTests();
+
+    // Test seam: the edge of one cell of GetAppliedGroundRevisionIn, in meters.
+    static constexpr float32 GetAppliedGroundCellMetresForTests() { return kAppliedGroundCellMetres; }
+    // Test seam: the most cells one bake of GetAppliedGroundRevisionIn records cell by cell.
+    static constexpr int64 GetMaxAppliedGroundCellsPerBakeForTests() { return kMaxAppliedGroundCellsPerBake; }
+    // Test seam: the most wide-bake spans GetAppliedGroundRevisionIn keeps.
+    static constexpr size_t GetMaxAppliedGroundSpansForTests() { return kMaxAppliedGroundSpans; }
 
     // Test seam: the closed areas' reference surfaces built since construction. A
     // gather whose areas' inputs did not change builds none.
     uint32 GetAreaSurfaceBuildCountForTests() const { return m_AreaSurfaces.GetBuildCountForTests(); }
-
-    // Test seams for the spread settle renormalize (Fix 2). GetSplatRenormalizeTexelCount
-    // is a monotonic count of procedural-splat texels the band-spread flush regenerated;
-    // the settle-spike bound oracle asserts the per-frame delta never exceeds the budget
-    // (+ one texel row of round-up slop) and that a large terrain spreads across frames.
-    static uint64 GetSplatRenormalizeTexelCountForTests();
-    static std::size_t GetSplatRenormalizeTexelBudgetForTests();
 
     // Test seams for the interactive-drag live-preview throttle. The throttle
     // paces mid-drag preview re-bakes by wall-clock time; tests inject a
@@ -739,6 +727,8 @@ public:
     uint32 GetDragPreviewBakeCountForTests() const { return m_DragPreviewBakeCount; }
     // Row bands the last bake pass fanned out across the pool; 0 when it ran whole.
     uint32 GetLastBakeBandCountForTests() const { return m_LastBakeBandCount; }
+    // Row bands the last streamed arrival's height compose fanned out; 0 when it ran whole.
+    uint32 GetLastArrivalHeightBandCountForTests() const { return m_LastArrivalHeightBandCount; }
     // Blocks until the grass compose in flight, if any, has finished; its result swaps in at the
     // start of the next update.
     void WaitForGrassComposeForTests();
@@ -835,13 +825,12 @@ private:
 
     // Applies every splat effect (surface rules, paint) to `splatmap` in stack order, clamped like
     // ApplyHeightModifiers. The rules measure `heightfield` (normalized: meters need `heightScale`) on the
-    // splat grid against the (splatMinH, splatMaxH) range. Each problem warns once per latch Reset.
+    // splat grid. Each problem warns once per latch Reset.
     static void ApplySplatModifiers(std::vector<uint8>& splatmap,
                              uint32 splatmapWidth, uint32 splatmapHeight,
                              const Terrain::HeightfieldData& heightfield,
                              const SplatTexelLattice& lattice,
                              float32 heightScale,
-                             float32 splatMinH, float32 splatMaxH,
                              const std::vector<ResolvedModifier>& modifiers,
                              int32 regionMinX, int32 regionMinZ,
                              int32 regionMaxX, int32 regionMaxZ,
@@ -892,6 +881,9 @@ private:
     // SurfaceChanged): every sample on a full bake, else the samples the height and splat dirt reach.
     static void PublishSurfaceChanged(TiledTerrainData& tiled, bool fullBake, const DirtyUnion& heightDirty,
                                       const DirtyUnion& splatDirty);
+    // Publishes the level-0 rect a grass compose of `tiled` changes on its grass planes
+    // (TiledTerrainData::SurfaceChanged): every sample when `entire`, else the samples `dirty` reaches.
+    static void PublishGrassSurfaceChanged(TiledTerrainData& tiled, bool entire, const DirtyUnion& dirty);
 
     // BakeHeightPageOverlay for every tiled terrain that awaits its overlay
     // (TiledTerrainData::AwaitsPageOverlay) under an unchanged modifier set.
@@ -935,39 +927,21 @@ private:
                                   const Terrain::HeightfieldData* baseHeightmap, float32 originX, float32 originY,
                                   float32 originZ, const std::vector<ResolvedModifier>& modifiers, int32 minX,
                                   int32 minZ, int32 maxX, int32 maxZ);
-    // A single terrain's splat pass over an inclusive texel rect against (minH, maxH),
-    // resetting the rect first when resetRect is set, in row bands for a large rect.
-    void BakeSingleTerrainSplat(TerrainData& data, float32 originX, float32 originZ, float32 minH, float32 maxH,
-                                bool resetRect, const std::vector<ResolvedModifier>& modifiers, int32 minX,
+    // A single terrain's splat pass over an inclusive texel rect, resetting the rect first
+    // when resetRect is set, in row bands for a large rect.
+    void BakeSingleTerrainSplat(TerrainData& data, float32 originX, float32 originZ, bool resetRect, const std::vector<ResolvedModifier>& modifiers, int32 minX,
                                 int32 minZ, int32 maxX, int32 maxZ);
 
-    // Renormalize every resident Full tile's splatmap against (globalMinH, globalMaxH)
-    // and commit that range (first bake and the deferred stroke-settle flush).
-    void RenormalizeAllTileSplats(TiledTerrainData& tiled, float32 tileSize,
-                                  const std::vector<ResolvedModifier>& modifiers,
-                                  float32 globalMinH, float32 globalMaxH,
-                                  std::vector<TileCoord>& outBakedTiles);
+    // Bake the splatmap of every resident Full tile and mark the resident splats baked.
+    // The first splat bake of a tiled terrain.
+    void BakeAllTileSplats(TiledTerrainData& tiled, float32 tileSize,
+                           const std::vector<ResolvedModifier>& modifiers,
+                           std::vector<TileCoord>& outBakedTiles);
 
-    // Renormalize a horizontal texel-row band [rowStart, rowEnd] (inclusive) of one
-    // resident tile's splatmap against (globalMinH, globalMaxH), leaving the rest of
-    // the tile untouched and NOT marking it dirty. The band-spread settle flush
-    // (FlushDeferredSplatResplat) calls this to hold each settle frame within a texel
-    // budget; each row is visited exactly once across a tile's bands, so the fully
-    // banded result is byte-identical to RenormalizeAllTileSplats (same generator,
-    // same frozen range). Returns the number of texels processed (band area).
-    std::size_t RenormalizeTileSplatRows(TerrainTileData& tile, float32 tileSize,
-                                         float32 heightScale,
-                                         const std::vector<ResolvedModifier>& modifiers,
-                                         float32 globalMinH, float32 globalMaxH,
-                                         int32 rowStart, int32 rowEnd);
-
-    // Settle a deferred whole-terrain splat renormalize once a stroke has stopped
-    // (edit-realtime). Called on quiescent frames (ShouldGather == false) while any
-    // tiled terrain carries SplatResplatPending: counts idle frames per terrain and,
-    // after kSplatResplatSettleFrames of quiet, runs the one full renormalize against
-    // the final range so the settled splat is byte-identical to a full bake. Recomputes
-    // m_AnyResplatPending. No work once every terrain has settled.
-    void FlushDeferredSplatResplat(ECS::World& world, TerrainService& terrainService);
+    // Re-splat the ReadbackSplatRegion of every resident Full tile, the heights a GPU-bake
+    // settle readback replaced, empty each region, and update the terrain's height range.
+    void BakeGpuReadbackSplats(ECS::World& world, TerrainService& terrainService);
+    void BakeTiledReadbackSplats(TiledTerrainData& tiled, const std::vector<ResolvedModifier>& modifiers);
 
     // Apply the authored modifiers to tiles that streamed in since the last bake
     // (LodState Full but ModifiersApplied still false), scoped to those tiles.
@@ -1037,35 +1011,30 @@ private:
     // volume has at most one stamp).
     static StampSampleBasis MakeStampBasis(const ResolvedModifier& mod);
 
-    // Spherical (planet) bake: re-derive the sphere sculpt atlas's modifier layer over the (face,
-    // rect) regions the changed modifiers touch. A planet has no planar heightfield (the CBT
-    // renderer displaces the cube-sphere procedurally), so the modifier stack bakes into
-    // TerrainService's sphere sculpt layer instead — the sphere analogue of ApplyHeightModifiers.
-    // Supported modifier types are the height-affecting, footprinted ones: Noise, Sculpt zones,
-    // Flatten (levels the base relief toward a radial target — needs `relief` to cancel the
-    // closed-form relief per texel), and Stamp (Add/Subtract a mask disc), each with a circle or
-    // rectangle shape. Paint / Spline modifiers — and any modifier whose shape is Spline, which has
-    // no spherical SDF analogue — are not baked on planets and are surfaced honestly (one-shot log
-    // + inspector notice), never silently dropped. `fullBake` re-derives all six faces; otherwise the region diff (current vs the last
-    // bake snapshot) unions each changed modifier's old ∪ new footprint into the dirty face set.
-    void BakeSphereModifiers(TerrainService& terrainService, float32 planetRadius,
+    // Bakes the Noise, Sculpt, Flatten and Stamp modifiers of planet `planet` (its terrain entity id) into
+    // its modifier layer of `faceSamples` level-0 samples a side; Paint and Spline get a notice. Flatten
+    // reads `relief`. `fullBake` bakes every footprint again, else only the changed footprints.
+    void BakeSphereModifiers(TerrainService& terrainService, uint32 planet, uint32 faceSamples, float32 planetRadius,
                              const Components::TerrainPlanetRelief& relief,
                              const std::vector<ResolvedModifier>& modifiers,
                              const std::vector<uint64>& modifierGeometryHashes, bool fullBake);
 
-    // Change gate: decides whether the gather + hash + bake path runs this
-    // frame. True when any modifier component / modifier transform changed
-    // (Changed<> scans over modifier archetypes), a modifier was added or
-    // removed (lifecycle events), the terrain-state hash moved, or a
-    // structural fallback demands a full run (first gated run, lifecycle
-    // window gap > 1, World::Clear). Always true when gating is disabled
-    // (GE_TERRAIN_CHANGE_GATING=0 or GE_ECS_CHANGE_FILTER=0).
-    //
-    // The scanned type set is folded out of ModifierRootComponents /
-    // ModifierEffectComponents (TerrainModifierComponents.h) so it cannot drift
-    // from what GatherModifiers reads — a component the gather reads but the
-    // gate misses bakes once and then goes deaf to its own edits.
-    bool ShouldGather(ECS::World& world, TerrainService& terrainService);
+    // What the change gate saw this frame.
+    enum class ChangeGateResult : uint8
+    {
+        // No input of the gather changed, and no bake is owed.
+        Quiet,
+        // No input of the gather changed, but a streamed tile waits for its modifier bake or a terrain waits
+        // for its height page overlay. The bake reads the last gather.
+        BakeOwed,
+        // An input of the gather changed, or the gate is off: gather again.
+        InputsChanged,
+    };
+
+    // Returns InputsChanged when an input of the gather changed or gating is off, BakeOwed when only a
+    // residency bake is owed, else Quiet. It scans the types of ModifierRootComponents and
+    // ModifierEffectComponents, so it cannot drift from GatherModifiers.
+    ChangeGateResult ConsumeChangeGate(ECS::World& world, TerrainService& terrainService);
 
     // Hash of all state that affects a modifier's output (fields + spline
     // version + zone payload version).
@@ -1082,23 +1051,12 @@ private:
     // regardless (they are below the parallel-dispatch threshold).
     JobSystem::WorkStealingThreadPool* m_JobPool = nullptr;
 
-    // The update proper; Update runs it, then a settled store request.
+    // The update proper; Update runs it, then the colour map and the surface pages.
     void UpdateBakes(ECS::World& world);
-    // Serves a RequestBakeCacheStore once the bake is settled; keeps it pending otherwise.
-    void StoreRequestedBakes(ECS::World& world);
-    GUID m_BakeStoreScene{};
-    bool m_BakeStoreRequested = false;
-    // The last store's job: it copies each terrain's bake, then writes the files. Waited
-    // before the next store and at destruction.
-    std::unique_ptr<JobSystem::TaskHandle> m_BakeStoreWrites;
-    // The last store's copy of each terrain's bake, until a bake has made sure it is taken.
-    // The copy reads the terrain data in place and only this system's bakes write it.
-    std::shared_ptr<BakeStoreSnapshot> m_PendingBakeStoreSnapshot;
-    // Before a bake writes terrain data: takes the pending store's copy inline when the job
-    // has not claimed it yet, otherwise waits for the job's copy, which is already running.
-    void TakePendingBakeStoreSnapshot();
     // Bands the last RunBakeRowBands fanned out across the pool; 0 when it ran whole.
     uint32 m_LastBakeBandCount = 0;
+    // The same count for the last streamed arrival's height compose.
+    uint32 m_LastArrivalHeightBandCount = 0;
     // The splat pass warns once per update for each out-of-range paint layer (keyed
     // by the index) and for each splat/heightfield size mismatch that leaves rules
     // unaddressable (keyed by the four sizes), however many terrains, tiles and
@@ -1181,6 +1139,31 @@ private:
 
     // See GetAppliedGroundRevision.
     uint64 m_AppliedGroundRevision = 0;
+    // The world XZ cell of GetAppliedGroundRevisionIn, from the world origin, in meters. 128 m holds
+    // a 16 km terrain in 16384 cells.
+    static constexpr float32 kAppliedGroundCellMetres = 128.0f;
+    // The most cells one bake raises cell by cell. A bake over more cells is kept as one span.
+    static constexpr int64 kMaxAppliedGroundCellsPerBake = 1024;
+    // The most wide-bake spans kept. A new span joins each kept span it has a cell in common with. When a new
+    // span does not fit, the oldest span raises the floor.
+    static constexpr size_t kMaxAppliedGroundSpans = 64;
+    // The cells [FirstX, LastX] x [FirstZ, LastZ] that hold the wide bakes, each over more than
+    // kMaxAppliedGroundCellsPerBake cells, whose cells overlap. Revision is that of the last of them.
+    struct AppliedGroundSpan
+    {
+        int32 FirstX = 0;
+        int32 LastX = 0;
+        int32 FirstZ = 0;
+        int32 LastZ = 0;
+        uint64 Revision = 0;
+    };
+    // Records a bake that moved ground at m_AppliedGroundRevision: everywhere, or over `heightDirty`.
+    void RaiseAppliedGround(bool fullBake, const DirtyUnion& heightDirty);
+    // The applied-ground revision of every cell, of the edited cells by packed cell coordinate, and of the
+    // wide bakes, oldest first. All only rise; a tile that arrives later reads the floor, a span or a cell.
+    uint64 m_AppliedGroundFloor = 0;
+    FlatMap<uint64, uint64> m_AppliedGroundCells;
+    std::vector<AppliedGroundSpan> m_AppliedGroundSpans;
 
     // Track modifier state hash to avoid re-applying unchanged modifiers.
     uint64 m_LastModifierHash = 0;
@@ -1189,16 +1172,7 @@ private:
     // not support yet (paint / flatten / stamp / spline), so it is never a silent no-op.
     bool m_SphereUnsupportedWarned = false;
 
-    // One-shot: warn once when the analytic-eligible modifier count exceeds the bounded set
-    // (kMaxSphereAnalyticModifiers) — the excess falls back to the store bake, never dropped.
-    bool m_SphereAnalyticOverflowWarned = false;
-
-    // True while any tiled terrain has a deferred splat renormalize owed (set when a
-    // stroke's height edit shifts the global range). Keeps the quiescent-frame path
-    // running the settle check until every terrain has flushed; false in steady state.
-    bool m_AnyResplatPending = false;
-
-    // Change-gating state. One gate shared by all of ShouldGather's scans:
+    // Change-gating state. One gate shared by all of ConsumeChangeGate's scans:
     // like TransformHierarchySystem's serial gate, they feed a single
     // all-or-nothing decision and are written back to one entry sample
     // (M14 contract — entry-sample before the scans, write-back after).
@@ -1298,12 +1272,12 @@ private:
     std::unordered_map<GUID, uint64> m_StampMaskVersions;
 
     // Set by DrainAssetInvalidations when a referenced asset was evicted;
-    // ShouldGather ORs it in (no ECS state changes on hot-reload, so the
+    // ConsumeChangeGate ORs it in (no ECS state changes on hot-reload, so the
     // Changed<> scans and lifecycle events can't see it).
     bool m_ForceGatherAfterAssetEvict = false;
 
     // Zone-payload edit epoch baseline. A brush stroke mutates the service
-    // store, not any ECS component, so ShouldGather wakes on an epoch change
+    // store, not any ECS component, so ConsumeChangeGate wakes on an epoch change
     // (like the asset-evict flag). Seeded on the first gather; re-baselined
     // after every gather so the gate is quiet once the stroke is baked.
     uint64 m_LastSeenZonePayloadEpoch = 0;
