@@ -81,7 +81,7 @@ This is an alpha: APIs and file formats may change between releases.
 
 The engine is yours as much as ours: open issues, send pull requests, and help shape it. [CONTRIBUTING.md](CONTRIBUTING.md) and [CodingStyle.md](CodingStyle.md) say how.
 
-Join us on Discord: https://discord.gg/c8JASm4q8
+Join us on Discord: https://discord.gg/ptyXSNz7NW
 
 ## A note on AI
 
