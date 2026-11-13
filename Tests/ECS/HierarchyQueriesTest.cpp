@@ -9,6 +9,7 @@
 #include "Memory/Testing/ScopedAllocationFault.h"
 
 #include <algorithm>
+#include <cstring>
 #include <new>
 #include <optional>
 
@@ -352,4 +353,35 @@ TEST(HierarchyQueries, ReparentKeepingWorldPose_FarParentGivesTheOffsetInFloatPr
     EXPECT_NEAR(local->Position.X, 1.3, 1e-6);
     EXPECT_NEAR(local->Position.Y, -0.7, 1e-6);
     EXPECT_NEAR(local->Position.Z, 2.2, 1e-6);
+}
+
+// A move to the scene root makes the local Transform the exact world pose and keeps Padding at zero.
+TEST(HierarchyQueries, ReparentKeepingWorldPose_ToTheRootCopiesTheWorldPoseExactly) {
+    using GameEngine::Components::Transform;
+    using GameEngine::Components::WorldTransform;
+    using GameEngine::Mathematics::Quaternion;
+    using GameEngine::Mathematics::Vector3;
+    using GameEngine::Mathematics::WorldPosition;
+    World w;
+    auto parentEntity = w.Create();
+    parentEntity.Set(WorldTransform{});
+    const Transform rotatedAndScaled = Transform::FromTRS(WorldPosition{300000.1234567, -12.5, 7.25},
+                                                          Quaternion::FromAxisAngle(Vector3(0.0f, 1.0f, 0.0f), 0.7f),
+                                                          Vector3(2.0f, 0.5f, 3.0f));
+    WorldTransform childPose{};
+    childPose.Position = rotatedAndScaled.Position;
+    childPose.Basis = rotatedAndScaled.Basis;
+    childPose.Version = 9u;
+    auto childEntity = w.Create();
+    childEntity.Set(childPose);
+    childEntity.Set(Parent{parentEntity.GetHandle()});
+    w.ProcessCommands();
+
+    GameEngine::Components::ReparentKeepingWorldPose(w, childEntity.GetHandle(), EntityHandle{});
+
+    EXPECT_EQ(w.GetComponent<Parent>(childEntity.GetHandle()), nullptr);
+    const Transform* local = w.GetComponent<Transform>(childEntity.GetHandle());
+    ASSERT_NE(local, nullptr);
+    EXPECT_EQ(0, std::memcmp(local, &childPose, GameEngine::Components::kTransformPoseBytes));
+    EXPECT_EQ(local->Padding, 0u);
 }

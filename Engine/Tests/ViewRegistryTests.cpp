@@ -514,7 +514,9 @@ TEST(ViewRegistryTests, ACameraAt125KmMovingATenthOfAMeterPerSecondMovesOnEveryF
         rs.Views().SetCameraData(camera, active.ToCameraData(1.0f), active.ToCameraRanges());
         const float32 translationX = rs.Views().ResolveCameraData(view).viewRel[3][0];
         if (frame > 0)
+        {
             EXPECT_NE(translationX, previousTranslationX) << "frame " << frame;
+        }
         previousTranslationX = translationX;
     }
 }

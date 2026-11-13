@@ -8,7 +8,6 @@
 #include "Mathematics/Matrix4x4.h"
 #include "Mathematics/MatrixOps.h"
 
-#include <cstring>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -174,7 +173,8 @@ inline void ReparentKeepingWorldPose(ECS::World& world, ECS::EntityHandle entity
     if (!newParent.IsValid()) {
         if (const auto* entityWorld = world.GetComponent<WorldTransform>(entity)) {
             Transform local{};
-            std::memcpy(&local, entityWorld, kTransformPoseBytes);
+            local.Position = entityWorld->Position;
+            local.Basis = entityWorld->Basis;
             world.AddComponentImmediate(entity, local);
         }
         world.RemoveComponentImmediate<Parent>(entity);

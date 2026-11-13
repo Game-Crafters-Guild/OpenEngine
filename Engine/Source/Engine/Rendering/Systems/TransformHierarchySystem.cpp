@@ -37,7 +37,8 @@ static_assert(sizeof(Transform) == sizeof(std::array<uint64, 8>), "Node::localSn
 
 inline bool WriteRootWorldTransform(const Transform& local, WorldTransform& out) {
     if (out.Version == 0u || std::memcmp(&out, &local, Components::kTransformPoseBytes) != 0) {
-        std::memcpy(&out, &local, Components::kTransformPoseBytes);
+        out.Position = local.Position;
+        out.Basis = local.Basis;
         ++out.Version;
         return true;
     }
@@ -450,8 +451,8 @@ size_t TransformHierarchySystem::PropagateSubtree(size_t rootIndex, std::vector<
             Components::ComposeWorldPose(*m_Nodes[parentIndex].worldRead, *node.local, next);
             if (node.world->Version == 0u ||
                 std::memcmp(node.world, &next, Components::kTransformPoseBytes) != 0) {
-                std::memcpy(node.world, &next, Components::kTransformPoseBytes);
-                ++node.world->Version;
+                next.Version = node.world->Version + 1u;
+                *node.world = next;
                 changed.push_back(node.entity);
             }
         } else if (!node.flatOwned && WriteRootWorldTransform(*node.local, *node.world)) {

@@ -170,9 +170,13 @@ TEST(TerrainPlanetSurfaceRules, ALatitudeRowPaintsThePolarBandAndNothingElse)
         {
             const float32 w = RowWeightAt(polar, latitude, longitude);
             if (std::abs(latitude) >= 70.01f)
+            {
                 EXPECT_FLOAT_EQ(w, 1.0f) << "lat " << latitude << " lon " << longitude;
+            }
             else if (std::abs(latitude) <= 61.99f)
+            {
                 EXPECT_EQ(w, 0.0f) << "lat " << latitude << " lon " << longitude;
+            }
         }
 }
 
