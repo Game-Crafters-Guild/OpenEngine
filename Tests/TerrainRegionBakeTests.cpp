@@ -4670,7 +4670,9 @@ TEST(TerrainRegionBake, AGrassRegionChangedAfterTheStoresOpenReachesOnlyTheGrass
                   terrain.System.SurfacePages().PendingPages(TiledHandleOf(terrain)) == 0u;
         ASSERT_TRUE(tiled.SurfacePages.PinnedLevelsBaked) << "the add took the planes off screen at frame " << frame;
         if (!settled)
+        {
             ASSERT_EQ(tiled.SurfacePages.Planes.size(), 2u) << "a plane changed before the bake ended, frame " << frame;
+        }
     }
     ASSERT_TRUE(settled);
     EXPECT_EQ(tiled.SurfacePages.Planes.size(), 3u) << "the baked GrassControl plane is not published";
@@ -5771,7 +5773,9 @@ TEST(TerrainRegionBake, AGrassPlaneAddedToAStreamingSurfaceRewritesItsResidentPa
         }
         ASSERT_NE(pages.Surface().PackedTable(1u, shown), nullptr);
         if (rewrites < slots.size())
+        {
             ASSERT_EQ(shown, oldMask) << "the new plane shows before every resident page holds it";
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     EXPECT_EQ(rewrites, slots.size()) << "a resident page was not rewritten with the new plane";
@@ -7231,7 +7235,9 @@ void StreamWithAWaitingUpgrade(uint32 heldRefreshes, WaitingCamera waitingMove,
         StreamAndRecordArrivals(streaming, svc, terrain, finalCamera, arrivals);
         const TileStreamingManager::Stats stats = streaming.GetStats();
         if (stats.TeleportModeActive && CountArrivals(arrivals, 1, TileLodState::Coarse) > 0)
+        {
             EXPECT_EQ(stats.TilesLoading, 0u) << "a job ran in teleport mode with both tiles resident";
+        }
     }
     ASSERT_TRUE(AllTilesFull(*terrain.Tiled)) << "the tiles did not reach Full within the deadline";
 }
@@ -7285,7 +7291,9 @@ TEST(TileStreaming, AWaitingUpgradeGetsNoJobWhileTeleportModeLoadsCoarseOnly)
     for (const TileArrival& arrival : arrivals)
     {
         if (arrival.Lod == TileLodState::Full)
+        {
             EXPECT_FALSE(arrival.DuringTeleport) << "tile " << arrival.TileX << " loaded full detail in teleport mode";
+        }
     }
 }
 

@@ -116,7 +116,9 @@ TEST_F(PlayModePauseTests, PauseStopsThePhysicsSystemsAndKeepsTheAnimationSystem
     EXPECT_FALSE(physics->IsEnabled()) << "the physics writeback would write over an edit to a body";
     EXPECT_TRUE(animation->IsEnabled()) << "the stopped clock holds the pose";
     if (audio)
+    {
         EXPECT_FALSE(audio->IsEnabled()) << "the audio engine plays when the clock stops";
+    }
     playMode.TogglePause();
     EXPECT_TRUE(physics->IsEnabled()) << "resume restarts physics";
 

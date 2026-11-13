@@ -1461,7 +1461,7 @@ void ShadowMapRenderFeature::BuildShadowDataGPU(const CascadeFrameData& cascadeF
                                                      uint32_t frameIndex,
                                                      ShadowDataGPU& out)
 {
-    std::memset(&out, 0, sizeof(ShadowDataGPU));
+    out = ShadowDataGPU{};
 
     // "No pyramid" is NEGATIVE, not zero — zero is a legal-looking bindless
     // index. Written before anything can publish a real one, so every path out

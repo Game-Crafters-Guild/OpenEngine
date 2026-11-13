@@ -320,12 +320,14 @@ class ScribePanelLayoutTests : public ScribePanelTests
     {
         bool removed = false;
         if (Assets().BeginUnregisterSource(kAssetSourceAliasEditor, [&removed](bool) { removed = true; }))
+        {
             EXPECT_TRUE(WaitUntil(
                 [&removed]
                 {
                     Assets().Update();
                     return removed;
                 }));
+        }
         std::error_code ignored;
         std::filesystem::remove_all(s_Root, ignored);
     }
@@ -473,8 +475,12 @@ TEST_F(ScribePanelTests, ACompileRefusalAndAnUnknownNameShowOnTheirRowsAtOnce)
     ASSERT_EQ(document->GetRefusals().size(), 1u);
     EXPECT_EQ(document->GetRefusals()[0].Item, AI::StateTreeCompileItem::Transition);
     for (const Row& row : document->BuildOutline())
+    {
         if (row.RowKind == Row::Kind::EnterCondition)
+        {
             EXPECT_TRUE(row.Refusal.empty()) << row.Text << ": " << row.Refusal;
+        }
+    }
 }
 
 TEST_F(ScribePanelTests, UndoRestoresTheEditedFieldAndRedoAppliesItAgain)
@@ -983,7 +989,9 @@ TEST_F(ScribePanelTests, ARefusedConsiderationNamesItsOptionAndTheInputsGroupMar
         if (row.RowKind == Row::Kind::Group)
             inInputs = row.Text == "Inputs";
         if (row.RowKind == Row::Kind::State && row.Text == "Attack")
+        {
             EXPECT_STREQ(ScribeDocument::KindWord(row), "Option");
+        }
         if (inInputs && row.RowKind == Row::Kind::Name && !row.Refusal.empty())
             markedInputs.push_back(row.Text);
     }
