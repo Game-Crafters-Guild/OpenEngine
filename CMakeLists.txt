@@ -329,6 +329,13 @@ else()
     )
 endif()
 
+# Force MSVC to use UTF-8 encoding for both source and execution character sets 
+# to prevent character encoding warnings (C4819) on multilingual systems.
+# Under strict compilation configurations, this warning is promoted to an error and breaks the build.
+if(MSVC)
+    add_compile_options(/utf-8)
+endif()
+
 # UISystem removed during redesign; keep permanently disabled
 
 # WebAssembly target: one static binary (no Engine DLL, no dynamic native
