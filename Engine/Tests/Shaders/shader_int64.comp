@@ -1,0 +1,17 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+
+layout(local_size_x = 1) in;
+layout(set = 0, binding = 0, std430) buffer Values
+{
+    int64_t SignedInput;
+    uint64_t UnsignedInput;
+    int64_t SignedOutput;
+    uint64_t UnsignedOutput;
+} values;
+
+void main()
+{
+    values.SignedOutput = values.SignedInput / int64_t(3);
+    values.UnsignedOutput = (values.UnsignedInput >> 8) + uint64_t(17);
+}

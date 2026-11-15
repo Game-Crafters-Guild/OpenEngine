@@ -10,12 +10,9 @@
 // ~6e-5 m), as instanced meshes do (camera_relative.glsl GE_ClipFromSectorLocal).
 // The draw computes rel = float(sector - originSector) * 1024 + local.
 //
-// The decode arithmetic is df64 ("double-float": an unevaluated sum of two fp32 values,
-// Dekker/Knuth error-free transforms, ~2^-47 relative) — NOT fp64. Rationale (design §5):
-// shaderFloat64 is absent from our device init, 1/16–1/64 rate on consumer GPUs, and
-// VK_FALSE on MoltenVK/Metal; df64 is plain fp32 ALU + fma(), portable everywhere the
-// CBT already runs. At R = 6.371e6 the df64 decode error is ~5e-8 m — five orders below
-// the 6e-5 m local-storage ULP, so the representation, not the arithmetic, is the limit.
+// The decode uses df64 (two fp32 values with ~2^-47 relative precision), not optional native fp64.
+// Its fp32 ALU + fma() operations are portable to every CBT backend, including Metal.
+// At R = 6.371e6 the ~5e-8 m decode error is below the 6e-5 m local-storage ULP.
 //
 // Determinism (the crack-freedom argument, extending the #474 proof structure): every
 // function here is a pure function of the corner's exact int64 cube numerator N (and

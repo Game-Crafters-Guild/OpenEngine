@@ -155,6 +155,29 @@ Implementation. Most files here match a header one to one. The render graph itse
 
 Vulkan is the primary backend. DX12 is secondary and may lag in feature coverage.
 
+#### 64-bit integer shaders
+
+Check `device.GetCapabilities().supportsShaderInt64` before selecting a shader that uses signed or unsigned 64-bit integer arithmetic.
+Vulkan enables this feature whenever the physical device supports it, including device-creation fallbacks.
+When the capability is false, select a shader that uses supported arithmetic instead.
+
+In GLSL, require `GL_EXT_shader_explicit_arithmetic_types_int64` to use `int64_t` and `uint64_t`.
+Upload integer storage-buffer data with the shader's declared offsets and alignment.
+This capability does not enable 64-bit integer atomics.
+Material properties and typed shader metadata do not expose 64-bit integer types.
+
+#### Double-precision shaders
+
+Check `device.GetCapabilities().supportsShaderFloat64` before selecting a shader that uses 64-bit floating-point arithmetic.
+Vulkan enables this feature whenever the physical device supports it, including device-creation fallbacks.
+When the capability is false, select a shader that uses supported arithmetic instead.
+Enabling the feature does not change the precision of existing shaders.
+
+GLSL shaders can use `double`, `dvec*`, and `dmat*` types on a capable device.
+Upload double-valued storage-buffer data with the shader's declared offsets and alignment.
+Material properties and typed shader metadata do not expose double-valued types.
+The terrain's double-float arithmetic remains the portable precision path.
+
 ### Materials — `Include/Rendering/Materials/`
 
 The composer-based shader system. Materials are JSON documents that select a surface shader, lighting model, and properties. The composer glues a *surface* shader (artist-authored), an *adapter* (engine-authored scaffolding), and a *lighting model* into a compilable shader source per variant.

@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <cstdint>
@@ -590,8 +591,7 @@ TEST(DeviceDiagnostics, OwnershipTransferSuppression_AssertZero_SingleQueue)
 
 namespace
 {
-// Build a compute pipeline from a .comp.spv with a single set=0/binding=0
-// storage buffer — the layout both F1 test kernels share.
+// Build a compute pipeline with one storage buffer at set=0/binding=0.
 PipelineHandle CreateStorageComputePipeline(IDevice& dev, const char* spvName, const char* debugName)
 {
     std::vector<uint8_t> code = GameEngine::Rendering::Tests::ReadSpirvBytes(spvName);
@@ -642,6 +642,207 @@ DescriptorSetHandle CreateStorageDescriptor(IDevice& dev, BufferHandle buffer, s
     return handle;
 }
 } // namespace
+
+TEST(DeviceDiagnostics, ShaderInt64CapabilityMatchesPhysicalDeviceSupport)
+{
+    SetEnvHeadless();
+    DeviceDesc description{};
+    description.preferredAPI = GraphicsAPI::Vulkan;
+    auto device = DeviceFactory::CreateDevice(description);
+    ASSERT_TRUE(device);
+    ASSERT_TRUE(device->Initialize(description));
+    auto* vulkan = dynamic_cast<VulkanDevice*>(device.get());
+    ASSERT_NE(vulkan, nullptr);
+
+    VkPhysicalDeviceFeatures features{};
+    vkGetPhysicalDeviceFeatures(vulkan->GetVkPhysicalDevice(), &features);
+    EXPECT_EQ(device->GetCapabilities().supportsShaderInt64, features.shaderInt64 == VK_TRUE);
+}
+
+TEST(DeviceDiagnostics, ShaderInt64PreservesSignedAndUnsignedValuesBeyond32Bits)
+{
+    SetEnvHeadless();
+    ScopedEnvVar validation("GE_VK_VALIDATION", "1");
+    ScopedEnvVar validationAssert("GE_VK_VALIDATION_ASSERT", "0");
+    DeviceDesc description{};
+    description.preferredAPI = GraphicsAPI::Vulkan;
+    description.enableDebugLayer = true;
+    auto device = DeviceFactory::CreateDevice(description);
+    ASSERT_TRUE(device);
+    ASSERT_TRUE(device->Initialize(description));
+    auto* vulkan = dynamic_cast<VulkanDevice*>(device.get());
+    ASSERT_NE(vulkan, nullptr);
+
+    VkPhysicalDeviceFeatures features{};
+    vkGetPhysicalDeviceFeatures(vulkan->GetVkPhysicalDevice(), &features);
+    if (features.shaderInt64 != VK_TRUE)
+    {
+        GTEST_SKIP() << "The physical device does not support shaderInt64";
+    }
+    EXPECT_TRUE(device->GetCapabilities().supportsShaderInt64);
+    ASSERT_TRUE(device->GetValidationStats().Enabled);
+    ASSERT_TRUE(device->BeginFrame());
+    device->ResetValidationStats();
+
+    // This layout matches the four 64-bit scalars in the GLSL storage block.
+    struct ShaderValues
+    {
+        int64_t SignedInput;
+        uint64_t UnsignedInput;
+        int64_t SignedOutput;
+        uint64_t UnsignedOutput;
+    };
+    static_assert(sizeof(ShaderValues) == 4 * sizeof(uint64_t));
+    constexpr int64_t kSignedInput = -(int64_t{1} << 40) - 7;
+    constexpr uint64_t kUnsignedInput = (uint64_t{1} << 63) | (uint64_t{1} << 40) | 9;
+    const ShaderValues values{kSignedInput, kUnsignedInput, 0, 0};
+    constexpr size_t kBufferBytes = sizeof(values);
+    BufferDesc bufferDescription{};
+    bufferDescription.size = kBufferBytes;
+    bufferDescription.usage = static_cast<uint32_t>(BufferUsage::Storage | BufferUsage::TransferSrc | BufferUsage::TransferDst);
+    bufferDescription.memoryUsage = BufferMemoryUsage::DeviceLocal;
+    bufferDescription.debugName = "ShaderInt64.Values";
+    const BufferHandle buffer = device->CreateBuffer(bufferDescription);
+    ASSERT_TRUE(buffer.IsValid());
+    device->UpdateBuffer(buffer, 0, kBufferBytes, &values);
+    const BufferHandle readback = device->CreateReadbackBuffer(kBufferBytes, "ShaderInt64.Readback");
+    ASSERT_TRUE(readback.IsValid());
+
+    const PipelineHandle pipeline = CreateStorageComputePipeline(*device, "shader_int64.comp.spv", "ShaderInt64.Compute");
+    const auto pipelineValidation = device->GetValidationStats();
+    ASSERT_EQ(pipelineValidation.ErrorCount, 0u)
+        << (pipelineValidation.Vuids.empty() ? std::string{} : pipelineValidation.Vuids.front().FirstMessage);
+    ASSERT_TRUE(pipeline.IsValid());
+    const DescriptorSetHandle descriptor = CreateStorageDescriptor(*device, buffer, kBufferBytes, "ShaderInt64.Descriptor");
+    ASSERT_TRUE(descriptor.IsValid());
+
+    auto commands = device->CreateCommandList(IDevice::QueueType::Graphics);
+    ASSERT_TRUE(commands);
+    commands->Begin();
+    commands->Barrier(ResourceBarrier::CreateBufferBarrier(buffer, ResourceState::CopyDest, ResourceState::UnorderedAccess));
+    commands->SetPipeline(pipeline);
+    commands->BindDescriptorSet(0, descriptor, pipeline);
+    commands->Dispatch(1, 1, 1);
+    commands->Barrier(ResourceBarrier::CreateBufferBarrier(buffer, ResourceState::UnorderedAccess, ResourceState::CopySource));
+    commands->CopyBuffer(buffer, readback, kBufferBytes, 0, 0);
+    commands->End();
+    std::vector<CommandList*> lists{commands.get()};
+    device->ExecuteCommandLists(lists);
+    device->WaitForIdle();
+
+    const void* mapped = device->MapBuffer(readback);
+    ASSERT_NE(mapped, nullptr);
+    ShaderValues result{};
+    std::memcpy(&result, mapped, kBufferBytes);
+    device->UnmapBuffer(readback);
+    EXPECT_EQ(result.SignedInput, kSignedInput);
+    EXPECT_EQ(result.UnsignedInput, kUnsignedInput);
+    EXPECT_EQ(result.SignedOutput, kSignedInput / 3);
+    EXPECT_EQ(result.UnsignedOutput, (kUnsignedInput >> 8) + 17);
+
+    device->DestroyDescriptorSet(descriptor);
+    device->DestroyPipeline(pipeline);
+    device->DestroyBuffer(readback);
+    device->DestroyBuffer(buffer);
+    device->Present();
+    device->WaitForIdle();
+    EXPECT_EQ(device->GetValidationStats().ErrorCount, 0u);
+}
+
+TEST(DeviceDiagnostics, ShaderFloat64CapabilityMatchesPhysicalDeviceSupport)
+{
+    SetEnvHeadless();
+    DeviceDesc description{};
+    description.preferredAPI = GraphicsAPI::Vulkan;
+    auto device = DeviceFactory::CreateDevice(description);
+    ASSERT_TRUE(device);
+    ASSERT_TRUE(device->Initialize(description));
+    auto* vulkan = dynamic_cast<VulkanDevice*>(device.get());
+    ASSERT_NE(vulkan, nullptr);
+
+    VkPhysicalDeviceFeatures features{};
+    vkGetPhysicalDeviceFeatures(vulkan->GetVkPhysicalDevice(), &features);
+    EXPECT_EQ(device->GetCapabilities().supportsShaderFloat64, features.shaderFloat64 == VK_TRUE);
+}
+
+TEST(DeviceDiagnostics, ShaderFloat64PreservesDifferencesBelowFloat32Precision)
+{
+    SetEnvHeadless();
+    ScopedEnvVar validation("GE_VK_VALIDATION", "1");
+    ScopedEnvVar validationAssert("GE_VK_VALIDATION_ASSERT", "0");
+    DeviceDesc description{};
+    description.preferredAPI = GraphicsAPI::Vulkan;
+    description.enableDebugLayer = true;
+    auto device = DeviceFactory::CreateDevice(description);
+    ASSERT_TRUE(device);
+    ASSERT_TRUE(device->Initialize(description));
+    auto* vulkan = dynamic_cast<VulkanDevice*>(device.get());
+    ASSERT_NE(vulkan, nullptr);
+
+    VkPhysicalDeviceFeatures features{};
+    vkGetPhysicalDeviceFeatures(vulkan->GetVkPhysicalDevice(), &features);
+    if (features.shaderFloat64 != VK_TRUE)
+    {
+        GTEST_SKIP() << "The physical device does not support shaderFloat64";
+    }
+    EXPECT_TRUE(device->GetCapabilities().supportsShaderFloat64);
+    ASSERT_TRUE(device->GetValidationStats().Enabled);
+    ASSERT_TRUE(device->BeginFrame());
+    device->ResetValidationStats();
+
+    // The GLSL storage block contains two doubles. FP32 cannot represent input + 1.
+    constexpr double kInput = 16777216.0;
+    const std::array<double, 2> values{kInput, -1.0};
+    constexpr size_t kBufferBytes = sizeof(values);
+    BufferDesc bufferDescription{};
+    bufferDescription.size = kBufferBytes;
+    bufferDescription.usage = static_cast<uint32_t>(BufferUsage::Storage | BufferUsage::TransferSrc | BufferUsage::TransferDst);
+    bufferDescription.memoryUsage = BufferMemoryUsage::DeviceLocal;
+    bufferDescription.debugName = "ShaderFloat64.Values";
+    const BufferHandle buffer = device->CreateBuffer(bufferDescription);
+    ASSERT_TRUE(buffer.IsValid());
+    device->UpdateBuffer(buffer, 0, kBufferBytes, values.data());
+    const BufferHandle readback = device->CreateReadbackBuffer(kBufferBytes, "ShaderFloat64.Readback");
+    ASSERT_TRUE(readback.IsValid());
+
+    const PipelineHandle pipeline = CreateStorageComputePipeline(*device, "shader_float64.comp.spv", "ShaderFloat64.Compute");
+    const auto pipelineValidation = device->GetValidationStats();
+    ASSERT_EQ(pipelineValidation.ErrorCount, 0u)
+        << (pipelineValidation.Vuids.empty() ? std::string{} : pipelineValidation.Vuids.front().FirstMessage);
+    ASSERT_TRUE(pipeline.IsValid());
+    const DescriptorSetHandle descriptor = CreateStorageDescriptor(*device, buffer, kBufferBytes, "ShaderFloat64.Descriptor");
+    ASSERT_TRUE(descriptor.IsValid());
+
+    auto commands = device->CreateCommandList(IDevice::QueueType::Graphics);
+    ASSERT_TRUE(commands);
+    commands->Begin();
+    commands->Barrier(ResourceBarrier::CreateBufferBarrier(buffer, ResourceState::CopyDest, ResourceState::UnorderedAccess));
+    commands->SetPipeline(pipeline);
+    commands->BindDescriptorSet(0, descriptor, pipeline);
+    commands->Dispatch(1, 1, 1);
+    commands->Barrier(ResourceBarrier::CreateBufferBarrier(buffer, ResourceState::UnorderedAccess, ResourceState::CopySource));
+    commands->CopyBuffer(buffer, readback, kBufferBytes, 0, 0);
+    commands->End();
+    std::vector<CommandList*> lists{commands.get()};
+    device->ExecuteCommandLists(lists);
+    device->WaitForIdle();
+
+    const void* mapped = device->MapBuffer(readback);
+    ASSERT_NE(mapped, nullptr);
+    std::array<double, 2> result{};
+    std::memcpy(result.data(), mapped, kBufferBytes);
+    device->UnmapBuffer(readback);
+    EXPECT_DOUBLE_EQ(result[0], kInput);
+    EXPECT_DOUBLE_EQ(result[1], 1.0);
+
+    device->DestroyDescriptorSet(descriptor);
+    device->DestroyPipeline(pipeline);
+    device->DestroyBuffer(readback);
+    device->DestroyBuffer(buffer);
+    device->Present();
+    device->WaitForIdle();
+    EXPECT_EQ(device->GetValidationStats().ErrorCount, 0u);
+}
 
 // F1: DispatchIndirect consumes GPU-written workgroup counts.
 // Kernel A writes {2,1,1} into an args buffer; a buffer barrier transitions it
