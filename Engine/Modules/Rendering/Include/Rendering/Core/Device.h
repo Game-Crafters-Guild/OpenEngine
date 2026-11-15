@@ -893,13 +893,14 @@ struct RenderingDeviceCapabilities
     // without MTLResidencySet (macOS before 15) also reports false, but it
     // refuses the call and draws nothing rather than emulating it.
     bool supportsDrawIndirectCountNative = false;
-    // True when the device supports 64-bit integers in shaders (Vulkan
-    // shaderInt64). The engine enables it whenever supported — buffer_reference /
-    // instanced shaders declare uint64_t scalars, and CBT terrain stores its
-    // per-bisector HeapID as a plain u64. This is NON-ATOMIC u64 support only;
-    // int64 *atomics* (shaderBufferInt64Atomics) are deliberately not required
-    // (CBT uses a u32-word bitfield so it stays portable to Metal/MoltenVK).
+    /// True when signed and unsigned 64-bit integer shader arithmetic is enabled.
+    /// Vulkan enables shaderInt64 whenever supported, including device-creation fallbacks.
+    /// Integer atomics require separate features and are not implied by this flag.
     bool supportsShaderInt64 = false;
+    /// True when 64-bit floating-point shader arithmetic is enabled on the device.
+    /// Vulkan enables shaderFloat64 whenever supported, including device-creation fallbacks.
+    /// Other backends report false unless they provide the same shader support.
+    bool supportsShaderFloat64 = false;
     // True when the device supports BC (DXT/BPTC) block-compressed sampled
     // textures (Vulkan textureCompressionBC, enabled at device creation when
     // available). Gates BC1/3/5/7 texture creation; loaders fall back to

@@ -1,0 +1,14 @@
+#version 450
+
+layout(local_size_x = 1) in;
+layout(set = 0, binding = 0, std430) buffer Values
+{
+    double InputValue;
+    double OutputValue;
+} values;
+
+void main()
+{
+    precise double shifted = values.InputValue + 1.0LF;
+    values.OutputValue = shifted - values.InputValue;
+}
